@@ -331,11 +331,13 @@ use techy::core::node::{
     ParsedSlot, ParsedSlots, SlotRole,
 };
 use techy::core::specs::{CallableSpec, Package};
-use techy::core::{GroupRule, Language, ParsingState, ParsingStateDelta, TokenKind};
+use techy::core::{
+    GroupRule, Language, ParsingState, ParsingStateDelta, TokenEdge, TokenKind,
+};
 use techy::error::{DiagnosticInfo, ParseError, Recovery};
 use techy::latexlike::{BodyMarker, CallableType, GroupType, Latexlike, LatexlikeDriver};
 use techy::serialize::SerializableObject;
-use techy::source::{SourceSpan, Span};
+use techy::source::SourceSpan;
 
 /// Condition: the terminating `;` never appeared.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
@@ -396,7 +398,7 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
     > {
         // The dispatch loop already consumed the trigger token whole
         // (post-space included): the reader stands on the raw content.
-        let start = cx.tokens.pos();
+        let start = cx.tokens.position_here();
 
         // The raw-reading state: features off, `;` the one terminator.
         let terminator = Arc::new(GroupRule {
@@ -407,17 +409,23 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
         let raw = cx.derive_state(&verbatim_state_delta(terminator))?;
 
         // Read chars until the terminator or end of input.
-        let (content_end, end_pos) = loop {
+        let (content_end, end_position) = loop {
             let Some(token) = cx.probe_token(&raw)? else {
                 // Tolerated unreadable token: end the region here; the
                 // enclosing content loop re-reads and recovers it itself.
-                break (cx.tokens.pos(), cx.tokens.pos());
+                break (cx.tokens.position_here(), cx.tokens.position_here());
             };
             match &token.kind {
-                TokenKind::Char(_) => cx.tokens.move_past(&token, true),
+                TokenKind::Char(_) => {
+                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace)
+                }
                 TokenKind::GroupClose { .. } => {
-                    cx.tokens.move_past(&token, true);
-                    break (token.span.start(), token.span.end());
+                    let content_end =
+                        cx.tokens.position_at(&token, TokenEdge::Start);
+                    let end_position =
+                        cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
+                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                    break (content_end, end_position);
                 }
                 TokenKind::EndOfStream => {
                     // Detection-site recovery: strict aborts here (`?`);
@@ -425,14 +433,16 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
                     // to keep the content read so far.
                     cx.recover(
                         MissingTerminator::new(self.invocation.name),
-                        SourceSpan::new(&cx.source, token.span),
+                        cx.tokens.source_span_of(&token),
                     )?;
-                    break (token.span.start(), token.span.start());
+                    let at = cx.tokens.position_at(&token, TokenEdge::Start);
+                    break (at.clone(), at);
                 }
                 other => {
+                    let at = cx.tokens.source_span_of(&token);
                     return Err(cx.implementation_error(
                         format!("unexpected {other} token under the raw state"),
-                        token.span,
+                        at,
                     ))
                 }
             }
@@ -441,12 +451,14 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
         // Stage the raw content as one chars node, recorded under the raw
         // state it was read in…
         let mut children = Vec::new();
-        let content = Span::new(start, content_end);
-        if content_end > start {
+        // The two positions delimit the content; an incoherent pair would be a
+        // bug in this parser, which `source_span_within` reports as one.
+        let content: SourceSpan = cx.source_span_within(&start, &content_end)?;
+        if !content.is_empty() {
             let id = cx
                 .stage_node(
-                    NodeKind::chars(content),
-                    SourceSpan::new(&cx.source, content),
+                    NodeKind::chars(content.span()),
+                    content.clone(),
                     Arc::clone(&raw),
                     Vec::new(),
                 )
@@ -474,7 +486,7 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
             ParsedArguments::empty(),
             slots,
             children,
-            Some(end_pos),
+            Some(&end_position),
         )?;
         Ok((id, None))
     }

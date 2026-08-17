@@ -523,7 +523,7 @@ mod plain_chars {
                 self.inner().pos()
             }
 
-            fn move_to_edge(&mut self, tok: &Token<'s, PlainCharsLang>, edge: TokenEdge) {
+            fn move_to_edge(&mut self, tok: &Token<'_, PlainCharsLang>, edge: TokenEdge) {
                 self.inner_mut().move_to_edge(tok, edge);
             }
 
@@ -533,7 +533,7 @@ mod plain_chars {
 
             fn source_span_between(
                 &self,
-                tok: &Token<'s, PlainCharsLang>,
+                tok: &Token<'_, PlainCharsLang>,
                 a: TokenEdge,
                 b: TokenEdge,
             ) -> SourceSpan {
@@ -546,7 +546,7 @@ mod plain_chars {
 
             fn position_at(
                 &self,
-                tok: &Token<'s, PlainCharsLang>,
+                tok: &Token<'_, PlainCharsLang>,
                 edge: TokenEdge,
             ) -> StdStreamPosition {
                 self.inner().position_at(tok, edge)

@@ -782,12 +782,14 @@ mod tests {
                         .map(|i| start + i)
                         .unwrap_or(content.len());
                     cx.tokens.move_to_pos(end);
+                    // The claimed extent is where the reader now stands.
+                    let end = cx.tokens.position_here();
                     let id = cx.stage_invocation(
                         &self.invocation,
                         ParsedArguments::empty(),
                         ParsedSlots::empty(),
                         Vec::new(),
-                        Some(end),
+                        Some(&end),
                     )?;
                     Ok((id, None))
                 }
@@ -800,13 +802,12 @@ mod tests {
         }
     }
 
-    /// A takeover that stages with a deliberately chosen explicit end — the
-    /// vehicle for the bad-computed-span contract violation:
-    /// `stage_invocation` must answer an implementation error, never panic.
+    /// A takeover that stages with an explicit end **before** the trigger's own
+    /// start (the trigger's pre-space edge) — the vehicle for the
+    /// bad-computed-span contract violation: `stage_invocation` must answer an
+    /// implementation error, never panic.
     #[derive(Debug)]
-    struct BadEndSpec {
-        end: usize,
-    }
+    struct BadEndSpec;
 
     impl crate::serialize::SerializableObject<Latexlike> for BadEndSpec {}
 
@@ -823,7 +824,6 @@ mod tests {
         {
             struct BadEndParser<'a, 's> {
                 invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
-                end: usize,
             }
             impl ConstructParser<Latexlike> for BadEndParser<'_, '_> {
                 type Output = BuildId;
@@ -834,17 +834,24 @@ mod tests {
                     Latexlike,
                     (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>),
                 > {
+                    // A legitimately obtained position that nonetheless cannot
+                    // end this node: the trigger's own pre-space edge lies before
+                    // its start.
+                    let end = cx.tokens.position_at(
+                        self.invocation.token,
+                        crate::token::TokenEdge::StartBeforePreSpace,
+                    );
                     let id = cx.stage_invocation(
                         &self.invocation,
                         ParsedArguments::empty(),
                         ParsedSlots::empty(),
                         Vec::new(),
-                        Some(self.end),
+                        Some(&end),
                     )?;
                     Ok((id, None))
                 }
             }
-            Ok(Box::new(BadEndParser { invocation, end: self.end }))
+            Ok(Box::new(BadEndParser { invocation }))
         }
 
         fn stack_frame_title(&self, role: FrameRole, name: &str) -> alloc::string::String {
@@ -852,10 +859,10 @@ mod tests {
         }
     }
 
-    /// A language whose `\bad` macro stages with the given explicit end.
-    fn bad_end_language(recovery: Recovery, end: usize) -> Language<Latexlike> {
+    /// A language whose `\bad` macro stages with an end before the trigger's start.
+    fn bad_end_language(recovery: Recovery) -> Language<Latexlike> {
         let mut package = Package::new("t");
-        package.insert(CallableType::Macro, "bad", Arc::new(BadEndSpec { end }));
+        package.insert(CallableType::Macro, "bad", Arc::new(BadEndSpec));
         with_packages(recovery, [package])
     }
 
@@ -873,21 +880,20 @@ mod tests {
             );
         };
 
-        // An end preceding the trigger's start (`\bad` starts at 3).
-        let language = bad_end_language(Recovery::Strict, 0);
+        // An end preceding the trigger's start (`\bad` starts at 3, its pre-space
+        // at 2). An end outside the source content, or off a character boundary, is
+        // no longer expressible: a stream position comes from the reader, and the
+        // reader hands out only valid ones.
+        let language = bad_end_language(Recovery::Strict);
         assert_implementation_error(language.parse("ab \\bad cd").unwrap_err());
 
-        // An end beyond the source content.
-        let language = bad_end_language(Recovery::Strict, 999);
-        assert_implementation_error(language.parse("ab \\bad cd").unwrap_err());
-
-        // An end inside a multi-byte character ("é" occupies bytes 8..10).
-        let language = bad_end_language(Recovery::Strict, 9);
+        // Multi-byte content takes the same path (an abort, never a panic).
+        let language = bad_end_language(Recovery::Strict);
         assert_implementation_error(language.parse("ab \\bad é").unwrap_err());
 
         // Tolerant recovery does not swallow the abort (the implementation-error
         // contract: a contract violation is not a source condition).
-        let language = bad_end_language(Recovery::Tolerant, 0);
+        let language = bad_end_language(Recovery::Tolerant);
         assert_implementation_error(language.parse("ab \\bad cd").unwrap_err());
     }
 

@@ -526,7 +526,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             return Err(cx.implementation_error(
                 "the matched environment stop token disappeared on re-peek \
                  (the token reader re-read the same position differently)",
-                Span::empty(body_end),
+                SourceSpan::new(&cx.source, Span::empty(body_end)),
             ));
         };
         let (token_escape_char, token_post_space) = match &end_token.kind {
@@ -539,7 +539,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 return Err(cx.implementation_error(
                     "the matched environment stop token changed on re-peek \
                      (the token reader re-read the same position differently)",
-                    end_token.span,
+                    cx.tokens.source_span_of(&end_token),
                 ));
             }
         };
@@ -587,7 +587,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                     return Err(cx.implementation_error(
                         "the token reader moved during a failed terminator name-group \
                          read (a failed read must consume nothing)",
-                        end_token.span,
+                        cx.tokens.source_span_of(&end_token),
                     ));
                 }
                 cx.recover(
@@ -661,7 +661,7 @@ where
             return Err(cx.implementation_error(
                 "the driver's content-loop parser returned a pass-through state delta \
                  (a nodes parser has no after-effect to report)",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
 
@@ -691,13 +691,13 @@ where
             // A group close nobody at this level asked for: close the body without
             // consuming it (decision 8's unwinding — the stray close is left for an
             // enclosing level, or the root, to claim).
-            StopCause::UnexpectedGroupClose { span } => {
+            StopCause::UnexpectedGroupClose { span, .. } => {
                 cx.recover(
                     MissingEnvironmentTerminator::new(
                         self.invocation_name,
                         MissingTerminatorFound::StrayGroupClose,
                     ),
-                    SourceSpan::new(&cx.source, span),
+                    span,
                 )?;
                 (body_end, None)
             }
@@ -705,7 +705,7 @@ where
                 return Err(cx.implementation_error(
                     "the driver's content-loop parser reported a node-condition stop, \
                      but the environment body's stop spec sets no node condition",
-                    Span::empty(cx.tokens.pos()),
+                    cx.here(),
                 ));
             }
         };
@@ -717,7 +717,9 @@ where
                 Arc::clone(&cx.state),
                 outcome.nodes,
             )
-            .map_err(|error| cx.staging_error(error, Span::new(body_start, body_end)))?;
+            .map_err(|error| {
+                cx.staging_error(error, SourceSpan::new(&cx.source, Span::new(body_start, body_end)))
+            })?;
         Ok((
             EnvironmentBody {
                 body,
@@ -990,7 +992,12 @@ mod tests {
                 .state
                 .scopes()
                 .retrieve_spec(&query, &cx.state)
-                .map_err(|error| cx.implementation_error(error, name_group.name_span))?;
+                .map_err(|error| {
+                    cx.implementation_error(
+                        error,
+                        SourceSpan::new(&cx.source, name_group.name_span),
+                    )
+                })?;
             let spec: Arc<dyn CallableSpec<EnvLang>> = match resolved {
                 Some(spec) => spec,
                 None => {
@@ -1007,7 +1014,11 @@ mod tests {
             // Arguments: the 6.5 machinery, shared with StdInvocationParser. The
             // argument frames quote the *environment's* name, not `\begin`'s.
             let (mut children, arguments) =
-                parse_declared_arguments(cx, &spec, name_group.name_span)?;
+                parse_declared_arguments(
+                    cx,
+                    &spec,
+                    &SourceSpan::new(&cx.source, name_group.name_span),
+                )?;
 
             // The body: parsed under the slot's state (the body delta stacked on the
             // invocation's base, session-mediated; structural revert) up to and
@@ -2058,7 +2069,7 @@ mod tests {
             self.inner().pos()
         }
 
-        fn move_to_edge(&mut self, tok: &Token<'s, EnvLang>, edge: TokenEdge) {
+        fn move_to_edge(&mut self, tok: &Token<'_, EnvLang>, edge: TokenEdge) {
             self.inner_mut().move_to_edge(tok, edge);
         }
 
@@ -2068,7 +2079,7 @@ mod tests {
 
         fn source_span_between(
             &self,
-            tok: &Token<'s, EnvLang>,
+            tok: &Token<'_, EnvLang>,
             a: TokenEdge,
             b: TokenEdge,
         ) -> SourceSpan {
@@ -2079,7 +2090,7 @@ mod tests {
             self.inner().position_here()
         }
 
-        fn position_at(&self, tok: &Token<'s, EnvLang>, edge: TokenEdge) -> StdStreamPosition {
+        fn position_at(&self, tok: &Token<'_, EnvLang>, edge: TokenEdge) -> StdStreamPosition {
             self.inner().position_at(tok, edge)
         }
 

@@ -800,7 +800,7 @@ where
             return Err(cx.implementation_error(
                 "the std environment composition requires a Command trigger \
                  (custom trigger shapes need their own composition and Env type)",
-                trigger.span,
+                cx.tokens.source_span_of(trigger),
             ));
         };
         let (escape_char, post_space) = (*escape_char, *post_space);
@@ -831,7 +831,9 @@ where
                     Arc::clone(&cx.state),
                     vec![],
                 )
-                .map_err(|error| cx.implementation_error(error, trigger.span))?;
+                .map_err(|error| {
+                    cx.implementation_error(error, SourceSpan::new(&cx.source, trigger.span))
+                })?;
             return Ok((id, None));
         };
         let source = Arc::clone(&cx.source);
@@ -862,7 +864,9 @@ where
             .state
             .scopes()
             .retrieve_spec(&query, &cx.state)
-            .map_err(|error| cx.implementation_error(error, name_group.name_span))?;
+            .map_err(|error| {
+                cx.implementation_error(error, SourceSpan::new(&cx.source, name_group.name_span))
+            })?;
         let spec: Arc<dyn CallableSpec<LLL>> = match resolved {
             Some(spec) => spec,
             None => {
@@ -879,7 +883,11 @@ where
         // Declared arguments: the shared core loop; the argument frames quote the
         // *environment's* name, not `\begin`.
         let (mut children, arguments) =
-            parse_declared_arguments(cx, &spec, name_group.name_span)?;
+            parse_declared_arguments(
+                cx,
+                &spec,
+                &SourceSpan::new(&cx.source, name_group.name_span),
+            )?;
 
         // The environment's behavior, through the funnel downcast. A
         // non-`EnvironmentSpec` registration has no behavior to offer and gets the
@@ -932,7 +940,7 @@ where
         if passthrough.is_some() {
             return Err(cx.implementation_error(
                 "the environment body parser must return no pass-through state delta",
-                trigger.span,
+                SourceSpan::new(&cx.source, trigger.span),
             ));
         }
 
@@ -979,7 +987,10 @@ where
                 children,
             )
             .map_err(|error| {
-                cx.staging_error(error, Span::new(trigger.span.start(), body.end))
+                cx.staging_error(
+                    error,
+                    SourceSpan::new(&cx.source, Span::new(trigger.span.start(), body.end)),
+                )
             })?;
         Ok((id, None))
     }
@@ -1035,7 +1046,7 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
                 Arc::clone(&cx.state),
                 vec![],
             )
-            .map_err(|error| cx.staging_error(error, span))?;
+            .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
         Ok((id, None))
     }
 }

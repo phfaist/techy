@@ -60,7 +60,7 @@ use core::fmt;
 use crate::engine::ParseDriver;
 use crate::error::DiagnosticInfo;
 use crate::node::{ArgumentExt, ContentNodes};
-use crate::source::{SourceSpan, Span};
+use crate::source::SourceSpan;
 use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes};
 use crate::state::Lang;
 use crate::token::TokenKind;
@@ -172,7 +172,7 @@ where
                     "TackOnFieldsArgumentParser field names must be distinct \
                      (duplicate registration of ‘{duplicate}’)"
                 ),
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
         let mut nodes = Vec::new();
@@ -209,7 +209,7 @@ where
             seen[index] = true;
 
             nodes.extend(noise.nodes);
-            stage_pre_space(cx, &mut nodes, token.pre_space)?;
+            stage_pre_space(cx, &mut nodes, &token)?;
 
             // The dispatch mirrors the expression position's: resolution is the
             // parser's own configuration (never the scope stack), the trigger is

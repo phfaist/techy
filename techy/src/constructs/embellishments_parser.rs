@@ -110,13 +110,13 @@ where
         if self.markers.is_empty() {
             return Err(cx.implementation_error(
                 "EmbellishmentsArgumentParser::new needs at least one marker",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
         if self.markers.iter().any(|marker| marker.is_empty()) {
             return Err(cx.implementation_error(
                 "EmbellishmentsArgumentParser::new needs non-empty markers",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
         let mut nodes = Vec::new();
@@ -154,7 +154,7 @@ where
             if expression.is_none() {
                 // Marker + expression are atomic: rewind the marker (and this
                 // iteration's noise) and end the run, silently.
-                cx.tokens.move_to_pos(noise.start);
+                cx.tokens.move_to_position(&noise.start);
                 break;
             }
 
@@ -176,11 +176,11 @@ where
                     Arc::clone(&cx.state),
                     wrapper_children,
                 )
-                .map_err(|error| cx.staging_error(error, span))?;
+                .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
 
             used[marker_index] = true;
             nodes.extend(noise.nodes);
-            stage_pre_space(cx, &mut nodes, first.pre_space)?;
+            stage_pre_space(cx, &mut nodes, &first)?;
             if content_start.is_none() {
                 content_start = Some(nodes.len() as u32);
             }

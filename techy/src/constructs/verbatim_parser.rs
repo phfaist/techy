@@ -197,7 +197,7 @@ fn read_raw_content<L: Lang>(
                         "token reader produced a {} token under a verbatim state",
                         other
                     ),
-                    token.span,
+                    cx.tokens.source_span_of(&token),
                 ));
             }
         }
@@ -359,7 +359,7 @@ where
 
         // Committed: the whitespace becomes region noise, the delimiter is consumed.
         let mut nodes = Vec::new();
-        stage_pre_space(cx, &mut nodes, token.pre_space)?;
+        stage_pre_space(cx, &mut nodes, &token)?;
         cx.tokens.move_past(&token, true);
         let open_span = token.span;
         let content_start = cx.tokens.pos();
@@ -406,7 +406,7 @@ where
                     Arc::clone(&content_state),
                     vec![],
                 )
-                .map_err(|error| cx.staging_error(error, span))?;
+                .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
             children.push(id);
         }
         let child_count = children.len() as u32;
@@ -426,7 +426,7 @@ where
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.staging_error(error, group_span))?;
+            .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, group_span)))?;
         nodes.push(group);
         Ok(Some(ParsedArgumentNodes::new(
             nodes,
@@ -716,7 +716,9 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                             Arc::clone(&verbatim_state),
                             vec![],
                         )
-                        .map_err(|error| cx.staging_error(error, token.span))?;
+                        .map_err(|error| {
+                            cx.staging_error(error, SourceSpan::new(&cx.source, token.span))
+                        })?;
                     children.push(id);
                     content_designation_start = 1;
                 }
@@ -743,7 +745,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                     Arc::clone(&verbatim_state),
                     vec![],
                 )
-                .map_err(|error| cx.staging_error(error, span))?;
+                .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
             children.push(id);
         }
 
@@ -755,7 +757,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.staging_error(error, body_span))?;
+            .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, body_span)))?;
         let end = raw_end.terminator.map(|span| span.end()).unwrap_or(raw_end.content_end);
         Ok((
             EnvironmentBody {

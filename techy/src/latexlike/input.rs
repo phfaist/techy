@@ -61,8 +61,9 @@ use crate::node::{
 };
 use crate::engine::ParseDriver;
 use crate::scopes::SpecProvenance;
-use crate::source::{SourceSpan, Span};
+use crate::source::Span;
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
+use crate::token::TokenEdge;
 use crate::state::ParsingStateDelta;
 
 use super::lang::LatexlikeGroupType;
@@ -306,20 +307,20 @@ where
         cx: &mut ParseContext<'_, '_, LLL>,
     ) -> ConstructParserResult<LLL, (BuildId, Option<Box<ParsingStateDelta<LLL>>>)> {
         let token = self.invocation.token;
-        let name_span = Span::new(token.span.start(), token.post_space().start());
+        let name = cx.tokens.source_span_between(token, TokenEdge::Start, TokenEdge::End);
 
         // 1. The declared arguments (the shared core loop).
         let (mut children, arguments) =
-            parse_declared_arguments(cx, self.invocation.spec, name_span)?;
+            parse_declared_arguments(cx, self.invocation.spec, &name)?;
 
         // The invocation's extent in the *includer's* source: trigger through the
-        // last argument node (the trigger's own end when the argument is absent).
-        let end = children
-            .last()
-            .and_then(|last| cx.staged_nodes().get(*last))
-            .map(|view| view.span().end())
-            .unwrap_or(token.span.end());
-        let at = SourceSpan::new(&cx.source, token.span.start()..end);
+        // last argument node — where the reader now stands (the trigger's own end
+        // when the argument is absent).
+        let end = cx.tokens.position_here();
+        let at = cx.source_span_within(
+            &cx.tokens.position_at(token, TokenEdge::Start),
+            &end,
+        )?;
 
         // 2. The argument text — the reference, exactly as written.
         let reference: Option<String> = arguments
@@ -386,7 +387,7 @@ where
             ParsedArguments::from(arguments),
             slots,
             children,
-            Some(end),
+            Some(&end),
         )?;
         Ok((id, after_effects))
     }
@@ -449,7 +450,7 @@ mod tests {
     use crate::scopes::Package;
     use crate::source::{
         check_include_chain, MapResolver, ResolveError, ResolvedContent,
-        SourceProvenance, SourceResolver,
+        SourceProvenance, SourceResolver, SourceSpan,
     };
     use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
 
