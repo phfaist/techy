@@ -203,7 +203,7 @@ impl Serialize for CompactIndex {
 /// not one of the two reserved forms, a floating-point number, an integer outside
 /// `i64` — is an error, and so is a value nesting deeper than
 /// [`SerialValue::MAX_NESTING_DEPTH`] (the depth is checked as the value is read, so
-/// a hostile input cannot exhaust the stack whatever the format).
+/// a malicious input cannot exhaust the stack whatever the format).
 impl<'de> Deserialize<'de> for SerialValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         ValueAt { depth: 0 }.deserialize(deserializer)
@@ -375,7 +375,7 @@ fn out_of_range<E: de::Error, N: fmt::Display>(v: N) -> E {
     E::custom(SerialValueError::IntegerOutOfRange { value: v.to_string(), target: "i64" })
 }
 
-/// A capacity to preallocate from an untrusted size hint: bounded, so that a hostile
+/// A capacity to preallocate from an untrusted size hint: bounded, so that a malicious
 /// hint cannot demand a huge allocation up front.
 pub(super) fn cautious_capacity(hint: Option<usize>) -> usize {
     hint.map_or(0, |n| n.min(1024))
