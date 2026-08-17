@@ -285,7 +285,7 @@ where
             // under any policy (resolve_command's contract).
             let resolved = cx
                 .driver
-                .resolve_command(&cx.state, next)
+                .resolve_command(&cx.state, cx.tokens.token_kind(next))
                 .map_err(|error| cx.attach_hook_frames(error))?;
             match resolved {
                 CommandResolution::Resolved(resolved) => {
@@ -1050,8 +1050,8 @@ mod tests {
     use crate::state::{ParsingState, StateData};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsRules, StdTokenReader, TokenListReader, TokenReader,
-        TokenRules, WhitespaceRules,
+        ParagraphRules, SpecialsRules, StdTokenReader, TokenKindView, TokenListReader,
+        TokenReader, TokenRules, WhitespaceRules,
     };
     use alloc::string::ToString;
     use alloc::vec;
@@ -1108,17 +1108,17 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<ArgLang>,
-            token: &Token<'_, ArgLang>,
+            token_kind: TokenKindView<'_, ArgLang>,
         ) -> Result<CommandResolution<ArgLang>, crate::error::ParseError> {
-            let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+            let TokenKindView::Command { name, escape_char } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             let query = CallableQuery::new(
                 CT_MACRO,
                 name,
-                CallableSyntax::Command { escape_char: *escape_char },
+                CallableSyntax::Command { escape_char },
             )
-            .with_token(token);
+            .with_token_kind(token_kind);
             Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })

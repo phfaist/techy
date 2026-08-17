@@ -89,7 +89,7 @@ impl<L: Lang> SpecsProvider<L> for ToyProvider {
 
     fn retrieve_spec(
         &self,
-        _query: &CallableQuery<'_, '_, L>,
+        _query: &CallableQuery<'_, L>,
         _state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
         Ok(None)

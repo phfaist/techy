@@ -1239,7 +1239,7 @@ impl SpecsProvider<ParseLang> for ParseProvider {
 
     fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, ParseLang>,
+        query: &CallableQuery<'_, ParseLang>,
         _state: &ParsingState<ParseLang>,
     ) -> Result<Option<Arc<dyn CallableSpec<ParseLang>>>, ProviderError> {
         Ok(match query.name {

@@ -66,7 +66,7 @@ use crate::source::{
 };
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
-use crate::token::{GroupRule, StdStreamPosition, StdTokenReader, Token, TokenKind, TokenReader};
+use crate::token::{GroupRule, StdStreamPosition, StdTokenReader, Token, TokenKindView, TokenReader};
 
 
 use super::ParserSession;
@@ -240,14 +240,21 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- parse-time hooks (migrated off `Lang`, July 2026) -----------------------
 
-    /// Resolve a [`Command`](crate::token::TokenKind::Command) token to its invocation
-    /// form and behavior spec. Typically implemented by a preset dispatching to the
-    /// state's libraries via a [`CallableQuery`](crate::scopes::CallableQuery) — the
-    /// token carries the fired escape character for syntax disambiguation. `Specials`
-    /// tokens need no hook: recognition = resolution, the token already carries its
-    /// spec (that asymmetry is deliberate — specials resolution is token-time and stays
-    /// on [`Lang::scan_specials`](crate::state::Lang::scan_specials); command
-    /// resolution is parse-time and lives here).
+    /// Resolve a [`Command`](crate::token::TokenKindView::Command) token to its
+    /// invocation form and behavior spec. Typically implemented by a preset
+    /// dispatching to the state's libraries via a
+    /// [`CallableQuery`](crate::scopes::CallableQuery) — the view carries the fired
+    /// escape character for syntax disambiguation. `Specials` tokens need no hook:
+    /// recognition = resolution, the token already carries its spec (that asymmetry is
+    /// deliberate — specials resolution is token-time and stays on
+    /// [`Lang::scan_specials`](crate::state::Lang::scan_specials); command resolution
+    /// is parse-time and lives here).
+    ///
+    /// The hook receives the triggering token's **view**
+    /// ([`TokenKindView`](crate::token::TokenKindView), by value — it is `Copy`), not
+    /// the token: a resolver holds no reader, and the view is everything a reader-less
+    /// party can learn about a token. Anything other than a `Command` view is a
+    /// caller-contract violation; answer [`Unresolved`](CommandResolution::Unresolved).
     ///
     /// An implementation returns [`Resolved`](CommandResolution::Resolved) to dispatch
     /// the invocation, or [`Unresolved`](CommandResolution::Unresolved) — the parse
@@ -288,9 +295,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
-        CommandResolver::resolve_command(&(), state, token)
+        CommandResolver::resolve_command(&(), state, token_kind)
     }
 
     /// The node kind representing a paragraph break. The *core* stages the returned
@@ -671,15 +678,15 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 /// [`ScopesCommandResolver`] is the standard scope-stack resolution
 /// ([`resolve_command_in_scopes`]) under a fixed command callable type.
 pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
-    /// Resolve a [`Command`](TokenKind::Command) token — the contract, the
-    /// meaning of an `Err` (abort) versus a
+    /// Resolve a [`Command`](TokenKindView::Command) token from its view — the
+    /// contract, the meaning of an `Err` (abort) versus a
     /// [`Failed`](CommandResolution::Failed) resolution (diagnose and recover),
     /// and the condition choice are [`ParseDriver::resolve_command`]'s, which
     /// [`StdParseDriver`] forwards here. The two signatures stay in step.
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>>;
 }
 
@@ -690,9 +697,9 @@ impl<L: Lang> CommandResolver<L> for () {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
-        let _ = (state, token);
+        let _ = (state, token_kind);
         Ok(CommandResolution::Unresolved {
             detail: Some(
                 "command resolution is not implemented by this language’s driver — \
@@ -723,9 +730,9 @@ impl<L: Lang> CommandResolver<L> for ScopesCommandResolver<L> {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
-        Ok(resolve_command_in_scopes(state, token, self.command_type))
+        Ok(resolve_command_in_scopes(state, token_kind, self.command_type))
     }
 }
 
@@ -845,9 +852,9 @@ impl<L: Lang<StreamPosition = StdStreamPosition>, R: CommandResolver<L>> ParseDr
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
-        self.command_resolver.resolve_command(state, token)
+        self.command_resolver.resolve_command(state, token_kind)
     }
 
     fn source_resolver(&self) -> Option<&dyn SourceResolver<L::SourceOrigin>> {
@@ -959,8 +966,8 @@ pub enum CommandResolution<L: Lang> {
 /// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers —
 /// and, where the scopes advertise their symbols, a **did-you-mean** hint — as
 /// detail; an operational provider error is [`Failed`](CommandResolution::Failed)
-/// carrying the provider's rendered error. A non-[`Command`](TokenKind::Command)
-/// token — a caller-contract violation — yields `Unresolved { detail: None }`.
+/// carrying the provider's rendered error. A non-[`Command`](TokenKindView::Command)
+/// view — a caller-contract violation — yields `Unresolved { detail: None }`.
 ///
 /// **The did-you-mean detail** scans the providers' advertised definitions
 /// ([`SpecsProvider::iter_symbols`](crate::scopes::SpecsProvider::iter_symbols),
@@ -975,25 +982,22 @@ pub enum CommandResolution<L: Lang> {
 /// `check_provider_commands_shadowed_by_escape` fires regardless of fallbacks).
 pub fn resolve_command_in_scopes<L: Lang>(
     state: &ParsingState<L>,
-    token: &Token<'_, L>,
+    token_kind: TokenKindView<'_, L>,
     callable_type: L::CallableTypeId,
 ) -> CommandResolution<L> {
-    let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+    let TokenKindView::Command { name, escape_char } = token_kind else {
         return CommandResolution::Unresolved { detail: None };
     };
-    let query = CallableQuery::new(
-        callable_type,
-        name,
-        CallableSyntax::Command { escape_char: *escape_char },
-    )
-    .with_token(token);
+    let query =
+        CallableQuery::new(callable_type, name, CallableSyntax::Command { escape_char })
+            .with_token_kind(token_kind);
     match state.scopes().retrieve_spec(&query, state) {
         Ok(Some(spec)) => {
             CommandResolution::Resolved(ResolvedCallable { callable_type, spec })
         }
         Ok(None) => {
             let mut detail = state.scopes().searched_providers().to_string();
-            if let Some(hint) = did_you_mean_hint(state, name, *escape_char, callable_type)
+            if let Some(hint) = did_you_mean_hint(state, name, escape_char, callable_type)
             {
                 detail.push_str("; ");
                 detail.push_str(&hint);

@@ -1091,7 +1091,7 @@ where
                         // A hook Err aborts under any policy (resolve_command's
                         // contract); the recoverable channels are the Ok values.
                         cx.driver
-                            .resolve_command(&cx.state, &token)
+                            .resolve_command(&cx.state, cx.tokens.token_kind(&token))
                             .map_err(|error| cx.attach_hook_frames(error))?
                     };
                     match resolved {
@@ -1352,9 +1352,9 @@ mod tests {
     /// the latexlike preset share one query-and-dispatch implementation.
     fn resolve_macro_in_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
-        Ok(resolve_command_in_scopes(state, token, CT_MACRO))
+        Ok(resolve_command_in_scopes(state, token_kind, CT_MACRO))
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
@@ -1422,9 +1422,9 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<CmdLang>,
-            token: &Token<'_, CmdLang>,
+            token_kind: TokenKindView<'_, CmdLang>,
         ) -> Result<CommandResolution<CmdLang>, ParseError> {
-            resolve_macro_in_scopes(state, token)
+            resolve_macro_in_scopes(state, token_kind)
         }
     }
 
@@ -2901,7 +2901,7 @@ mod tests {
             }
             fn retrieve_spec(
                 &self,
-                _query: &CallableQuery<'_, '_, CmdLang>,
+                _query: &CallableQuery<'_, CmdLang>,
                 _state: &ParsingState<CmdLang>,
             ) -> Result<Option<Arc<dyn CallableSpec<CmdLang>>>, ProviderError> {
                 Err(ProviderError::Failed("provider is down".into()))
@@ -2999,7 +2999,7 @@ mod tests {
         fn resolve_command(
             &self,
             _state: &ParsingState<HintLang>,
-            _token: &Token<'_, HintLang>,
+            _token_kind: TokenKindView<'_, HintLang>,
         ) -> Result<CommandResolution<HintLang>, ParseError> {
             Ok(CommandResolution::Unresolved {
                 detail: Some("load the {amsmath} library for this command".into()),
@@ -3067,7 +3067,7 @@ mod tests {
         fn resolve_command(
             &self,
             _state: &ParsingState<AbortLang>,
-            _token: &Token<'_, AbortLang>,
+            _token_kind: TokenKindView<'_, AbortLang>,
         ) -> Result<CommandResolution<AbortLang>, ParseError> {
             let source: Arc<Source> = Arc::new(Source::new(""));
             Err(ParseError::new(
@@ -3563,9 +3563,9 @@ mod tests {
             fn resolve_command(
                 &self,
                 state: &ParsingState<ExtLang>,
-                token: &Token<'_, ExtLang>,
+                token_kind: TokenKindView<'_, ExtLang>,
             ) -> Result<CommandResolution<ExtLang>, ParseError> {
-                resolve_macro_in_scopes(state, token)
+                resolve_macro_in_scopes(state, token_kind)
             }
         }
 
@@ -4509,9 +4509,9 @@ mod tests {
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
-                token: &Token<'_, DriveLang>,
+                token_kind: TokenKindView<'_, DriveLang>,
             ) -> Result<CommandResolution<DriveLang>, ParseError> {
-                resolve_macro_in_scopes(state, token)
+                resolve_macro_in_scopes(state, token_kind)
             }
 
             fn group_interior_delta(

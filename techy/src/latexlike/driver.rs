@@ -31,7 +31,7 @@ use crate::state::{
     ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
     TokenRulesOverrides, WhitespaceOverrides,
 };
-use crate::token::{GroupRule, StdTokenReader, Token, TokenReader};
+use crate::token::{GroupRule, StdTokenReader, TokenKindView, TokenReader};
 
 use super::{
     Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType,
@@ -447,9 +447,13 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     fn resolve_command(
         &self,
         state: &ParsingState<LLL>,
-        token: &Token<'_, LLL>,
+        token_kind: TokenKindView<'_, LLL>,
     ) -> Result<CommandResolution<LLL>, crate::error::ParseError<LLL::SourceOrigin>> {
-        Ok(resolve_command_in_scopes(state, token, LLL::CallableTypeId::macro_callable()))
+        Ok(resolve_command_in_scopes(
+            state,
+            token_kind,
+            LLL::CallableTypeId::macro_callable(),
+        ))
     }
 
     /// One-line delegation to the [`make_paragraph_break_node`] behavior function

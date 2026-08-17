@@ -626,8 +626,8 @@ mod tests {
     };
     use crate::token::{
         CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
-        ParagraphRules, SpecialsRules, Token, TokenKind, TokenListReader, TokenRules,
-        WhitespaceRules,
+        ParagraphRules, SpecialsRules, Token, TokenKind, TokenKindView, TokenListReader,
+        TokenRules, WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::sync::Arc;
@@ -913,14 +913,12 @@ mod tests {
     #[test]
     fn default_resolve_command_reports_unimplemented_resolution() {
         let st = state();
-        let token: Token<'static, PlainLang> = Token::new(
-            TokenKind::Command { name: "foo", escape_char: '\\', post_space: Span::empty(4) },
-            Span::new(0, 4),
-            Span::empty(0),
-        );
+        // The view is a plain public enum: a resolver hook takes exactly this, so a
+        // test states the trigger's facts directly instead of scanning one.
+        let token_kind = TokenKindView::Command { name: "foo", escape_char: '\\' };
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
         let resolved: CommandResolution<PlainLang> =
-            driver.resolve_command(&st, &token).unwrap();
+            driver.resolve_command(&st, token_kind).unwrap();
         match resolved {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("command resolution is not implemented"));
@@ -943,27 +941,20 @@ mod tests {
         let st = ParsingState::<PlainLang>::lang_initial_with_packages([package])
             .expect("seed state");
 
-        let token: Token<'static, PlainLang> = Token::new(
-            TokenKind::Command { name: "foo", escape_char: '\\', post_space: Span::empty(4) },
-            Span::new(0, 4),
-            Span::empty(0),
-        );
+        let token_kind =
+            TokenKindView::<PlainLang>::Command { name: "foo", escape_char: '\\' };
         // Through the strategy value carried by StdParseDriver…
         let driver: StdParseDriver<ScopesCommandResolver<PlainLang>> = StdParseDriver::new(
             Recovery::Strict,
             ScopesCommandResolver::<PlainLang> { command_type: 0u32 },
         );
         assert!(matches!(
-            driver.resolve_command(&st, &token).unwrap(),
+            driver.resolve_command(&st, token_kind).unwrap(),
             CommandResolution::Resolved(_)
         ));
         // …and a clean miss carries the searched-providers detail.
-        let miss: Token<'static, PlainLang> = Token::new(
-            TokenKind::Command { name: "bar", escape_char: '\\', post_space: Span::empty(4) },
-            Span::new(0, 4),
-            Span::empty(0),
-        );
-        match driver.resolve_command(&st, &miss).unwrap() {
+        let miss = TokenKindView::<PlainLang>::Command { name: "bar", escape_char: '\\' };
+        match driver.resolve_command(&st, miss).unwrap() {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("defs"));
             }

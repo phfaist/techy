@@ -620,7 +620,7 @@ impl SpecsProvider<Latexlike> for CountingProvider {
 
     fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, Latexlike>,
+        query: &CallableQuery<'_, Latexlike>,
         _state: &ParsingState<Latexlike>,
     ) -> Result<Option<Arc<dyn CallableSpec<Latexlike>>>, ProviderError> {
         if query.name != "now" {

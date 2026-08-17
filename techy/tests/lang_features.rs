@@ -48,8 +48,7 @@ mod support {
         CommandResolver, CommandRule, CommandRules, FeatureAbsent, FeaturePresent,
         FinalizeError, GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures,
         ParseResult, ParsingState, SpecialsMatch, SpecialsScanError, StateData,
-        StdParseDriver, Token,
-        TokenKind, TokenRules, TriggerChars, WhitespaceRules,
+        StdParseDriver, TokenKindView, TokenRules, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -297,15 +296,15 @@ mod support {
         fn resolve_command(
             &self,
             _state: &ParsingState<CommandsWithoutScopesLang>,
-            token: &Token<'_, CommandsWithoutScopesLang>,
+            token_kind: TokenKindView<'_, CommandsWithoutScopesLang>,
         ) -> Result<
             CommandResolution<CommandsWithoutScopesLang>,
             techy::error::ParseError,
         > {
-            let TokenKind::Command { name, .. } = &token.kind else {
+            let TokenKindView::Command { name, .. } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
-            let spec: Arc<dyn CallableSpec<CommandsWithoutScopesLang>> = match *name {
+            let spec: Arc<dyn CallableSpec<CommandsWithoutScopesLang>> = match name {
                 // A plain zero-argument callable.
                 "mark" => Arc::new(StdCallableSpec::default()),
                 _ => return Ok(CommandResolution::Unresolved { detail: None }),

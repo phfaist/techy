@@ -872,9 +872,9 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<EnvLang>,
-            token: &Token<'_, EnvLang>,
+            token_kind: TokenKindView<'_, EnvLang>,
         ) -> Result<CommandResolution<EnvLang>, crate::error::ParseError> {
-            let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+            let TokenKindView::Command { name, escape_char } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             // `\begin` introduces every environment: the shared dispatcher spec's
@@ -882,7 +882,7 @@ mod tests {
             // nothing — inside a body it is the stop condition (checked before the
             // dispatch arms), and an orphan at the root takes the
             // unresolvable-command recovery ([§dd-dr:parsers-engine], decision 8).
-            if *name == "begin" {
+            if name == "begin" {
                 return Ok(CommandResolution::Resolved(ResolvedCallable {
                     callable_type: CT_ENVIRONMENT,
                     spec: Arc::new(BeginSpec),
@@ -891,9 +891,9 @@ mod tests {
             let query = CallableQuery::new(
                 CT_MACRO,
                 name,
-                CallableSyntax::Command { escape_char: *escape_char },
+                CallableSyntax::Command { escape_char },
             )
-            .with_token(token);
+            .with_token_kind(token_kind);
             Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })

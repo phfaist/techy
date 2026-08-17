@@ -828,7 +828,8 @@ mod tests {
     use crate::state::StateData;
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsRules, StdTokenReader, TokenRules, WhitespaceRules,
+        ParagraphRules, SpecialsRules, StdTokenReader, TokenKindView, TokenRules,
+        WhitespaceRules,
     };
     use alloc::format;
     use alloc::string::ToString;
@@ -885,17 +886,17 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<VerbLang>,
-            token: &Token<'_, VerbLang>,
+            token_kind: TokenKindView<'_, VerbLang>,
         ) -> Result<CommandResolution<VerbLang>, crate::error::ParseError> {
-            let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+            let TokenKindView::Command { name, escape_char } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             let query = CallableQuery::new(
                 CT_MACRO,
                 name,
-                CallableSyntax::Command { escape_char: *escape_char },
+                CallableSyntax::Command { escape_char },
             )
-            .with_token(token);
+            .with_token_kind(token_kind);
             Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })

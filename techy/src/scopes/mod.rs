@@ -66,7 +66,7 @@ use crate::state::{
     ParsingStateDelta,
 };
 use crate::token::{
-    SpecialsMatch, SpecialsScanError, Token, TokenErrorKind, TriggerChars,
+    SpecialsMatch, SpecialsScanError, TokenErrorKind, TokenKindView, TriggerChars,
 };
 
 mod provenance;
@@ -97,11 +97,14 @@ pub enum CallableSyntax {
 /// A callable resolution request: everything a [`SpecsProvider`] may dispatch on, minus
 /// the parsing state (passed alongside).
 ///
-/// The `token` is present when resolution happens for an already-scanned token (the nodes
-/// parser resolving a `Command`) and lets providers inspect `pre_space` and
-/// spans; it is `None` where no token exists yet (specials scan, synthesized
-/// invocations). Plain data providers ignore everything but `callable_type` and `name`.
-pub struct CallableQuery<'a, 's, L: Lang> {
+/// `token_kind` is the **view** of the triggering token, present when resolution
+/// happens for an already-scanned token (the nodes parser resolving a `Command`) and
+/// `None` where no token exists yet (specials scan, synthesized invocations). The view
+/// is what a provider can know about the token: a provider has no reader, so it never
+/// sees spans or pre-space. `name` and `syntax` repeat the `Command` facts for
+/// providers that ignore the view — and plain data providers ignore everything but
+/// `callable_type` and `name`.
+pub struct CallableQuery<'a, L: Lang> {
     /// The invocation form being resolved (e.g. the preset's macro form).
     pub callable_type: L::CallableTypeId,
     /// The name to resolve. Providers store *normalized* names; normalization is the
@@ -109,23 +112,23 @@ pub struct CallableQuery<'a, 's, L: Lang> {
     pub name: &'a str,
     /// The syntax context of the invocation.
     pub syntax: CallableSyntax,
-    /// The triggering token, when one exists.
-    pub token: Option<&'a Token<'s, L>>,
+    /// The view of the triggering token, when one exists.
+    pub token_kind: Option<TokenKindView<'a, L>>,
 }
 
-impl<'a, 's, L: Lang> CallableQuery<'a, 's, L> {
+impl<'a, L: Lang> CallableQuery<'a, L> {
     /// A query without token context.
     pub fn new(
         callable_type: L::CallableTypeId,
         name: &'a str,
         syntax: CallableSyntax,
-    ) -> CallableQuery<'a, 's, L> {
-        CallableQuery { callable_type, name, syntax, token: None }
+    ) -> CallableQuery<'a, L> {
+        CallableQuery { callable_type, name, syntax, token_kind: None }
     }
 
-    /// Attach the triggering token.
-    pub fn with_token(mut self, token: &'a Token<'s, L>) -> CallableQuery<'a, 's, L> {
-        self.token = Some(token);
+    /// Attach the view of the triggering token.
+    pub fn with_token_kind(mut self, token_kind: TokenKindView<'a, L>) -> CallableQuery<'a, L> {
+        self.token_kind = Some(token_kind);
         self
     }
 }
@@ -133,21 +136,21 @@ impl<'a, 's, L: Lang> CallableQuery<'a, 's, L> {
 // Manual impls: derives would demand `L: Clone`/`L: Debug` although only references and
 // plain data are stored.
 
-impl<L: Lang> Clone for CallableQuery<'_, '_, L> {
+impl<L: Lang> Clone for CallableQuery<'_, L> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<L: Lang> Copy for CallableQuery<'_, '_, L> {}
+impl<L: Lang> Copy for CallableQuery<'_, L> {}
 
-impl<L: Lang> fmt::Debug for CallableQuery<'_, '_, L> {
+impl<L: Lang> fmt::Debug for CallableQuery<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CallableQuery")
             .field("callable_type", &self.callable_type)
             .field("name", &self.name)
             .field("syntax", &self.syntax)
-            .field("token", &self.token)
+            .field("token_kind", &self.token_kind)
             .finish()
     }
 }
@@ -488,7 +491,7 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableO
     /// fold, never a panic.
     fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, L>,
+        query: &CallableQuery<'_, L>,
         state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError>;
 
@@ -1150,7 +1153,7 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
 
     fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, L>,
+        query: &CallableQuery<'_, L>,
         state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
         if !self.visible_in(state.mode()) {
@@ -1405,7 +1408,7 @@ impl<L: Lang> SpecsProvider<L> for Scope<L> {
 
     fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, L>,
+        query: &CallableQuery<'_, L>,
         _state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
         Ok(self.get(query.callable_type, query.name).cloned())
@@ -1522,7 +1525,7 @@ impl<L: Lang> SpecsProvider<L> for FallbackProvider<L> {
 
     fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, L>,
+        query: &CallableQuery<'_, L>,
         _state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
         Ok(self.fallbacks.get(&query.callable_type).cloned())
@@ -1766,7 +1769,7 @@ impl<L: Lang> ScopeStack<L> {
     /// attached.
     pub fn retrieve_spec(
         &self,
-        query: &CallableQuery<'_, '_, L>,
+        query: &CallableQuery<'_, L>,
         state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ScopeStackError> {
         for provider in self.entries().iter().rev() {
@@ -2051,7 +2054,7 @@ mod tests {
         Arc::new(StdCallableSpec::default())
     }
 
-    fn macro_query(name: &str) -> CallableQuery<'_, 'static, PlainLang> {
+    fn macro_query(name: &str) -> CallableQuery<'_, PlainLang> {
         CallableQuery::new(MACRO, name, CallableSyntax::Command { escape_char: '\\' })
     }
 
@@ -2194,7 +2197,7 @@ mod tests {
             }
             fn retrieve_spec(
                 &self,
-                _query: &CallableQuery<'_, '_, PlainLang>,
+                _query: &CallableQuery<'_, PlainLang>,
                 _state: &ParsingState<PlainLang>,
             ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
                 Err(ProviderError::Failed("backing store unavailable".into()))
@@ -2245,7 +2248,7 @@ mod tests {
             }
             fn retrieve_spec(
                 &self,
-                query: &CallableQuery<'_, '_, PlainLang>,
+                query: &CallableQuery<'_, PlainLang>,
                 _state: &ParsingState<PlainLang>,
             ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
                 Ok(match query.syntax {
@@ -2330,7 +2333,7 @@ mod tests {
         let text_state = moded_state(stack.clone(), Mode::Text);
         let math_state = moded_state(stack.clone(), Mode::Math);
 
-        let query: CallableQuery<'_, '_, ModedLang> =
+        let query: CallableQuery<'_, ModedLang> =
             CallableQuery::new(MACRO, "vec", CallableSyntax::Command { escape_char: '\\' });
 
         // Text mode: the restricted package answers "not here" — the stack is
@@ -2366,9 +2369,9 @@ mod tests {
         let text_state = moded_state(stack.clone(), Mode::Text);
         let math_state = moded_state(stack.clone(), Mode::Math);
 
-        let emph: CallableQuery<'_, '_, ModedLang> =
+        let emph: CallableQuery<'_, ModedLang> =
             CallableQuery::new(MACRO, "emph", CallableSyntax::Command { escape_char: '\\' });
-        let vec_q: CallableQuery<'_, '_, ModedLang> =
+        let vec_q: CallableQuery<'_, ModedLang> =
             CallableQuery::new(MACRO, "vec", CallableSyntax::Command { escape_char: '\\' });
 
         // The text-only definition resolves in text, not in math; the all-modes one in
@@ -2666,7 +2669,7 @@ mod tests {
             }
             fn retrieve_spec(
                 &self,
-                _query: &CallableQuery<'_, '_, PlainLang>,
+                _query: &CallableQuery<'_, PlainLang>,
                 _state: &ParsingState<PlainLang>,
             ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
                 Ok(None)
