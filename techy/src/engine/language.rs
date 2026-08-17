@@ -21,7 +21,7 @@ use crate::error::{Diagnostics, ParseError};
 use crate::node::NodeKind;
 use super::descent_guard::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use super::driver::ParseDriver;
-use crate::source::{Source, SourceSpan, Span};
+use crate::source::{Source, SourceSpan};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 
 use super::{ParseResult, ParserSession};
@@ -221,7 +221,7 @@ impl<L: Lang> Language<L> {
             cx.state = outcome.state;
             match outcome.stop {
                 StopCause::EndOfInput => break,
-                StopCause::UnexpectedGroupClose { span } => {
+                StopCause::UnexpectedGroupClose { span, after } => {
                     // Impossible under a language that declares groups absent: a
                     // group close cannot be tokenized, so reaching this arm means the
                     // token source violated its contract (`TokenReader` docs) — an
@@ -239,22 +239,22 @@ impl<L: Lang> Language<L> {
                     // the delimiter exactly as matched (`StopCause`'s contract) —
                     // sliced, not re-peeked: a re-read under any state but the loop's
                     // own could tokenize different bytes.
-                    let delim = span.slice(cx.source.content()).to_string();
-                    cx.recover(StrayGroupClose { delim }, SourceSpan::new(&cx.source, span))?;
-                    cx.tokens.move_to_pos(span.end());
+                    let delim = span.content().to_string();
+                    cx.recover(StrayGroupClose { delim }, span.clone())?;
+                    cx.tokens.move_to_position(&after);
                     // Stage the consumed delimiter as a chars node (the
                     // markup-in-chars recovery artifact; 7.9): the root partition
                     // stays exact across the skip.
                     let id = cx.stage_node(
-                            NodeKind::chars(span),
-                            SourceSpan::new(&cx.source, span),
+                            NodeKind::chars(span.span()),
+                            span.clone(),
                             Arc::clone(&cx.state),
                             Vec::new(),
                         )
                         .map_err(|error| cx.staging_error(error, span))?;
                     nodes.push(id);
                 }
-                StopCause::TokenCondition { span } => {
+                StopCause::TokenCondition { span, .. } => {
                     return Err(cx.implementation_error(
                         "the root content loop stopped on a token condition none was \
                          set (nodes-parser contract violation)",
@@ -265,13 +265,17 @@ impl<L: Lang> Language<L> {
                     return Err(cx.implementation_error(
                         "the root content loop stopped on a node condition none was \
                          set (nodes-parser contract violation)",
-                        Span::empty(cx.tokens.pos()),
+                        cx.here(),
                     ));
                 }
             }
         }
-        let root = cx.stage_node(NodeKind::list(), SourceSpan::entire(&source), seed, nodes)
-            .map_err(|error| cx.staging_error(error, Span::empty(0)))?;
+        let root = cx
+            .stage_node(NodeKind::list(), SourceSpan::entire(&source), seed, nodes)
+            .map_err(|error| {
+                let at = SourceSpan::at(&SourceSpan::entire(&source).start_pos());
+                cx.staging_error(error, at)
+            })?;
         session.finish(root).map_err(|error| {
             ParseError::new(
                 ImplementationError::new(error.to_string()),
@@ -762,7 +766,10 @@ mod tests {
                 Ok((
                     NodesOutcome {
                         nodes: Vec::new(),
-                        stop: StopCause::TokenCondition { span: Span::empty(0) },
+                        stop: StopCause::TokenCondition {
+                            span: cx.here(),
+                            after: cx.tokens.position_here(),
+                        },
                         state: Arc::clone(&cx.state),
                         after_effects: None,
                     },

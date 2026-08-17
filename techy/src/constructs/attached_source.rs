@@ -183,19 +183,16 @@ impl<L: Lang> ParseContext<'_, '_, L> {
                 cx.state = outcome.state;
                 match outcome.stop {
                     StopCause::EndOfInput => break,
-                    StopCause::UnexpectedGroupClose { span } => {
+                    StopCause::UnexpectedGroupClose { span, after } => {
                         // Local recovery: diagnose, consume, stage the delimiter
                         // as chars, resume — the includer never sees the close.
-                        let delim = span.slice(cx.source.content()).to_string();
-                        cx.recover(
-                            StrayGroupClose { delim },
-                            SourceSpan::new(&cx.source, span),
-                        )?;
-                        cx.tokens.move_to_pos(span.end());
+                        let delim = span.content().to_string();
+                        cx.recover(StrayGroupClose { delim }, span.clone())?;
+                        cx.tokens.move_to_position(&after);
                         let id = cx
                             .stage_node(
-                                NodeKind::chars(span),
-                                SourceSpan::new(&cx.source, span),
+                                NodeKind::chars(span.span()),
+                                span.clone(),
                                 Arc::clone(&cx.state),
                                 Vec::new(),
                             )
@@ -420,7 +417,7 @@ mod tests {
     fn with_context<R>(
         driver: &StdParseDriver,
         content: &str,
-        f: impl FnOnce(&mut ParseContext<'_, '_, DocLang>) -> R,
+        f: impl FnOnce(&mut ParseContext<'_, '_, DocLang>, &Arc<Source>) -> R,
     ) -> (R, ParserSession<DocLang>) {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(&source);
@@ -429,7 +426,9 @@ mod tests {
         let result = {
             let mut cx =
                 ParseContext::new(&mut reader, Arc::clone(&source), state, &mut session, driver);
-            f(&mut cx)
+            // The test's own source: a construct parser gets its spans from the
+            // reader, so the fixtures build theirs from the binding here.
+            f(&mut cx, &source)
         };
         (result, session)
     }
@@ -458,12 +457,12 @@ mod tests {
     #[test]
     fn the_door_parses_attached_content_into_the_same_session() {
         let driver = driver(Recovery::Strict);
-        let (nodes, session) = with_context(&driver, r"\input{chapter.tex}", |cx| {
-            let trigger = SourceSpan::entire(&cx.source);
+        let (nodes, session) = with_context(&driver, r"\input{chapter.tex}", |cx, source| {
+            let trigger = SourceSpan::entire(source);
             let attached: Arc<Source> =
                 Arc::new(Source::resolved("hello {world}", "chapter.tex", trigger));
             let mut parser = nodes_parser(cx.driver);
-            let outer_pos_before = cx.tokens.pos();
+            let outer_pos_before = cx.here().start();
             let outcome = cx
                 .parse_attached_source(
                     Arc::clone(&attached),
@@ -473,7 +472,7 @@ mod tests {
                 .unwrap();
             let nodes = outcome.nodes;
             // The outer reader did not move: the sub-parse ran a fresh inner one.
-            assert_eq!(cx.tokens.pos(), outer_pos_before);
+            assert_eq!(cx.here().start(), outer_pos_before);
             // Content nodes only, staged into the *same* builder, with spans in
             // the attached source.
             let staged = cx.staged_nodes();
@@ -493,8 +492,8 @@ mod tests {
         // Tolerant: the included file's stray `}` is diagnosed, staged as chars,
         // and the run resumes — the includer is never unwound.
         let driver = driver(Recovery::Tolerant);
-        let (nodes, session) = with_context(&driver, "outer", |cx| {
-            let trigger = SourceSpan::new(&cx.source, 0..5);
+        let (nodes, session) = with_context(&driver, "outer", |cx, source| {
+            let trigger = SourceSpan::new(source, 0..5);
             let attached: Arc<Source> =
                 Arc::new(Source::resolved("a}b", "frag.tex", trigger));
             let mut parser = nodes_parser(cx.driver);
@@ -521,8 +520,8 @@ mod tests {
 
         // Strict: the funnel aborts, as everywhere.
         let strict = self::driver(Recovery::Strict);
-        let (result, _session) = with_context(&strict, "outer", |cx| {
-            let trigger = SourceSpan::new(&cx.source, 0..5);
+        let (result, _session) = with_context(&strict, "outer", |cx, source| {
+            let trigger = SourceSpan::new(source, 0..5);
             let attached: Arc<Source> =
                 Arc::new(Source::resolved("a}b", "frag.tex", trigger));
             let mut parser = nodes_parser(cx.driver);
@@ -538,8 +537,8 @@ mod tests {
         // recursion policy belongs to the embedder's resolver
         // ([`check_include_chain`]), never to the core.
         let driver = driver(Recovery::Strict);
-        let ((), session) = with_context(&driver, "outer", |cx| {
-            let trigger = SourceSpan::new(&cx.source, 0..5);
+        let ((), session) = with_context(&driver, "outer", |cx, source| {
+            let trigger = SourceSpan::new(source, 0..5);
             let first: Arc<Source> = Arc::new(
                 Source::resolved("self", "self.tex", trigger)
                     .with_origin(Some("self.tex".into())),
@@ -561,8 +560,8 @@ mod tests {
     fn attach_without_a_resolver_diagnoses_no_source_resolver() {
         // Tolerant: recorded at `at`, Ok(None) — nothing attached.
         let tolerant = driver(Recovery::Tolerant);
-        let (result, session) = with_context(&tolerant, r"\input{chapter.tex}", |cx| {
-            let at = SourceSpan::entire(&cx.source);
+        let (result, session) = with_context(&tolerant, r"\input{chapter.tex}", |cx, source| {
+            let at = SourceSpan::entire(source);
             let mut parser = nodes_parser(cx.driver);
             cx.attach_source_reference(
                 "chapter.tex",
@@ -587,8 +586,8 @@ mod tests {
 
         // Strict: the funnel aborts with the condition.
         let strict = driver(Recovery::Strict);
-        let (result, _session) = with_context(&strict, r"\input{chapter.tex}", |cx| {
-            let at = SourceSpan::entire(&cx.source);
+        let (result, _session) = with_context(&strict, r"\input{chapter.tex}", |cx, source| {
+            let at = SourceSpan::entire(source);
             let mut parser = nodes_parser(cx.driver);
             cx.attach_source_reference(
                 "chapter.tex",
@@ -603,8 +602,8 @@ mod tests {
     #[test]
     fn a_failing_resolver_diagnoses_unresolvable_reference_with_the_live_error() {
         let tolerant = driver_resolving(Recovery::Tolerant, &[]); // empty map
-        let (result, session) = with_context(&tolerant, r"\input{missing.tex}", |cx| {
-            let at = SourceSpan::entire(&cx.source);
+        let (result, session) = with_context(&tolerant, r"\input{missing.tex}", |cx, source| {
+            let at = SourceSpan::entire(source);
             let mut parser = nodes_parser(cx.driver);
             cx.attach_source_reference(
                 "missing.tex",
@@ -657,8 +656,8 @@ mod tests {
 
         let driver = StdParseDriver::new(Recovery::Tolerant, ())
             .with_source_resolver(RewritingResolver);
-        let (result, session) = with_context(&driver, r"\input{missing.tex}", |cx| {
-            let at = SourceSpan::entire(&cx.source);
+        let (result, session) = with_context(&driver, r"\input{missing.tex}", |cx, source| {
+            let at = SourceSpan::entire(source);
             let mut parser = nodes_parser(cx.driver);
             cx.attach_source_reference(
                 "missing.tex",
@@ -685,8 +684,8 @@ mod tests {
     fn attach_resolves_and_parses_with_provenance_stamped_at_the_trigger() {
         let driver =
             driver_resolving(Recovery::Strict, &[("chapter.tex", "chapter {content}")]);
-        let ((), session) = with_context(&driver, r"\input{chapter.tex} tail", |cx| {
-            let at = SourceSpan::new(&cx.source, 0..19);
+        let ((), session) = with_context(&driver, r"\input{chapter.tex} tail", |cx, source| {
+            let at = SourceSpan::new(source, 0..19);
             let mut parser = nodes_parser(cx.driver);
             let nodes = cx
                 .attach_source_reference(
@@ -777,7 +776,7 @@ mod tests {
         let mut session: ParserSession<PlainLang> = ParserSession::new();
         let state = Arc::new(ParsingState::<PlainLang>::lang_initial().expect("seed state"));
         let mut cx = ParseContext::new(&mut reader, source.clone(), state, &mut session, &driver);
-        let at = SourceSpan::entire(&cx.source);
+        let at = SourceSpan::entire(&source);
         let mut parser = ParseDriver::<PlainLang>::make_nodes_parser(
             &driver,
             StopSpec::none(),
@@ -797,8 +796,8 @@ mod tests {
         // deltas exports `after_effects: None` — the ruled `Option` spelling, so a
         // persisting caller forwards nothing rather than an empty delta.
         let driver = driver(Recovery::Strict);
-        let ((), session) = with_context(&driver, r"\input{plain.tex}", |cx| {
-            let trigger = SourceSpan::entire(&cx.source);
+        let ((), session) = with_context(&driver, r"\input{plain.tex}", |cx, source| {
+            let trigger = SourceSpan::entire(source);
             let attached: Arc<Source> =
                 Arc::new(Source::resolved("plain {content}", "plain.tex", trigger));
             let mut parser = nodes_parser(cx.driver);
