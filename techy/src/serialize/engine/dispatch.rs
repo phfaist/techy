@@ -118,7 +118,7 @@ where
 /// produced by [`IdentifierResolver`]s. Wraps one deserialization routine producing
 /// `Arc<T>`, either a type's own [`DeserializableObject`] impl
 /// ([`from_type`](ObjectReader::from_type)) or any routine ([`new`](ObjectReader::new)
-/// — how a resolver wraps a definition it loaded dynamically). Cheap to clone (the
+/// — how a resolver wraps a definition it obtained at run time). Cheap to clone (the
 /// routine is shared).
 pub struct ObjectReader<L: SerializableLang, T: ?Sized> {
     read: Arc<ReadFn<L, T>>,
@@ -180,8 +180,8 @@ impl<L: SerializableLang, T: ?Sized> fmt::Debug for ObjectReader<L, T> {
 /// A namespace's supplier of readers for a heterogeneous table — a *namespace* being
 /// an identifier prefix owned by one framework or package: asked for an identifier no
 /// registered reader covers, it answers with the [`ObjectReader`] for it (constructed
-/// on demand — from a definition it loads, under its own trust policy) or declines.
-/// Registered with a prefix on the table's handle
+/// on demand — from a definition it obtains at run time, under its own trust policy)
+/// or declines. Registered with a prefix on the table's handle
 /// ([`TableHandle::register_resolver`]); a resolver is asked only for identifiers
 /// beginning with its prefix, and its answer for an identifier — a reader or a
 /// decline — is kept by the session, so it is never asked twice for one identifier

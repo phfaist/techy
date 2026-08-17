@@ -390,7 +390,7 @@ pub enum DeserializeError {
     /// [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object),
     /// a driver, or a resolver — could not rebuild the object, for a reason of its own
     /// (an object the reading environment lacks, a definition that could not be
-    /// loaded, …): `detail` says which, in words; `cause` optionally carries the
+    /// obtained, …): `detail` says which, in words; `cause` optionally carries the
     /// underlying error (the shape of [`HookFailed`](crate::error::HookFailed); the
     /// `Arc` keeps the error `Clone`). Construct with
     /// [`failed`](DeserializeError::failed) and [`with_cause`](DeserializeError::with_cause).

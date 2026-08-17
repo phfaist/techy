@@ -66,7 +66,7 @@ use super::{
 ///
 /// Any `Fn() -> P` closure or function whose `P` converts into a shared provider
 /// ([`IntoSpecsProvider`]) is a recipe: `known.register_recipe("minilatex",
-/// minilatex_package::<Latexlike>)`. A recipe that can fail (loading a package from a
+/// minilatex_package::<Latexlike>)`. A recipe that can fail (building a package from a
 /// file, say) implements the trait itself and reports through `build`'s `Result`.
 pub trait ProviderRecipe<L: Lang>: Send + Sync {
     /// Build the provider.
