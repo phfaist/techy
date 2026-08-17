@@ -570,7 +570,10 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
   optional segment key `main` (a `$index` naming the segment's principal payload,
   translated on read and returned by `push_segment`) and an optional caller-provided
   `profile` string per segment (identifies what can read the payload fully; a reader
-  with a declared profile rejects a mismatch — Q7-g). Also `Deserialize for
+  with a declared profile rejects a mismatch — Q7-g) — placed inside a dedicated,
+  always-present `meta` object (user ruling 2026-08-17: `{ "version", "meta": {
+  "profile"?: … }, "tables", "main"? }`) so segment metadata can grow later (e.g.
+  emission time) without touching the envelope. Also `Deserialize for
   DiagnosticValue` added (D1 promise). Original agenda: every public
   field name and enum string (core + latexlike), the `Index` table discriminant
   rendering (name string vs ordinal), the canonical base64 form for `Bytes`; the
