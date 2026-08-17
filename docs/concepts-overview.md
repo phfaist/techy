@@ -205,3 +205,6 @@ types ([`MacroSpec`](crate::latexlike::MacroSpec),
 preloaded). A framework language with its own vocabularies joins the language
 family (the [`LatexlikeLang`](crate::latexlike::LatexlikeLang) family trait)
 instead of forking the preset.
+
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

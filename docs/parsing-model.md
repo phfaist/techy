@@ -289,5 +289,5 @@ The [`core`](crate::core) module page is the reference map of the machinery
 hub; [`core::constructs`](crate::core::constructs) is the reference for the
 parsing layer's contracts.
 
-Read next: [Custom construct parsers](crate::guide::construct_parsers) —
-writing a parser of your own against the contracts this chapter mapped.
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

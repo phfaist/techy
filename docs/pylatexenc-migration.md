@@ -223,8 +223,8 @@ invocation point.
 [The specs chapter](crate::guide::specs#resolving-external-sources-input-like-inclusion)
 has the standard filesystem recipe.
 
-Read next: [Learn techy by example](crate::guide::learn_by_example) — the
-shipped behavior in small, complete, compile-checked examples.
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.
 
 [pyl]: https://pylatexenc.readthedocs.io/
 [pyl-latexwalker-mod]: https://pylatexenc.readthedocs.io/en/latest/latexwalker/

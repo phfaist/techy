@@ -1,27 +1,30 @@
 # Guide
 
-techy is a fast, extensible parser toolkit for LaTeX-like markup languages,
-written in Rust. It builds a [node tree](crate::guide::concepts_overview#the-node-tree)
+Techy is a fast, extensible parser toolkit for parsing a LaTeX-like language
+as markup, written in Rust. It builds a
+[node tree](crate::guide::concepts_overview#the-node-tree)
 — an Abstract Syntax Tree — from LaTeX-like source code, which you can then
-analyze, transform, or convert into other representations.
+analyze, transform, serialize, or convert into other representations.
 
-The engine itself has no privileged language concepts: there is no built-in
-math mode, no hard-coded `{`/`}` groups, `%` comments, or `\` commands. The
-familiar LaTeX behavior is provided by a preset, the
+The engine itself is based on a generic core which has no hard-coded
+privileged language concepts.  The
+familiar LaTeX behavior (e.g., `\command` macros, `{…}` groups)
+is provided by a preset, the
 [`latexlike`](crate::latexlike) module, and custom LaTeX-like languages are
-defined with the same public machinery. The crate is `no_std`-friendly (it
-depends only on `core` and `alloc`) and performs no input/output of its own;
-content lookup for `\input`-like constructs is delegated to the calling
-application through the [`SourceResolver`](crate::source::SourceResolver)
-trait.
+defined with the same public machinery.
+
+The crate is [`no_std`-friendly with
+minimal dependencies](crate#crate-dependencies-features-and-panic-policy).
 
 This guide is the narrative documentation; the crate modules are the API
 reference. Each chapter is a sub-page of this module, and the Markdown sources
 live in `docs/` in the repository. The chapters are grouped into a **User
 Guide** (using techy as it ships), a **Developer Guide** (extending techy with
 your own parsers and languages, and embedding it elsewhere), and an **AI
-Guide** (condensed chapters written to be loaded into an AI assistant's
-context).
+Guide** (condensed chapters optimized for loading into an AI assistant's
+context).  The AI Guide might also be useful for humans already familiar
+with techy's philosophy and who might prefer a condensed, summarized map
+of the library.
 
 **New to techy? Read the [Introduction](crate::guide::introduction) first** —
 it explains what the library is for and where each part of this guide fits.

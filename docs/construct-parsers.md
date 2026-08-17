@@ -514,5 +514,5 @@ ever swapping `cx.state`; the condition is a custom derive-backed type that
 flows through the same diagnostics carriers as the library's own; and the
 staged chars node records the state it was actually read under.
 
-Read next: [Defining a custom language](crate::guide::custom_lang) — the
-`Lang` contract that construct parsers, specs, and drivers all plug into.
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

@@ -13,22 +13,28 @@
 //! ## Crate dependencies, features, and panic policy
 //! 
 //! **no_std + alloc:**
-//! The crate is `no_std`-friendly: it depends only on `core` and `alloc` (sources are shared
-//! as `Arc`, so the target must support atomics). Consequently the library performs no
-//! input/output of its own — content lookup for `\input`-like constructs is delegated to the
-//! embedder via the [`SourceResolver`](source::SourceResolver) trait. In particular the
+//! The crate is `no_std`-friendly: it depends on `core` and `alloc`.  Several objects
+//! are shared as `Arc`, so the target must support atomics.  Input/output (e.g., for
+//! handling `\input`, if the language declares it) is delegated via appropriate traits
+//! to be implemented by the embedder.  In particular, the
 //! crate builds for WebAssembly targets such as `wasm32-unknown-unknown`, where the host
 //! supplies all input.
+//! 
+//! **Minimal dependencies:**
+//! This crate strives to pull in an absolute minimum of runtime dependencies (currently,
+//! only `hashbrown` and the optional `serde`, see below).  Some build-time dependencies
+//! are required to implement custom derive macros.
+//!
+//! **No-panic policy:**
+//! This library never panics on document input.  A small set of public methods and functions
+//! may panic on a caller contract violation, following some rust standard patterns (e.g.
+//! unguarded index accessors) — see [`techy::guide::panics`] for a complete list of
+//! public-facing items that can panic.
 //!
 //! **Cargo features:**
 //! - `serde` (off by default) — enables the optional serialization of techy parsing results
 //!   (e.g. node trees) via [serde](https://serde.rs).  See [`techy::serialize`] and
 //!   [`techy::guide::serialize`].
-//!
-//! **No-panic policy:**
-//! This library never panics on document input.  A small set of public methods and functions
-//! may panic on invalid input, following rust standard patterns (e.g. unguarded index
-//! accessors) — see [`techy::guide::panics`].
 //!
 //! ## The public modules
 //!

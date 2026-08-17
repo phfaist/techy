@@ -59,3 +59,6 @@ the non-panicking companion:
 
 These two families are the complete list of documented panics in the public API;
 no other public item panics on documented use.
+
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

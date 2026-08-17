@@ -137,5 +137,5 @@ everything else — the value model and its rendering, each table's layout,
 sources kept outside the stream, custom tables and annotation types, how a
 language or framework opts in, every error — follows on the same page.
 
-Read next: [Migrating from pylatexenc](crate::guide::pylatexenc_migration)
-— the concept mappings for readers arriving from the Python library.
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

@@ -532,5 +532,5 @@ environments `\open{name} … \shut{name}` registers
 own — everything downstream, including verbatim bodies and the re-emitted
 source, follows those names.
 
-Read next: [Integration: tooling, embedding, and bindings](crate::guide::integration)
-— the facts that matter when techy runs inside a larger system.
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

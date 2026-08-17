@@ -124,5 +124,5 @@ identical content. Holding the source also keeps a
 attempts for free — its documentation calls this the span-stability
 rule.
 
-Read next: [Serializing parses](crate::guide::serialize) — writing parses
-out and reading them back: caching, inter-process exchange, snapshot tests.
+Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
+the other chapters on extending and embedding techy.

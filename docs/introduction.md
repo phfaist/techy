@@ -111,8 +111,10 @@ in depth.
   Python library [pylatexenc](https://pylatexenc.readthedocs.io/) — plus the
   [Concepts overview](crate::guide::concepts_overview), the look-up page that
   the rest of the documentation links into.
-- The **AI Guide** condenses the same material into chapters written to be
-  loaded into an AI assistant's context.
+- The **AI Guide** condenses the same material into chapters optimized to be
+  loaded into an AI assistant's context.  The AI Guide might also be helpful to
+  humans already familiar with techy's approach and who are looking for a
+  condensed, summarized map of the library.
 
 Read next: [Language syntax](crate::guide::language_syntax), for what a
 latexlike language looks like — or jump straight to
