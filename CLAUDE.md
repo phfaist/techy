@@ -97,9 +97,8 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
    unreachable invariants (`unreachable!`/`expect` with the invariant stated), plus a
    small register of individually user-approved exceptions in deep std-convention code:
    the indexing-style accessors with non-panicking `get` companions, and the always-on
-   precondition asserts of the six approved value functions (Span::new/extend_to,
-   Token::new, SourceSpan::new, SourcePos::new, skip_whitespace — contract violation
-   panics in all builds). Full policy: DESIGN_RATIONALE.md [§dd-dr:panic-policy] rule 3.
+   precondition asserts of the approved value functions (see `docs/panics.md`).
+   Full policy: DESIGN_RATIONALE.md [§dd-dr:panic-policy] rule 3.
    New exceptions need explicit user approval. The user-facing exhaustive list of
    panicking public items is the guide chapter `docs/panics.md`
    (`techy::guide::panics`) — any change to documented panicking behavior updates it.
