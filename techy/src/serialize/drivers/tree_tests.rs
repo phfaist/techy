@@ -1555,3 +1555,264 @@ fn a_tree_of_plain_data_annotations_round_trips_through_the_bridge() {
     };
     round_trip_tree(setup_bridge, &tree, |a: &String, b: &String| a == b);
 }
+
+// --- property: random trees round-trip ------------------------------------------------
+
+/// Random small trees built through the node builder over the toy lang — every node
+/// kind, nested groups, callables with 0–3 arguments (absent, single-token, or
+/// group-shaped) and 0–3 slots of every role (content slots as body lists,
+/// attached/hidden slots as region-level nodes), two states shared across the nodes,
+/// one spec per arity shared across the callables — round-trip equivalent
+/// (`assert_trees_equivalent`: structure, text, spans, regions, identity topology).
+mod tree_properties {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// The shape of a node to build.
+    #[derive(Debug, Clone)]
+    enum Shape {
+        /// A run of characters (its text).
+        Chars(String),
+        /// A `%c` comment with its line break.
+        Comment,
+        /// A brace group with children.
+        Group(Vec<Shape>),
+        /// A callable with arguments and slots.
+        Callable { args: Vec<ArgShape>, slots: Vec<SlotShape> },
+    }
+
+    #[derive(Debug, Clone)]
+    enum ArgShape {
+        /// Not provided.
+        Absent,
+        /// A single-token argument: the content is the node itself.
+        Token(String),
+        /// A group argument: the content is inside the group.
+        Group(Vec<Shape>),
+    }
+
+    #[derive(Debug, Clone)]
+    struct SlotShape {
+        role: SlotRole,
+        named: bool,
+        children: Vec<Shape>,
+    }
+
+    fn chars_text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(prop_oneof![Just('a'), Just('b'), Just('\u{e9}'), Just(' ')], 1..4)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    fn shape() -> impl Strategy<Value = Shape> {
+        let leaf = prop_oneof![chars_text().prop_map(Shape::Chars), Just(Shape::Comment)];
+        leaf.prop_recursive(3, 24, 4, |inner| {
+            let arg = prop_oneof![
+                Just(ArgShape::Absent),
+                chars_text().prop_map(ArgShape::Token),
+                proptest::collection::vec(inner.clone(), 0..3).prop_map(ArgShape::Group),
+            ];
+            let slot = (
+                prop_oneof![Just(SlotRole::Content), Just(SlotRole::Attached), Just(SlotRole::Hidden)],
+                any::<bool>(),
+                proptest::collection::vec(inner.clone(), 1..3),
+            )
+                .prop_map(|(role, named, children)| SlotShape { role, named, children });
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..4).prop_map(Shape::Group),
+                (proptest::collection::vec(arg, 0..4), proptest::collection::vec(slot, 0..3))
+                    .prop_map(|(args, slots)| Shape::Callable { args, slots }),
+            ]
+        })
+    }
+
+    /// The source text of `shapes` (the layout `build` follows).
+    fn write_text(shapes: &[Shape], out: &mut String) {
+        for shape in shapes {
+            match shape {
+                Shape::Chars(text) => out.push_str(text),
+                Shape::Comment => out.push_str("%c\n"),
+                Shape::Group(children) => {
+                    out.push('{');
+                    write_text(children, out);
+                    out.push('}');
+                }
+                Shape::Callable { args, slots } => {
+                    out.push_str("\\m");
+                    for arg in args {
+                        match arg {
+                            ArgShape::Absent => {}
+                            ArgShape::Token(text) => out.push_str(text),
+                            ArgShape::Group(children) => {
+                                out.push('{');
+                                write_text(children, out);
+                                out.push('}');
+                            }
+                        }
+                    }
+                    for slot in slots {
+                        write_text(&slot.children, out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The build in progress: the builder, the source, the two states, the specs by
+    /// arity, and the cursor into the text.
+    struct Build {
+        builder: NodeTreeBuilder<ToyLang, ()>,
+        src: ToySource,
+        states: [ToyState; 2],
+        specs: Vec<Option<Arc<ToySpec<ToyLang>>>>,
+        pos: usize,
+        counter: usize,
+    }
+
+    const ARG_NAMES: [&str; 3] = ["a0", "a1", "a2"];
+
+    impl Build {
+        fn state(&mut self) -> ToyState {
+            self.counter += 1;
+            Arc::clone(&self.states[self.counter % 2])
+        }
+
+        fn spec(&mut self, arity: usize) -> Arc<ToySpec<ToyLang>> {
+            let slot = &mut self.specs[arity];
+            Arc::clone(slot.get_or_insert_with(|| ToySpec::shared("m", &ARG_NAMES[..arity])))
+        }
+
+        fn add(&mut self, kind: NodeKind<ToyLang>, range: core::ops::Range<usize>, children: Vec<crate::node::BuildId>) -> crate::node::BuildId {
+            let state = self.state();
+            self.builder.add(kind, span(&self.src, range), state, children, (), ()).unwrap()
+        }
+
+        fn chars(&mut self, text: &str) -> crate::node::BuildId {
+            let start = self.pos;
+            self.pos += text.len();
+            self.add(NodeKind::chars(Span::new(start, self.pos)), start..self.pos, Vec::new())
+        }
+
+        fn group(&mut self, children: &[Shape]) -> crate::node::BuildId {
+            let start = self.pos;
+            self.pos += 1;
+            let ids = self.nodes(children);
+            let close = self.pos;
+            self.pos += 1;
+            self.add(
+                NodeKind::group(GroupData::new(GT_BRACE, Span::new(start, start + 1), Span::new(close, close + 1))),
+                start..self.pos,
+                ids,
+            )
+        }
+
+        fn nodes(&mut self, shapes: &[Shape]) -> Vec<crate::node::BuildId> {
+            shapes.iter().map(|shape| self.node(shape)).collect()
+        }
+
+        fn node(&mut self, shape: &Shape) -> crate::node::BuildId {
+            match shape {
+                Shape::Chars(text) => self.chars(text),
+                Shape::Comment => {
+                    let start = self.pos;
+                    self.pos += 3;
+                    self.add(
+                        NodeKind::comment(TextContent::from("%"), TextContent::from("c"), TextContent::from("\n")),
+                        start..self.pos,
+                        Vec::new(),
+                    )
+                }
+                Shape::Group(children) => self.group(children),
+                Shape::Callable { args, slots } => {
+                    let start = self.pos;
+                    self.pos += 2;
+                    let spec = self.spec(args.len());
+                    let mut children = Vec::new();
+                    let mut parsed_args = Vec::new();
+                    for (index, arg) in args.iter().enumerate() {
+                        let arg_spec = Arc::clone(&spec.arguments()[index]);
+                        match arg {
+                            ArgShape::Absent => parsed_args.push(ParsedArgument::absent(arg_spec)),
+                            ArgShape::Token(text) => {
+                                let id = self.chars(text);
+                                let at = children.len() as u32;
+                                children.push(id);
+                                parsed_args.push(ParsedArgument::provided(arg_spec, ChildRegion::single(at), ()));
+                            }
+                            ArgShape::Group(inner) => {
+                                let id = self.group(inner);
+                                let at = children.len() as u32;
+                                children.push(id);
+                                let content = ContentNodes::InChildrenOf(id, 0..inner.len() as u32);
+                                parsed_args.push(ParsedArgument::provided(arg_spec, ChildRegion::new(at..at + 1, content), ()));
+                            }
+                        }
+                    }
+                    let mut parsed_slots = Vec::new();
+                    for (index, slot) in slots.iter().enumerate() {
+                        let at = children.len() as u32;
+                        let region = match slot.role {
+                            SlotRole::Content => {
+                                let body_start = self.pos;
+                                let ids = self.nodes(&slot.children);
+                                let body = self.add(NodeKind::list(), body_start..self.pos, ids);
+                                children.push(body);
+                                ChildRegion::new(at..at + 1, ContentNodes::InChildrenOf(body, 0..slot.children.len() as u32))
+                            }
+                            SlotRole::Attached | SlotRole::Hidden => {
+                                let ids = self.nodes(&slot.children);
+                                let count = ids.len() as u32;
+                                children.extend(ids);
+                                ChildRegion::new(at..at + count, ContentNodes::InRegion(0..count))
+                            }
+                        };
+                        let name = alloc::format!("s{index}");
+                        parsed_slots.push(if slot.named {
+                            ParsedSlot::new(region, name.as_str(), slot.role, ())
+                        } else {
+                            ParsedSlot::new_unnamed(region, slot.role, ())
+                        });
+                    }
+                    let callable = CallableData {
+                        callable_type: if slots.is_empty() { CT_MACRO } else { CT_ENV },
+                        name: "m".into(),
+                        spec: spec as Arc<dyn CallableSpec<ToyLang>>,
+                        arguments: ParsedArguments::new(parsed_args),
+                        slots: ParsedSlots::new(parsed_slots),
+                        invocation_syntax: (),
+                    };
+                    self.add(NodeKind::callable(callable), start..self.pos, children)
+                }
+            }
+        }
+    }
+
+    /// Build the tree of `shapes` (a `List` root over them).
+    fn build_tree(shapes: &[Shape]) -> NodeTree<ToyLang, ()> {
+        let mut text = String::new();
+        write_text(shapes, &mut text);
+        let mut build = Build {
+            builder: NodeTreeBuilder::<ToyLang, ()>::new(),
+            src: source(&text),
+            states: [state(), state()],
+            specs: Vec::from([None, None, None, None]),
+            pos: 0,
+            counter: 0,
+        };
+        let ids = build.nodes(shapes);
+        assert_eq!(build.pos, text.len(), "the layout and the build agree");
+        let root = build.add(NodeKind::list(), 0..text.len(), ids);
+        build.builder.finish(root).unwrap()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(40))]
+
+        #[test]
+        fn a_random_tree_round_trips(shapes in proptest::collection::vec(shape(), 1..4)) {
+            let tree = build_tree(&shapes);
+            let back = round_trip_tree(setup::<ToyLang>, &tree, ignore_annotations);
+            prop_assert_eq!(back.nodes().len(), tree.nodes().len());
+        }
+    }
+}

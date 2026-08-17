@@ -1106,3 +1106,143 @@ mod serde_rendering {
         assert_eq!(reader.state(tables.states.position(0)).unwrap().rules().command_rules().len(), 1);
     }
 }
+
+// --- property: random states round-trip -----------------------------------------------
+
+/// Random token rules and scope stacks (every feature-agnostic section populated at
+/// random, the expected close drawn from the temporary rules, the delimiter rules, a
+/// rule held by no list, or none) round-trip through a state entry equal in every
+/// section, with the providers resolved to the environment's instances in order.
+mod state_properties {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// A short string over a small alphabet (delimiters, escapes, whitespace, a
+    /// multibyte character); may be empty.
+    fn short_text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(
+            prop_oneof![
+                Just('{'),
+                Just('}'),
+                Just('['),
+                Just(']'),
+                Just('$'),
+                Just('%'),
+                Just('\\'),
+                Just(' '),
+                Just('\t'),
+                Just('a'),
+                Just('\u{e9}'),
+                Just('*'),
+            ],
+            0..4,
+        )
+        .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    fn group_rule() -> impl Strategy<Value = Arc<GroupRule<ToyLang>>> {
+        (0..4u32, short_text(), short_text())
+            .prop_map(|(group_type, open, close)| Arc::new(GroupRule { group_type, open, close }))
+    }
+
+    fn command_rule() -> impl Strategy<Value = Arc<CommandRule>> {
+        (prop_oneof![Just('\\'), Just('@'), Just('\u{e9}')], short_text())
+            .prop_map(|(escape_char, name_chars)| Arc::new(CommandRule { escape_char, name_chars }))
+    }
+
+    /// Random rules; `expecting` selects the expected close: an index into the
+    /// temporary rules then the delimiter rules, one past them for a rule held by no
+    /// list (a group type no random rule has, so it equals none), or beyond for none.
+    fn token_rules() -> impl Strategy<Value = TokenRules<ToyLang>> {
+        (
+            (any::<bool>(), short_text()),
+            any::<bool>(),
+            (any::<bool>(), proptest::collection::vec(group_rule(), 0..4), proptest::collection::vec(group_rule(), 0..3)),
+            0..8usize,
+            (any::<bool>(), proptest::collection::vec(command_rule(), 0..3)),
+            (any::<bool>(), proptest::collection::vec(short_text(), 0..3)),
+            any::<bool>(),
+            short_text(),
+        )
+            .prop_map(
+                |(
+                    (ws_enabled, ws_chars),
+                    paragraphs,
+                    (groups_enabled, rules, temporary),
+                    expecting,
+                    (commands_enabled, commands),
+                    (comments_enabled, comments),
+                    specials,
+                    forbidden,
+                )| {
+                    let candidates: Vec<Arc<GroupRule<ToyLang>>> =
+                        temporary.iter().chain(rules.iter()).cloned().collect();
+                    let expecting_close = if expecting < candidates.len() {
+                        Some(Arc::clone(&candidates[expecting]))
+                    } else if expecting == candidates.len() {
+                        Some(Arc::new(GroupRule { group_type: 9, open: "<".into(), close: ">".into() }))
+                    } else {
+                        None
+                    };
+                    TokenRules {
+                        whitespace: WhitespaceRules { enabled: ws_enabled, chars: ws_chars.into() },
+                        paragraphs: ParagraphRules { enabled: paragraphs },
+                        groups: GroupRules { enabled: groups_enabled, rules, temporary, expecting_close },
+                        commands: CommandRules { enabled: commands_enabled, rules: commands },
+                        comments: CommentRules {
+                            enabled: comments_enabled,
+                            rules: comments.into_iter().map(|start| Arc::new(CommentRule { start })).collect(),
+                        },
+                        specials: SpecialsRules { enabled: specials },
+                        forbidden_chars: ForbiddenCharsRules { chars: forbidden.into() },
+                    }
+                },
+            )
+    }
+
+    /// Whether the expected close of `rules` is value-equal to a rule of its lists
+    /// (temporary first, then delimiter rules) — what the reader re-links to.
+    fn expecting_close_is_listed(rules: &TokenRules<ToyLang>) -> Option<bool> {
+        let expecting = rules.expecting_group_close()?;
+        Some(rules.temporary_group_rules().iter().chain(rules.group_rules()).any(|rule| **rule == **expecting))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn a_random_state_round_trips(rules in token_rules(), scope_count in 0..4usize) {
+            let providers: Vec<Arc<ToyProvider>> =
+                (0..scope_count).map(|i| ToyProvider::new(&alloc::format!("p{i}"))).collect();
+            let state = state_with(rules, &providers);
+            let mut writer = session_with_environment(SerdeSession::<ToyLang>::new(), &providers);
+            let position = writer.intern_state(&state).unwrap();
+            let segment = writer.take_segment();
+            #[cfg(feature = "serde")]
+            let segment: Segment = serde_json::from_str(&serde_json::to_string(&segment).unwrap()).unwrap();
+            let mut reader = session_with_environment(SerdeSession::<ToyLang>::new(), &providers);
+            reader.push_segment(segment).unwrap();
+            let states = reader.standard_tables().unwrap().states;
+            let back = reader.state(states.position(position.index())).unwrap();
+            prop_assert_eq!(back.rules(), state.rules());
+            let scopes = back.scopes().providers();
+            prop_assert_eq!(scopes.len(), providers.len());
+            for (provider, resolved) in providers.iter().zip(scopes) {
+                prop_assert!(Arc::ptr_eq(&(Arc::clone(provider) as Arc<dyn SpecsProvider<ToyLang>>), resolved));
+            }
+            // An expected close value-equal to a listed rule is re-linked to the
+            // rebuilt list's handle; one held by no list stays its own object.
+            if let Some(listed) = expecting_close_is_listed(state.rules()) {
+                let expecting = back.rules().expecting_group_close().unwrap();
+                let relinked = back
+                    .rules()
+                    .temporary_group_rules()
+                    .iter()
+                    .chain(back.rules().group_rules())
+                    .any(|rule| Arc::ptr_eq(rule, expecting));
+                prop_assert_eq!(relinked, listed);
+            }
+        }
+    }
+}

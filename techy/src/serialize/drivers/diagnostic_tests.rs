@@ -770,3 +770,62 @@ fn a_diagnostic_and_a_parse_result_have_a_pinned_json_rendering() {
     );
     assert_eq!(json, expected);
 }
+
+// --- property: random diagnostics collections round-trip ---------------------------------
+
+/// Random `Diagnostics` — a random retention limit, a random sequence of pushed
+/// diagnostics of random severities, projections, spans, and frame counts (some
+/// suppressed by the limit) — round-trip inside a parse result: the retained
+/// diagnostics equivalent one by one, the limit and the counts (`suppressed`,
+/// `error_count`) as pushed.
+mod diagnostics_properties {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    fn severity() -> impl Strategy<Value = Severity> {
+        prop_oneof![Just(Severity::Note), Just(Severity::Warning), Just(Severity::Error)]
+    }
+
+    /// One pushed diagnostic: severity, the projection's `expected_close` text, the
+    /// span's start (within `xyz`), and the number of traceback frames.
+    fn pushed() -> impl Strategy<Value = (Severity, String, usize, usize)> {
+        (severity(), "[}\\]\\)a-c\u{e9}]{0,3}", 0..3usize, 0..3usize)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn a_random_diagnostics_collection_round_trips(
+            limit in 0..6usize,
+            pushes in proptest::collection::vec(pushed(), 0..10),
+            session_ext in any::<u32>(),
+        ) {
+            let parsed = parse("xyz");
+            let src = parsed.tree.root().span().source().clone();
+            let mut diagnostics = Diagnostics::with_limit(limit);
+            let mut errors = 0;
+            for (severity, expected_close, start, frame_count) in &pushes {
+                let condition = UnclosedGroup { expected_close: expected_close.clone(), found: UnclosedGroupFound::EndOfInput };
+                let frames: Vec<TraceFrame<Option<String>>> = (0..*frame_count)
+                    .map(|i| TraceFrame::new(alloc::format!("frame {i}"), SourceSpan::new(&src, i..i + 1)))
+                    .collect();
+                let span = SourceSpan::new(&src, *start..*start + 1);
+                diagnostics.push(Diagnostic::from_parts(*severity, alloc::boxed::Box::new(condition), span, frames));
+                if *severity == Severity::Error {
+                    errors += 1;
+                }
+            }
+            prop_assert_eq!(diagnostics.len(), pushes.len().min(limit));
+            prop_assert_eq!(diagnostics.suppressed(), pushes.len().saturating_sub(limit));
+            prop_assert_eq!(diagnostics.error_count(), errors);
+            let result = Arc::new(ParseResult { tree: parsed.tree, diagnostics, session_ext });
+            let back = round_trip_parse_result(&result);
+            assert_parse_results_equivalent(&result, &back);
+            prop_assert_eq!(back.diagnostics.limit(), limit);
+            prop_assert_eq!(back.diagnostics.suppressed(), pushes.len().saturating_sub(limit));
+            prop_assert_eq!(back.diagnostics.error_count(), errors);
+        }
+    }
+}
