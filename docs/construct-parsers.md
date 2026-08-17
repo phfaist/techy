@@ -50,16 +50,16 @@ delta** — covered [below](#what-a-parser-returns).
 ## What a parser receives: the `ParseContext`
 
 Every parser gets one context value,
-[`ParseContext`](crate::core::constructs::ParseContext), bundling the five
-parse inputs — the token reader, the source, the input parsing state, the
-session, and the driver. Its methods are the parser's entire toolkit:
+[`ParseContext`](crate::core::constructs::ParseContext), bundling the four
+parse inputs — the token reader, the input parsing state, the session, and
+the driver. Its methods are the parser's entire toolkit:
 
 **Token reading.** `cx.tokens` is the
 [`TokenReader`](crate::core::TokenReader): peek or consume tokens under an
-explicitly passed state, and reposition
-([`move_past`](crate::core::TokenReader::move_past),
-[`move_to_pos`](crate::core::TokenReader::move_to_pos),
-[`pos`](crate::core::TokenReader::pos)). Prefer
+explicitly passed state, and reposition — at an edge of a token it read
+([`move_to`](crate::core::TokenReader::move_to)) or at a position it handed
+out earlier
+([`move_to_position`](crate::core::TokenReader::move_to_position)). Prefer
 [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token)
 over a raw peek: it maps tokenizer errors per the recovery policy (strict:
 abort; tolerant: report `None` so you treat the position as unusable, while
@@ -208,7 +208,8 @@ default factory's parser). The essentials:
   included — by the dispatching arm; your parser starts on whatever follows
   it. A parser that needs the post-space bytes raw (the `\verb` idiom)
   repositions the reader itself
-  (`move_to_pos(token.post_space().start())`).
+  (`cx.tokens.move_to(token, TokenEdge::End)` — the end of the token
+  proper, before its post-space).
 - **`cx.state` is the invocation's base state**; the caller has already
   resolved any descent-state policy and scopes the state structurally.
 - **Announce consumed material.** A spec that declares no arguments but

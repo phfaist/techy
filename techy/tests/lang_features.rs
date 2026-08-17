@@ -592,7 +592,7 @@ mod groups_only {
     use techy::source::Source;
     use techy::core::{
         Language, ParsingState, ParsingStateDelta, StdParseDriver, StdTokenReader, Token,
-        TokenKind, TokenReader, TokenRulesOverrides,
+        TokenEdge, TokenKind, TokenReader, TokenRulesOverrides,
     };
     use techy::error::Recovery;
     use techy::source::Span;
@@ -636,7 +636,7 @@ mod groups_only {
         assert_eq!(token.span, Span::new(0, 1));
         assert_eq!(token.pre_space, Span::empty(0));
 
-        reader.move_past(&token, true);
+        reader.move_to_edge(&token, TokenEdge::EndPastPostSpace);
         let token = reader.peek(&state).unwrap();
         assert!(matches!(&token.kind, TokenKind::GroupOpen { delim: "{", .. }));
         assert_eq!(token.pre_space, Span::empty(1));

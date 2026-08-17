@@ -44,8 +44,7 @@ objects and runs the parse to completion:
   scratch: no reuse, no configuration;
 - a **parse context** ([`ParseContext`](crate::core::constructs::ParseContext))
   — the single value handed to every construct parser, bundling the token
-  reader, the source, the current parsing state, the session, and the
-  driver.
+  reader, the current parsing state, the session, and the driver.
 
 The entry point then drives the **root content loop** over the whole source,
 stages a root `List` node spanning it, and freezes the session into a

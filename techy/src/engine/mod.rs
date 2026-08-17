@@ -762,9 +762,10 @@ mod tests {
         > {
             let token = cx.tokens.next(&cx.state).expect("test token stream is error-free");
             let TokenKind::Char(_) = token.kind else { panic!("test feeds a Char token") };
+            let span = cx.tokens.source_span_of(&token);
             let id = cx.stage_node(
-                NodeKind::chars(token.span),
-                crate::source::SourceSpan::new(&cx.source, token.span),
+                NodeKind::chars(span.span()),
+                span,
                 cx.state.clone(),
                 vec![],
             ).unwrap();
@@ -787,7 +788,7 @@ mod tests {
         let mut parser = OneCharParser;
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
-        assert_eq!(cx.tokens.pos(), 1);
+        assert_eq!(cx.here().start(), 1);
 
         let result = session.finish(id).unwrap();
         assert!(result.diagnostics.is_empty());
