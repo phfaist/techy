@@ -2,7 +2,7 @@
 //! [`TreeIndex`], its position type; the annotation-codec registration
 //! ([`TableHandle::register_annotation`]); the [`TreeSerialization`] extension trait
 //! (`serialize_tree` / `tree`); and the context-aware value conversions of the core
-//! payload types a language's own codecs reuse ([`TextContent`], [`Span`],
+//! payload types a language's own codecs reuse ([`TextContent`] — owned text only,
 //! [`SlotRole`], [`GroupRule`]).
 //!
 //! A node tree is rebuilt through the node builder: the reader stages the nodes in
@@ -11,9 +11,13 @@
 //! and [`finish`](crate::node::NodeTreeBuilder::finish)es the tree — which mints a
 //! fresh layout tag, recomputes the parent table, and re-establishes every region
 //! invariant by construction. Everything read is untrusted input: a children range
-//! out of bounds, a region that does not tile the child list, a content parent
-//! outside its region, a span out of bounds, a reference into the wrong table — each
-//! is an error naming the node, never a panic.
+//! out of bounds, a node no other node claims as a child, a region that does not tile
+//! the child list, a content parent outside its region, a span out of bounds, a
+//! reference into the wrong table — each is an error naming the node
+//! ([`DeserializeError::InNode`]), never a panic. Text inside language-typed payloads
+//! (the invocation syntax, the ext values) is owned on the wire — the value
+//! conversions receive no node whose source a span could be validated against; the
+//! [`TreeSerdeDriver`] docs state the rule.
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -27,12 +31,12 @@ use hashbrown::HashMap;
 
 use crate::node::{
     validate_tree, ArgumentExt, BuildId, CallableData, ChildRegion, CommentData, ContentNodes,
-    GroupData, NodeExt, NodeKind, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
-    ParsedSlot, ParsedSlots, SlotExt, SlotRole,
+    GroupData, NodeBuildError, NodeExt, NodeKind, NodeTree, NodeTreeBuilder, ParsedArgument,
+    ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole,
 };
-use crate::source::{Span, TextContent};
+use crate::source::TextContent;
 use crate::spec::CallableSpec;
-use crate::state::Lang;
+use crate::state::{InvocationSyntax, Lang};
 use crate::token::GroupRule;
 
 use super::super::engine::{
@@ -64,8 +68,9 @@ crate::serial_index! {
 /// The trees table is *heterogeneous* by the tree's **annotation type**: a
 /// `NodeTree<L, A>` is written under the identifier of the codec registered for `A`,
 /// and read back through it. The unit annotation (`NodeTree<L>`, the parser's output)
-/// is pre-registered under the identifier `core.tree`, and its annotations are omitted
-/// from the wire; any other annotation type is registered on the table's handle with
+/// is registered by the driver itself, in every session it is registered in, under
+/// the identifier `core.tree`, and its annotations are omitted from the wire; any
+/// other annotation type is registered on the table's handle with
 /// [`register_annotation`](TableHandle::register_annotation), which serializes each
 /// node's annotation through the type's own
 /// [`SerializableValue`]/[`DeserializableValue`] conversions (so an annotation that
@@ -73,9 +78,29 @@ crate::serial_index! {
 /// interns it like any other value). Serializing a tree whose annotation type is not
 /// registered is a [`SerializeError`].
 ///
-/// The everyday spellings are the [`TreeSerialization`] extension trait's
-/// `serialize_tree` and `tree`. Registered by
-/// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
+/// The table's object type is `dyn Any + Send + Sync` (one table for every annotation
+/// type), but the table accepts `NodeTree<L, A>` values only: interning any other
+/// object through the general [`SerdeSession::intern`](crate::serialize::SerdeSession::intern)
+/// is a [`SerializeError`] naming the object as not a node tree of a registered
+/// annotation type. The everyday spellings, typed to node trees, are the
+/// [`TreeSerialization`] extension trait's `serialize_tree` and `tree`. Registered by
+/// [`SerdeSession::new`](crate::serialize::SerdeSession::new); a session composed with
+/// [`SerdeSession::empty`](crate::serialize::SerdeSession::empty) registers it with
+/// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table)
+/// (the unit annotation needs no further registration).
+///
+/// **Text in language payloads is owned on the wire.** A node's own text payloads
+/// (the content of a `Chars` node, a group's delimiters, a comment's parts) may be
+/// span-backed ([`TextContent::Spanned`]) on the wire: the reader validates each such
+/// byte range against the node's own source before the tree is finished. A callable's
+/// invocation syntax and every ext value (a node's, an argument's, a slot's) are
+/// language-typed payloads the driver writes and reads through their value
+/// conversions, which receive no node — hence no source to validate against. So the
+/// writer materializes the invocation syntax against the node's source
+/// ([`InvocationSyntax::materialized`]) before converting it, [`TextContent`]'s value
+/// conversion writes and reads owned text only, and ext values must not carry spans
+/// relative to the node's source (the contract [`NodeTree::materialize`] states — it
+/// leaves ext values untouched).
 pub struct TreeSerdeDriver<L: SerializableLang> {
     lang: core::marker::PhantomData<fn() -> L>,
 }
@@ -160,7 +185,8 @@ impl<L: SerializableLang> Clone for TreeCodec<L> {
 }
 
 /// The trees table's registry: the codecs by annotation type (for writing) and by
-/// identifier (for reading).
+/// identifier (for reading). Created on first use with the unit annotation's codec
+/// (`core.tree`) registered, so every trees table has it.
 struct TreeRegistry<L: SerializableLang> {
     by_type: HashMap<TypeId, TreeCodec<L>>,
     by_identifier: HashMap<String, TreeCodec<L>>,
@@ -168,7 +194,11 @@ struct TreeRegistry<L: SerializableLang> {
 
 impl<L: SerializableLang> Default for TreeRegistry<L> {
     fn default() -> Self {
-        TreeRegistry { by_type: HashMap::new(), by_identifier: HashMap::new() }
+        let mut registry = TreeRegistry { by_type: HashMap::new(), by_identifier: HashMap::new() };
+        let unit = unit_tree_codec::<L>();
+        registry.by_type.insert(TypeId::of::<NodeTree<L, ()>>(), unit.clone());
+        registry.by_identifier.insert(unit.identifier.to_string(), unit);
+        registry
     }
 }
 
@@ -198,8 +228,9 @@ fn codec_by_type<L: SerializableLang>(
         .ok_or_else(|| SerializeError::failed("the trees table registry is of the wrong type"))?;
     registry.by_type.get(&type_id).cloned().ok_or_else(|| {
         SerializeError::failed(
-            "this tree's annotation type is not registered for serialization; register it \
-             with TableHandle::register_annotation",
+            "the object is not a NodeTree of a registered annotation type (the trees table \
+             accepts NodeTree<L, A> values only, for an annotation type A registered with \
+             TableHandle::register_annotation; the unit annotation is pre-registered)",
         )
     })
 }
@@ -253,35 +284,66 @@ where
         serialize: Arc::new(|object, cx| {
             let tree = downcast_tree::<L, A>(object)?;
             let nodes = serialize_nodes(tree, cx)?;
-            let annotations = tree
-                .annotations()
-                .iter()
-                .map(|annotation| annotation.serialize_value(cx))
-                .collect::<Result<Vec<_>, _>>()?;
+            let annotations = serialize_annotations(tree, |annotation, cx| annotation.serialize_value(cx), cx)?;
             Ok(WireTree { nodes, annotations: Some(annotations) }.to_serial_value()?)
         }),
         deserialize: Arc::new(|data, cx| {
-            let mut wire = WireTree::from_serial_value(data)?;
-            let node_count = wire.nodes.len();
-            let list = wire.annotations.take().ok_or_else(|| {
-                DeserializeError::failed(
-                    "the tree entry carries no annotations, but its annotation type is not the unit type",
-                )
-            })?;
-            if list.len() != node_count {
-                return Err(DeserializeError::failed(alloc::format!(
-                    "the tree has {node_count} nodes but {} annotations",
-                    list.len()
-                )));
-            }
-            let annotations = list
-                .iter()
-                .map(|value| <A as DeserializableValue<L>>::deserialize_value(value, cx))
-                .collect::<Result<Vec<A>, _>>()?;
-            let tree = rebuild_tree::<L, A>(wire.nodes, annotations, cx)?;
+            let wire = WireTree::from_serial_value(data)?;
+            let (nodes, annotations) = deserialize_annotations(
+                wire,
+                |value, cx| <A as DeserializableValue<L>>::deserialize_value(value, cx),
+                cx,
+            )?;
+            let tree = rebuild_tree::<L, A>(nodes, annotations, cx)?;
             Ok(Arc::new(tree) as Arc<dyn Any + Send + Sync>)
         }),
     }
+}
+
+/// The annotations of `tree`, one wire value per node through `serialize`; a failure
+/// is wrapped in [`SerializeError::InNode`] with the node's position.
+fn serialize_annotations<L: SerializableLang, A>(
+    tree: &NodeTree<L, A>,
+    serialize: impl Fn(&A, &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>,
+    cx: &mut SerializeContext<'_, L>,
+) -> Result<Vec<SerialValue>, SerializeError> {
+    tree.annotations()
+        .iter()
+        .zip(tree.nodes())
+        .enumerate()
+        .map(|(index, (annotation, node))| {
+            serialize(annotation, cx).map_err(|error| error.in_node(index as u32, callable_name(&node.kind)))
+        })
+        .collect()
+}
+
+/// The annotations of a wire tree of a non-unit annotation type — required, one per
+/// node — read through `deserialize`, and the wire nodes; a failure at an annotation is
+/// wrapped in [`DeserializeError::InNode`] with the node's position.
+fn deserialize_annotations<L: SerializableLang, A>(
+    mut wire: WireTree,
+    deserialize: impl Fn(&SerialValue, &mut DeserializeContext<'_, L>) -> Result<A, DeserializeError>,
+    cx: &mut DeserializeContext<'_, L>,
+) -> Result<(Vec<WireNode>, Vec<A>), DeserializeError> {
+    let node_count = wire.nodes.len();
+    let list = wire.annotations.take().ok_or_else(|| {
+        DeserializeError::failed("the tree entry carries no annotations, but its annotation type is not the unit type")
+    })?;
+    if list.len() != node_count {
+        return Err(DeserializeError::failed(alloc::format!(
+            "the tree has {node_count} nodes but {} annotations",
+            list.len()
+        )));
+    }
+    let annotations = list
+        .iter()
+        .zip(&wire.nodes)
+        .enumerate()
+        .map(|(index, (value, node))| {
+            deserialize(value, cx).map_err(|error| error.in_node(index as u32, wire_callable_name(node)))
+        })
+        .collect::<Result<Vec<A>, _>>()?;
+    Ok((wire.nodes, annotations))
 }
 
 /// The `NodeTree<L, A>` behind an erased tree object, or a serialize error (never
@@ -301,7 +363,10 @@ impl<L: SerializableLang> TableHandle<TreeSerdeDriver<L>> {
     /// trees table of `session`: `NodeTree<L, A>` values are then serialized and read
     /// back through `A`'s own [`SerializableValue`] / [`DeserializableValue`]
     /// conversions (one wire value per node). The unit annotation (`NodeTree<L>`) is
-    /// pre-registered under `core.tree` and needs no registration.
+    /// pre-registered under `core.tree` and needs no registration. An annotation
+    /// value must not carry spans relative to a node's source: the conversion runs
+    /// without access to any node (a [`SourceSpan`](crate::source::SourceSpan), which names
+    /// its source, is fine).
     ///
     /// # Errors
     ///
@@ -344,12 +409,6 @@ impl<L: SerializableLang> TableHandle<TreeSerdeDriver<L>> {
     {
         register_codec::<L>(self, session, TypeId::of::<NodeTree<L, A>>(), serde_tree_codec::<L, A>(identifier.into()))
     }
-
-    /// Pre-register the unit annotation codec (`core.tree`) — called by
-    /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
-    pub(crate) fn register_core_tree(self, session: &mut SerdeSession<L>) -> Result<(), RegistrationError> {
-        register_codec::<L>(self, session, TypeId::of::<NodeTree<L, ()>>(), unit_tree_codec::<L>())
-    }
 }
 
 /// The codec of a plain-data annotation type `A`, through the serde bridge (see
@@ -365,32 +424,21 @@ where
         serialize: Arc::new(|object, cx| {
             let tree = downcast_tree::<L, A>(object)?;
             let nodes = serialize_nodes(tree, cx)?;
-            let annotations = tree
-                .annotations()
-                .iter()
-                .map(|annotation| super::super::bridge::to_value(annotation).map_err(SerializeError::from))
-                .collect::<Result<Vec<_>, _>>()?;
+            let annotations = serialize_annotations(
+                tree,
+                |annotation, _cx| super::super::bridge::to_value(annotation).map_err(SerializeError::from),
+                cx,
+            )?;
             Ok(WireTree { nodes, annotations: Some(annotations) }.to_serial_value()?)
         }),
         deserialize: Arc::new(|data, cx| {
-            let mut wire = WireTree::from_serial_value(data)?;
-            let node_count = wire.nodes.len();
-            let list = wire.annotations.take().ok_or_else(|| {
-                DeserializeError::failed(
-                    "the tree entry carries no annotations, but its annotation type is not the unit type",
-                )
-            })?;
-            if list.len() != node_count {
-                return Err(DeserializeError::failed(alloc::format!(
-                    "the tree has {node_count} nodes but {} annotations",
-                    list.len()
-                )));
-            }
-            let annotations = list
-                .iter()
-                .map(|value| super::super::bridge::from_value::<A>(value).map_err(DeserializeError::from))
-                .collect::<Result<Vec<A>, _>>()?;
-            let tree = rebuild_tree::<L, A>(wire.nodes, annotations, cx)?;
+            let wire = WireTree::from_serial_value(data)?;
+            let (nodes, annotations) = deserialize_annotations(
+                wire,
+                |value, _cx| super::super::bridge::from_value::<A>(value).map_err(DeserializeError::from),
+                cx,
+            )?;
+            let tree = rebuild_tree::<L, A>(nodes, annotations, cx)?;
             Ok(Arc::new(tree) as Arc<dyn Any + Send + Sync>)
         }),
     }
@@ -450,10 +498,19 @@ pub trait TreeSerialization<L: SerializableLang> {
     /// The session has no trees table ([`DeserializeError::UnknownTableName`]); the
     /// errors of [`SerdeSession::object`](crate::serialize::SerdeSession::object); the
     /// tree at that position was serialized with a different annotation type than `A`
-    /// ([`DeserializeError::Failed`]).
+    /// ([`DeserializeError::Failed`], naming the identifier the tree was serialized
+    /// under and the annotation type requested).
     fn tree<A>(&mut self, position: TreeIndex) -> Result<NodeTree<L, A>, DeserializeError>
     where
         A: SerializableValue<L> + DeserializableValue<L> + Clone + Debug + Send + Sync + 'static;
+}
+
+/// The identifier registered in `session`'s trees table for the tree type `tree_type`
+/// (`TypeId::of::<NodeTree<L, A>>()`), when there is one.
+fn registered_identifier<L: SerializableLang>(session: &mut SerdeSession<L>, tree_type: TypeId) -> Option<String> {
+    let ordinal = session.table_ordinal_by_name(TREES_TABLE)?;
+    let registry = session.registry_mut::<TreeRegistry<L>>(ordinal)?;
+    registry.by_type.get(&tree_type).map(|codec| codec.identifier.to_string())
 }
 
 impl<L: SerializableLang> TreeSerialization<L> for SerdeSession<L> {
@@ -478,9 +535,19 @@ impl<L: SerializableLang> TreeSerialization<L> for SerdeSession<L> {
         let object = self.object(handle, position)?;
         match object.downcast::<NodeTree<L, A>>() {
             Ok(tree) => Ok((*tree).clone()),
-            Err(_) => Err(DeserializeError::failed(
-                "the tree at this position was serialized with a different annotation type than the one requested",
-            )),
+            Err(object) => {
+                // The stored tree's codec is registered (it was read through it); the
+                // requested type may not be.
+                let stored = registered_identifier(self, (*object).type_id())
+                    .unwrap_or_else(|| String::from("(unregistered)"));
+                let requested = core::any::type_name::<A>();
+                let requested_identifier = registered_identifier(self, TypeId::of::<NodeTree<L, A>>())
+                    .map_or_else(|| String::from("unregistered"), |identifier| alloc::format!("`{identifier}`"));
+                Err(DeserializeError::failed(alloc::format!(
+                    "the tree at this position was serialized under `{stored}` and cannot be read as \
+                     annotation type `{requested}` ({requested_identifier})"
+                )))
+            }
         }
     }
 }
@@ -488,7 +555,8 @@ impl<L: SerializableLang> TreeSerialization<L> for SerdeSession<L> {
 // --- writing ---------------------------------------------------------------------------
 
 /// The nodes of `tree` in storage order — annotation-blind (the annotations are
-/// serialized by the codec).
+/// serialized by the codec). A failure at a node is wrapped in
+/// [`SerializeError::InNode`] with the node's position and, for a callable, its name.
 fn serialize_nodes<L: SerializableLang, A>(
     tree: &NodeTree<L, A>,
     cx: &mut SerializeContext<'_, L>,
@@ -497,8 +565,19 @@ fn serialize_nodes<L: SerializableLang, A>(
     nodes
         .iter()
         .enumerate()
-        .map(|(index, data)| serialize_node(index as u32, data, nodes, cx))
+        .map(|(index, data)| {
+            serialize_node(index as u32, data, nodes, cx)
+                .map_err(|error| error.in_node(index as u32, callable_name(&data.kind)))
+        })
         .collect()
+}
+
+/// The invocation name of a callable node, for the location wrappers.
+fn callable_name<L: Lang>(kind: &NodeKind<L>) -> Option<String> {
+    match kind {
+        NodeKind::Callable(data) => Some(data.name.to_string()),
+        _ => None,
+    }
 }
 
 fn serialize_node<L: SerializableLang>(
@@ -549,13 +628,17 @@ fn serialize_kind<L: SerializableLang>(
                 .iter()
                 .map(|slot| serialize_slot(slot, index, children_start, nodes, cx))
                 .collect::<Result<Vec<_>, _>>()?;
+            // The invocation syntax is materialized against the node's own source
+            // first: its value conversion receives no node, so span-backed text
+            // inside it could not be validated on reading (see `TreeSerdeDriver`).
+            let invocation_syntax = callable.invocation_syntax.materialized(data.span.source()).serialize_value(cx)?;
             Ok(WireNodeKind::Callable {
                 callable_type: callable.callable_type.serialize_value(cx)?,
                 name: callable.name.to_string(),
                 spec: cx.intern_spec(&callable.spec)?,
                 arguments,
                 slots,
-                invocation_syntax: callable.invocation_syntax.serialize_value(cx)?,
+                invocation_syntax,
             })
         }
     }
@@ -616,11 +699,14 @@ fn serialize_region<L: Lang>(
 
 // --- reading ---------------------------------------------------------------------------
 
-fn node_failure(index: usize, detail: &str) -> DeserializeError {
-    DeserializeError::failed(alloc::format!("node #{index}: {detail}"))
-}
-
 /// Rebuild a tree from its wire nodes and annotations through the node builder.
+///
+/// The wire node list must be exactly the nodes reachable from the root: every node
+/// but the root is listed among the children of exactly one node stored before it,
+/// and the root among nobody's — checked here, so that no node is silently dropped
+/// (the builder drops staged nodes the root does not reach) and none is claimed twice.
+/// A failure at a node is wrapped in [`DeserializeError::InNode`] with the node's
+/// position and, for a callable, its name.
 fn rebuild_tree<L: SerializableLang, A: Clone>(
     wire_nodes: Vec<WireNode>,
     annotations: Vec<A>,
@@ -630,53 +716,151 @@ fn rebuild_tree<L: SerializableLang, A: Clone>(
     if node_count == 0 {
         return Err(DeserializeError::failed("a node tree has at least one node (the root)"));
     }
+    if u32::try_from(node_count).is_err() {
+        return Err(DeserializeError::failed("a node tree has at most u32::MAX nodes"));
+    }
     // `node_count == annotations.len()` by the codec; guard anyway.
     if annotations.len() != node_count {
         return Err(DeserializeError::failed("the number of annotations does not match the number of nodes"));
     }
 
     let mut builder = NodeTreeBuilder::<L, A>::new();
+    // The staging map: wire position → builder id, filled in reverse storage order.
     let mut build_id_of: Vec<Option<BuildId>> = alloc::vec![None; node_count];
+    // Which node lists each node among its children (`None`: no node so far).
+    let mut claimed_by: Vec<Option<u32>> = alloc::vec![None; node_count];
 
     // Stage in reverse storage order: a node's children (and every region's content
     // parent, a descendant) are stored after it, so they are staged first.
-    for index in (0..node_count).rev() {
+    for (index, annotation) in annotations.into_iter().enumerate().rev() {
         let wire = &wire_nodes[index];
-        let (child_start, child_end) = (wire.children.start, wire.children.end);
-        if child_start > child_end || child_end as usize > node_count {
-            return Err(node_failure(index, "children range out of bounds"));
-        }
-        if child_start != child_end && (child_start as usize) <= index {
-            return Err(node_failure(index, "children must be stored after their parent"));
-        }
-        let mut children = Vec::with_capacity((child_end - child_start) as usize);
-        for child in child_start..child_end {
-            let build_id = build_id_of[child as usize]
-                .ok_or_else(|| node_failure(index, "a child references a node not stored after it"))?;
-            children.push(build_id);
-        }
-
-        let kind = rebuild_kind(index as u32, wire, &build_id_of, cx)?;
-        let span = deserialize_span(wire.span, cx)?;
-        let state = cx.state(wire.state)?;
-        let ext = <NodeExt<L> as DeserializableValue<L>>::deserialize_value(&wire.ext, cx)?;
-        let annotation = annotations[index].clone();
-        let build_id = builder
-            .add(kind, span, state, children, ext, annotation)
-            .map_err(|error| node_failure(index, &error.to_string()))?;
+        let build_id =
+            stage_node(index as u32, wire, &build_id_of, &mut claimed_by, &mut builder, annotation, cx)
+                .map_err(|error| error.in_node(index as u32, wire_callable_name(wire)))?;
         build_id_of[index] = Some(build_id);
     }
 
-    // `node_count >= 1` and every index was staged: node 0 has a build id.
+    // Every node but the root is some node's child; the root is nobody's (a children
+    // range reaching position 0 fails the stored-after-its-parent check in `stage_node`).
+    if let Some(unclaimed) = (1..node_count).find(|&index| claimed_by[index].is_none()) {
+        return Err(DeserializeError::failed(
+            "no node lists this node among its children (the serialized node list must be \
+             exactly the nodes reachable from the root)",
+        )
+        .in_node(unclaimed as u32, wire_callable_name(&wire_nodes[unclaimed])));
+    }
+
+    // `node_count >= 1` and every position was staged: node 0 has a build id.
     let root = build_id_of[0].expect("the root node was staged");
-    let tree = builder
-        .finish(root)
-        .map_err(|error| DeserializeError::failed(alloc::format!("finishing the tree: {error}")))?;
+    let tree = builder.finish(root).map_err(|error| builder_failure(error, &build_id_of))?;
     // Defense in depth: the builder enforces the all-trees law, but the reader is a
     // total validator of untrusted input.
-    validate_tree(&tree)
-        .map_err(|violation| DeserializeError::failed(alloc::format!("the rebuilt tree is invalid: {violation}")))?;
+    validate_tree(&tree).map_err(|violation| {
+        DeserializeError::failed(alloc::format!("the rebuilt tree is invalid: {violation}")).with_cause(violation)
+    })?;
+    // Every node was claimed once, so the builder reached every node from the root; a
+    // shorter tree would be a bug in this reader or in the builder.
+    if tree.node_count() != node_count {
+        return Err(DeserializeError::Internal {
+            detail: alloc::format!(
+                "the rebuilt tree has {} nodes, but the entry lists {node_count} and every one was \
+                 checked reachable from the root",
+                tree.node_count()
+            ),
+        });
+    }
     Ok(tree)
+}
+
+/// Validate and stage wire node `index`: its children range (in bounds, stored after
+/// the node, each child listed by this node alone), then its kind, span, state, ext,
+/// and annotation, into `builder`. Records this node as the one listing its children in
+/// `claimed_by`.
+fn stage_node<L: SerializableLang, A>(
+    index: u32,
+    wire: &WireNode,
+    build_id_of: &[Option<BuildId>],
+    claimed_by: &mut [Option<u32>],
+    builder: &mut NodeTreeBuilder<L, A>,
+    annotation: A,
+    cx: &mut DeserializeContext<'_, L>,
+) -> Result<BuildId, DeserializeError> {
+    let node_count = build_id_of.len();
+    let (child_start, child_end) = (wire.children.start, wire.children.end);
+    if child_start > child_end || child_end as usize > node_count {
+        return Err(DeserializeError::failed(alloc::format!(
+            "children range {child_start}..{child_end} is out of bounds ({node_count} nodes)"
+        )));
+    }
+    if child_start != child_end && child_start <= index {
+        return Err(DeserializeError::failed(alloc::format!(
+            "children range {child_start}..{child_end} does not lie after the node (a node's \
+             children are stored after it)"
+        )));
+    }
+    let mut children = Vec::with_capacity((child_end - child_start) as usize);
+    for child in child_start..child_end {
+        if let Some(other) = claimed_by[child as usize] {
+            return Err(DeserializeError::failed(alloc::format!(
+                "node #{child} is already listed among the children of node #{other}"
+            )));
+        }
+        claimed_by[child as usize] = Some(index);
+        // Stored after this node, hence staged before it (staging runs in reverse).
+        let build_id = build_id_of[child as usize].ok_or_else(|| DeserializeError::Internal {
+            detail: alloc::format!("child node #{child} of node #{index} was not staged before its parent"),
+        })?;
+        children.push(build_id);
+    }
+
+    let kind = rebuild_kind(index, wire, build_id_of, cx)?;
+    let span = deserialize_span(wire.span, cx)?;
+    let state = cx.state(wire.state)?;
+    let ext = <NodeExt<L> as DeserializableValue<L>>::deserialize_value(&wire.ext, cx)?;
+    builder.add(kind, span, state, children, ext, annotation).map_err(|error| builder_failure(error, build_id_of))
+}
+
+/// The invocation name of a callable wire node, for the location wrappers.
+fn wire_callable_name(wire: &WireNode) -> Option<String> {
+    match &wire.kind {
+        WireNodeKind::Callable { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// The wire position a builder id was staged for — the staging map inverted (a linear
+/// search, on error paths only).
+fn wire_position_of(build_id_of: &[Option<BuildId>], id: BuildId) -> Option<usize> {
+    build_id_of.iter().position(|staged| *staged == Some(id))
+}
+
+/// A builder error as a read error: the message names wire node positions rather than
+/// builder ids, and the builder error itself is kept as the cause.
+fn builder_failure(error: NodeBuildError, build_id_of: &[Option<BuildId>]) -> DeserializeError {
+    let node = |id: BuildId| match wire_position_of(build_id_of, id) {
+        Some(position) => alloc::format!("node #{position}"),
+        None => alloc::format!("a node the reader never staged ({id:?})"),
+    };
+    let detail = match &error {
+        NodeBuildError::ChildNotStaged { child } => alloc::format!("child {} was not staged", node(*child)),
+        NodeBuildError::ChildAlreadyClaimed { child } => alloc::format!("child {} already has a parent", node(*child)),
+        NodeBuildError::ContentParentNotStaged { parent } => {
+            alloc::format!("content parent {} was not staged", node(*parent))
+        }
+        NodeBuildError::RootNotStaged { root } => alloc::format!("root {} was not staged", node(*root)),
+        NodeBuildError::RootClaimed { root } => alloc::format!("root {} is another node's child", node(*root)),
+        NodeBuildError::ContentParentUnreachable { parent } => {
+            alloc::format!("content parent {} is not reachable from the root", node(*parent))
+        }
+        NodeBuildError::ContentParentOutsideSubtree { parent } => {
+            alloc::format!("content parent {} is not inside the callable's subtree", node(*parent))
+        }
+        NodeBuildError::ContentParentOutsideRegion { parent } => {
+            alloc::format!("content parent {} lies outside its own argument/slot region", node(*parent))
+        }
+        other => other.to_string(),
+    };
+    DeserializeError::failed(alloc::format!("the node builder rejected the tree: {detail}")).with_cause(error)
 }
 
 fn rebuild_kind<L: SerializableLang>(
@@ -743,7 +927,16 @@ fn rebuild_argument<L: SerializableLang>(
             let ext = <ArgumentExt<L> as DeserializableValue<L>>::deserialize_value(ext_value, cx)?;
             Ok(ParsedArgument::provided(spec, region, ext))
         }
-        None => Ok(ParsedArgument::absent(spec)),
+        None => {
+            // An absent argument has no ext: one on the wire is not silently dropped.
+            if wire.ext.is_some() {
+                return Err(DeserializeError::failed(alloc::format!(
+                    "argument #{} is absent (it has no region) but carries an ext",
+                    arg_index.saturating_add(1)
+                )));
+            }
+            Ok(ParsedArgument::absent(spec))
+        }
     }
 }
 
@@ -762,7 +955,10 @@ fn rebuild_slot<L: SerializableLang>(
 }
 
 /// Convert a wire region into the builder's staged form: the region's child offsets
-/// and its content designation ([`ContentNodes`]) in build-id terms.
+/// and its content designation ([`ContentNodes`]) in build-id terms. A content parent
+/// other than the callable itself must be a node inside the region — a descendant of
+/// the callable, stored after it, hence already staged; the builder checks that it lies
+/// inside the region's own subtree when the tree is finished.
 fn staged_region(
     wire: &WireRegion,
     callable_index: u32,
@@ -773,11 +969,22 @@ fn staged_region(
     let content = if wire.content_parent == callable_index {
         ContentNodes::InRegion(content)
     } else {
-        let build_id = build_id_of
-            .get(wire.content_parent as usize)
-            .copied()
-            .flatten()
-            .ok_or_else(|| DeserializeError::failed("a region's content parent is not a node stored before its callable"))?;
+        let parent = wire.content_parent;
+        let build_id = match build_id_of.get(parent as usize) {
+            None => {
+                return Err(DeserializeError::failed(alloc::format!(
+                    "a region's content parent, node #{parent}, is out of range ({} nodes)",
+                    build_id_of.len()
+                )))
+            }
+            Some(None) => {
+                return Err(DeserializeError::failed(alloc::format!(
+                    "a region's content parent, node #{parent}, is stored before its callable (a \
+                     content parent is a node inside the region, stored after the callable)"
+                )))
+            }
+            Some(Some(build_id)) => *build_id,
+        };
         ContentNodes::InChildrenOf(build_id, content)
     };
     Ok(ChildRegion::new(children, content))
@@ -785,42 +992,49 @@ fn staged_region(
 
 // --- value conversions of core payload types (D23; a language's own codecs reuse them)
 
-/// Textual content is `{spanned: {start, end}}` (a byte range into the carrying node's
-/// own source) or `{owned: "text"}` — its serialized shape needs no context.
+/// The value conversion of textual content — for text inside a language-typed payload
+/// (a callable's invocation syntax, an ext value) — carries **owned text only**:
+/// `{owned: "text"}`. A [`Spanned`](TextContent::Spanned) value is an error: the
+/// conversion receives no node, so a byte range into the carrying node's
+/// source could not be validated on reading, and text that is span-backed must be
+/// materialized against the node's source first ([`TextContent::materialized`] — for a
+/// callable's invocation syntax, the tree writer does so through
+/// [`InvocationSyntax::materialized`] before converting the payload; see
+/// [`TreeSerdeDriver`]). The text payloads of the nodes themselves (a `Chars` node's
+/// content, a group's delimiters, a comment's parts) do not go through this
+/// conversion: the tree driver writes them span-backed and validates the ranges
+/// against the node's source.
 impl<L: Lang> SerializableValue<L> for TextContent {
     fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
     where
         L: SerializableLang,
     {
-        Ok(self.to_serial_value()?)
+        match self {
+            TextContent::Owned(_) => Ok(self.to_serial_value()?),
+            TextContent::Spanned(span) => Err(SerializeError::failed(alloc::format!(
+                "span-backed text ({span:?}) inside a language payload cannot be serialized: \
+                 the payload's value conversion receives no node, so the text must be \
+                 materialized against the node's source first (TextContent::materialized)"
+            ))),
+        }
     }
 }
 
+/// Reads `{owned: "text"}` only; a `{spanned: {start, end}}` value is an error (see
+/// the write side above: without the node, the range could not be validated).
 impl<L: Lang> DeserializableValue<L> for TextContent {
     fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
     where
         L: SerializableLang,
     {
-        Ok(TextContent::from_serial_value(value)?)
-    }
-}
-
-/// A byte range is `{start, end}`; `start > end` is rejected on reading.
-impl<L: Lang> SerializableValue<L> for Span {
-    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(self.to_serial_value()?)
-    }
-}
-
-impl<L: Lang> DeserializableValue<L> for Span {
-    fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(Span::from_serial_value(value)?)
+        match TextContent::from_serial_value(value)? {
+            owned @ TextContent::Owned(_) => Ok(owned),
+            TextContent::Spanned(span) => Err(DeserializeError::failed(alloc::format!(
+                "span-backed text ({span:?}) inside a language payload is not accepted: the \
+                 payload's value conversion receives no node to validate the range against \
+                 (text inside a language payload is owned on the wire)"
+            ))),
+        }
     }
 }
 

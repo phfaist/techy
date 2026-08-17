@@ -4,13 +4,18 @@
 //! per-node annotations (omitted for the unit annotation). Written and read by the
 //! crate's tree driver ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)); the
 //! language-typed parts (a group's or a callable's type, a node's ext, an invocation
-//! syntax) ride as [`SerialValue`]s produced by the language's own conversions, and
-//! the argument/slot regions are stored in a builder-ready form the reader
+//! syntax) are carried as [`SerialValue`]s produced by the language's own conversions,
+//! and the argument/slot regions are stored in a builder-ready form the reader
 //! re-resolves.
 //!
 //! The tree layout tag and the parent table are never written: the reader mints a
 //! fresh tag and recomputes the parent table when it rebuilds the tree through the
 //! node builder (see [`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)).
+//! Language-typed parts carry no span-backed text: the writer materializes the
+//! invocation syntax against the node's source before converting it, and
+//! `TextContent`'s value conversion is owned-only — only the node's own text
+//! payloads below (`Chars`, `Group`, `Comment`) are span-backed on the wire, and the
+//! reader validates their ranges against the node's source.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -31,8 +36,12 @@ use super::{
 //
 // These are core types with no language parameter and no table reference, so their
 // serialized shapes need no serialization context; the tree wire structs embed them
-// directly. The context-aware `SerializableValue`/`DeserializableValue` impls a
-// language's own payload codecs use delegate to these (see the tree driver).
+// directly — the node's own text payloads in either form (`spanned` ranges are
+// validated against the node's source by the reader and the builder). The
+// context-aware `SerializableValue`/`DeserializableValue` impls a language's own
+// payload codecs use delegate to these (see the tree driver) — restricted, for
+// `TextContent`, to the owned form (a payload's conversion receives no node to
+// validate a range against); a bare `Span` has no value conversion for the same reason.
 
 /// A byte range is `{start, end}` (both `usize`); a range with `start > end` is
 /// rejected on reading (a [`Span`] cannot hold one).

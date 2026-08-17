@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use crate::node::{NodeData, NodeKind, NodeTree};
-use crate::state::Lang;
+use crate::state::{InvocationSyntax, Lang};
 
 use super::{
     DeserializableValue, SerdeSession, SerialIndex, SerializableLang, SerializableValue,
@@ -22,8 +22,9 @@ use super::{
 
 /// Assert that two trees are structurally equivalent: same node count, and, in
 /// storage order, the same kind and payload (the resolved text of every content, the
-/// group and callable types, names, region ranges, slot roles, and the debug forms of
-/// specs, exts, and invocation syntaxes), the same spans (offsets and source text),
+/// group and callable types, names, region ranges, slot roles, the debug forms of
+/// specs and exts, and the debug forms of the invocation syntaxes materialized against
+/// their node's source), the same spans (offsets and source text),
 /// the same parsing states (debug forms), the same identity topology (the
 /// `Arc::ptr_eq` classes of states, specs, and span sources), the same parent tables,
 /// the same single-source flag, and, via `annotation_eq`, the same annotations.
@@ -112,9 +113,12 @@ fn assert_node_equivalent<L: Lang>(index: usize, a: &NodeData<L>, b: &NodeData<L
             assert_eq!(format!("{:?}", ca.callable_type), format!("{:?}", cb.callable_type), "node #{index}: ct");
             assert_eq!(&*ca.name, &*cb.name, "node #{index}: callable name");
             assert_eq!(format!("{:?}", ca.spec), format!("{:?}", cb.spec), "node #{index}: spec");
+            // Compared materialized: the tree writer materializes the invocation syntax
+            // against the node's source (text inside language payloads is owned on the
+            // wire), so a span-backed field reads back as the same text, owned.
             assert_eq!(
-                format!("{:?}", ca.invocation_syntax),
-                format!("{:?}", cb.invocation_syntax),
+                format!("{:?}", ca.invocation_syntax.materialized(a.span.source())),
+                format!("{:?}", cb.invocation_syntax.materialized(b.span.source())),
                 "node #{index}: invocation syntax"
             );
             assert_eq!(ca.arguments.len(), cb.arguments.len(), "node #{index}: argument count");

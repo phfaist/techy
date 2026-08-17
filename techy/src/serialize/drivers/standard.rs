@@ -122,17 +122,16 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// ([`SourceSerdeDriver::with_text_policy`], [`SourceSerdeDriver::with_text_supplier`]).
     pub fn with_source_driver(sources: SourceSerdeDriver<L>) -> SerdeSession<L> {
         let mut session = SerdeSession::empty();
-        // Invariant: an empty session accepts the four standard tables — their names
-        // are distinct, their homogeneous identifiers non-empty, and four tables are
+        // Invariant: an empty session accepts the five standard tables — their names
+        // are distinct, their homogeneous identifiers non-empty, and five tables are
         // far below the table limit — so none of these registrations can fail.
         const ACCEPTED: &str = "an empty session accepts the standard tables";
         session.register_table(sources).expect(ACCEPTED);
         session.register_table(StateSerdeDriver::new()).expect(ACCEPTED);
         session.register_table(SpecSerdeDriver::<L>::new(SPECS_TABLE)).expect(ACCEPTED);
         session.register_table(ProviderSerdeDriver::<L>::new(PROVIDERS_TABLE)).expect(ACCEPTED);
-        let trees = session.register_table(TreeSerdeDriver::<L>::new()).expect(ACCEPTED);
-        // The unit annotation is pre-registered; a fresh trees table accepts it.
-        trees.register_core_tree(&mut session).expect("a fresh trees table accepts the unit annotation");
+        // The trees table registers the unit annotation itself.
+        session.register_table(TreeSerdeDriver::<L>::new()).expect(ACCEPTED);
         session
     }
 
