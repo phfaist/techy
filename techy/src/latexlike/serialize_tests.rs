@@ -1175,22 +1175,22 @@ mod rendering {
     /// (`dev-docs/serialize_schema.md`): a tolerant parse of `\e{x} {`
     /// (a macro `\e` with one mandatory argument, defined in a shared package `d`;
     /// then an unclosed group) serialized as a parse result into a fresh session
-    /// declaring the profile `schema-draft example`, the segment naming the parse
+    /// declaring the profile `schema example`, the segment naming the parse
     /// result as its main entry. Ignored: run it to REGENERATE the description's
     /// example after a wire change —
-    /// `cargo test --features serde -p techy --lib schema_draft_worked_example -- --ignored --nocapture`
+    /// `cargo test --features serde -p techy --lib schema_worked_example -- --ignored --nocapture`
     /// — and paste its output; the description's example is never edited by hand.
     /// Prints the exact canonical line first, then a readable per-entry layout.
     #[test]
     #[ignore = "prints the schema description's worked example; run with --ignored --nocapture to regenerate it"]
-    fn schema_draft_worked_example() {
+    fn schema_worked_example() {
         let defs = Package::<Latexlike>::new_shared("d", |package| {
             package.define_macro("e", ["m"]).unwrap();
         });
         let language = language(Recovery::Tolerant, [Arc::clone(&defs) as Arc<dyn SpecsProvider<Latexlike>>]);
         let result = Arc::new(parse(&language, "\\e{x} {"));
         let mut writer = SerdeSession::<Latexlike>::new();
-        writer.set_profile("schema-draft example");
+        writer.set_profile("schema example");
         let position = writer.serialize_parse_result(&result).unwrap();
         let segment = writer.take_segment_with_main(position).unwrap();
 

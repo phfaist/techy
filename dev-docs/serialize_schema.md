@@ -200,7 +200,7 @@ very segment is the worked example there):
 ```json
 {
   "version": 1,
-  "meta": {"profile": "schema-draft example"},
+  "meta": {"profile": "schema example"},
   "tables": [
     {"name": "sources",       "table": 0, "start": 0, "entries": [ … ]},
     {"name": "states",        "table": 1, "start": 0, "entries": [ … ]},
@@ -240,16 +240,16 @@ multi-word (`parse-results`); entry identifiers are two-part `<owner>.<kind>`
 parse of the text `\e{x} {` (a macro `\e` with one mandatory argument, defined in a
 shared package `d`; then an unclosed group), serialized as a parse result with
 `session.serialize_parse_result(&Arc::new(result))` into a fresh
-`SerdeSession::<Latexlike>::new()` that declared the profile `schema-draft example`,
+`SerdeSession::<Latexlike>::new()` that declared the profile `schema example`,
 emitted with `take_segment_with_main(position)` (the parse result as the segment's main
 entry), and rendered with `serde_json::to_string`. **The example is generated, never
 edited by hand.** Regeneration recipe: the ignored test
-`latexlike::serialize_tests::rendering::schema_draft_worked_example` prints the exact
+`latexlike::serialize_tests::rendering::schema_worked_example` prints the exact
 canonical line, an envelope summary line, and the readable per-entry layout reproduced
 below —
 
 ```text
-cargo test --features serde -p techy --lib schema_draft_worked_example -- --ignored --nocapture
+cargo test --features serde -p techy --lib schema_worked_example -- --ignored --nocapture
 ```
 
 — after any wire change, rerun it and paste; the readable layout puts one key per line
@@ -262,7 +262,7 @@ this document, the generator, and the test suite cannot silently disagree.
 The generator's envelope summary of the example, verbatim:
 
 ```text
-version 1; meta {"profile": "schema-draft example"}; main {"$index": [6, 0]}
+version 1; meta {"profile": "schema example"}; main {"$index": [6, 0]}
 ```
 
 and its table headers, verbatim (ordinal, start position, entry count):
