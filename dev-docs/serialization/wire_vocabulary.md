@@ -469,13 +469,21 @@ continuity, version, duplicate tables) IS the verification level. Of the M6 prop
     `SerdeSession::set_profile`); base64 standard alphabet; NO `$` escaping (a `$`-key is
     a typed error); `SerialValue::Map` order-sensitive; `Deserialize for DiagnosticValue`.
 
-## 17. OPEN for M7 (not vocabulary)
+## 17. M7 (not vocabulary)
 
-- **`usize` widths on the wire.** Counts and offsets that are `usize` in the live types
-  (`Diagnostics::limit/suppressed/error_count`, source `length`, node counts) are written
-  as `i64` and read back into `usize` with range checks; a value that fits `i64` but not
-  the reading target's `usize` (a 32-bit reader of a 64-bit writer's stream) is an
-  `IntegerOutOfRange` read error. The test suite uses values valid on both widths
-  (`1 << 20`, not `1 << 40`). Whether the schema should state a portable bound (e.g. "counts
-  fit `u32`") is M7's to decide.
-- The permanent home of §1–§13 (schema page vs ARCHITECTURE section) — M7.
+- **`usize` widths on the wire — RESOLVED (M7a, 2026-08-17).** Counts and offsets that
+  are `usize` in the live types (`Diagnostics::limit/suppressed/error_count`, source
+  `length`, span offsets, node counts, line/column offsets) are written as `i64` (a
+  `usize` above `i64::MAX` is a write error, `IntegerOutOfRange` target `i64`) and read
+  back into `usize` with range checks; a value that fits `i64` but not the reading
+  target's `usize` (a 32-bit reader of a 64-bit writer's stream) is an
+  `IntegerOutOfRange` read error (target `usize`), never a truncation — verified in the
+  wire conversions (`wire/mod.rs` `int_conversions!`) and the bridge
+  (`deserialize_checked_int!`), pinned by `drivers/tests.rs
+  extreme_line_column_offsets_round_trip_and_saturate`. **No wire change; the schema
+  states no portable bound** (a stream meant for 32-bit readers keeps such quantities
+  within `u32`; the wire integers that are `u32` in the live types — table ids,
+  positions, node indices — fit every reader). The test suite uses values valid on
+  both widths (`1 << 20`, `u32::MAX`; not `1 << 40`). Recorded in `schema_draft.md` §1.
+- **Nesting depth — DONE (M7a).** `SerialValue::MAX_NESTING_DEPTH` = 64 (schema §1).
+- The permanent home of §1–§13 (schema page vs ARCHITECTURE section) — M7 docs pass.

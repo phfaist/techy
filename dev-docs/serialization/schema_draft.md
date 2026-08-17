@@ -39,12 +39,33 @@ Every serialized thing is a `SerialValue`:
 |---|---|---|
 | `Null` | the absent value | `null` |
 | `Bool` | | `true` / `false` |
-| `Int` (i64) | every integer width; out-of-range values are errors, never truncated | number |
+| `Int` (i64) | every integer width; out-of-range values are errors, never truncated (see the width note below the table) | number |
 | `Str` | | string |
 | `Bytes` | a byte string | `{"$bytes": "<base64>"}` — standard alphabet, `=` padding, no line breaks; strict decoder |
 | `List` | | array |
 | `Map` | string-keyed, an **ordered list of entries**: equality is order-sensitive and the rendering preserves the order — the same entries in another order are a different value with a different rendering; keys unique by construction, never beginning with `$` | object, in entry order |
 | `Index {table, index}` | a reference to entry `index` of table `table` | `{"$index": [<table ordinal>, <index>]}` — the ordinal is the WRITER's table numbering, translated by the reader through the segment's directory (§2) |
+
+**Integer widths.** Every integer on the wire is an `i64` whatever its Rust width: counts,
+byte offsets, positions, and limits that are `usize` in the live types
+(`Diagnostics::limit`/`suppressed`/`error_count`, a source's `length`, span offsets, node
+counts, line/column offsets) are written as `i64` — a `usize` above `i64::MAX` cannot be
+written (`SerialValueError::IntegerOutOfRange`, target `i64`) — and read back with a
+range check on the reader's own type: a value that fits `i64` but not the reader's
+`usize` (a 64-bit writer's value above `u32::MAX` read on a 32-bit target) is
+`IntegerOutOfRange` (target `usize`), a typed error, never a truncation. The schema
+states no portable bound; a stream meant for 32-bit readers keeps such quantities within
+`u32`. (Wire integers that are `u32` in the live types — table ids, positions, node
+indices — fit every reader.)
+
+**Nesting depth.** A value nests at most `SerialValue::MAX_NESTING_DEPTH` (64) levels of
+lists and maps; the segment's own structure (the segment map, `tables`, a table's map,
+`entries`) counts, so an entry's stored form nests at most 60 levels (59 for a
+heterogeneous table's `{identifier, data}` wrapper). Every reader enforces the bound as it
+reads (`Deserialize` for `SerialValue`/`Segment`, `Segment::from_serial_value`,
+`push_segment`; `SerialValueError::NestingTooDeep`), and a session refuses to intern a
+deeper entry — no writer emits a segment no reader accepts. Well below serde_json's own
+default recursion limit (128), so the same bound is in force in every format.
 
 The two `$`-keys are the only keys beginning with `$` the rendering ever writes: the value
 model **reserves the `$` prefix** — a `Map` holding a key that begins with `$` is a
