@@ -1,4 +1,4 @@
-//! The serialized shape of a [`ParseResult`](crate::engine::ParseResult):
+//! The serialized shape of a [`ParseResult`](crate::core::ParseResult):
 //! [`WireParseResult`] — the tree's position in the trees table, the diagnostics
 //! collection ([`WireDiagnostics`]: the retained diagnostics' positions in the
 //! diagnostics table plus the collection's retention cap and counts), and the session

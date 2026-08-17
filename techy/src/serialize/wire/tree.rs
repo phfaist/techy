@@ -1,4 +1,4 @@
-//! The serialized shape of a [`NodeTree`](crate::node::NodeTree): [`WireTree`] and its
+//! The serialized shape of a [`NodeTree`](crate::core::node::NodeTree): [`WireTree`] and its
 //! parts — the nodes in storage order, each a [`WireNode`] with its structural kind
 //! ([`WireNodeKind`]), span, state position, ext, and children range, and the
 //! per-node annotations (omitted for the unit annotation). Written and read by the
@@ -156,7 +156,7 @@ pub(crate) struct WireNode {
     pub(crate) children: WireRange,
 }
 
-/// The structural kind of a node (the closed [`NodeKind`](crate::node::NodeKind)
+/// The structural kind of a node (the closed [`NodeKind`](crate::core::node::NodeKind)
 /// taxonomy) with its payload.
 #[derive(Debug, Clone, ToSerialValue, FromSerialValue)]
 pub(crate) enum WireNodeKind {
@@ -237,7 +237,7 @@ pub(crate) struct WireArgument {
     #[serial(name = "ext")]
     pub(crate) ext: Option<SerialValue>,
     /// The argument spec's description, when the callable spec serializes one (see
-    /// [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec));
+    /// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec));
     /// none under the index rule (the argument spec is the callable's declared one).
     #[serial(name = "spec_payload")]
     pub(crate) spec_payload: Option<SerialValue>,
@@ -276,7 +276,7 @@ pub(crate) struct WireRegion {
 }
 
 /// A region's content designation — the wire form of
-/// [`ContentNodes`](crate::node::ContentNodes), variant for variant: the content
+/// [`ContentNodes`](crate::core::node::ContentNodes), variant for variant: the content
 /// nodes sit either directly in the region's own node list (`in_region`: offsets
 /// within that list) or among the children of a node inside the region (`in_children_of`:
 /// the storage index of that node — an argument's group, a slot's body list — and

@@ -8,7 +8,7 @@
 //! A node tree is rebuilt through the node builder: the reader stages the nodes in
 //! reverse storage order (so a node's children exist before it), re-resolves each
 //! callable's argument and slot regions from the builder-ready form the wire stores,
-//! and [`finish`](crate::node::NodeTreeBuilder::finish)es the tree — which mints a
+//! and [`finish`](crate::core::node::NodeTreeBuilder::finish)es the tree — which mints a
 //! fresh layout tag, recomputes the parent table, and re-establishes every region
 //! invariant by construction. Everything read is untrusted input: a children range
 //! out of bounds, a node no other node claims as a child, a region that does not tile

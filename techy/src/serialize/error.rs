@@ -34,7 +34,7 @@ impl fmt::Display for OriginLabel<'_> {
 
 /// Error of the write side: what a
 /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) call,
-/// a [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec)
+/// a [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
 /// call, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), or the session
 /// driving them ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern),
 /// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern)) can
@@ -55,7 +55,7 @@ pub enum SerializeError {
     /// A parsed argument was parsed against an argument spec that is not the one its
     /// callable spec declares at that index — an *out-of-band* argument spec — and the
     /// callable spec's
-    /// [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec)
+    /// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
     /// is the default, which handles declared argument specs only. `count` is the
     /// number of argument specs the callable spec declares (`index >= count` means the
     /// index itself is out of range).
@@ -156,8 +156,8 @@ pub enum SerializeError {
     /// The spec carries no provenance stamp, and its type has no self-contained
     /// serialized form: it can only be serialized by identity — as a reference to the
     /// provider that defined it — which needs the stamp a shared package hands out
-    /// ([`Package::new_shared`](crate::scopes::Package::new_shared),
-    /// [`SpecProvenance`](crate::scopes::SpecProvenance)). The spec was built outside
+    /// ([`Package::new_shared`](crate::core::specs::Package::new_shared),
+    /// [`SpecProvenance`](crate::core::specs::SpecProvenance)). The spec was built outside
     /// a shared package (or not stamped). `spec` names the spec's type.
     MissingProvenance {
         /// The name of the spec's type.
@@ -346,7 +346,7 @@ impl core::error::Error for SerializeError {
 /// Error of the read side: what a
 /// [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object)
 /// call, a
-/// [`deserialize_argument_spec`](crate::spec::CallableSpec::deserialize_argument_spec)
+/// [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec)
 /// call, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), an
 /// [`IdentifierResolver`](crate::serialize::IdentifierResolver), or the session
 /// driving them ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment),
@@ -377,9 +377,9 @@ pub enum DeserializeError {
     },
     /// A serialized argument carries a description of its argument spec — written by
     /// a callable spec that overrides
-    /// [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec)
+    /// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
     /// — but the callable spec it is read against uses the default
-    /// [`deserialize_argument_spec`](crate::spec::CallableSpec::deserialize_argument_spec),
+    /// [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec),
     /// which reads no such description: the reading environment's callable spec is
     /// not of the type that wrote the argument.
     UnexpectedArgumentSpecPayload {
@@ -513,7 +513,7 @@ pub enum DeserializeError {
         end: usize,
     },
     /// The serialized data uses a parsing feature the reading language declares
-    /// absent ([`Lang::Features`](crate::state::Lang::Features)): a state's rules carry
+    /// absent ([`Lang::Features`](crate::core::Lang::Features)): a state's rules carry
     /// the section of that feature, or its scope stack is non-empty for a language
     /// without the scope stack. The language reading the data is not the one that
     /// wrote it — or not one with the same feature declarations.

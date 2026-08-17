@@ -15,7 +15,7 @@ use super::session::SerdeSession;
 
 /// The serialization call's access to the session in progress — the `cx` argument of
 /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object),
-/// [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec),
+/// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec),
 /// and [`ObjectSerdeDriver::serialize_object`].
 ///
 /// A context exists only for a [`SerializableLang`]: that bound is what makes the
@@ -86,7 +86,7 @@ impl<L: SerializableLang> fmt::Debug for SerializeContext<'_, L> {
 
 /// The deserialization call's access to the session in progress — the `cx` argument
 /// of [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object),
-/// [`deserialize_argument_spec`](crate::spec::CallableSpec::deserialize_argument_spec),
+/// [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec),
 /// [`ObjectSerdeDriver::deserialize_object`], and
 /// [`IdentifierResolver::resolve`](crate::serialize::IdentifierResolver::resolve).
 ///

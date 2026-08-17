@@ -161,7 +161,7 @@ impl<L: Lang> KnownProviders<L> {
 
     /// Register `recipe` as the way to build the provider named `name` when no
     /// provider is held under that name. The provider the recipe builds must answer
-    /// `name` as its own [`name()`](crate::scopes::SpecsProvider::name):
+    /// `name` as its own [`name()`](crate::core::specs::SpecsProvider::name):
     /// [`resolve`](KnownProviders::resolve) checks it and reports a recipe that builds
     /// a provider of another name as an error. Returns the recipe previously
     /// registered under `name`, if any (replaced).
@@ -185,7 +185,7 @@ impl<L: Lang> KnownProviders<L> {
     /// # Errors
     ///
     /// The recipe's own failure; the recipe built a provider whose
-    /// [`name()`](crate::scopes::SpecsProvider::name) is not `name`
+    /// [`name()`](crate::core::specs::SpecsProvider::name) is not `name`
     /// ([`DeserializeError::Failed`], naming both).
     pub fn resolve(&self, name: &str) -> Result<Option<Arc<dyn SpecsProvider<L>>>, DeserializeError> {
         if let Some(provider) = self.providers.get(name) {

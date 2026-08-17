@@ -233,7 +233,7 @@ pub trait ParseResultSerialization<L: SerializableLang> {
     /// everything they refer to is interned into the standard tables. The parse
     /// result is interned by identity — the same `Arc` again yields its existing
     /// position — which is why it is passed as an `Arc` (a
-    /// [`Language::parse`](crate::engine::Language::parse) result is wrapped with
+    /// [`Language::parse`](crate::core::Language::parse) result is wrapped with
     /// `Arc::new`; a parse result cannot be cloned into one here, since a language's
     /// session extension need not be `Clone`).
     ///

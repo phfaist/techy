@@ -32,7 +32,7 @@ use super::value::{SerialEntry, SerialValue};
 /// implementation of every such type is what its owner writes; the impl of this
 /// trait itself is empty. A language built on the crate's defaults (`()` for the
 /// exts and events, `u32` ids, `Option<String>` origin — what
-/// [`TrivialLang`](crate::state::TrivialLang) supplies) opts in with an empty impl
+/// [`TrivialLang`](crate::core::TrivialLang) supplies) opts in with an empty impl
 /// block, the core impls covering every type; a language with its own vocabulary or
 /// ext types implements the two value traits for those types first.
 pub trait SerializableLang:
@@ -57,8 +57,8 @@ pub trait SerializableLang:
 /// The write side of the serialization capability: an object that can produce its
 /// serialized form.
 ///
-/// Every [`CallableSpec`](crate::spec::CallableSpec) and every
-/// [`SpecsProvider`](crate::scopes::SpecsProvider) implements this trait — it is a
+/// Every [`CallableSpec`](crate::core::specs::CallableSpec) and every
+/// [`SpecsProvider`](crate::core::specs::SpecsProvider) implements this trait — it is a
 /// supertrait of both, so that the method is callable through their trait objects
 /// (`dyn CallableSpec<L>`, `dyn SpecsProvider<L>`), where the concrete type is
 /// unknown. The method is defaulted to "unsupported", so a type that does not

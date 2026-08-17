@@ -194,7 +194,7 @@ impl<L: SerializableLang> DeserializableObject<L> for Diagnostic<L::SourceOrigin
 /// names the adapter itself for type-keyed uses.
 ///
 /// So a diagnostic read back ([`DiagnosticSerialization::diagnostic`], or inside a
-/// deserialized [`ParseResult`](crate::engine::ParseResult)) answers the same
+/// deserialized [`ParseResult`](crate::core::ParseResult)) answers the same
 /// [`identifier()`](Diagnostic::identifier), the same
 /// [`serializable_data()`](crate::error::DiagnosticData::serializable_data), and the
 /// same [`message()`](Diagnostic::message) as the diagnostic that was written, and
