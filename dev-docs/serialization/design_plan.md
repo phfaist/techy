@@ -864,6 +864,118 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M4 implementer agent — **M4 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `58d4c20` M3 review nits (char
+  mismatch uses `kind_name()`; source/object/mod doc wording; two state-reading
+  tests — a missing section reads as a present feature's empty rules; an
+  `expecting_close` matching no rule reads with a fresh handle); `d544935` the tree
+  driver + wire structs + annotation codecs + `serialize_tree`/`tree` sugar; `dd0ed0b`
+  the deep-compare helper, the round-trip harness, and the test corpus + hostile
+  battery (+ the M3 pinned-segment snapshot gains the empty `trees` directory row);
+  `6ce4ecc` module-doc pass for the trees table; `3227193` the feature-gated
+  `register_serde_annotation`. Verified: `cargo build`/`test` green with and without
+  `--features serde` (926/954 unit incl. the 27/29-test tree battery, 30+8+13+23+1
+  integration, 72/73 doctests); `rm -rf target/doc && cargo docs` clean both states;
+  clippy clean on all new code (the pre-existing `never_loop` in `latexlike/mod.rs`
+  is untouched). **What M4 built** (plan §7 M4, `serialize/wire/tree.rs`,
+  `serialize/drivers/tree.rs`, `serialize/tree_support.rs`,
+  `serialize/drivers/tree_tests.rs`):
+  - **Trees table (ordinal 4, `"trees"`, heterogeneous by annotation type).**
+    `TreeSerdeDriver<L>` with `type Object = dyn Any + Send + Sync`,
+    `type Index = TreeIndex`. The entry identifier names the ANNOTATION type's codec
+    (D23): `()` pre-registered as `"core.tree"` (annotations omitted on the wire);
+    other `A`s via `TableHandle::register_annotation::<A>(session, id)` (the
+    `SerializableValue`/`DeserializableValue` value traits ARE the codec — an `A` that
+    is a `SourceSpan` interns its source through `cx`), plus feature-gated
+    `register_serde_annotation::<A>` for plain-data `A: Serialize + DeserializeOwned +
+    …` through the bridge. Write dispatches on `(**object).type_id()`; read on
+    `entry.identifier`; unregistered type → typed `SerializeError`, unknown identifier
+    → `DeserializeError::UnknownIdentifier { table: "trees", … }`. The registry rides
+    on a generalized `TableRegistry` trait (the old `ReadDispatchState`, renamed and
+    widened to `pub(crate)` so a custom driver can keep its own registrations); the
+    trees registry memoizes nothing.
+  - **Sugar (extension trait `TreeSerialization` on `SerdeSession<L>`, session-level
+    only — the context forms were unused, skipped):** `serialize_tree(&NodeTree<L, A>)
+    -> Result<TreeIndex, _>` (wraps the tree in a fresh `Arc<dyn Any>` and interns —
+    every call a new entry, trees are values; documented) and `tree::<A>(TreeIndex) ->
+    Result<NodeTree<L, A>, _>` (downcast; wrong `A` → `Failed`).
+  - **Wire form (`WireTree { nodes: [WireNode…] in storage order, annotations:
+    Option<[value…]> }`, annotations omitted for `()`).** Per node: `kind` (chars |
+    group | callable | comment | list), `span` (the M3 `WireSpan {source, start,
+    end}`), `state` (`StateIndex`), `ext` (`NodeExt` value conversion), `children`
+    (storage range `[start,end)`). Callable payload: `callable_type`/`invocation_syntax`
+    (value conversions), `name`, `spec` (`SpecIndex`), `arguments: [{region?, ext?,
+    spec_payload?}]`, `slots: [{name?, region, role, ext}]`. `TextContent`, `Span`,
+    `SlotRole` gained context-free internal wire codecs and (delegating) value-trait
+    codecs; `GroupRule<L>` a value-trait codec — the M5-inlining surface of D23.
+  - **Region coordinate choice (Q3-relevant, decided + recorded):** a region is
+    `{children: [start,end) offsets into the callable's OWN child list, content:
+    [start,end) offsets, content_parent: u32 storage index}`. `content_parent ==` the
+    callable's storage index ⇔ `InRegion` (offsets within the region's node list);
+    otherwise ⇔ `InChildrenOf` (offsets within that node's children). The reader maps
+    `content_parent` through its staging map to a `BuildId`, so correctness does NOT
+    depend on storage-index preservation — only the presence of every referenced node.
+  - **Reader = builder-style rebuild (D22):** validates node count and each `children`
+    range (in bounds, strictly after the parent, each child claimed once — the builder
+    re-checks), stages in REVERSE storage order (children before parents), per node:
+    source/state/spec via `cx`, values via the value traits, span validated by the M3
+    `deserialize_span` before `SourceSpan::new`, `TextContent` spans validated
+    `start<=end` before `Span::new` then residency-checked by the builder; then
+    `finish(root)` (fresh tag, parent table + `single_source` recomputed) and
+    `validate_tree` as a final defense-in-depth check. Iterative throughout (no
+    recursion proportional to tree size); the child-collection `Vec` is capacity-bounded
+    by the validated node count, so a huge `children.end` errors without allocating.
+  - **D21 pair exercised:** default index rule (write returns `Ok(None)`, read clones
+    `arguments()[i]`), an overriding toy spec (`OobSpec` round-trips an out-of-band
+    argument spec), out-of-band without an override → write `ArgumentSpecOutOfBand`
+    inside `InTable{"trees"}`, an unexpected payload at the default →
+    `UnexpectedArgumentSpecPayload`, an index past `arguments().len()` →
+    `ArgumentIndexOutOfRange`. **Deviation (recorded):** the write error is NOT wrapped
+    to name the node+callable (plan §7-step-3 wording) — wrapping in `Failed` would
+    forfeit the typed variant the tests match on; the typed variant + `InTable{"trees"}`
+    location is kept instead. Per-node naming would need a dedicated wrapper/variant;
+    left as a small follow-up.
+  - **Argument ext presence follows the region, not an `Option` key:** a provided
+    argument whose ext serializes to `Null` (the unit ext) omits the wire key and reads
+    the ext back from `Null` (so `Some(Null)` vs `None` does not corrupt it) — the one
+    non-obvious wire subtlety.
+  - **Test support (reused by M5):** `serialize/tree_support.rs` (`#[cfg(test)]
+    pub(crate)`) — `assert_trees_equivalent` (node count; kind + resolved payload text;
+    region fields; slot names/roles; `Debug` of specs/exts/invocation-syntax; spans by
+    offset + source content; states by `Debug`; the `Arc::ptr_eq` topology classes of
+    states/specs/sources; parent tables; `single_source`; annotations via callback) and
+    the generic `round_trip_tree<L, A>(setup, tree, eq)` harness (serialize → segment →
+    JSON under the feature → new session → `push_segment` → `tree()` → deep-compare).
+    M5 reuses the harness with a latexlike `setup` and parsed inputs.
+  - **Corpus-at-M5 scheduling note:** the M4 corpus is toy-lang parses (a `ParseLang`
+    with `{}`/`\`/`%` rules resolving `\hi`/`\emph{x}` through a toy provider) plus
+    hand-built trees covering every node kind and region shape (`InRegion` +
+    `InChildrenOf`, all three slot roles, absent + token + group arguments, nested
+    callables, multi-source, `Owned` text, `SourceSpan` and plain-data annotations).
+    The REAL latexlike corpus runs at M5 (its spec/provider `SerializableObject`/
+    `DeserializableObject` impls do not exist yet); M5 only adds inputs to the existing
+    harness.
+  **Provisional wire names (Q3):** table `trees`; identifier `core.tree`; node keys
+  `kind`, `span`, `state`, `ext`, `children` (`start`/`end`); kind variants `chars`,
+  `group`, `callable`, `comment`, `list`; group keys `group_type`/`open`/`close`;
+  callable keys `callable_type`/`name`/`spec`/`arguments`/`slots`/`invocation_syntax`;
+  argument keys `region`/`ext`/`spec_payload`; slot keys `name`/`region`/`role`/`ext`
+  (`content`/`attached`/`hidden`); region keys `children`/`content`/`content_parent`;
+  `TextContent` `spanned {start,end}`/`owned`; tree keys `nodes`/`annotations`.
+  **Public API surface (new):** `TreeSerdeDriver<L>` (`new`, `Default`); `TreeIndex`;
+  `TreeSerialization` (`serialize_tree`, `tree`); `TableHandle::register_annotation`,
+  `TableHandle::register_serde_annotation` (feature-gated); `StandardTables.trees`
+  field; `SerdeSession::new` now registers the trees table (ordinal 4);
+  `RegistrationError::DuplicateAnnotationType { table }`; `SerializableValue`/
+  `DeserializableValue` impls for `TextContent`, `Span`, `SlotRole`, `GroupRule<L>`;
+  `SerializableObject`/`DeserializableObject` impls — none new on core public types (the
+  tree driver interns states/specs/sources, none needing a new object impl). Crate-
+  internal only: `NodeData` re-export widened from `#[cfg(test)]` to unconditional
+  `pub(crate)` (the tree driver walks the flat storage); the `TableRegistry` trait
+  rename; `SerdeSession::{table_index, table_name}` widened to `pub(crate)`; both
+  contexts' `session_mut` widened to `pub(crate)`. Next: M4 review → M5 (specs,
+  providers, latexlike). Blockers: none.
+
 - 2026-08-17 — M3 implementer agent — **M3 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `1d25304` the D17 REVISED value
   traits + `SerializableLang` bounds; `f401f3b` source & state drivers, standard
