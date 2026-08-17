@@ -734,16 +734,16 @@ Revisit if: a reader must expose more of a position than equality.
 
 #### Zero-copy tokens [§dd-dr:zero-copy-tokens]
 
-Status: DECIDED (upheld through the token redesign and the opacity redesign).
+Status: DECIDED (upheld through both token redesigns).
 
 Tokenization copies nothing out of the source. `StdToken<L>` holds byte ranges (its own
 extent, its preceding whitespace, its post-space and comment-delimiter sub-ranges) plus
 the `Arc`s a `GroupOpen` or `Specials` token already carries — no `String`s, and no
 lifetime at all; the standard reader slices its borrowed `&'s str` when a parser asks what
 a token is, and that borrow never enters the AST ([§dd-dr:token-opacity]).
-Revisit if: — answered by opacity. A reader whose content is not one stable `&str` (a
-source built mid-parse, a chunked backing) chooses its own `Lang::Token` and answers for
-it; the token type no longer has to fit every reader.
+Revisit if: the former clause — a token source that cannot expose stable slices — is
+answered by opacity: such a reader chooses its own `Lang::Token` and interprets it itself,
+so the token type no longer has to fit every reader.
 
 #### `TokenReader` is the behavior extension point for tokenization [§dd-dr:token-reader]
 
