@@ -1617,9 +1617,11 @@ which never reached `main`).
   2a, 2b, 3a and 3b).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-4-final`.
 - **Status**: implemented — awaiting review. Date: 2026-08-18.
-- **Commits** (`git log --oneline main..bt-4-final`, newest first; the newest one is
-  this PROGRESS/PLAN update itself, "bettertokens: Stage 4 — the final sweep, its
-  numbers, and the plan's status", which also deletes the timing example):
+- **Commits** (`git log --oneline main..bt-4-final`, newest first). Two commits are
+  not in the list below because they were written after it: this PROGRESS/PLAN update
+  itself ("bettertokens: Stage 4 — the final sweep, its numbers, and the plan's
+  status", which also deletes the timing example), and one wording fix on top of it
+  ("docs: 'source' means the Source type, not the origin of a position").
 
 ```
 8338d6d TODO_Big: the better-tokens follow-ups left for later

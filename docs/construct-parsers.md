@@ -83,8 +83,8 @@ three questions to ask:
   in reading order, from where its leading whitespace begins to where its
   trailing whitespace ends.
 - *Where does the stream stand?* A **stream position** names a place in the
-  token stream. It is opaque as well, and the reader is the only source of
-  one: [`position_here()`](crate::core::TokenReader::position_here) for the
+  token stream. It is opaque as well, and only a reader hands one out:
+  [`position_here()`](crate::core::TokenReader::position_here) for the
   place the stream stands at, and
   [`position_at(&token, edge)`](crate::core::TokenReader::position_at) for an
   edge of a token. Two positions become a span through
