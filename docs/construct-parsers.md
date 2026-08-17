@@ -333,7 +333,7 @@ use techy::core::node::{
 };
 use techy::core::specs::{CallableSpec, Package};
 use techy::core::{
-    GroupRule, Language, ParsingState, ParsingStateDelta, TokenEdge, TokenKindView,
+    GroupRule, Language, ParsingState, ParsingStateDelta, TokenEdge, TokenKind,
 };
 use techy::error::{DiagnosticInfo, ParseError, Recovery};
 use techy::latexlike::{BodyMarker, CallableType, GroupType, Latexlike, LatexlikeDriver};
@@ -368,26 +368,23 @@ impl CallableSpec<Latexlike> for UntilSpec {
     // An infallible factory wraps its parser in `Ok(...)` — the `Err` channel
     // means "the parser could not be built" (never a depth refusal, which is the
     // descent guard's business).
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, Latexlike>,
+        invocation: Invocation<'a, Latexlike>,
     ) -> Result<
         Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>,
         ParseError,
-    >
-    where
-        's: 'a,
-    {
+    > {
         Ok(Box::new(UntilParser { invocation }))
     }
 }
 
 /// The per-invocation temporary: the invocation bundle travels inside it.
-struct UntilParser<'a, 's> {
-    invocation: Invocation<'a, 's, Latexlike>,
+struct UntilParser<'a> {
+    invocation: Invocation<'a, Latexlike>,
 }
 
-impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
+impl ConstructParser<Latexlike> for UntilParser<'_> {
     type Output = BuildId;
 
     fn parse(
@@ -417,10 +414,10 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
                 break (cx.tokens.position_here(), cx.tokens.position_here());
             };
             match cx.tokens.token_kind(&token) {
-                TokenKindView::Char(_) => {
+                TokenKind::Char(_) => {
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
                 }
-                TokenKindView::GroupClose { .. } => {
+                TokenKind::GroupClose { .. } => {
                     let content_end =
                         cx.tokens.position_at(&token, TokenEdge::Start);
                     let end_position =
@@ -428,7 +425,7 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     break (content_end, end_position);
                 }
-                TokenKindView::EndOfStream => {
+                TokenKind::EndOfStream => {
                     // Detection-site recovery: strict aborts here (`?`);
                     // tolerant records the diagnostic, and our recovery is
                     // to keep the content read so far.
