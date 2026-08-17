@@ -71,11 +71,15 @@
 //! - [`Span::slice`](source::Span::slice) — panics on a span invalid for the given
 //!   content (the non-panicking companion is [`Span::get`](source::Span::get));
 //! - [`TextContent::resolve`](source::TextContent::resolve) — panics on a stored
-//!   range invalid for the given source's content (a broken invariant, not
-//!   document input; every operation that resolves or materializes a tree's
-//!   span-backed text — [`NodeTree::materialize`](core::node::NodeTree::materialize),
-//!   the preset's source recomposer, the tree serialization of [`serialize`] — reaches
-//!   this panic on a consumer-built tree that breaks the invariant, and on no other
+//!   range invalid for the given source's content (a broken invariant, which no
+//!   parsed input can cause; every operation that resolves or materializes a tree's
+//!   span-backed text — among others [`NodeRef::chars`](core::node::NodeRef::chars),
+//!   [`NodeRef::group_delimiters`](core::node::NodeRef::group_delimiters),
+//!   [`NodeRef::summary`](core::node::NodeRef::summary),
+//!   [`NodeTree::materialize`](core::node::NodeTree::materialize),
+//!   [`core_source_instruction`](recompose::core_source_instruction), the preset's
+//!   source recomposer, and the tree serialization of [`serialize`] — reaches this
+//!   panic on a consumer-built tree that breaks the invariant, and on no other
 //!   input);
 //! - [`ChildRegion::children`](core::node::ChildRegion::children),
 //!   [`ChildRegion::content_range`](core::node::ChildRegion::content_range), and
