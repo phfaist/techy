@@ -745,10 +745,10 @@ fn truncate_for_display(content: &str) -> (&str, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{StdToken, StdTokenKindData, TokenEdge, TokenKind, truncate_for_display};
+    use super::{StdToken, StdTokenKindData, Token, TokenEdge, TokenKind, truncate_for_display};
     use crate::source::Span;
     use crate::spec::{CallableSpec, StdCallableSpec};
-    use crate::state::TrivialLang;
+    use crate::state::{Lang, TrivialLang};
     use crate::token::GroupRule;
     use alloc::format;
     use alloc::sync::Arc;
@@ -763,6 +763,19 @@ mod tests {
 
     fn spec() -> Arc<dyn CallableSpec<PlainLang>> {
         Arc::new(StdCallableSpec::default())
+    }
+
+    #[test]
+    fn a_trivial_lang_gets_the_standard_token_from_the_blanket_impl() {
+        // `Lang::Token` is the marker contract [`Token`], and the blanket
+        // `impl<T: TrivialLang> Lang for T` names `StdToken<Self>` — both checked by
+        // compilation here.
+        fn assert_token_contract<L: Lang, T: Token<L>>() {}
+        assert_token_contract::<PlainLang, <PlainLang as Lang>::Token>();
+
+        let token: <PlainLang as Lang>::Token =
+            StdToken::char('a', Span::new(0, 1), Span::empty(0));
+        assert_eq!(token, StdToken::char('a', Span::new(0, 1), Span::empty(0)));
     }
 
     #[test]
