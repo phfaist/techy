@@ -104,11 +104,18 @@ and §1 wins for the final tree.
   that produced it (or a reader over the same content, e.g. the test list reader).
 - **Stream position**: an opaque value naming a place in the token stream, minted by
   the reader; for `StdTokenReader` a byte offset behind a private newtype.
-- **Edge** (`TokenEdge`): one of the four boundaries of a token in stream order:
+- **Edge** (`TokenEdge`): one of the five boundaries of a token in stream order:
   `StartBeforePreSpace` (where its pre-space begins), `Start` (where the token proper
-  begins), `End` (where the token proper ends = where its post-space begins),
-  `EndPastPostSpace` (where its post-space ends). For kinds without post-space
-  `End == EndPastPostSpace`; for tokens without pre-space `StartBeforePreSpace == Start`.
+  begins), `ContentStart` (where the token's own content begins, past its leading
+  marker: for `Comment` right after the start delimiter, for `Command` right after the
+  escape character, `= Start` for every other kind), `End` (where the token proper ends
+  = where its post-space begins), `EndPastPostSpace` (where its post-space ends). The
+  offsets satisfy `StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤ EndPastPostSpace`
+  (`≤`: edges may coincide — for kinds without post-space `End == EndPastPostSpace`, for
+  tokens without pre-space `StartBeforePreSpace == Start`, for kinds without a leading
+  marker `ContentStart == Start`). `ContentStart` is the user's ruling O-3 (§1.17,
+  2026-08-17): it lets a comment's three sub-spans (`start` delimiter, `content`,
+  `post_space`) be three reader answers instead of string-length arithmetic.
 - **Text location**: a `SourceSpan`/`SourcePos` (S0 types, `Arc<Source>` + offsets).
   This is the *only* form in which locations leave the reader.
 - **Reader-relative span**: an internal notion of `StdToken`; never visible to parsers.
@@ -238,11 +245,16 @@ pub enum TokenKind<'t, L: Lang> {
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TokenEdge { StartBeforePreSpace, Start, End, EndPastPostSpace }
+pub enum TokenEdge { StartBeforePreSpace, Start, ContentStart, End, EndPastPostSpace }
 ```
 
-`Ord` is stream order (declaration order). Used by `move_to`, `position_at`,
-`source_span_between`.
+`Ord` is stream order (declaration order); offsets satisfy `≤` between consecutive
+edges (§1.1). Used by `move_to`, `position_at`, `source_span_between`. `ContentStart`
+(ruling O-3, added in Stage 3a) is interpreted by `Token::edge_offset`/`StdToken::edge_offset`:
+`Comment` → the start delimiter's end, `Command` → `span.start() + escape_char.len_utf8()`,
+every other kind → `span.start()`. Comment nodes take their sub-spans as
+`source_span_between(&tok, Start, ContentStart)` / `(ContentStart, End)` /
+`(End, EndPastPostSpace)`.
 
 ### 1.5 `StdStreamPosition` (`techy/src/token/reader.rs`)
 
@@ -687,7 +699,7 @@ closed core enum), `TokenEdge`, `StdStreamPosition`, `Lang::Token`,
 token_kind, source_span_between, source_span_of, position_here, position_at,
 source_position_at, source_span_within}`, `ParseContext::{here, source_span_within}`,
 `ParseDriver::make_token_reader`, `SourceSpan::at`, `StopCause::*::after`,
-`Invocation::kind`, `CallableQuery::token_kind` + `CallableQuery::with_token_kind`
+`Invocation::kind`, `TokenEdge::ContentStart` (ruling O-3), `CallableQuery::token_kind` + `CallableQuery::with_token_kind`
 (the view of the triggering token; ruling O-1), and the view's comment field names
 `TokenKind::Comment { start_delim, content }` (the delimiter as *written text*, where
 the stored token had a `Span`).
@@ -763,6 +775,19 @@ the normative text; this list is the audit trail.
   whole resolve chain (`ParseDriver::resolve_command`, `CommandResolver::resolve_command`,
   `resolve_command_in_scopes`) receives `token_kind: TokenKind<'_, L>` instead of the
   token or the bare `(name, escape_char)` pair. Spelled out in §1.10. Status: closed.*
+- **O-3 — comment sub-spans need a fifth edge** (found while briefing Stage 3a). The
+  view `Comment { start_delim, content }` has no span fields and the four edges do not
+  name the boundary between a comment's start delimiter and its content, so a parser
+  could not ask the reader for the delimiter span (and must not derive it from
+  `start_delim.len()`: a custom reader may normalize `content`). *Ruling (user,
+  2026-08-17): add `TokenEdge::ContentStart` — "where the token's own content begins,
+  past its leading marker" (`Comment`: after the start delimiter; `Command`: after the
+  escape character; every other kind: `= Start`), with the ordering
+  `StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤ EndPastPostSpace` (`≤`, not `<`:
+  edges may coincide). Folded into §1.1, §1.4, §1.14. Implemented in Stage 3a. Rejected:
+  deriving the sub-spans from the view's string lengths under a new reader contract
+  (contradicts "never reconstruct spans from content"); a dedicated comment-parts reader
+  method (ad hoc). Status: closed.*
 - **O-2 — who edits `CLAUDE.md`** (§1.3, §1.15). *Ruling (user, 2026-08-17): the user
   edited CLAUDE.md themselves on `main` (rule 4 no longer names `Token::new`; it points
   at `docs/panics.md`). No stage edits CLAUDE.md; Stage 4's final report lists lines
