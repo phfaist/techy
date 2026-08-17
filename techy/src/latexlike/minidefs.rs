@@ -148,6 +148,10 @@ where
 /// [`serialize::register_package_recipes`](super::serialize::register_package_recipes)
 /// for the toy package, kept here so that builds that never import this module
 /// keep dead-stripping it.
+///
+/// The two package names are part of the preset's stable serialized vocabulary: a
+/// serialized package refers to its package by name, so `minilatex` and
+/// `minilatex.item` are kept as they are (like the seed package's `_builtin`).
 pub fn register_package_recipes<LLL: LatexlikeLang>(known: &mut KnownProviders<LLL>)
 where
     ArgumentExt<LLL>: Default,

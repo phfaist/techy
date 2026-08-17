@@ -691,6 +691,10 @@ where
 /// seed state can insert that state's builtin package instead, so that read data
 /// shares the very instances its parses use. The [`minidefs`](super::minidefs)
 /// packages have their own [`minidefs::register_package_recipes`](super::minidefs::register_package_recipes).
+///
+/// The name `_builtin` (like `minilatex` and `minilatex.item`) is part of the
+/// preset's stable serialized vocabulary: a serialized package refers to its package
+/// by name, so the names are kept as they are.
 pub fn register_package_recipes<LLL>(known: &mut KnownProviders<LLL>)
 where
     LLL: LatexlikeLang,

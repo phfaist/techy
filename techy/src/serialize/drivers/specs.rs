@@ -265,6 +265,9 @@ pub fn register_core_readers<L: SerializableLang>(session: &mut SerdeSession<L>)
     Ok(())
 }
 
+/// The handles of the specs and providers tables, in that order.
+pub(crate) type SpecAndProviderTables<L> = (TableHandle<SpecSerdeDriver<L>>, TableHandle<ProviderSerdeDriver<L>>);
+
 /// The specs and providers tables of `session`, by name — what a reader-registration
 /// helper needs (the other standard tables need not be registered).
 ///
@@ -274,7 +277,7 @@ pub fn register_core_readers<L: SerializableLang>(session: &mut SerdeSession<L>)
 /// lacks (with the standard driver type).
 pub(crate) fn spec_and_provider_tables<L: SerializableLang>(
     session: &SerdeSession<L>,
-) -> Result<(TableHandle<SpecSerdeDriver<L>>, TableHandle<ProviderSerdeDriver<L>>), RegistrationError> {
+) -> Result<SpecAndProviderTables<L>, RegistrationError> {
     let specs = session
         .table_handle::<SpecSerdeDriver<L>>(SPECS_TABLE)
         .ok_or_else(|| RegistrationError::UnknownTableName { name: String::from(SPECS_TABLE) })?;

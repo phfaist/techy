@@ -937,6 +937,120 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M6b rulings-pass agent — **M6b rulings pass complete** on
+  `techy-serialize` (worktree `.claude/worktrees/techy-serialize`). Commits: `f8d5ebc`
+  no `$` escaping + `Map` order; `13ec2db` the Q3 wire renames; `8b16c05` condition
+  projection keys + the derive's field attribute; `a816fd3` segment `main` + `profile`
+  (`SegmentMeta`); `d5f0a62` `Deserialize for DiagnosticValue` + nits N1/N2/N4/N5/N7;
+  plus the docs commit carrying this entry (`schema_draft.md` regenerated,
+  `wire_vocabulary.md` updated, N3/N6). Verified: `cargo build`/`test` green with and
+  without `--features serde` (1007/1043 unit, 30+9+13+23+1 integration plus the 5-test
+  feature-gated `tests/serialize_stream.rs`, 75/76 doctests); `rm -rf target/doc &&
+  cargo docs` clean both states; clippy clean on the touched code. **Rulings applied
+  (each: how):**
+  - (1) **No `$` escaping.** `SerialValueError::ReservedMapKey { key }` (new); checked
+    in `render.rs` for BOTH renderings (canonical and compact, write and read — the
+    write path calls the map serializer's `serialize_key` first so the bridge's own
+    check reports the typed error, then checks for every other format) and in the
+    bridge wherever it builds a map (map keys, struct field names via
+    `serialize_field`, variant names via `tagged`, now fallible). Reading: `$bytes`/
+    `$index` are the only accepted `$`-keys (must be first and alone); anything else
+    incl. `$$…` is an error. Proptest key strategy no longer generates leading `$`.
+  - (2) **`Map` = ordered association list**: documented on the variant, the type, and
+    the schema; pinned by `map_equality_and_rendering_are_order_sensitive`.
+  - (3) Envelope `{identifier, data}`; directory `table` (Rust `SegmentTable::id()`
+    kept — the accessor names the id, the wire key names the table); `$index` and
+    `TableId` unchanged.
+  - (4) `core.provider-spec-identity`; `WireSpecIdentity.key` renders as `definition`
+    (Rust field unchanged).
+  - (5) `WireState.rules` renders as `token_rules` (Rust field unchanged).
+  - (6) `WireRegion { children, content: WireContent }` with `WireContent::{InRegion
+    {start, end}, InChildrenOf {node, start, end}}` (`in_region` / `in_children_of`);
+    writer picks the variant by `content_parent == callable`; reader: `in_children_of`
+    node must be in range and staged (stored after the callable — naming the callable
+    itself hits the same "not stored after its callable" error since the callable is
+    staged last); `staged_region` lost its `callable_index` parameter. Tests updated
+    (+ unknown content form rejected, callable-as-node rejected).
+  - (7) `WireDiagnostic` field order severity, identifier, message, data, span, frames.
+  - (8) parse-result `diagnostics` nested — unchanged.
+  - (9) `Option` asymmetry documented once: `techy::serialize` module docs ("Absent
+    values in the serialized form") + schema draft §1.
+  - (10) `ForbiddenChar` key `char` via a NEW field-level derive attribute
+    `#[diagnostic(key = "…")]` (spelling `key`, matching the M6 inventory's own
+    proposal; parsed in techy-derive `diagnostic_info.rs serialization_key`; message
+    interpolation still by Rust field name; pinned in `tests/derive_conditions.rs`);
+    `ResolveError` projection `cause_chain` (hand-written impl in error.rs). No
+    per-condition projection-key pin test added (not asked; flagged in
+    wire_vocabulary §12).
+  - (11) Package names documented as stable vocabulary on both
+    `register_package_recipes` (latexlike + minidefs) and in wire_vocabulary §10.4.
+  - (12) Q7: nothing added (as ruled).
+  - (13) **Segment `main`**: `Segment { version, meta, tables, main: Option<WireMain> }`
+    (`WireMain` private: renders `{"$index": [t, i]}`); writer API
+    `SerdeSession::take_segment_with_main(main: impl SerialIndex) -> Result<Segment,
+    SerializeError>` (chosen over `Segment::set_main`: the session validates the
+    position is its own — table known, `index < len` — with the new
+    `SerializeError::IndexOutOfRange { table, index, len }`; on error nothing is
+    emitted and the pending entries stay pending); `Segment::main() ->
+    Option<(TableId, u32)>` (writer's numbering, untranslated); `push_segment` now
+    returns `Result<Option<(TableId, u32)>, DeserializeError>` — the plain pair, not a
+    receipt struct (the two parts of a `SerialValue::Index`; typed position via
+    `handle.position(index)` after comparing `table` with `handle.id()` — documented;
+    a receipt struct/`TableHandle` helper judged premature). Reader validation:
+    writer table id through the directory (`UnknownWriterTable`), position < table
+    length after the push (`IndexOutOfRange`), checked BEFORE anything is appended
+    (no rollback needed).
+  - (14) **Profile, per the user's `meta` amendment**: `SegmentMeta { profile:
+    Option<String> }` (public, `Default`, `profile()`), `Segment::meta()`; wire
+    `"meta": {"profile"?: …}` ALWAYS present (empty object when unset), key order
+    `version, meta, tables, main`; `SerdeSession::set_profile(impl Into<String>)` /
+    `profile()`; every emitted segment carries it; `push_segment` checks it right
+    after the version (before the unemitted-entries and directory checks) →
+    `DeserializeError::ProfileMismatch { expected, found: Option<String> }`; a reader
+    without a profile accepts any. Intended use documented on `set_profile` (the
+    caller names the environment/version combination that resolves every identity and
+    identifier; techy only compares). **Name flag:** `profile` reads well enough;
+    alternatives considered — `configuration` (too long / overloaded), `environment`
+    (collides with the "reading environment" vocabulary and with LaTeX environments),
+    `schema` (wrong: it is not techy's schema). Keep `profile` unless the user prefers
+    `reader` / `target`.
+  - (15) `Deserialize for DiagnosticValue` (feature-gated, `drivers/diagnostic.rs`):
+    `SerialValue::deserialize` then the driver's conversion, `Bytes`/`Index` → serde
+    error carrying the path; round trip pinned through JSON, the bridge, and postcard.
+  **M6 nits:** N1 documented (not clamped) on `Diagnostics::with_limit` and
+  `serialize_parse_result`'s `# Errors`; N2 `register_core_readers` and
+  `latexlike::serialize::register` use the new `pub(crate) spec_and_provider_tables`
+  (by NAME + driver type; error names the missing one of the two; a two-table
+  hand-composed session now takes the readers — tested); `STANDARD_TABLE_NAMES` /
+  `missing_standard_table` removed (unused); N3 `TEXT_A/B/C` + wording; N4 `1 << 20` +
+  the `usize`-width note in wire_vocabulary §17 (M7); N5
+  `UnrepresentableDiagnosticValue { kind, path }` (`error.cause_chain[2]`, empty =
+  root; Display "at `path`" / "at its root"); N6 wire_vocabulary anchors are now file +
+  item names (line numbers dropped); N7 cross-references added on `DiagnosticInfo`,
+  `Diagnostics`, and `DiagnosticValue`.
+  **Docs:** `schema_draft.md` rewritten to the new forms; its worked example is now
+  GENERATED by the ignored test
+  `latexlike::serialize_tests::rendering::schema_draft_worked_example` (tolerant
+  `\e{x} {`, profile `schema-draft example`, parse result as main; prints the exact
+  canonical line + a two-level readable layout that the draft reproduces byte for
+  byte, checked by script) — rerun with `--ignored --nocapture` after any wire change;
+  `wire_vocabulary.md` updated (rulings applied, §16 = RESOLVED record, `main`/`meta.
+  profile` in §1, §17 = the M7 OPEN list: `usize` widths, permanent home). Determinism
+  digest re-pinned twice ((8003, …) after the renames, (8013, 3_299_525_534_588_708_154)
+  after `meta`).
+  **Public API surface (new/changed):** `techy::serialize::SegmentMeta` (new; `profile()`),
+  `Segment::meta()`, `Segment::main()`, `SerdeSession::{set_profile, profile,
+  take_segment_with_main}`, `SerdeSession::push_segment` return type CHANGED to
+  `Result<Option<(TableId, u32)>, DeserializeError>`, `SerializeError::IndexOutOfRange`,
+  `DeserializeError::ProfileMismatch`, `DeserializeError::UnrepresentableDiagnosticValue`
+  gained `path`, `SerialValueError::ReservedMapKey`, feature-gated `impl Deserialize for
+  DiagnosticValue`, `#[diagnostic(key = "…")]` field attribute on the `DiagnosticInfo`
+  derive. Crate-internal: `WireContent`, `WireMain`, `spec_and_provider_tables`,
+  `render::check_map_key`, `serialize_entries`. **Plan patches for the supervisor:** D10
+  says "`Segment` is the one public wire struct" — `SegmentTable` (M2) and now
+  `SegmentMeta` are public too; §6 pinned signatures for `push_segment`; D26/§7 M6
+  bullet's "no `Deserialize` for `DiagnosticValue`" is superseded. Next: re-verification
+  → M7. Blockers: none.
 - 2026-08-17 — M6 implementer agent — **M6 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `b65f4a1` the M5 review nits (matched
   variant names in `expect_unit_variant`, `missing_standard_table` naming the missing

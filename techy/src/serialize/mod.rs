@@ -41,6 +41,18 @@
 //! the session as its user data); a value that refers to an object the reading
 //! environment lacks is a deserialization error.
 //!
+//! **Absent values in the serialized form.** Two spellings of "nothing" occur, and
+//! both read back the same: a *field the crate's own wire structures leave out* — an
+//! optional part that is absent (a source's digest, a slot's name, an argument's
+//! region) is an omitted key, never a `null` — and a *language-owned value that is
+//! null* — the slots a language fills with its own values (a state's mode or ext, a
+//! node's ext, a source's origin, a parse result's session extension) render whatever
+//! the language's value conversion produced, and the crate's conversions of `()` and
+//! of an `Option` that is `None` produce `null`. So a reader of the rendering sees
+//! `"origin": null` beside an omitted `"digest"`; the difference is principled (an
+//! omitted key is the structure's, a `null` value is the language's) and reading
+//! accepts a missing key and a `null` alike wherever a value may be absent.
+//!
 //! **The capability** is expressed as two pairs of traits. For objects:
 //! [`SerializableObject`] — the write side, which every callable spec and provider
 //! carries as a supertrait (defaulted, so a type that does not participate writes a

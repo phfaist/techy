@@ -43,9 +43,9 @@ use super::super::wire::{index_from_serial_value, FromSerialValue, ToSerialValue
 /// # Serialized form
 ///
 /// [`to_serial_value`](Segment::to_serial_value) / [`from_serial_value`](Segment::from_serial_value)
-/// convert a segment to and from a [`SerialValue`] — the map
-/// `{"version": <int>, "meta": {"profile"?: <str>}, "tables": [<table>, …], "main"?:
-/// <table position>}` (`meta` always present, its keys optional; `main` omitted when
+/// convert a segment to and from a [`SerialValue`] — the map `{"version": <int>,
+/// "meta": {"profile"?: <str>}, "tables": [<table>, …], "main"?: <position>}`
+/// (`meta` always present, its keys optional; `main` a table position, omitted when
 /// none), each table the map `{"name": <str>, "table": <int>, "start": <int>,
 /// "entries": [<value>, …]}` (`table` being the writer's table id, the ordinal every
 /// table reference inside the entries uses) — with the key names

@@ -1170,5 +1170,94 @@ mod rendering {
         );
         assert_eq!(json, expected);
     }
+
+    /// The setup of the schema draft's worked example
+    /// (`dev-docs/serialization/schema_draft.md`): a tolerant parse of `\e{x} {`
+    /// (a macro `\e` with one mandatory argument, defined in a shared package `d`;
+    /// then an unclosed group) serialized as a parse result into a fresh session
+    /// declaring the profile `schema-draft example`, the segment naming the parse
+    /// result as its main entry. Ignored: run it to REGENERATE the draft's example
+    /// after a wire change —
+    /// `cargo test --features serde -p techy --lib schema_draft_worked_example -- --ignored --nocapture`
+    /// — and paste its output; the draft's example is never edited by hand. Prints
+    /// the exact canonical line first, then a readable per-entry layout.
+    #[test]
+    #[ignore = "prints the schema draft's worked example; run with --ignored --nocapture to regenerate it"]
+    fn schema_draft_worked_example() {
+        let defs = Package::<Latexlike>::new_shared("d", |package| {
+            package.define_macro("e", ["m"]).unwrap();
+        });
+        let language = language(Recovery::Tolerant, [Arc::clone(&defs) as Arc<dyn SpecsProvider<Latexlike>>]);
+        let result = Arc::new(parse(&language, "\\e{x} {"));
+        let mut writer = SerdeSession::<Latexlike>::new();
+        writer.set_profile("schema-draft example");
+        let position = writer.serialize_parse_result(&result).unwrap();
+        let segment = writer.take_segment_with_main(position).unwrap();
+
+        std::println!("=== canonical rendering (one line) ===");
+        std::println!("{}", serde_json::to_string(&segment).unwrap());
+        std::println!("=== envelope ===");
+        std::println!(
+            "version {}; meta {}; main {}",
+            segment.version(),
+            segment.meta().profile().map_or(String::from("{}"), |p| alloc::format!("{{\"profile\": {p:?}}}")),
+            segment.main().map_or(String::from("none"), |(t, i)| alloc::format!("{{\"$index\": [{}, {}]}}", t.ordinal(), i)),
+        );
+        for table in segment.tables() {
+            std::println!(
+                "=== table `{}` (ordinal {}, start {}, {} entries) ===",
+                table.name(),
+                table.id().ordinal(),
+                table.start(),
+                table.entries().len()
+            );
+            for (position, entry) in table.entries().iter().enumerate() {
+                std::println!("--- entry {position} ---");
+                if table.name() == "trees" {
+                    // One node per line keeps the tree readable.
+                    let SerialValue::Map(fields) = entry else { panic!() };
+                    let SerialValue::Map(data) = &fields[1].1 else { panic!() };
+                    let SerialValue::List(nodes) = &data[0].1 else { panic!() };
+                    std::println!("{{\"identifier\": {}, \"data\": {{\"nodes\": [", serde_json::to_string(&fields[0].1).unwrap());
+                    for (i, node) in nodes.iter().enumerate() {
+                        let comma = if i + 1 < nodes.len() { "," } else { "" };
+                        std::println!("  {}{comma}", serde_json::to_string(node).unwrap());
+                    }
+                    std::println!("]}}}}");
+                } else {
+                    print_two_levels(entry);
+                }
+            }
+        }
+    }
+
+    /// Print a map value with its keys one per line and, for a value that is itself a
+    /// map of several keys, that map's keys one per line too (compact below that):
+    /// the readable layout of the schema draft's examples.
+    fn print_two_levels(value: &SerialValue) {
+        fn compact(value: &SerialValue) -> String {
+            serde_json::to_string(value).unwrap()
+        }
+        let SerialValue::Map(fields) = value else {
+            std::println!("{}", compact(value));
+            return;
+        };
+        std::println!("{{");
+        for (i, (key, value)) in fields.iter().enumerate() {
+            let comma = if i + 1 < fields.len() { "," } else { "" };
+            match value {
+                SerialValue::Map(inner) if inner.len() > 1 => {
+                    std::println!("  {key:?}: {{");
+                    for (j, (k, v)) in inner.iter().enumerate() {
+                        let comma = if j + 1 < inner.len() { "," } else { "" };
+                        std::println!("    {k:?}: {}{comma}", compact(v));
+                    }
+                    std::println!("  }}{comma}");
+                }
+                other => std::println!("  {key:?}: {}{comma}", compact(other)),
+            }
+        }
+        std::println!("}}");
+    }
 }
 
