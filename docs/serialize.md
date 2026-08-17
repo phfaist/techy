@@ -4,8 +4,9 @@ This chapter introduces [`techy::serialize`](crate::serialize): writing what a
 parse produced — the node tree, its parsing states and sources, the specs and
 packages it used, the diagnostics — into a format-independent value model, and
 rebuilding it elsewhere. It is an introduction to the everyday flow; the
-[module documentation](crate::serialize) is the reference (vocabulary, every
-table's layout, the engine, the errors).
+[module documentation](crate::serialize) is the reference (vocabulary, the write
+and read paths step by step, every table's layout, the engine, the errors) and
+this chapter does not repeat it.
 
 **When you would serialize.** To cache parses (parse many inputs over time,
 append each parse to a stream, reread them later without reparsing — a corrupt
@@ -25,112 +26,81 @@ emits form a *stream*; positions are numbered across the stream, so a reader
 absorbs one stream's segments in order. Nothing here needs a cargo feature;
 the optional `serde` feature adds the rendering through serde formats.
 
-## Writing
+## A cache: write today, read tomorrow
 
-Interning goes through extension traits named by kind — here
-[`ParseResultSerialization`](crate::serialize::ParseResultSerialization),
-whose `serialize_parse_result` interns the tree, its diagnostics, and
-everything they refer to. Writing needs no registration.
-
-```rust
-use std::sync::Arc;
-use techy::core::{Language, ParsingState};
-use techy::error::Recovery;
-use techy::latexlike::minidefs::minilatex_package;
-use techy::latexlike::{Latexlike, LatexlikeDriver};
-use techy::serialize::{ParseResultSerialization, SerdeSession};
-
-let language: Language<Latexlike> = Language::new(
-    LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial_with_packages([minilatex_package()])?,
-);
-let result = Arc::new(language.parse(r"Hello \emph{world}")?);
-
-let mut writer = SerdeSession::<Latexlike>::new();
-let position = writer.serialize_parse_result(&result)?;
-let segment = writer.take_segment_with_main(position)?;  // names the parse result as the main entry
-# assert_eq!(segment.tables().len(), 7);
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-With the `serde` feature, a segment renders through any serde format; the
-canonical stream rendering is JSON Lines — one segment per line:
+The whole flow in one scenario. Today's process parses, serializes the parse
+result as its segment's *main entry*, and keeps the segment as one JSON line
+(this needs the `serde` feature). Tomorrow's process holds its own language and
+its own session; it needs two things the writer did not: the *readers* of specs
+and providers, registered by the preset's
+[`latexlike::serialize::register`](crate::latexlike::serialize::register), and a
+*reading environment* — a [`KnownProviders`](crate::serialize::KnownProviders)
+holding the packages the parse used, so that every spec resolves to the very
+instance this program holds.
+[`push_segment`](crate::serialize::SerdeSession::push_segment) then hands back
+the main entry in the reader's own numbering. Both sides declare the same
+*profile*: a stream written for another configuration is refused up front.
 
 ```rust
 # #[cfg(feature = "serde")]
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-# use techy::core::{Language, ParsingState};
-# use techy::error::Recovery;
-# use techy::latexlike::{Latexlike, LatexlikeDriver};
-# use techy::serialize::{SerdeSession, TreeSerialization};
-# let language: Language<Latexlike> = Language::new(
-#     LatexlikeDriver::new(Recovery::Tolerant), ParsingState::lang_initial()?);
-# let result = language.parse("Hello {world}")?;
-# let mut writer = SerdeSession::<Latexlike>::new();
-# writer.serialize_tree(&result.tree)?;
-# let segment = writer.take_segment();
-let line = serde_json::to_string(&segment)?;
-let back: techy::serialize::Segment = serde_json::from_str(&line)?;
-assert_eq!(back, segment);
+use std::sync::Arc;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::minidefs::{self, minilatex_package};
+use techy::latexlike::serialize::{register, register_package_recipes};
+use techy::latexlike::{Latexlike, LatexlikeDriver};
+use techy::serialize::{KnownProviders, ParseResultSerialization, SerdeSession, Segment};
+
+// The program's language, built the same way on both days.
+fn build_language() -> Result<Language<Latexlike>, Box<dyn std::error::Error>> {
+    Ok(Language::new(
+        LatexlikeDriver::new(Recovery::Tolerant),
+        ParsingState::lang_initial_with_packages([minilatex_package()])?,
+    ))
+}
+
+// Today: parse, serialize, keep the line (in a file, a database row, …).
+let language = build_language()?;
+let result = Arc::new(language.parse(r"Hello \emph{world}")?);
+let mut writer = SerdeSession::<Latexlike>::new();
+writer.set_profile("my-app cache");
+let position = writer.serialize_parse_result(&result)?;
+let cached: String = serde_json::to_string(&writer.take_segment_with_main(position)?)?;
+
+// Tomorrow: a fresh process, its own language, a reading session.
+let language = build_language()?;
+let mut known = KnownProviders::<Latexlike>::new();
+for provider in language.initial_state().scopes().providers() {
+    known.insert(Arc::clone(provider));                 // the packages this program holds
+}
+register_package_recipes(&mut known);                   // recipes for the preset's own
+minidefs::register_package_recipes(&mut known);         // packages, in case it does not
+let mut reader = SerdeSession::<Latexlike>::new();
+reader.set_profile("my-app cache");
+reader.set_user_data(known);
+register(&mut reader)?;                                 // the readers, once per session
+
+let segment: Segment = serde_json::from_str(&cached)?;
+let (table, index) = reader.push_segment(segment)?.expect("the segment names its main entry");
+let parse_results = reader.standard_tables().expect("standard tables").parse_results;
+assert_eq!(table, parse_results.id());
+let result = reader.parse_result(parse_results.position(index))?;
+assert_eq!(result.tree.root().child(1).unwrap().macro_name(), Some("emph"));
 # Ok(()) }
 # #[cfg(not(feature = "serde"))]
 # fn main() {}
 ```
 
-## Reading
+A cache of many parses is the same stream continued: every further parse
+result goes into the writer with `serialize_parse_result`, and each
+`take_segment_with_main` yields the next line.
 
-A reading session needs what a writing session does not: the *readers* of
-specs and providers (registered once, by the preset's
-[`latexlike::serialize::register`](crate::latexlike::serialize::register)) and
-a *reading environment* — a [`KnownProviders`](crate::serialize::KnownProviders)
-holding the packages the parse used, so that a spec is resolved to the very
-instance your program holds. Then
-[`push_segment`](crate::serialize::SerdeSession::push_segment) absorbs each
-segment of the stream in order and hands back its main entry, translated into
-the reader's own table numbering.
+## Reading then appending
 
-```rust
-# use std::sync::Arc;
-# use techy::core::{Language, ParsingState};
-# use techy::error::Recovery;
-# use techy::latexlike::{Latexlike, LatexlikeDriver};
-# use techy::serialize::{ParseResultSerialization, SerdeSession};
-use techy::latexlike::minidefs::{self, minilatex_package};
-use techy::latexlike::serialize::{register, register_package_recipes};
-use techy::serialize::KnownProviders;
-# let language: Language<Latexlike> = Language::new(
-#     LatexlikeDriver::new(Recovery::Tolerant),
-#     ParsingState::lang_initial_with_packages([minilatex_package()])?,
-# );
-# let result = Arc::new(language.parse(r"Hello \emph{world}")?);
-# let mut writer = SerdeSession::<Latexlike>::new();
-# let position = writer.serialize_parse_result(&result)?;
-# let segment = writer.take_segment_with_main(position)?;
-
-// The reading environment: the packages of the language that parsed, held by
-// identity, plus recipes for the preset's packages your program may not hold.
-let mut known = KnownProviders::<Latexlike>::new();
-for provider in language.initial_state().scopes().providers() {
-    known.insert(Arc::clone(provider));
-}
-register_package_recipes(&mut known);
-minidefs::register_package_recipes(&mut known);
-
-let mut reader = SerdeSession::<Latexlike>::new();
-reader.set_user_data(known);
-register(&mut reader)?;
-
-let (table, index) = reader.push_segment(segment)?.expect("the segment names a main entry");
-let parse_results = reader.standard_tables().expect("standard tables").parse_results;
-assert_eq!(table, parse_results.id());
-let back = reader.parse_result(parse_results.position(index))?;
-assert_eq!(back.tree.root().child(1).unwrap().macro_name(), Some("emph"));
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-**Reading then appending.** A session that absorbed a stream can continue it:
-intern the next parse and emit a segment that refers back to what it already
-holds — nothing is written twice.
+A session that absorbed a stream can continue it: intern the next parse and
+emit a segment that refers back to what it already holds — nothing is written
+twice.
 
 ```rust
 # use std::sync::Arc;
@@ -155,26 +125,17 @@ let continuation = reader.take_segment_with_main(position)?;   // the stream's n
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## What survives, and what does not
+## Where to read on
 
-A tree read back has the same structure, the same spans into the same sources
-(shared as before), the same parsing states (shared as before), and — for
-specs resolved by identity — the very spec instances the reading environment
-holds. Diagnostics keep their identifiers, projections, messages, and spans.
-What does not survive: node ids and tree tags (a rebuilt tree is a new tree;
-durable node identity travels in annotations), and the concrete condition
-types of diagnostics (a diagnostic read back carries a
-[`DeserializedCondition`](crate::serialize::DeserializedCondition); match on
-the identifier). Identity resolution needs the reading side to hold the *same*
-packages — a package of the same name that defines things differently is not
-detected; declare a *profile* ([`set_profile`](crate::serialize::SerdeSession::set_profile))
-on both sides so that a stream written for one configuration is refused up
-front by a reader configured for another.
-
-Everything else — the value model and its JSON rendering, the layout of every
-table, sources kept outside the stream and verified by digest, custom tables
-and annotation types, how a language or framework opts in, every error — is in
-the [`serialize`](crate::serialize) module documentation.
+A parse read back is a new tree over the same shared sources, states, and spec
+instances; what exactly a round trip preserves and what it does not (node ids,
+tree tags, the concrete condition types of diagnostics) is stated at the end of
+the module documentation's [Reading](crate::serialize#reading) section. The
+rules that bind a stream (one stream per session, absorb before append,
+profiles, JSON Lines) are its [Streams](crate::serialize#streams) section, and
+everything else — the value model and its rendering, each table's layout,
+sources kept outside the stream, custom tables and annotation types, how a
+language or framework opts in, every error — follows on the same page.
 
 Read next: [Migrating from pylatexenc](crate::guide::pylatexenc_migration)
 — the concept mappings for readers arriving from the Python library.
