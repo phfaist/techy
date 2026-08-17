@@ -61,7 +61,7 @@ use super::token::{Token, TokenKind, TokenKindView};
 ///   from the list). `pre_space` is left out of the comparison because `peek` clips it
 ///   to the current position.
 /// - A **position** is accepted when its offset is one this reader handed out: the set
-///   starts with the initial position alone and grows with the four edge offsets of
+///   starts with the initial position alone and grows with the five edge offsets of
 ///   every token the reader serves, with every position it answers
 ///   (`position_here`/`position_at`), and with every offset it is moved to
 ///   (`move_to`). A position taken from somewhere the reader never served is
@@ -145,10 +145,11 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     }
 }
 
-/// The four edges, for seeding the issued-offset set.
-const EVERY_EDGE: [TokenEdge; 4] = [
+/// The five edges, for seeding the issued-offset set.
+const EVERY_EDGE: [TokenEdge; 5] = [
     TokenEdge::StartBeforePreSpace,
     TokenEdge::Start,
+    TokenEdge::ContentStart,
     TokenEdge::End,
     TokenEdge::EndPastPostSpace,
 ];
@@ -440,6 +441,19 @@ mod tests {
             reader.token_kind(&token),
             TokenKindView::Comment { start_delim: "%", content: "% note" }
         );
+        // The same two facts as edge answers — what the comment node records.
+        assert_eq!(
+            reader
+                .source_span_between(&token, TokenEdge::Start, TokenEdge::ContentStart)
+                .content(),
+            "%"
+        );
+        assert_eq!(
+            reader
+                .source_span_between(&token, TokenEdge::ContentStart, TokenEdge::End)
+                .content(),
+            "% note"
+        );
     }
 
     #[test]
@@ -542,6 +556,7 @@ mod tests {
         for edge in [
             TokenEdge::StartBeforePreSpace,
             TokenEdge::Start,
+            TokenEdge::ContentStart,
             TokenEdge::End,
             TokenEdge::EndPastPostSpace,
         ] {

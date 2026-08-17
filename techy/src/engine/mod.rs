@@ -761,7 +761,9 @@ mod tests {
             (Self::Output, Option<Box<ParsingStateDelta<PlainLang>>>),
         > {
             let token = cx.tokens.next(&cx.state).expect("test token stream is error-free");
-            let TokenKind::Char(_) = token.kind else { panic!("test feeds a Char token") };
+            let TokenKindView::Char(_) = cx.tokens.token_kind(&token) else {
+                panic!("test feeds a Char token")
+            };
             let span = cx.tokens.source_span_of(&token);
             let id = cx.stage_node(
                 NodeKind::chars(span.span()),

@@ -333,7 +333,7 @@ use techy::core::node::{
 };
 use techy::core::specs::{CallableSpec, Package};
 use techy::core::{
-    GroupRule, Language, ParsingState, ParsingStateDelta, TokenEdge, TokenKind,
+    GroupRule, Language, ParsingState, ParsingStateDelta, TokenEdge, TokenKindView,
 };
 use techy::error::{DiagnosticInfo, ParseError, Recovery};
 use techy::latexlike::{BodyMarker, CallableType, GroupType, Latexlike, LatexlikeDriver};
@@ -416,11 +416,11 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
                 // enclosing content loop re-reads and recovers it itself.
                 break (cx.tokens.position_here(), cx.tokens.position_here());
             };
-            match &token.kind {
-                TokenKind::Char(_) => {
+            match cx.tokens.token_kind(&token) {
+                TokenKindView::Char(_) => {
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
                 }
-                TokenKind::GroupClose { .. } => {
+                TokenKindView::GroupClose { .. } => {
                     let content_end =
                         cx.tokens.position_at(&token, TokenEdge::Start);
                     let end_position =
@@ -428,7 +428,7 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     break (content_end, end_position);
                 }
-                TokenKind::EndOfStream => {
+                TokenKindView::EndOfStream => {
                     // Detection-site recovery: strict aborts here (`?`);
                     // tolerant records the diagnostic, and our recovery is
                     // to keep the content read so far.

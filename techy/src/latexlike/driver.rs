@@ -67,7 +67,7 @@ pub enum ParagraphBreakStyle {
     /// identity** — the stamped spec is the canonical [`ParagraphBreakSpec`],
     /// recognized by `Any`-downcast — never by a name spelling. The token level is
     /// unchanged (still
-    /// [`ParagraphBreak`](crate::token::TokenKind::ParagraphBreak)), and the spec
+    /// [`ParagraphBreak`](crate::token::TokenKindView::ParagraphBreak)), and the spec
     /// lives on no provider, so paragraph breaks do **not** appear in
     /// [`iter_symbols`](crate::scopes::ScopeStack::iter_symbols) enumerations.
     /// Extraction helpers treat the node as the non-text material it now is

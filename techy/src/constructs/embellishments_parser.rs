@@ -40,7 +40,7 @@
 //!   markers must be contiguous (no intervening whitespace; the
 //!   [`MarkerArgumentParser`](super::MarkerArgumentParser) precedent — no pylatexenc
 //!   space-normalized accumulation).
-//! - Markers are sequences of [`Char`](TokenKind::Char) tokens: a character claimed by
+//! - Markers are sequences of [`Char`](TokenKindView::Char) tokens: a character claimed by
 //!   another recognizer in the argument's state (a specials trigger, a group open)
 //!   does not match. State-dependent tokenization is the law of the land — e.g. the
 //!   latexlike `''` typography ligature outranks a `'` marker in text mode but not in
@@ -59,7 +59,7 @@ use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::Lang;
-use crate::token::{TokenEdge, TokenKind};
+use crate::token::{TokenEdge, TokenKindView};
 
 use super::argument_parsers::{
     parse_expression_node, scan_argument_noise, stage_pre_space,
@@ -242,7 +242,9 @@ impl EmbellishmentsArgumentParser {
         first: &crate::token::Token<'s, L>,
         used: &[bool],
     ) -> ConstructParserResult<L, Option<(usize, SourceSpan<L::SourceOrigin>)>> {
-        let TokenKind::Char(first_char) = &first.kind else { return Ok(None) };
+        let TokenKindView::Char(first_char) = cx.tokens.token_kind(first) else {
+            return Ok(None);
+        };
 
         let available = |candidate: &str| {
             self.markers
@@ -260,7 +262,7 @@ impl EmbellishmentsArgumentParser {
         };
 
         let mut run = String::new();
-        run.push(*first_char);
+        run.push(first_char);
         if !prefixes_any(&run) {
             return Ok(None);
         }
@@ -275,11 +277,13 @@ impl EmbellishmentsArgumentParser {
             // Accumulate while the run still prefixes an available marker; each
             // continuation char must be contiguous (no pre-space).
             let Some(token) = cx.probe_token(&state)? else { break };
-            let TokenKind::Char(c) = &token.kind else { break };
-            if !token.pre_space.is_empty() {
+            let TokenKindView::Char(c) = cx.tokens.token_kind(&token) else { break };
+            if cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace)
+                != cx.tokens.position_at(&token, TokenEdge::Start)
+            {
                 break;
             }
-            run.push(*c);
+            run.push(c);
             if !prefixes_any(&run) {
                 break;
             }

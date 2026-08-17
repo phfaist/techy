@@ -40,7 +40,7 @@ use core::fmt;
 
 use crate::error::ParseError;
 use crate::state::{Lang, ParsingState};
-use crate::token::Token;
+use crate::token::TokenKindView;
 
 use super::Invocation;
 
@@ -52,11 +52,13 @@ pub enum GroupChildState<'p, L: Lang> {
     Inherit,
     /// Use this state (the chars-except-groups revert-to-outer case).
     Fixed(Arc<ParsingState<L>>),
-    /// Compute the base from the loop's current state and the opening token (which
-    /// carries `delim` and the resolved `Arc<GroupRule>` — so the policy can key on the
-    /// group's class). Deterministic, no side effects: return one of the inputs or a
-    /// precomputed state where possible — passing an input through preserves pointer
-    /// identity.
+    /// Compute the base from the loop's current state and the opening token's
+    /// [view](TokenKindView) (which carries `delim` and the resolved
+    /// `Arc<GroupRule>` — so the policy can key on the group's class). Like every
+    /// reader-less hook, the callback sees the view rather than the token: what it
+    /// can know about a token is what the view says. Deterministic, no side effects:
+    /// return one of the inputs or a precomputed state where possible — passing an
+    /// input through preserves pointer identity.
     ///
     /// `Err` **aborts the parse** under any recovery policy, propagated exactly
     /// like a construct parser's own `Err` (the live traceback is attached at the
@@ -75,7 +77,7 @@ pub enum GroupChildState<'p, L: Lang> {
     Compute(
         &'p dyn Fn(
             &Arc<ParsingState<L>>,
-            &Token<'_, L>,
+            TokenKindView<'_, L>,
         )
             -> Result<Arc<ParsingState<L>>, ParseError<L::SourceOrigin>>,
     ),

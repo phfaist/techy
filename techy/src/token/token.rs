@@ -386,13 +386,24 @@ impl<'s, L: Lang> Token<'s, L> {
         Token { kind, span, pre_space }
     }
 
-    /// The byte offset of one of the token's four boundaries, in the coordinates of the
+    /// The byte offset of one of the token's five boundaries, in the coordinates of the
     /// content the issuing reader scans — the primitive behind the reader's
     /// position and span answers.
     pub(crate) fn edge_offset(&self, edge: TokenEdge) -> usize {
         match edge {
             TokenEdge::StartBeforePreSpace => self.pre_space.start(),
             TokenEdge::Start => self.span.start(),
+            // Past the kind's leading marker, where it has one: a comment's start
+            // delimiter (a leading sub-range of `span`, so its end is the content's
+            // start) or a command's escape character. Every other kind starts its own
+            // content at `span.start`.
+            TokenEdge::ContentStart => match &self.kind {
+                TokenKind::Comment { start, .. } => start.end(),
+                TokenKind::Command { escape_char, .. } => {
+                    self.span.start() + escape_char.len_utf8()
+                }
+                _ => self.span.start(),
+            },
             // Post-space is a trailing sub-range of `span`, so its start is the end of
             // the token proper — for every kind (an empty post-space sits at `span.end`).
             TokenEdge::End => self.post_space().start(),

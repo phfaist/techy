@@ -7,8 +7,9 @@
 //! ([`GroupRules::enabled`](crate::token::GroupRules::enabled)) and overrides any
 //! close expectation inherited
 //! from an enclosing group, so it is the single recognizer left active: the body
-//! arrives as pure [`Char`](TokenKind::Char) tokens and the terminator — multi-character
-//! strings included — as one [`GroupClose`](TokenKind::GroupClose). These parsers
+//! arrives as pure [`Char`](TokenKindView::Char) tokens and the terminator —
+//! multi-character strings included — as one
+//! [`GroupClose`](TokenKindView::GroupClose). These parsers
 //! read through the ordinary [`TokenReader`](crate::token::TokenReader) protocol;
 //! they need a **scanning** reader (a pre-scanned token list cannot re-tokenize under
 //! the verbatim state — `TokenListReader`'s documented fidelity limit).
@@ -55,7 +56,7 @@ use crate::state::{
     LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState, ParsingStateDelta,
     SpecialsOverrides, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, Token, TokenEdge, TokenKind};
+use crate::token::{GroupRule, TokenEdge, TokenKindView};
 
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
@@ -109,9 +110,9 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
 /// ([`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all))
 /// and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
 /// **replaced** by `terminator`. Under the derived state the
-/// content arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
+/// content arrives as pure [`Char`](TokenKindView::Char) tokens and the terminator —
 /// `terminator`'s `close` string, which must be non-empty to ever match — as one
-/// [`GroupClose`](TokenKind::GroupClose) token.
+/// [`GroupClose`](TokenKindView::GroupClose) token.
 ///
 /// The base building block for custom raw-content parsers; [`VerbatimArgumentParser`]
 /// and [`VerbatimBodyParser`] derive their reading states through it.
@@ -158,7 +159,7 @@ struct RawContentEnd<L: Lang> {
 fn read_raw_content<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     state: &Arc<ParsingState<L>>,
-    mut consume_close_as_content: impl FnMut(&Token<'_, L>) -> bool,
+    mut consume_close_as_content: impl FnMut(TokenKindView<'_, L>) -> bool,
     mut on_char: impl FnMut(char),
 ) -> ConstructParserResult<L, RawContentEnd<L>> {
     loop {
@@ -176,14 +177,15 @@ fn read_raw_content<L: Lang>(
                 end: here,
             });
         };
-        match &token.kind {
-            TokenKind::Char(c) => {
-                on_char(*c);
+        let kind = cx.tokens.token_kind(&token);
+        match kind {
+            TokenKindView::Char(c) => {
+                on_char(c);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
-            TokenKind::GroupClose { .. } => {
+            TokenKindView::GroupClose { .. } => {
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
-                if consume_close_as_content(&token) {
+                if consume_close_as_content(kind) {
                     continue;
                 }
                 return Ok(RawContentEnd {
@@ -192,7 +194,7 @@ fn read_raw_content<L: Lang>(
                     end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                 });
             }
-            TokenKind::EndOfStream => {
+            TokenKindView::EndOfStream => {
                 let end = cx.tokens.position_at(&token, TokenEdge::Start);
                 return Ok(RawContentEnd {
                     content_end: end.clone(),
@@ -333,8 +335,8 @@ where
         let Some(token) = cx.probe_token(&probe_state)? else {
             return Ok(None);
         };
-        let open = match &token.kind {
-            TokenKind::Char(c) => *c,
+        let open = match cx.tokens.token_kind(&token) {
+            TokenKindView::Char(c) => c,
             // Under the probe state only `Char` and `EndOfStream` exist; treat
             // anything else like end of input (a misbehaving reader is caught by the
             // content loop's implementation-error arm, not the recovery path).
@@ -386,7 +388,7 @@ where
         let raw_end = read_raw_content(
             cx,
             &content_state,
-            |_close_token| {
+            |_close_kind| {
                 depth.set(depth.get() - 1);
                 depth.get() > 0
             },
@@ -726,7 +728,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         let mut content_designation_start = 0u32;
         if self.gobble_leading_newline {
             if let Some(token) = cx.probe_token(&verbatim_state)? {
-                if matches!(token.kind, TokenKind::Char('\n')) {
+                if matches!(cx.tokens.token_kind(&token), TokenKindView::Char('\n')) {
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     let span = cx.tokens.source_span_of(&token);
                     let id = cx

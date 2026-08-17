@@ -34,20 +34,27 @@ use super::rules::{CommandRule, TokenRules};
 use super::specials::SpecialsScanError;
 use super::token::{Token, TokenKind, TokenKindView};
 
-/// One of the four boundaries of a token, in reading order.
+/// One of the five boundaries of a token, in reading order.
 ///
 /// A token occupies a stretch of the stream that has two optional whitespace wings:
 /// *pre-space* (content whitespace read just before the token, outside its span) and
 /// *post-space* (syntactic whitespace consumed just after the token proper, inside its
 /// span — only [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)
-/// tokens have any). An edge names one of the four boundaries this creates, and is how
-/// a construct parser asks a [`TokenReader`] for a position or a span without knowing
-/// how the reader stores either.
+/// tokens have any). Inside the token proper, a kind may carry a leading marker (a
+/// comment's start delimiter, a command's escape character) before its own content.
+/// An edge names one of the five boundaries this creates, and is how a construct
+/// parser asks a [`TokenReader`] for a position or a span without knowing how the
+/// reader stores either.
 ///
-/// For a kind without post-space, [`End`](TokenEdge::End) and
-/// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) coincide; for a token with no
-/// preceding whitespace, [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) and
-/// [`Start`](TokenEdge::Start) coincide.
+/// The five offsets are in reading order and may coincide:
+///
+/// ```text
+/// StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤ EndPastPostSpace
+/// ```
+///
+/// `ContentStart == Start` for a kind with no leading marker;
+/// `End == EndPastPostSpace` for a kind with no post-space;
+/// `StartBeforePreSpace == Start` for a token with no preceding whitespace.
 ///
 /// The ordering (`PartialOrd`/`Ord`) is the declaration order, which is reading order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,6 +64,11 @@ pub enum TokenEdge {
     StartBeforePreSpace,
     /// Where the token proper begins (its pre-space has been passed).
     Start,
+    /// Where the token's own content begins, past its leading marker: after a
+    /// [`Comment`](TokenKind::Comment)'s start delimiter, after a
+    /// [`Command`](TokenKind::Command)'s escape character. Every other kind has no
+    /// leading marker, so this is its [`Start`](TokenEdge::Start).
+    ContentStart,
     /// Where the token proper ends — equivalently, where its post-space begins.
     End,
     /// Where the token's post-space ends: the position the stream stands at after
@@ -110,9 +122,12 @@ impl StdStreamPosition {
 ///   ([`move_to_position`](TokenReader::move_to_position),
 ///   [`source_span_within`](TokenReader::source_span_within)). Positions compare for
 ///   equality, never for order.
-/// - A **[`TokenEdge`]** names one of a token's four boundaries. Asking for a position
+/// - A **[`TokenEdge`]** names one of a token's five boundaries — the two whitespace
+///   wings, the token proper, and where the token's own content begins past a leading
+///   marker (a comment delimiter, a command's escape character). Asking for a position
 ///   or a span at an edge is how a caller talks about where a token is without reading
-///   anything off the token.
+///   anything off the token. The three sub-spans a comment node records are exactly
+///   `Start..ContentStart`, `ContentStart..End` and `End..EndPastPostSpace`.
 ///
 /// Locations leave a reader in exactly one form: a
 /// [`SourceSpan`]/[`SourcePos`], which carries its own source. That is what lets a
@@ -156,13 +171,6 @@ impl StdStreamPosition {
 /// 6. **Edge order does not matter to `source_span_between`:** the result is the span
 ///    between the two edges in reading order, whichever order they are named in. Two
 ///    equal edges give the empty span at that edge.
-/// 7. **A comment view's two texts are the token's own bytes, in order:** for a
-///    [`Comment`](TokenKindView::Comment) token, `start_delim` followed by `content`
-///    is exactly what lies between the token's [`Start`](TokenEdge::Start) and
-///    [`End`](TokenEdge::End) edges. That is what lets a parser record the comment's
-///    three parts as spans of the node it stages — the delimiter runs from the
-///    token's start for `start_delim.len()` bytes, the content from there to where
-///    the post-space begins.
 ///
 /// At the end of the stream `peek` returns the terminal, idempotent
 /// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
@@ -187,9 +195,12 @@ pub trait TokenReader<'s, L: Lang> {
     ///
     /// This is the position-based navigation the parse loops use: `move_to(&tok,
     /// TokenEdge::EndPastPostSpace)` consumes the token, `move_to(&tok,
-    /// TokenEdge::Start)` puts it back to be read again, and
+    /// TokenEdge::Start)` puts it back to be read again,
     /// [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) also gives back the
-    /// whitespace before it.
+    /// whitespace before it, and the two inner edges
+    /// ([`ContentStart`](TokenEdge::ContentStart), [`End`](TokenEdge::End)) put the
+    /// stream inside the token — past a leading marker, or before the syntactic
+    /// post-space (the `\verb` idiom).
     fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge);
 
     /// Reposition the stream at a position this reader handed out earlier.
@@ -213,8 +224,8 @@ pub trait TokenReader<'s, L: Lang> {
     /// The view carries no location: where the token is comes from
     /// [`source_span_of`](TokenReader::source_span_of),
     /// [`source_span_between`](TokenReader::source_span_between) and
-    /// [`position_at`](TokenReader::position_at). For a comment token, contract clause
-    /// 7 fixes how the view's two texts relate to those edges.
+    /// [`position_at`](TokenReader::position_at) — a comment's delimiter span, for
+    /// instance, is `source_span_between(tok, Start, ContentStart)`.
     fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
     where
         's: 't;
@@ -2002,6 +2013,120 @@ mod tests {
         let source = Arc::new(Source::new("x"));
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
+    }
+
+    #[test]
+    fn the_content_start_edge_lies_past_a_kinds_leading_marker() {
+        //                                    0....5....10...15
+        let source = Arc::new(Source::new("%% note\n\\vec  x"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        // A comment: `ContentStart` is right after the start delimiter, so the
+        // delimiter, the text and the post-space are three plain reader answers.
+        let comment = reader.next(&st).unwrap();
+        assert_eq!(
+            reader.source_span_between(&comment, TokenEdge::Start, TokenEdge::ContentStart),
+            SourceSpan::new(&source, sp(0, 1))
+        );
+        assert_eq!(
+            reader
+                .source_span_between(&comment, TokenEdge::ContentStart, TokenEdge::End)
+                .content(),
+            "% note"
+        );
+        assert_eq!(
+            reader.source_span_between(&comment, TokenEdge::End, TokenEdge::EndPastPostSpace),
+            SourceSpan::new(&source, sp(7, 8))
+        );
+
+        // A command: `ContentStart` is right after the escape character, so the name is
+        // `ContentStart..End`.
+        let command = reader.next(&st).unwrap();
+        assert_eq!(
+            reader
+                .source_span_between(&command, TokenEdge::Start, TokenEdge::ContentStart)
+                .content(),
+            "\\"
+        );
+        assert_eq!(
+            reader
+                .source_span_between(&command, TokenEdge::ContentStart, TokenEdge::End)
+                .content(),
+            "vec"
+        );
+
+        // A kind with no leading marker: `ContentStart` is its `Start`.
+        let plain = reader.next(&st).unwrap();
+        assert_eq!(
+            reader.position_at(&plain, TokenEdge::ContentStart),
+            reader.position_at(&plain, TokenEdge::Start)
+        );
+    }
+
+    #[test]
+    fn a_multi_byte_escape_character_moves_content_start_by_its_own_width() {
+        // `§` is two bytes: the command's name starts two bytes past its start.
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        rules.commands.rules = vec![Arc::new(CommandRule {
+            escape_char: '§',
+            name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
+        })];
+        let source = Arc::new(Source::new("§vec x"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(rules);
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let command = reader.next(&st).unwrap();
+        assert_eq!(
+            reader.source_span_between(&command, TokenEdge::Start, TokenEdge::ContentStart),
+            SourceSpan::new(&source, sp(0, '§'.len_utf8()))
+        );
+        assert_eq!(
+            reader
+                .source_span_between(&command, TokenEdge::ContentStart, TokenEdge::End)
+                .content(),
+            "vec"
+        );
+    }
+
+    #[test]
+    fn the_five_edges_are_in_reading_order_for_every_kind() {
+        // `StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤ EndPastPostSpace`, with
+        // equality where a kind has no pre-space, no leading marker, or no post-space.
+        let source = Arc::new(Source::new("a {%c\n} \\vec  b\n\nz"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+        loop {
+            let token = reader.next(&st).unwrap();
+            // Measured from the earliest edge, so each span's end *is* the edge's
+            // own offset.
+            let offsets: Vec<usize> = [
+                TokenEdge::StartBeforePreSpace,
+                TokenEdge::Start,
+                TokenEdge::ContentStart,
+                TokenEdge::End,
+                TokenEdge::EndPastPostSpace,
+            ]
+            .into_iter()
+            .map(|edge| {
+                reader
+                    .source_span_between(&token, TokenEdge::StartBeforePreSpace, edge)
+                    .range()
+                    .end
+            })
+            .collect();
+            let kind = reader.token_kind(&token);
+            assert!(
+                offsets.windows(2).all(|w| w[0] <= w[1]),
+                "{kind:?} edges out of order: {offsets:?}"
+            );
+            if matches!(kind, TokenKindView::EndOfStream) {
+                break;
+            }
+        }
     }
 
     // --- the token view ---------------------------------------------------------------

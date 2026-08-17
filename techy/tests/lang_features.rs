@@ -581,10 +581,9 @@ mod groups_only {
     use techy::source::Source;
     use techy::core::{
         Language, ParsingState, ParsingStateDelta, StdParseDriver, StdTokenReader, Token,
-        TokenEdge, TokenKind, TokenReader, TokenRulesOverrides,
+        TokenEdge, TokenKindView, TokenReader, TokenRulesOverrides,
     };
     use techy::error::Recovery;
-    use techy::source::Span;
 
     fn language(recovery: Recovery) -> Language<GroupsOnlyLang> {
         Language::new(
@@ -621,14 +620,27 @@ mod groups_only {
         let mut reader = StdTokenReader::new(&source);
 
         let token: Token<'_, GroupsOnlyLang> = reader.peek(&state).unwrap();
-        assert_eq!(token.kind, TokenKind::Char(' '));
-        assert_eq!(token.span, Span::new(0, 1));
-        assert_eq!(token.pre_space, Span::empty(0));
+        assert_eq!(reader.token_kind(&token), TokenKindView::Char(' '));
+        assert_eq!(reader.source_span_of(&token).range(), 0..1);
+        assert_eq!(
+            reader
+                .source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+                .range(),
+            0..0
+        );
 
         reader.move_to(&token, TokenEdge::EndPastPostSpace);
         let token = reader.peek(&state).unwrap();
-        assert!(matches!(&token.kind, TokenKind::GroupOpen { delim: "{", .. }));
-        assert_eq!(token.pre_space, Span::empty(1));
+        assert!(matches!(
+            reader.token_kind(&token),
+            TokenKindView::GroupOpen { delim: "{", .. }
+        ));
+        assert_eq!(
+            reader
+                .source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+                .range(),
+            1..1
+        );
     }
 
     // Ruled 2026-08-10: `disable_all()` flips exactly the present features' gates —

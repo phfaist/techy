@@ -788,7 +788,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
 ///
 /// This parser is dispatched for the `\begin` **command** ([`BeginSpec`] is a
 /// macro-shaped entry), and its trigger must be a
-/// [`Command`](crate::token::TokenKind::Command) token — a different trigger
+/// [`Command`](crate::token::TokenKindView::Command) token — a different trigger
 /// shape (a specials-dispatched begin, say) is a documented-contract violation
 /// and aborts as an implementation error. A custom trigger shape needs its own
 /// composition *and* its own `Env` record type: this composition's begin facts
@@ -824,14 +824,15 @@ where
         // command-initiated, so a non-command trigger is a documented-contract
         // violation by whatever dispatched this composition — an implementation
         // error, not a source condition.
-        let crate::token::TokenKind::Command { escape_char, .. } = &trigger.kind else {
+        let crate::token::TokenKindView::Command { escape_char, .. } =
+            self.invocation.kind
+        else {
             return Err(cx.implementation_error(
                 "the std environment composition requires a Command trigger \
                  (custom trigger shapes need their own composition and Env type)",
                 cx.tokens.source_span_of(trigger),
             ));
         };
-        let escape_char = *escape_char;
         // The trigger's own spelling facts, as the reader answers them: the command
         // itself (escape character included) and the syntactic post-space after it.
         let trigger_span = cx.tokens.source_span_of(trigger);
@@ -1041,8 +1042,8 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
         // group never parsed: a command trigger's own post-space is consumed with it
         // and would read as a trailing blank inside the quotes. Any other trigger
         // shape (this spec is registrable under any syntax) quotes its whole extent.
-        let command_end = match &trigger.kind {
-            crate::token::TokenKind::Command { .. } => TokenEdge::End,
+        let command_end = match self.invocation.kind {
+            crate::token::TokenKindView::Command { .. } => TokenEdge::End,
             _ => TokenEdge::EndPastPostSpace,
         };
         let after_trigger = cx.tokens.position_at(trigger, TokenEdge::EndPastPostSpace);

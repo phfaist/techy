@@ -51,20 +51,20 @@ use crate::node::{
     ArgumentExt, BuildId, ContentNodes, NodeKind, ParsedArgument, ParsedArguments,
     ParsedSlots,
 };
-use crate::source::{SourceSpan, Span};
+use crate::source::SourceSpan;
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{
     GroupOverrides, Lang, LangHasGroups, ParsingState, ParsingStateDelta, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, Token, TokenEdge, TokenKind};
+use crate::token::{GroupRule, Token, TokenEdge, TokenKindView};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{
     CommandResolutionFailed, ExpressionCallableRequiresContent, UnresolvableCommand,
 };
 use super::{
-    ConstructParserResult, FromInvocation, Invocation, ParseContext,
+    comment_node_kind, ConstructParserResult, FromInvocation, Invocation, ParseContext,
 };
 
 /// Condition: a mandatory argument was missing at its position (end of input, a
@@ -178,14 +178,10 @@ pub fn scan_argument_noise<'s, L: Lang>(
         let Some(token) = cx.probe_token(&state)? else {
             return Ok(ArgumentNoise { nodes, start, next: None });
         };
-        match &token.kind {
-            TokenKind::Comment { start, post_space, .. } => {
+        match cx.tokens.token_kind(&token) {
+            TokenKindView::Comment { .. } => {
                 stage_pre_space(cx, &mut nodes, &token)?;
-                // The token's sub-spans tile its span: start delimiter, content,
-                // post-space.
-                let content_span = Span::new(start.end(), post_space.start());
-                let kind = NodeKind::comment(*start, content_span, *post_space);
-                let span = cx.tokens.source_span_of(&token);
+                let (kind, span) = comment_node_kind(cx, &token);
                 nodes.push(stage(cx, kind, span)?);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
@@ -258,8 +254,9 @@ pub(super) fn parse_expression_node<'s, L: Lang>(
 where
     L::InvocationSyntax: FromInvocation<L>,
 {
-    match &next.kind {
-        TokenKind::Char(_) => {
+    let kind = cx.tokens.token_kind(next);
+    match kind {
+        TokenKindView::Char(_) => {
             stage_pre_space(cx, nodes, next)?;
             let span = cx.tokens.source_span_of(next);
             cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
@@ -268,7 +265,7 @@ where
             Ok(Some(id))
         }
 
-        TokenKind::GroupOpen { rule, .. } => {
+        TokenKindView::GroupOpen { rule, .. } => {
             stage_pre_space(cx, nodes, next)?;
             let rule = Arc::clone(rule);
             cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
@@ -279,7 +276,7 @@ where
             Ok(Some(id))
         }
 
-        TokenKind::Command { name, escape_char, .. } => {
+        TokenKindView::Command { name, escape_char } => {
             // Resolution under the current state, coherent with the state that
             // tokenized the token ([§dd-dr:parsers-engine]). A hook Err aborts
             // under any policy (resolve_command's contract).
@@ -294,6 +291,7 @@ where
                         name,
                         spec: &resolved.spec,
                         token: next,
+                        kind,
                     };
                     dispatch_expression_invocation(cx, nodes, invocation)
                 }
@@ -302,7 +300,7 @@ where
                     // position: diagnostic + span-backed chars fallback, the token
                     // consumed whole — mirroring the content loop.
                     let span = cx.tokens.source_span_of(next);
-                    cx.recover(UnresolvableCommand::new(*name, *escape_char, detail), span.clone())?;
+                    cx.recover(UnresolvableCommand::new(name, escape_char, detail), span.clone())?;
                     stage_pre_space(cx, nodes, next)?;
                     cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
                     let id = stage(cx, NodeKind::chars(span.span()), span)?;
@@ -313,7 +311,7 @@ where
                     // Operational resolver failure ([§dd-dr:errors]), in expression position: a
                     // distinct condition from a clean miss, same span-backed recovery.
                     let span = cx.tokens.source_span_of(next);
-                    cx.recover(CommandResolutionFailed::new(*name, *escape_char, detail), span.clone())?;
+                    cx.recover(CommandResolutionFailed::new(name, escape_char, detail), span.clone())?;
                     stage_pre_space(cx, nodes, next)?;
                     cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
                     let id = stage(cx, NodeKind::chars(span.span()), span)?;
@@ -323,18 +321,18 @@ where
             }
         }
 
-        TokenKind::Specials { callable_type, name, spec } => {
+        TokenKindView::Specials { callable_type, name, spec } => {
             // Recognition = resolution: the token carries the full resolution.
             let invocation =
-                Invocation { callable_type: *callable_type, name, spec, token: next };
+                Invocation { callable_type, name, spec, token: next, kind };
             dispatch_expression_invocation(cx, nodes, invocation)
         }
 
         // No expression starts here; the caller decides what absence means.
-        TokenKind::ParagraphBreak
-        | TokenKind::GroupClose { .. }
-        | TokenKind::EndOfStream
-        | TokenKind::Comment { .. } => Ok(None),
+        TokenKindView::ParagraphBreak
+        | TokenKindView::GroupClose { .. }
+        | TokenKindView::EndOfStream
+        | TokenKindView::Comment { .. } => Ok(None),
     }
 }
 
@@ -351,8 +349,8 @@ where
     if invocation.spec.requires_content() {
         // The trigger's written spelling, built only on this cold branch (the hot
         // dispatch path stays allocation-free).
-        let spelling = match &token.kind {
-            TokenKind::Command { name, escape_char, .. } => {
+        let spelling = match invocation.kind {
+            TokenKindView::Command { name, escape_char } => {
                 format!("{}{}", escape_char, name)
             }
             _ => invocation.name.into(),
@@ -629,7 +627,9 @@ where
             // The class form: a group open of the configured class.
             GroupArgumentForm::Class(group_type) => {
                 if let Some(next) = noise.next.clone() {
-                    if let TokenKind::GroupOpen { rule, .. } = &next.kind {
+                    if let TokenKindView::GroupOpen { rule, .. } =
+                        cx.tokens.token_kind(&next)
+                    {
                         if rule.group_type == *group_type {
                             stage_pre_space(cx, &mut noise.nodes, &next)?;
                             let rule = Arc::clone(rule);
@@ -734,8 +734,8 @@ fn probe_minted_group<'s, L: LangHasGroups>(
     let probe_state = cx.derive_state(&temporaries(rules.to_vec()))?;
     let matched = match cx.probe_token(&probe_state)? {
         Some(token) => {
-            let rule = match &token.kind {
-                TokenKind::GroupOpen { rule, .. }
+            let rule = match cx.tokens.token_kind(&token) {
+                TokenKindView::GroupOpen { rule, .. }
                     if rules.iter().any(|candidate| Arc::ptr_eq(rule, candidate)) =>
                 {
                     Some(Arc::clone(rule))
@@ -968,7 +968,7 @@ where
             noise.rewind(cx);
             return Ok(None);
         };
-        if !matches!(first.kind, TokenKind::Char(c) if c == first_char) {
+        if !matches!(cx.tokens.token_kind(&first), TokenKindView::Char(c) if c == first_char) {
             noise.rewind(cx);
             return Ok(None);
         }
@@ -983,9 +983,12 @@ where
             };
             // Consecutive: no whitespace between the marker's characters, and the
             // next one starts exactly where the run has reached.
-            let continues_marker = matches!(token.kind, TokenKind::Char(c) if c == expected)
-                && token.pre_space.is_empty()
-                && cx.tokens.position_at(&token, TokenEdge::Start) == end;
+            // Consecutive means: same character, and the token's pre-space edge is
+            // exactly where the run has reached (no whitespace in between).
+            let continues_marker =
+                matches!(cx.tokens.token_kind(&token), TokenKindView::Char(c) if c == expected)
+                    && cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace) == end
+                    && cx.tokens.position_at(&token, TokenEdge::Start) == end;
             if !continues_marker {
                 noise.rewind(cx);
                 return Ok(None);
@@ -1041,6 +1044,7 @@ mod tests {
         UnclosedGroupFound,
     };
     use super::*;
+    use crate::source::Span;
     use crate::engine::{ParseResult, ParserSession, ResolvedCallable};
     use crate::error::{ParseError, Recovery};
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
@@ -1321,7 +1325,10 @@ mod tests {
         let mut scanner = StdTokenReader::new(&source);
         loop {
             let token = TokenReader::next(&mut scanner, state).expect("clean scan");
-            let done = matches!(token.kind, TokenKind::EndOfStream);
+            let done = matches!(
+                TokenReader::token_kind(&scanner, &token),
+                TokenKindView::EndOfStream
+            );
             scanned.push(token);
             if done {
                 break;

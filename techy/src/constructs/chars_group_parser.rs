@@ -55,7 +55,7 @@ use crate::state::{
     CommandOverrides, CommentOverrides, FeaturePresence, Lang, LangFeatures,
     ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
 };
-use crate::token::{TokenEdge, TokenKind};
+use crate::token::{TokenEdge, TokenKindView};
 
 use super::argument_parsers::{
     missing_mandatory, scan_argument_noise, stage_pre_space, staged_child_count,
@@ -176,8 +176,10 @@ where
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut noise = scan_argument_noise(cx)?;
         let open = match noise.next.clone() {
-            Some(next) => match &next.kind {
-                TokenKind::GroupOpen { rule, .. } if rule.group_type == self.group_type => {
+            Some(next) => match cx.tokens.token_kind(&next) {
+                TokenKindView::GroupOpen { rule, .. }
+                    if rule.group_type == self.group_type =>
+                {
                     Some((next.clone(), Arc::clone(rule)))
                 }
                 _ => None,

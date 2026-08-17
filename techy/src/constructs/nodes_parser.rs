@@ -86,15 +86,15 @@ use core::mem;
 
 use crate::error::{DiagnosticInfo, ParseError, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
-use crate::source::{SourceSpan, Span};
+use crate::source::SourceSpan;
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenEdge, TokenKind};
+use crate::token::{Token, TokenEdge, TokenKindView};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
-use super::{ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
+use super::{comment_node_kind, ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
 
-/// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
+/// Condition: a [`Command`](TokenKindView::Command) token resolved to no callable
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
 /// [`Resolved`](crate::engine::CommandResolution::Resolved)) — the content loop recovers
 /// with a span-backed chars fallback.
@@ -126,7 +126,7 @@ impl fmt::Display for UnresolvableCommand {
     }
 }
 
-/// Condition: a [`Command`](TokenKind::Command) token's resolution *failed
+/// Condition: a [`Command`](TokenKindView::Command) token's resolution *failed
 /// operationally* — a definition provider errored while answering the query
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)
 /// returned [`Failed`](crate::engine::CommandResolution::Failed)) — as opposed to a
@@ -229,13 +229,13 @@ impl fmt::Display for UnusableRecoveryToken {
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
 /// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
 pub enum TokenStopKind<'p, L: Lang> {
-    /// Stop at a [`Command`](TokenKind::Command) token with this name (an environment
-    /// body stopping at `\end`).
+    /// Stop at a [`Command`](TokenKindView::Command) token with this name (an
+    /// environment body stopping at `\end`).
     Command {
         /// The command name to stop at (as written, without the escape character).
         name: &'p str,
     },
-    /// Stop at a [`GroupClose`](TokenKind::GroupClose) token that spells `close` **and**
+    /// Stop at a [`GroupClose`](TokenKindView::GroupClose) token that spells `close` **and**
     /// whose class (resolved against the current state) is `group_type` — the exact
     /// `(group_type, close)` pairing the enclosing group opened with. Both must match:
     /// a group opened with `{` (class `group_type`) stops at `}`, but neither at a `]`
@@ -254,10 +254,12 @@ pub enum TokenStopKind<'p, L: Lang> {
         /// The closing delimiter (as written, e.g. `}`) the enclosing group expects.
         close: &'p str,
     },
-    /// Stop at a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
+    /// Stop at a [`ParagraphBreak`](TokenKindView::ParagraphBreak) token.
     ParagraphBreak,
-    /// Stop at any token matching the predicate. Programmatic conditions live only in
-    /// tier-2 parser temporaries, never in spec data.
+    /// Stop at any token whose view matches the predicate. Programmatic conditions
+    /// live only in tier-2 parser temporaries, never in spec data. The predicate sees
+    /// the token's [view](TokenKindView) rather than the token: like every reader-less
+    /// hook, what it can know about a token is what the view says.
     ///
     /// An `Err` from the predicate **aborts the parse** under any recovery policy —
     /// a predicate that cannot answer leaves no sound way to decide where the run
@@ -271,7 +273,9 @@ pub enum TokenStopKind<'p, L: Lang> {
     // The predicate signature is the variant's whole documented meaning; hiding it
     // behind an alias would only make callers look the signature up elsewhere.
     #[allow(clippy::type_complexity)]
-    Predicate(&'p dyn Fn(&Token<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>),
+    Predicate(
+        &'p dyn Fn(TokenKindView<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>,
+    ),
 }
 
 /// The token-condition half of a [`StopSpec`]: which peeked token ends the parse
@@ -386,13 +390,13 @@ pub enum StopCause<L: Lang> {
     /// that node ended: a directly staged node is consumed, a flush leaves the triggering
     /// token unconsumed at its own start).
     NodeCondition,
-    /// [`EndOfStream`](TokenKind::EndOfStream) was reached (its trailing-whitespace
+    /// [`EndOfStream`](TokenKindView::EndOfStream) was reached (its trailing-whitespace
     /// node, if any, is already staged).
     EndOfInput,
     /// A group close no condition asked for; the close token is left unconsumed at
     /// its own start and the caller decides (diagnose-and-skip at the root, unwind in
     /// a group parser). The span covers the delimiter exactly as matched
-    /// ([`GroupClose`](crate::token::TokenKind::GroupClose) carries the span's slice
+    /// ([`GroupClose`](crate::token::TokenKindView::GroupClose) carries the span's slice
     /// and nothing more), so a caller diagnosing the close reads it off the span
     /// ([`SourceSpan::content`](crate::source::SourceSpan::content)) — re-peeking
     /// under any state but the loop's own could tokenize different bytes.
@@ -582,11 +586,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &ParseContext<'_, '_, L>,
         token: &Token<'_, L>,
     ) -> Result<(), String> {
-        if token.pre_space.is_empty() {
-            return Ok(());
-        }
         let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::Start);
+        if start == end {
+            return Ok(());
+        }
         self.extend_run_to(start, end, "the token's pre-space")
     }
 
@@ -751,26 +755,28 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn token_stop(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
+        token_kind: TokenKindView<'_, L>,
     ) -> Result<Option<bool>, ParseError<L::SourceOrigin>> {
         let Some(cond) = self.stop.token.as_ref() else {
             return Ok(None);
         };
         let matches = match &cond.kind {
             TokenStopKind::Command { name } => {
-                matches!(&token.kind, TokenKind::Command { name: n, .. } if n == name)
+                matches!(token_kind, TokenKindView::Command { name: n, .. } if n == *name)
             }
             // Both the spelling and the state-resolved class must match the pairing the
             // group opened with (a `]` sharing the class, or a `}` a delta re-classed,
             // must not close it).
-            TokenStopKind::GroupClose { group_type, close } => match &token.kind {
-                TokenKind::GroupClose { delim } => {
-                    delim == close && group_close_type(state, delim) == Some(*group_type)
+            TokenStopKind::GroupClose { group_type, close } => match token_kind {
+                TokenKindView::GroupClose { delim } => {
+                    delim == *close && group_close_type(state, delim) == Some(*group_type)
                 }
                 _ => false,
             },
-            TokenStopKind::ParagraphBreak => matches!(token.kind, TokenKind::ParagraphBreak),
-            TokenStopKind::Predicate(predicate) => predicate(token)?,
+            TokenStopKind::ParagraphBreak => {
+                matches!(token_kind, TokenKindView::ParagraphBreak)
+            }
+            TokenStopKind::Predicate(predicate) => predicate(token_kind)?,
         };
         Ok(matches.then_some(cond.consume))
     }
@@ -939,9 +945,13 @@ where
             // stop token that cannot be re-read cannot be left for the caller). A
             // predicate Err aborts under any policy, the live traceback attached
             // here — the callback has no session access.
+            // The one query per iteration: what this token is. Where it is stays a
+            // separate reader answer, asked for by the arms that need it.
+            let kind = cx.tokens.token_kind(&token);
+
             if !recovered {
                 if let Some(consume) = self
-                    .token_stop(&cx.state, &token)
+                    .token_stop(&cx.state, kind)
                     .map_err(|error| cx.attach_hook_frames(error))?
                 {
                     self.flush_for_token_stop(cx, &token)?;
@@ -961,8 +971,8 @@ where
                 }
             }
 
-            match &token.kind {
-                TokenKind::Char(_) => {
+            match kind {
+                TokenKindView::Char(_) => {
                     self.extend_run(cx, &token).map_err(|detail| {
                         let span = cx.tokens.source_span_of(&token);
                         cx.implementation_error(detail, span)
@@ -972,7 +982,7 @@ where
                     }
                 }
 
-                TokenKind::EndOfStream => {
+                TokenKindView::EndOfStream => {
                     // Invariant 4: the terminal token's pre-space is the input's
                     // trailing whitespace and reaches the tree.
                     let fired = self.flush_through(cx, &token)?;
@@ -984,7 +994,7 @@ where
                     return Ok((self.outcome(&cx.state, cause), None));
                 }
 
-                TokenKind::GroupClose { .. } => {
+                TokenKindView::GroupClose { .. } => {
                     // A close the stop condition did not ask for: report it as data and
                     // let the caller decide ([§dd-dr:panic-policy] rule 2); the token stays unconsumed.
                     let fired = self.flush_through(cx, &token)?;
@@ -1004,7 +1014,7 @@ where
                     return Ok((self.outcome(&cx.state, cause), None));
                 }
 
-                TokenKind::ParagraphBreak => {
+                TokenKindView::ParagraphBreak => {
                     // Impossible under a language that declares paragraphs absent:
                     // the token source violated its contract (`TokenReader` docs) —
                     // an implementation bug aborts under any policy, never a panic.
@@ -1037,7 +1047,7 @@ where
                     }
                 }
 
-                TokenKind::Comment { start, post_space, .. } => {
+                TokenKindView::Comment { .. } => {
                     // Impossible under a language that declares comments absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1055,11 +1065,7 @@ where
                         }
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
-                    // The token's sub-spans tile its span: start delimiter, content,
-                    // post-space.
-                    let content_span = Span::new(start.end(), post_space.start());
-                    let kind = NodeKind::comment(*start, content_span, *post_space);
-                    let span = cx.tokens.source_span_of(&token);
+                    let (kind, span) = comment_node_kind(cx, &token);
                     if !recovered {
                         cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     }
@@ -1068,7 +1074,7 @@ where
                     }
                 }
 
-                TokenKind::Command { name, escape_char, .. } => {
+                TokenKindView::Command { name, escape_char } => {
                     // Impossible under a language that declares commands absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1108,6 +1114,7 @@ where
                                 name,
                                 spec: &resolved.spec,
                                 token: &token,
+                                kind,
                             };
                             if self.dispatch_invocation(cx, invocation)? {
                                 return Ok((
@@ -1120,7 +1127,7 @@ where
                             // Unresolvable command ([§dd-dr:errors]): diagnostic plus span-backed
                             // chars fallback.
                             let condition =
-                                UnresolvableCommand::new(*name, *escape_char, detail);
+                                UnresolvableCommand::new(name, escape_char, detail);
                             if self.recover_as_chars(cx, &token, recovered, condition)? {
                                 return Ok((
                                     self.outcome(&cx.state, StopCause::NodeCondition),
@@ -1132,7 +1139,7 @@ where
                             // Operational resolver failure ([§dd-dr:errors]): a distinct condition
                             // from a clean miss, same span-backed chars recovery.
                             let condition =
-                                CommandResolutionFailed::new(*name, *escape_char, detail);
+                                CommandResolutionFailed::new(name, escape_char, detail);
                             if self.recover_as_chars(cx, &token, recovered, condition)? {
                                 return Ok((
                                     self.outcome(&cx.state, StopCause::NodeCondition),
@@ -1143,7 +1150,7 @@ where
                     }
                 }
 
-                TokenKind::Specials { callable_type, name, spec } => {
+                TokenKindView::Specials { callable_type, name, spec } => {
                     // Impossible under a language that declares specials absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1160,7 +1167,7 @@ where
                     // dispatched, as for commands.
                     if recovered {
                         let condition = UnusableRecoveryToken::new(
-                            *name,
+                            name,
                             UnusableRecoveryTokenKind::Specials,
                         );
                         if self.recover_as_chars(cx, &token, recovered, condition)? {
@@ -1172,18 +1179,14 @@ where
                         cx.tokens.move_to(&token, TokenEdge::Start);
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
-                    let invocation = Invocation {
-                        callable_type: *callable_type,
-                        name,
-                        spec,
-                        token: &token,
-                    };
+                    let invocation =
+                        Invocation { callable_type, name, spec, token: &token, kind };
                     if self.dispatch_invocation(cx, invocation)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
 
-                TokenKind::GroupOpen { delim, rule } => {
+                TokenKindView::GroupOpen { delim, rule } => {
                     // Impossible under a language that declares groups absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1200,7 +1203,7 @@ where
                     // chars fallback, reader untouched.
                     if recovered {
                         let condition = UnusableRecoveryToken::new(
-                            *delim,
+                            delim,
                             UnusableRecoveryTokenKind::GroupOpen,
                         );
                         if self.recover_as_chars(cx, &token, recovered, condition)? {
@@ -1220,7 +1223,7 @@ where
                     let base = match &self.child_states.group {
                         GroupChildState::Inherit => Arc::clone(&cx.state),
                         GroupChildState::Fixed(state) => Arc::clone(state),
-                        GroupChildState::Compute(compute) => compute(&cx.state, &token)
+                        GroupChildState::Compute(compute) => compute(&cx.state, kind)
                             .map_err(|error| cx.attach_hook_frames(error))?,
                     };
                     // Consume the trigger token here, at the site that peeked it and
@@ -1315,6 +1318,7 @@ impl<L: Lang> fmt::Debug for NodesParser<'_, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::Span;
     use crate::engine::{resolve_command_in_scopes, ParseResult, ParserSession, StdParseDriver};
     use crate::error::Recovery;
     use crate::scopes::{
@@ -1331,8 +1335,8 @@ mod tests {
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
         GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
         StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
-        TokenErrorKind, TokenKindView, TokenListReader, TokenReader, TokenRecovery,
-        TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        TokenErrorKind, TokenKind, TokenKindView, TokenListReader, TokenReader,
+        TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -1666,7 +1670,10 @@ mod tests {
         let mut tokens = Vec::new();
         loop {
             let token = TokenReader::next(&mut reader, state).expect("clean scan");
-            let done = matches!(token.kind, TokenKind::EndOfStream);
+            let done = matches!(
+                TokenReader::token_kind(&reader, &token),
+                TokenKindView::EndOfStream
+            );
             tokens.push(token);
             if done {
                 break;
@@ -1981,8 +1988,14 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         TokenReader::<'_, TestLang>::move_to_position(&mut reader, &parsed.position);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
-        assert!(matches!(token.kind, TokenKind::Command { name: "end", .. }));
-        assert!(token.pre_space.is_empty());
+        let reader: &dyn TokenReader<'_, TestLang> = &reader;
+        assert!(matches!(
+            reader.token_kind(&token),
+            TokenKindView::Command { name: "end", .. }
+        ));
+        assert!(reader
+            .source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+            .is_empty());
     }
 
     #[test]
@@ -2004,7 +2017,10 @@ mod tests {
         // … and `after` stands just past it.
         TokenReader::<'_, TestLang>::move_to_position(&mut reader, &after);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
-        assert!(matches!(token.kind, TokenKind::Char('c')));
+        assert!(matches!(
+            TokenReader::token_kind(&reader, &token),
+            TokenKindView::Char('c')
+        ));
     }
 
     #[test]
@@ -2159,8 +2175,9 @@ mod tests {
     #[test]
     fn stop_at_a_token_predicate() {
         let st = state();
-        let predicate =
-            |t: &Token<'_, TestLang>| Ok(matches!(t.kind, TokenKind::Comment { .. }));
+        let predicate = |kind: TokenKindView<'_, TestLang>| {
+            Ok(matches!(kind, TokenKindView::Comment { .. }))
+        };
         let parsed = run_both(
             "ab %c\nd",
             &st,
@@ -2180,7 +2197,7 @@ mod tests {
         // leaves no sound way to decide where the run ends — and the consultation
         // site attaches the live traceback (the predicate has no session access).
         let st = state();
-        let failing = |_: &Token<'_, TestLang>| -> Result<bool, ParseError> {
+        let failing = |_: TokenKindView<'_, TestLang>| -> Result<bool, ParseError> {
             let scratch: Arc<Source> = Arc::new(Source::new(""));
             Err(ParseError::new(
                 crate::error::HookFailed::new("stop table unavailable", None),
@@ -2239,8 +2256,11 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         TokenReader::<'_, TestLang>::move_to_position(&mut reader, &parsed.position);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
-        assert!(matches!(token.kind, TokenKind::Char('r')));
-        assert!(token.pre_space.is_empty());
+        let reader: &dyn TokenReader<'_, TestLang> = &reader;
+        assert!(matches!(reader.token_kind(&token), TokenKindView::Char('r')));
+        assert!(reader
+            .source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+            .is_empty());
     }
 
     #[test]
@@ -3445,15 +3465,17 @@ mod tests {
                     let token = cx.tokens.peek(&cx.state).expect("clean test content");
                     let at = cx.tokens.position_at(&token, TokenEdge::Start);
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
-                    match token.kind {
-                        TokenKind::Char('!') => {
+                    match cx.tokens.token_kind(&token) {
+                        TokenKindView::Char('!') => {
                             break (
                                 at,
                                 cx.tokens.source_span_of(&token),
                                 cx.tokens.position_here(),
                             )
                         }
-                        TokenKind::EndOfStream => panic!("test content has a marker"),
+                        TokenKindView::EndOfStream => {
+                            panic!("test content has a marker")
+                        }
                         _ => {}
                     }
                 };
@@ -4008,9 +4030,10 @@ mod tests {
         let no_comments = Arc::new(full.derived(&ParsingStateDelta::new().rules(
             TokenRulesOverrides { comments: CommentOverrides::disable(), ..Default::default() },
         )).unwrap());
-        let compute = |state: &Arc<ParsingState<TestLang>>, token: &Token<'_, TestLang>| {
-            Ok(match &token.kind {
-                TokenKind::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
+        let compute = |state: &Arc<ParsingState<TestLang>>,
+                       kind: TokenKindView<'_, TestLang>| {
+            Ok(match kind {
+                TokenKindView::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
                     Arc::clone(&no_comments)
                 }
                 _ => Arc::clone(state), // pass-through preserves pointer identity
@@ -4055,7 +4078,8 @@ mod tests {
         // demonstrated body is the documented DeriveError lift: HookFailed with
         // the derivation failure as the cause.
         let full = state_with(rules::<TestLang>());
-        let compute = |state: &Arc<ParsingState<TestLang>>, _token: &Token<'_, TestLang>| {
+        let compute = |state: &Arc<ParsingState<TestLang>>,
+                       _kind: TokenKindView<'_, TestLang>| {
             // A derivation the policy needs, failing operationally (a scope op
             // against a provider name that does not exist).
             let delta = ParsingStateDelta::new()

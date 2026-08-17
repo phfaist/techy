@@ -4,7 +4,8 @@
 //! # Contract
 //!
 //! Constructed with the opening delimiter's span and its resolved
-//! [`GroupRule`] — the two facts the [`GroupOpen`](crate::token::TokenKind::GroupOpen)
+//! [`GroupRule`] — the two facts the
+//! [`GroupOpen`](crate::token::TokenKindView::GroupOpen)
 //! trigger token carries. The **caller consumes the trigger token** before running the
 //! parser (the dispatch-loop arm that peeked it, under the state that tokenized it —
 //! the same at-match-time atomicity rule as the stop-condition consume flag; it also
@@ -264,7 +265,7 @@ mod tests {
     use crate::state::{ParsingState, TrivialLang, StateData};
     use crate::token::{
         CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
-        SpecialsRules, StdTokenReader, Token, TokenKind, TokenReader, TokenRules,
+        SpecialsRules, StdTokenReader, Token, TokenKindView, TokenReader, TokenRules,
         WhitespaceRules,
     };
     use alloc::vec;
@@ -320,7 +321,9 @@ mod tests {
         let st = state();
         let mut reader = StdTokenReader::new(&source);
         let open: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
-        let TokenKind::GroupOpen { rule, .. } = &open.kind else {
+        let TokenKindView::GroupOpen { rule, .. } =
+            TokenReader::token_kind(&reader, &open)
+        else {
             panic!("test content must start with a group open")
         };
         let rule = Arc::clone(rule);

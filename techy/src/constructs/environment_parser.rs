@@ -8,7 +8,7 @@ use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, ContentNodes, NodeKind};
 use crate::source::SourceSpan;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::{GroupRule, TokenEdge, TokenKind};
+use crate::token::{GroupRule, TokenEdge, TokenKindView};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -279,9 +279,13 @@ pub fn read_rigid_name_group<L: Lang>(
     let Some(open) = cx.probe_token(&Arc::clone(&cx.state))? else {
         return Ok(None);
     };
-    let rule = match &open.kind {
-        TokenKind::GroupOpen { rule, .. }
-            if rule.group_type == name_group_type && open.pre_space.is_empty() =>
+    // "Rigid": the open delimiter follows the trigger with no whitespace between —
+    // its pre-space edge and its start edge coincide.
+    let tight = cx.tokens.position_at(&open, TokenEdge::StartBeforePreSpace)
+        == cx.tokens.position_at(&open, TokenEdge::Start);
+    let rule = match cx.tokens.token_kind(&open) {
+        TokenKindView::GroupOpen { rule, .. }
+            if rule.group_type == name_group_type && tight =>
         {
             Arc::clone(rule)
         }
@@ -320,15 +324,17 @@ fn read_name_chars<L: Lang>(
         let Some(token) = cx.probe_token(&state)? else {
             return Ok(None);
         };
-        if !token.pre_space.is_empty() {
+        if cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace)
+            != cx.tokens.position_at(&token, TokenEdge::Start)
+        {
             return Ok(None);
         }
-        match &token.kind {
-            TokenKind::Char(_) => {
+        match cx.tokens.token_kind(&token) {
+            TokenKindView::Char(_) => {
                 name_end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
-            TokenKind::GroupClose { delim } if **delim == *rule.close => {
+            TokenKindView::GroupClose { delim } if *delim == *rule.close => {
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                 return Ok(Some(NameGroup {
                     name: cx.source_span_within(&name_start, &name_end)?,
@@ -543,9 +549,11 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 cx.here(),
             ));
         };
-        let token_escape_char = match &end_token.kind {
-            TokenKind::Command { name, escape_char, .. } if *name == self.stop_command_name => {
-                *escape_char
+        let token_escape_char = match cx.tokens.token_kind(&end_token) {
+            TokenKindView::Command { name, escape_char }
+                if name == self.stop_command_name =>
+            {
+                escape_char
             }
             _ => {
                 return Err(cx.implementation_error(
@@ -788,8 +796,8 @@ mod tests {
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
         ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdStreamPosition,
-        StdTokenReader, Token, TokenEdge, TokenKindView, TokenListReader, TokenReader,
-        TokenRules, TriggerChars, WhitespaceRules,
+        StdTokenReader, Token, TokenEdge, TokenKind, TokenKindView, TokenListReader,
+        TokenReader, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::String;
@@ -1165,11 +1173,12 @@ mod tests {
             let terminator = cx.with_parsing_state(verbatim_state, |cx| {
                 let terminator = loop {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
-                    match &token.kind {
-                        TokenKind::Char(_) => {
+                    match cx.tokens.token_kind(&token) {
+                        TokenKindView::Char(_) => {
                             cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
                         }
-                        TokenKind::GroupClose { .. } | TokenKind::EndOfStream => break token,
+                        TokenKindView::GroupClose { .. }
+                        | TokenKindView::EndOfStream => break token,
                         other => unreachable!("verbatim state yields only chars, got {}", other),
                     }
                 };
@@ -1178,8 +1187,8 @@ mod tests {
                 terminator
             });
             let terminator_start = cx.tokens.position_at(&terminator, TokenEdge::Start);
-            let (body_end, end) = match &terminator.kind {
-                TokenKind::GroupClose { .. } => (
+            let (body_end, end) = match cx.tokens.token_kind(&terminator) {
+                TokenKindView::GroupClose { .. } => (
                     terminator_start,
                     cx.tokens.position_at(&terminator, TokenEdge::EndPastPostSpace),
                 ),
@@ -1436,7 +1445,10 @@ mod tests {
         let mut scanner = StdTokenReader::new(&source);
         loop {
             let token = TokenReader::next(&mut scanner, state).expect("clean scan");
-            let done = matches!(token.kind, TokenKind::EndOfStream);
+            let done = matches!(
+                TokenReader::token_kind(&scanner, &token),
+                TokenKindView::EndOfStream
+            );
             scanned.push(token);
             if done {
                 break;

@@ -24,7 +24,7 @@ use crate::constructs::{
 };
 use crate::source::{Source, SourceSpan, TextContent};
 use crate::state::{InvocationSyntax, Lang};
-use crate::token::{GroupRule, TokenKind};
+use crate::token::{GroupRule, TokenEdge, TokenKindView, TokenReader};
 
 use super::lang::{LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
@@ -110,8 +110,9 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 }
 
 /// The standard-site constructor ([`FromInvocation`]): a
-/// [`Command`](TokenKind::Command) trigger records its
-/// [`Macro`](InvocationSyntaxData::Macro) facts straight off the token; every
+/// [`Command`](TokenKindView::Command) trigger records its
+/// [`Macro`](InvocationSyntaxData::Macro) facts from the trigger's view and the
+/// reader's answer for its syntactic post-space; every
 /// other trigger (a specials token, a paragraph-break token at the preset's
 /// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
 /// [`Environment`](InvocationSyntaxData::Environment) arm is never minted here —
@@ -119,12 +120,23 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 /// [`stage_node`](crate::constructs::ParseContext::stage_node) itself with
 /// [`environment_form`](LatexlikeInvocationSyntax::environment_form).
 impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
-    fn from_invocation(invocation: &Invocation<'_, '_, L>) -> Self {
-        match &invocation.token.kind {
-            TokenKind::Command { escape_char, post_space, .. } => {
+    fn from_invocation(
+        invocation: &Invocation<'_, '_, L>,
+        tokens: &dyn TokenReader<'_, L>,
+    ) -> Self {
+        match invocation.kind {
+            TokenKindView::Command { escape_char, .. } => {
+                // The post-space is a reader answer. Recording it as a bare span is
+                // sound because the node this payload rides on starts at this very
+                // token, so the two are in one source (§1.12's node-data rule).
+                let post_space = tokens.source_span_between(
+                    invocation.token,
+                    TokenEdge::End,
+                    TokenEdge::EndPastPostSpace,
+                );
                 InvocationSyntaxData::Macro {
-                    escape_char: *escape_char,
-                    post_space: TextContent::Spanned(*post_space),
+                    escape_char,
+                    post_space: TextContent::Spanned(post_space.span()),
                 }
             }
             _ => InvocationSyntaxData::Specials,
@@ -793,11 +805,11 @@ mod tests {
                         },
                     ))?;
                     while let Some(token) = cx.probe_token(&raw)? {
-                        match &token.kind {
-                            crate::token::TokenKind::Char('\n') => break,
-                            crate::token::TokenKind::Char(_) => cx
-                                .tokens
-                                .move_to(&token, crate::token::TokenEdge::EndPastPostSpace),
+                        match cx.tokens.token_kind(&token) {
+                            TokenKindView::Char('\n') => break,
+                            TokenKindView::Char(_) => {
+                                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
+                            }
                             _ => break,
                         }
                     }
@@ -1000,6 +1012,7 @@ mod tests {
                 Span::empty(0),
                 Span::empty(0),
             ),
+            kind: TokenKindView::EndOfStream,
         });
     }
 }
