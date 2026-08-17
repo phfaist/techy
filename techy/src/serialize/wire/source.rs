@@ -10,8 +10,8 @@ use crate::serialize::value::SerialValue;
 
 use super::{FromSerialValue, SerialBytes, ToSerialValue};
 
-/// One source. Provisional wire names (the vocabulary of the serialized form is
-/// finalized before the schema is frozen).
+/// One source. Wire names not yet frozen (see the
+/// `techy::serialize` module documentation, "Stability of the serialized form").
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireSource {
     /// The origin, in the language's own form (`SourceOrigin`'s value conversion).

@@ -353,7 +353,7 @@ impl core::error::Error for SerializeError {
 /// [`SerdeSession::object`](crate::serialize::SerdeSession::object),
 /// [`DeserializeContext::object`](crate::serialize::DeserializeContext::object))
 /// can report. Everything read is untrusted input: a malformed value, an index out of
-/// range, a reference cycle, or an unknown identifier is an error naming the culprit,
+/// range, a reference cycle, or an unknown identifier is an error naming what failed,
 /// never a panic. A failure inside a nested call is wrapped in
 /// [`InEntry`](DeserializeError::InEntry) with the entry it happened in, and a failure
 /// while rebuilding one node of a tree in [`InNode`](DeserializeError::InNode) with
@@ -456,8 +456,8 @@ pub enum DeserializeError {
     },
     /// No registered reader and no resolver of table `table` recognizes the
     /// identifier: the reading environment does not know how to rebuild objects of
-    /// that kind (nothing was registered for it, or the resolvers of its namespace
-    /// declined).
+    /// that kind (nothing was registered for it, or the resolvers registered for its
+    /// identifier prefix declined).
     UnknownIdentifier {
         /// The table's name.
         table: &'static str,
@@ -476,7 +476,7 @@ pub enum DeserializeError {
     /// ([`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile)):
     /// the segment carries `found` (`None`: no profile at all), the session requires
     /// `expected`. The stream was written for another configuration than the one
-    /// reading it; the check fails closed, before any entry is absorbed.
+    /// reading it; the mismatch is reported before any entry is absorbed.
     ProfileMismatch {
         /// The profile this session declares.
         expected: String,
@@ -982,7 +982,7 @@ pub enum RegistrationError {
         /// The table's name.
         table: &'static str,
     },
-    /// A codec for that annotation type is already registered in the trees table
+    /// That tree annotation type is already registered in the trees table
     /// ([`TableHandle::register_annotation`](crate::serialize::TableHandle::register_annotation)):
     /// a tree annotation type is registered once (the unit annotation is
     /// pre-registered).
@@ -1024,7 +1024,7 @@ impl fmt::Display for RegistrationError {
             ),
             RegistrationError::DuplicateAnnotationType { table } => write!(
                 f,
-                "a codec for that annotation type is already registered in table `{table}` \
+                "that annotation type is already registered in table `{table}` \
                  (a tree annotation type is registered once)"
             ),
         }
@@ -1111,7 +1111,7 @@ pub enum SerialValueError {
     /// variant when a segment is converted from its serialized form or absorbed by a
     /// session, and when a session interns an object whose entry would exceed the
     /// bound. When a value is read through serde (the `Deserialize` impls of
-    /// `SerialValue` and `Segment`, with the `serde` feature), the same check fires,
+    /// `SerialValue` and `Segment`, with the `serde` feature), the same check runs,
     /// but the error then arrives as the format's own error type — for a format whose
     /// error is not this type, as its `custom` error carrying this variant's message —
     /// not as this variant.

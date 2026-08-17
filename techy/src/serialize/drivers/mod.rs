@@ -13,8 +13,8 @@
 //! serialization of the crate's own spec and provider types with the reading
 //! environment's provider directory ([`KnownProviders`], [`register_core_readers`]).
 //!
-//! Everything here is registered on the type-blind engine exactly as a framework's
-//! own tables would be: the drivers implement
+//! Everything here is registered on the engine, which knows nothing of these object
+//! types, exactly as a framework's own tables would be: the drivers implement
 //! [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), the positions are
 //! [`serial_index!`](crate::serialize::serial_index) types, and the accessors find
 //! the tables by name ([`SerdeSession::table_handle`](crate::serialize::SerdeSession::table_handle)).

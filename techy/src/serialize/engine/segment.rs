@@ -48,8 +48,8 @@ use super::super::wire::{index_from_serial_value, FromSerialValue, ToSerialValue
 /// (`meta` always present, its keys optional; `main` a table position, omitted when
 /// none), each table the map `{"name": <str>, "table": <int>, "start": <int>,
 /// "entries": [<value>, …]}` (`table` being the writer's table id, the ordinal every
-/// table reference inside the entries uses) — with the key names
-/// provisional until the vocabulary of the serialized form is finalized. An entry of
+/// table reference inside the entries uses) — key names not yet frozen, see
+/// "Stability of the serialized form" in the [module documentation](crate::serialize). An entry of
 /// a table holding objects of one kind only is the entry's data itself; an entry of
 /// any other table is the map `{"identifier": <identifier>, "data": <value>}`. With the
 /// `serde` cargo feature the type implements `Serialize` and `Deserialize` by
@@ -221,7 +221,7 @@ impl Segment {
     /// Read a segment from its serialized form (see the type documentation). The value
     /// is untrusted input: a value of the wrong shape is an error, and so is a value
     /// nesting deeper than [`SerialValue::MAX_NESTING_DEPTH`] (checked first, without
-    /// recursion, so that a hostile depth is refused before anything walks the value).
+    /// recursion, so that a malicious depth is refused before anything walks the value).
     /// Reading validates the shape and the depth only; the version and the contents
     /// are validated when the segment is pushed into a session.
     ///

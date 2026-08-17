@@ -79,6 +79,10 @@ pub(crate) const INDEX_SENTINEL: &str = "techy::serialize::Index";
 /// and the common binary formats render as the bare two-element sequence). Declared
 /// `pub` for the expansion of the `serial_index!` macro (reached through
 /// `techy::__private`); not public API.
+///
+/// # Errors
+///
+/// Whatever `serializer` reports.
 pub fn serialize_index<S: Serializer>(
     table: TableId,
     index: u32,
@@ -90,6 +94,12 @@ pub fn serialize_index<S: Serializer>(
 /// Deserialize a table position written by `serialize_index`: from the bridge, a
 /// [`SerialValue::Index`]; from any other format, the two-element pair. Declared
 /// `pub` for the expansion of the `serial_index!` macro; not public API.
+///
+/// # Errors
+///
+/// The value is not a table position (from the bridge, [`SerialValueError::TypeMismatch`];
+/// from another format, that format's error for a value that is not a pair of two
+/// integers), or whatever `deserializer` reports.
 pub fn deserialize_index<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<(TableId, u32), D::Error> {

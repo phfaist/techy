@@ -1,6 +1,6 @@
 //! The wire-side value model: [`SerialValue`], [`SerialEntry`], [`TableId`], and the
-//! [`SerialIndex`] bound. Type-blind: nothing here names a source, a state, or a
-//! spec — every object kind is written in these terms alike.
+//! [`SerialIndex`] bound. Nothing here names a source, a state, or a spec — every
+//! object kind is written in these terms alike.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -33,15 +33,16 @@ use alloc::vec::Vec;
 /// by [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH) at every point where a
 /// value enters or leaves a session or a serialized form — read through serde,
 /// converted to or from a [`Segment`](crate::serialize::Segment), interned into a
-/// session — so that a hostile input cannot make a reader recurse without limit.
+/// session — so that a malicious input cannot make a reader recurse without limit.
 /// See the constant.
 ///
 /// # Rendering through serde
 ///
 /// With the `serde` cargo feature the type implements `Serialize` and `Deserialize`.
 /// Through a human-readable format (serde's `is_human_readable()`), the rendering is
-/// the canonical one — provisional until the vocabulary of the serialized form (its
-/// key names and enum strings) is finalized, and stated here for JSON: `Null` → `null`, `Bool` → boolean, `Int` → number, `Str` → string,
+/// the canonical one — not yet frozen, see "Stability of the serialized form" in the
+/// [module documentation](crate::serialize) — stated here for JSON: `Null` → `null`,
+/// `Bool` → boolean, `Int` → number, `Str` → string,
 /// `List` → array, `Map` → object in entry order; `Bytes` → the one-entry object
 /// `{"$bytes": "<base64>"}` (standard alphabet, `=` padding, no line breaks); `Index`
 /// → the one-entry object `{"$index": [<table>, <index>]}` (two integers: the table's
@@ -99,7 +100,7 @@ impl SerialValue {
     /// absorbing a segment ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)),
     /// and interning an object ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern)) —
     /// a deeper value is a [`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
-    /// error there, so that a hostile input cannot exhaust the stack of a reader
+    /// error there, so that a malicious input cannot exhaust the stack of a reader
     /// that walks values recursively, and so that a writer learns at once when an
     /// entry would be unreadable. A segment's serialized form counts as one value:
     /// its own structure — the segment map, its table list, a table's map, its entry

@@ -69,7 +69,7 @@ crate::serial_index! {
 /// serialization boundary, exactly as [`DiagnosticInfo::IDENTIFIER`] documents.
 ///
 /// A diagnostic is a value: every call writes a new entry (unlike a source or a
-/// state, which is written once and shared); the everyday spellings are the
+/// state, which is written once and shared); the convenience methods are the
 /// [`DiagnosticSerialization`] extension trait's `serialize_diagnostic` and
 /// `diagnostic`. The driver delegates to `Diagnostic`'s own [`SerializableObject`] and
 /// [`DeserializableObject`] impls. Registered by
@@ -375,7 +375,7 @@ impl<L: Lang> DeserializableValue<L> for Severity {
 
 /// Serializing a diagnostic into and reading one back from a session's diagnostics
 /// table by kind — `serialize_diagnostic` and `diagnostic` — on a [`SerdeSession`]:
-/// the everyday spellings over the general
+/// the convenience methods over the general
 /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) /
 /// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the
 /// diagnostics table handle.

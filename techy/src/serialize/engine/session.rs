@@ -58,9 +58,10 @@ use super::segment::{check_entry_nesting, Segment, SegmentMeta, SegmentTable, Wi
 /// followed.
 ///
 /// A session exists only for a [`SerializableLang`]. [`new`](SerdeSession::new)
-/// registers the crate's standard tables (sources, states, specs, providers — see
-/// [`StandardTables`](crate::serialize::StandardTables)); [`empty`](SerdeSession::empty)
-/// starts with no tables, for a session composed of other tables.
+/// registers the crate's standard tables (sources, states, specs, providers, trees,
+/// diagnostics, parse results — see [`StandardTables`](crate::serialize::StandardTables));
+/// [`empty`](SerdeSession::empty) starts with no tables, for a session composed of
+/// other tables.
 ///
 /// # Example
 ///
@@ -167,13 +168,13 @@ pub(super) struct TableState<L: SerializableLang> {
     outbox: Vec<SerialValue>,
     /// The registrations the session keeps for this table's driver (the readers and
     /// resolvers of a heterogeneous table — a `ReadDispatch<L, T>`; the annotation
-    /// codecs of the trees table), created on first use.
+    /// conversions of the trees table), created on first use.
     pub(super) registry: Option<Box<dyn TableRegistry>>,
 }
 
 /// The registrations of one table, as the type-blind session holds them for the
 /// table's driver — the readers by identifier, the resolvers, and the memoized
-/// resolver answers of a heterogeneous table; the annotation codecs of the trees
+/// resolver answers of a heterogeneous table; the annotation conversions of the trees
 /// table: created on first use through
 /// [`registry_mut`](SerdeSession::registry_mut), which downcasts to the concrete
 /// registry type, and asked to forget memoized answers when a push is rolled back.
@@ -239,8 +240,9 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// subsequent [`intern`](SerdeSession::intern), [`object`](SerdeSession::object),
     /// and [`push_segment`](SerdeSession::push_segment) call (each is one run with a
     /// fresh guard). The default is the crate-wide default ([`StdDescentGuardInit`]:
-    /// a stack budget). The guard's early warning has no observer here and is
-    /// dropped; a refusal is a `DescentLimitExceeded` error.
+    /// a stack budget). The guard's early warning (that the limit is getting close)
+    /// has no observer here and is dropped; a refusal is a `DescentLimitExceeded`
+    /// error.
     pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> SerdeSession<L> {
         self.descent_guard_init = init;
         self
@@ -256,8 +258,8 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// segment pushed into the session must carry the same one:
     /// [`push_segment`](SerdeSession::push_segment) rejects a segment whose profile
     /// differs or is missing ([`DeserializeError::ProfileMismatch`]) — the check
-    /// fails closed, before any entry is touched. A session with no profile declared
-    /// writes none and accepts any.
+    /// runs before any entry is touched. A session with no profile declared writes
+    /// none and accepts any.
     ///
     /// The profile is the caller's contract about the reading environment, made
     /// checkable: a stream written for one configuration is refused up front by a
@@ -405,7 +407,9 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// the driver's failure, wrapped in [`SerializeError::InTable`]; the object refers
     /// back to itself ([`SerializeError::ReferenceCycle`]); the nesting of interning
     /// calls exceeds the descent limit ([`SerializeError::DescentLimitExceeded`]);
-    /// the entry the driver produced nests too deep for a segment
+    /// the entry the driver produced for a homogeneous table carries an identifier
+    /// other than the table's ([`SerializeError::UnexpectedIdentifier`]); the entry
+    /// nests too deep for a segment
     /// ([`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
     /// in [`SerializeError::Value`], wrapped in `InTable`; see
     /// [`SerialValue::MAX_NESTING_DEPTH`] — the object is not interned then); the
@@ -595,7 +599,7 @@ impl<L: SerializableLang> SerdeSession<L> {
     ///
     /// On any error the session is left exactly as it was before the call — the
     /// segment's entries are dropped, and the session stays usable — and the error
-    /// names the culprit.
+    /// names what failed.
     ///
     /// # Errors
     ///
@@ -615,7 +619,8 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// in [`Value`](DeserializeError::Value), wrapped in
     /// [`InEntry`](DeserializeError::InEntry) — checked without recursion before any
     /// entry is walked; see [`SerialValue::MAX_NESTING_DEPTH`]); then, from
-    /// rebuilding the entries, a driver's failure
+    /// rebuilding the entries, a driver's failure — or a heterogeneous table's entry
+    /// that is not the identifier-and-data map ([`Value`](DeserializeError::Value)) —
     /// wrapped in [`InEntry`](DeserializeError::InEntry), a reference cycle
     /// ([`ReferenceCycle`](DeserializeError::ReferenceCycle)), a reference beyond a
     /// table's end ([`IndexOutOfRange`](DeserializeError::IndexOutOfRange)) or into

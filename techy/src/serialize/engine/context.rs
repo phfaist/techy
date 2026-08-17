@@ -42,10 +42,14 @@ impl<'a, L: SerializableLang> SerializeContext<'a, L> {
     ///
     /// # Errors
     ///
-    /// The handle is not one of this session's ([`SerializeError::UnknownTable`]);
-    /// the driver's failure, wrapped in [`SerializeError::InTable`]; the object refers
-    /// back to itself ([`SerializeError::ReferenceCycle`]); the nesting exceeds the
-    /// descent limit ([`SerializeError::DescentLimitExceeded`]).
+    /// The errors of [`SerdeSession::intern`], the same operation: the handle is not
+    /// one of this session's ([`SerializeError::UnknownTable`]); the driver's failure,
+    /// wrapped in [`SerializeError::InTable`]; the object refers back to itself
+    /// ([`SerializeError::ReferenceCycle`]); the nesting exceeds the descent limit
+    /// ([`SerializeError::DescentLimitExceeded`]); the entry carries an identifier
+    /// other than a homogeneous table's ([`SerializeError::UnexpectedIdentifier`]) or
+    /// nests too deep for a segment ([`SerializeError::Value`], wrapped in `InTable`);
+    /// the table is full ([`SerializeError::TableFull`]).
     pub fn intern<D: ObjectSerdeDriver<L>>(
         &mut self,
         table: TableHandle<D>,
@@ -124,7 +128,9 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
     /// lies beyond the table's end ([`DeserializeError::IndexOutOfRange`]); the entry
     /// refers back to itself ([`DeserializeError::ReferenceCycle`]); the nesting
     /// exceeds the descent limit ([`DeserializeError::DescentLimitExceeded`]); the
-    /// driver's failure, wrapped in [`DeserializeError::InEntry`].
+    /// driver's failure — or a heterogeneous table's entry that is not the
+    /// identifier-and-data map ([`DeserializeError::Value`]) — wrapped in
+    /// [`DeserializeError::InEntry`].
     pub fn object<D: ObjectSerdeDriver<L>>(
         &mut self,
         table: TableHandle<D>,

@@ -5,8 +5,8 @@
 //! ([`InvocationSyntaxData`], [`StdEnvironmentSyntax`], [`StdEnvironmentSideSyntax`])
 //! convert to and from serialized values ([`SerializableValue`] /
 //! [`DeserializableValue`], implemented for every language, so a family member
-//! reusing the types gets the conversions); the preset's callable spec types
-//! serialize as objects; and [`register`] prepares a reading session.
+//! ([`LatexlikeLang`]) reusing the types gets the conversions); the preset's callable
+//! spec types serialize as objects; and [`register`] prepares a reading session.
 //!
 //! **How the spec types serialize.** A spec whose data has no serialized form (its
 //! argument parsers, its body behavior) — [`MacroSpec`], [`SpecialsSpec`],
@@ -79,8 +79,9 @@
 //! assert!(Arc::ptr_eq(emph.spec().unwrap(), defs.get(latexlike::CallableType::Macro, "emph").unwrap()));
 //! ```
 //!
-//! Provisional wire names (the vocabulary of the serialized form is finalized before
-//! the schema is frozen): callable types `macro` / `environment` / `specials`; group
+//! The preset's wire names (not yet frozen — see "Stability of the serialized form"
+//! in the [`techy::serialize`](crate::serialize) documentation): callable types
+//! `macro` / `environment` / `specials`; group
 //! types `content` / `{math: inline | display}` / `verbatim`; modes `text` / `math`;
 //! the event `exit-math-context`; the slot ext `{body: bool}`; the invocation
 //! syntax `{macro: {escape_char, post_space}}` / `{environment: {begin, end?}}` /
@@ -124,7 +125,7 @@ impl SerializableLang for Latexlike {}
 
 // --- the vocabulary types ---------------------------------------------------------------
 
-/// The serialized names of the vocabulary values (provisional; see the module docs).
+/// The serialized names of the vocabulary values (not yet frozen; see the module docs).
 /// The parity of these strings with the serde renames on the enums (under the
 /// `serde` feature) is pinned by a test.
 mod names {
@@ -693,8 +694,8 @@ where
 /// packages have their own [`minidefs::register_package_recipes`](super::minidefs::register_package_recipes).
 ///
 /// The name `_builtin` (like `minilatex` and `minilatex.item`) is part of the
-/// preset's stable serialized vocabulary: a serialized package refers to its package
-/// by name, so the names are kept as they are.
+/// preset's serialized vocabulary and is kept stable like an identifier: a serialized
+/// package refers to its package by name.
 pub fn register_package_recipes<LLL>(known: &mut KnownProviders<LLL>)
 where
     LLL: LatexlikeLang,

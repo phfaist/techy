@@ -377,8 +377,8 @@ impl<L: Lang> StdCallableSpec<L> {
     }
 
     /// The provenance stamp, if the spec carries one (the
-    /// [`provenance`](StdCallableSpec::provenance) field, as a getter — the spelling
-    /// the preset's spec types share).
+    /// [`provenance`](StdCallableSpec::provenance) field, as a getter — the method
+    /// name the preset's spec types share).
     pub fn provenance(&self) -> Option<&SpecProvenance<L>> {
         self.provenance.as_ref()
     }

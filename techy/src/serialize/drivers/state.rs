@@ -42,12 +42,13 @@ crate::serial_index! {
 ///
 /// A state's entry carries its token rules in full — one section per feature the
 /// language declares present (whitespace, paragraphs, groups, commands, comments,
-/// specials, forbidden characters), each with its gate and its rules data; a feature
-/// the language declares absent has no section — its mode and its ext (through the
-/// language's `ModeId` and `StateExt` value conversions), and its scope stack as the
-/// positions of its providers in the providers table, outermost first. The derived
-/// caches of a state (the delimiter prefix table, the specials trigger characters)
-/// are not written: the reading side rebuilds them when it freezes the state.
+/// specials, forbidden characters), each with its `enabled` flag (forbidden
+/// characters have none) and its rules data; a feature the language declares absent
+/// has no section — its mode and its ext (through the language's `ModeId` and
+/// `StateExt` value conversions), and its scope stack as the positions of its
+/// providers in the providers table, outermost first. The derived caches of a state
+/// (the delimiter prefix table, the specials trigger characters) are not written: the
+/// reading side rebuilds them when it constructs the state.
 ///
 /// Reading refuses what the language cannot hold: a section for a feature the
 /// reading language declares absent, or a non-empty scope stack for a language
@@ -143,7 +144,7 @@ fn wire_group_rules<L: SerializableLang>(
 
 /// A state's serialized form: its token rules (one optional section per feature),
 /// mode, ext, and scope stack (its providers interned into the providers table, in
-/// stack order) — see [`StateSerdeDriver`]. Identifier `core.state`.
+/// stack order, outermost first) — see [`StateSerdeDriver`]. Identifier `core.state`.
 impl<L: Lang> SerializableObject<L> for ParsingState<L> {
     fn serialize_object(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialEntry, SerializeError>
     where
@@ -253,13 +254,14 @@ fn read_group_rules<L: SerializableLang>(
 }
 
 /// A state is rebuilt from its serialized form (see [`StateSerdeDriver`]) and frozen
-/// — its derived caches are recomputed; the language's transition customizer does
-/// not run again (the serialized data is a state that already passed it).
+/// — its derived caches are recomputed; the language's transition customizer
+/// ([`Lang::finalize_transition`](crate::core::Lang::finalize_transition)) does not
+/// run again (the serialized data is a state that already passed it).
 ///
-/// The expected group close, when the entry has one, is the same shared handle as
-/// the value-equal rule of the rebuilt `temporary` or `rules` list when there is one
-/// (the scoped-lifecycle check of [`ParsingState::derived`] compares by handle
-/// identity), and a fresh handle otherwise.
+/// The expected group close, when the entry has one, is the same `Arc` as the
+/// value-equal rule of the rebuilt `temporary` or `rules` list when there is one
+/// (the scoped-lifecycle check of [`ParsingState::derived`] compares by `Arc`
+/// identity), and a fresh `Arc` otherwise.
 impl<L: SerializableLang> DeserializableObject<L> for ParsingState<L> {
     type Output = ParsingState<L>;
 

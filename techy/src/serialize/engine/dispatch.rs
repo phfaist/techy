@@ -1,7 +1,8 @@
 //! Heterogeneous tables: [`DispatchingSerdeDriver`], the driver of a table holding
 //! trait objects of several concrete types; [`ObjectReader`], the registered way to
-//! rebuild the objects of one identifier; [`IdentifierResolver`], a namespace's
-//! supplier of readers; and the registration methods on the table's handle.
+//! rebuild the objects of one identifier; [`IdentifierResolver`], a supplier of
+//! readers for the identifiers of one prefix; and the registration methods on the
+//! table's handle.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -34,10 +35,10 @@ use super::session::{SerdeSession, TableRegistry};
 /// *namespace*, an identifier prefix owned by one framework or package; a
 /// resolver's answer, a reader or a decline, is kept, so it is asked once per
 /// identifier for the session's lifetime — and, when nothing recognizes the
-/// identifier, the error [`DeserializeError::UnknownIdentifier`]: reading *fails
-/// closed* — an unknown identifier is an error, never a guess. Registrations belong
-/// to the session (the driver holds none), so a driver value can be registered in
-/// any number of sessions.
+/// identifier, the error [`DeserializeError::UnknownIdentifier`]: an unknown
+/// identifier is an error, never a guess. Registrations belong to the session (the
+/// driver holds none), so a driver value can be registered in any number of
+/// sessions.
 ///
 /// `T` is the trait object type; `I` the table's position type (a
 /// [`serial_index!`](crate::serialize::serial_index) type). The table is

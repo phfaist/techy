@@ -123,8 +123,8 @@ impl FromSerialValue for SlotRole {
 
 /// One node tree. The nodes are in storage order (the root at index 0, then every
 /// node's children as one contiguous block); the annotations, one per node in the
-/// same order, are omitted for the unit annotation. Provisional wire names (the
-/// vocabulary of the serialized form is finalized before the schema is frozen).
+/// same order, are omitted for the unit annotation. Wire names not yet frozen (see the
+/// `techy::serialize` module documentation, "Stability of the serialized form").
 #[derive(Debug, Clone, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireTree {
     /// The nodes in storage order.

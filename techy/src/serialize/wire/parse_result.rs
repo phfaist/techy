@@ -12,8 +12,8 @@ use crate::serialize::value::SerialValue;
 
 use super::{FromSerialValue, ToSerialValue};
 
-/// One parse result. Provisional wire names (the vocabulary of the serialized form is
-/// finalized before the schema is frozen).
+/// One parse result. Wire names not yet frozen (see the
+/// `techy::serialize` module documentation, "Stability of the serialized form").
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireParseResult {
     /// The parsed tree (an entry of the trees table with the unit annotation).

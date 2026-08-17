@@ -56,8 +56,8 @@ crate::serial_index! {
 /// — and its session extension ([`ParseResult::session_ext`], through the language's
 /// `SessionExt` value conversion). Writing a parse result writes its tree and each of
 /// its diagnostics as new entries of their tables (they are values), and interns
-/// everything they refer to into the standard tables, so the whole parse lands in one
-/// stream with its sharing intact.
+/// everything they refer to into the standard tables, so the whole parse is written
+/// into one stream with its sharing intact.
 ///
 /// Reading rebuilds the tree through the trees table and each diagnostic through the
 /// diagnostics table (its condition is then a
@@ -75,7 +75,7 @@ crate::serial_index! {
 /// twice yields the existing position (unlike a tree or a diagnostic written on its
 /// own, which is a value). Reading back yields the shared `Arc<ParseResult>` the
 /// session holds — a parse result is not cloned out, since a language's session
-/// extension need not be `Clone`. The everyday spellings are the
+/// extension need not be `Clone`. The convenience methods are the
 /// [`ParseResultSerialization`] extension trait's `serialize_parse_result` and
 /// `parse_result`. The driver delegates to `ParseResult`'s own [`SerializableObject`]
 /// and [`DeserializableObject`] impls. Registered by
@@ -221,7 +221,7 @@ impl<L: SerializableLang> DeserializableObject<L> for ParseResult<L> {
 
 /// Serializing a parse result into and reading one back from a session's parse-results
 /// table by kind — `serialize_parse_result` and `parse_result` — on a [`SerdeSession`]:
-/// the everyday spellings over the general
+/// the convenience methods over the general
 /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) /
 /// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the
 /// parse-results table handle.

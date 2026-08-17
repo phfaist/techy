@@ -4,7 +4,8 @@
 //! Two renderings, chosen by the format's `is_human_readable()`:
 //!
 //! - **The canonical rendering** (human-readable formats, JSON being the one the public
-//!   contract is stated in — provisional until the wire vocabulary is finalized):
+//!   contract is stated in — not yet frozen, see the module docs' "Stability of the
+//!   serialized form"):
 //!   `Null` → `null`, `Bool` → boolean, `Int` → number, `Str` → string, `List` →
 //!   array, `Map` → object in entry order. The two variants without a native JSON form
 //!   render as reserved one-entry objects: `Bytes` → `{"$bytes": "<base64>"}` (standard

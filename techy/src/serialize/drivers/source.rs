@@ -96,8 +96,7 @@ pub trait SourceTextPolicy<O: SourceOrigin>: Send + Sync {
 /// against the recorded one ([`DeserializeError::SourceLengthMismatch`]), and, when
 /// the entry records a digest, calls [`digest_matches`](Self::digest_matches)
 /// ([`DeserializeError::SourceDigestMismatch`] on `false`) — so a text that has
-/// changed since it was serialized is a clean error, never a source with wrong
-/// offsets.
+/// changed since it was serialized is an error, never a source with wrong offsets.
 pub trait SourceTextSupplier<O: SourceOrigin>: Send + Sync {
     /// The text of `source`, as it was when the source was serialized: `source`
     /// carries everything the entry recorded about it (its origin, its provenance,
@@ -183,8 +182,8 @@ impl<O: SourceOrigin> ReferencedSource<O> {
 ///   computed by a hash function of the writer's choice, stored as the function's
 ///   name and output. On reading, the driver asks its [`SourceTextSupplier`] for the
 ///   text, checks the length, and asks the supplier to verify the digest; a text
-///   that changed since it was serialized is a clean error, never a source with
-///   wrong offsets. The crate neither chooses nor implements a hash function.
+///   that changed since it was serialized is an error, never a source with wrong
+///   offsets. The crate neither chooses nor implements a hash function.
 ///
 /// The choice is the [`SourceTextPolicy`]'s ([`with_text_policy`](Self::with_text_policy)),
 /// per source; the supply is the [`SourceTextSupplier`]'s
@@ -394,8 +393,8 @@ pub(crate) fn deserialize_span<L: SerializableLang>(
     Ok(SourceSpan::new(&source, start..end))
 }
 
-/// A span is the value `{"source": <position>, "start": <int>, "end": <int>}`
-/// (provisional wire names): its source is interned into the sources table (a source
+/// A span is the value `{"source": <position>, "start": <int>, "end": <int>}`: its
+/// source is interned into the sources table (a source
 /// interned before yields its existing position, so spans into one source share one
 /// entry), and its byte range is embedded.
 impl<L: Lang> SerializableValue<L> for SourceSpan<L::SourceOrigin> {

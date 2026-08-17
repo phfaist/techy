@@ -896,7 +896,7 @@ impl<L: Lang> Package<L> {
     /// [`provenance_for_specials`](Package::provenance_for_specials)) — the stamps
     /// refer weakly to the `Arc` being built. Inside `build`, insert the definitions
     /// as usual, stamping the specs first (the crate's spec types take the stamp with
-    /// `with_provenance`; the latexlike one-liners `define_macro`/`define_environment`
+    /// `with_provenance`; the latexlike helpers `define_macro`/`define_environment`
     /// stamp automatically). Only the specs a package stamps can be serialized by
     /// identity — see the type's documentation.
     ///

@@ -15,8 +15,8 @@ use crate::serialize::value::SerialValue;
 
 use super::{FromSerialValue, ToSerialValue};
 
-/// A package, by identity: its name. Provisional wire names (the vocabulary of the
-/// serialized form is finalized before the schema is frozen).
+/// A package, by identity: its name. Wire names not yet frozen (see the
+/// `techy::serialize` module documentation, "Stability of the serialized form").
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WirePackage {
     /// The package's name.

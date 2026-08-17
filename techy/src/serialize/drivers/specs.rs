@@ -58,8 +58,8 @@ use super::{
 // --- the reading environment: KnownProviders ------------------------------------------
 
 /// A way to build a provider the reading environment does not hold yet: what
-/// [`KnownProviders::register_recipe`] takes. A recipe is built at most once per
-/// serialized provider entry — the built provider is stored in the session's
+/// [`KnownProviders::register_recipe`] takes. A recipe's provider is built at most
+/// once per serialized provider entry — the built provider is stored in the session's
 /// providers table, and every reference to that entry yields it — but a second
 /// session, or a second entry naming the same provider (a writer holding two distinct
 /// providers of one name), builds it again.
@@ -98,9 +98,10 @@ where
 /// through the context.
 ///
 /// Resolution ([`resolve`](KnownProviders::resolve)): the provider inserted under
-/// the name wins; else the recipe registered under the name is built (once per
-/// serialized entry — the session keeps the built provider in its table); else the
-/// name is unknown ([`DeserializeError::MissingProvider`] at the reading site).
+/// the name takes precedence; else the recipe registered under the name is built
+/// (once per serialized entry — the session keeps the built provider in its table);
+/// else the name is unknown ([`DeserializeError::MissingProvider`] at the reading
+/// site).
 /// Names need not be unique across a parse's providers in general
 /// ([`SpecsProvider::name`]); here they are the keys — the deserializing program
 /// decides which provider each name means in its environment.
@@ -290,16 +291,17 @@ pub(crate) fn spec_and_provider_tables<L: SerializableLang>(
 // --- SpecProvenance: the identity form of a stamped spec ------------------------------
 
 /// The identity form of a stamped spec (identifier `core.provider-spec-identity`):
-/// `{provider, callable_type, definition}` — the
-/// defining provider's position in the providers table (interned here: the provider
-/// is written once, wherever it is referred to from), the invocation form in the
-/// language's own form, and the definition key (`{name: …}` or `{trigger: …}`). This
-/// is what a stamped spec's own `serialize_object` delegates to.
+/// `{provider, callable_type, definition}` — the defining provider's position in the
+/// providers table (interned here: the provider is written once, wherever it is
+/// referred to from), the callable type (`CallableTypeId`, in the language's own
+/// value form), and the definition key (`{name: …}` or `{trigger: …}`). This is what
+/// a stamped spec's own `serialize_object` delegates to.
 impl<L: Lang> SerializableObject<L> for SpecProvenance<L> {
     /// # Errors
     ///
     /// [`SerializeError::ProviderDropped`] when the defining provider no longer
-    /// exists; the errors of interning the provider.
+    /// exists; the errors of interning the provider and of the callable type's value
+    /// conversion.
     fn serialize_object(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialEntry, SerializeError>
     where
         L: SerializableLang,
@@ -332,9 +334,11 @@ impl<L: SerializableLang> DeserializableObject<L> for SpecProvenance<L> {
 
     /// # Errors
     ///
-    /// The value's shape; the provider position's errors; [`DeserializeError::Failed`]
-    /// when the provider is not a package; [`DeserializeError::MissingDefinition`]
-    /// when the package holds nothing under the key.
+    /// A malformed value ([`DeserializeError::Value`]); the errors of reading the
+    /// provider at the entry's position and of the callable type's value conversion;
+    /// [`DeserializeError::Failed`] when the provider is not a package;
+    /// [`DeserializeError::MissingDefinition`] when the package holds nothing under
+    /// the key.
     fn deserialize_object(
         value: &SerialValue,
         cx: &mut DeserializeContext<'_, L>,
@@ -438,9 +442,9 @@ impl<L: SerializableLang> DeserializableObject<L> for Package<L> {
 
     /// # Errors
     ///
-    /// The value's shape; [`DeserializeError::MissingProvider`] when no
-    /// `KnownProviders` is set or it knows neither a provider nor a recipe of the
-    /// name; the recipe's own failure.
+    /// A malformed value ([`DeserializeError::Value`]);
+    /// [`DeserializeError::MissingProvider`] when no `KnownProviders` is set or it
+    /// knows neither a provider nor a recipe of the name; the recipe's own failure.
     fn deserialize_object(
         value: &SerialValue,
         cx: &mut DeserializeContext<'_, L>,
@@ -482,8 +486,9 @@ impl<L: SerializableLang> DeserializableObject<L> for Scope<L> {
 
     /// # Errors
     ///
-    /// The value's shape; a definition listed twice ([`DeserializeError::Failed`]);
-    /// the errors of reading a spec.
+    /// A malformed value ([`DeserializeError::Value`]); a definition listed twice
+    /// ([`DeserializeError::Failed`]); the errors of reading a spec and of the
+    /// callable type's value conversion.
     fn deserialize_object(
         value: &SerialValue,
         cx: &mut DeserializeContext<'_, L>,
@@ -533,8 +538,9 @@ impl<L: SerializableLang> DeserializableObject<L> for FallbackProvider<L> {
 
     /// # Errors
     ///
-    /// The value's shape; a callable type listed twice ([`DeserializeError::Failed`]);
-    /// the errors of reading a spec.
+    /// A malformed value ([`DeserializeError::Value`]); a callable type listed twice
+    /// ([`DeserializeError::Failed`]); the errors of reading a spec and of the
+    /// callable type's value conversion.
     fn deserialize_object(
         value: &SerialValue,
         cx: &mut DeserializeContext<'_, L>,
