@@ -47,9 +47,9 @@ use core::fmt;
 use crate::engine::{Frame, FrameTitle};
 use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, GroupData, NodeKind};
-use crate::source::{SourceSpan, Span, TextContent};
+use crate::source::TextContent;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::GroupRule;
+use crate::token::{GroupRule, Token, TokenEdge};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -112,9 +112,10 @@ impl fmt::Display for UnclosedGroup {
 /// derives the actual interior state (base plus the expected close delimiter from
 /// the opening rule), scoped structurally over the descent. Recovery for a group
 /// that never closes is documented on [`UnclosedGroup`].
-pub struct GroupParser<'p, L: Lang> {
-    /// The opening delimiter's span (the consumed `GroupOpen` token's span).
-    open_span: Span,
+pub struct GroupParser<'p, 's, L: Lang> {
+    /// The consumed `GroupOpen` token: the group's open delimiter, as the reader
+    /// records it (its span and its stream position come from the reader).
+    open: Token<'s, L>,
     /// The opening token's resolved rule: the close spelling and group class of the
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
@@ -129,12 +130,11 @@ pub struct GroupParser<'p, L: Lang> {
     child_states: ChildStateSpec<'p, L>,
 }
 
-impl<'p, L: Lang> GroupParser<'p, L> {
-    /// A parser for the group opened by the consumed `GroupOpen` token with span
-    /// `open_span` and resolved rule `rule`, staging nodes with spans into the context's
-    /// [`source`](super::ParseContext::source).
-    pub fn new(open_span: Span, rule: Arc<GroupRule<L>>) -> GroupParser<'p, L> {
-        GroupParser { open_span, rule, child_states: ChildStateSpec::inherit() }
+impl<'p, 's, L: Lang> GroupParser<'p, 's, L> {
+    /// A parser for the group opened by the consumed `GroupOpen` token `open`, with
+    /// resolved rule `rule`.
+    pub fn new(open: Token<'s, L>, rule: Arc<GroupRule<L>>) -> GroupParser<'p, 's, L> {
+        GroupParser { open, rule, child_states: ChildStateSpec::inherit() }
     }
 
     /// Replace the interior's descent-state policy (default: inherit everywhere). See
@@ -145,7 +145,7 @@ impl<'p, L: Lang> GroupParser<'p, L> {
     }
 }
 
-impl<L: Lang> ConstructParser<L> for GroupParser<'_, L>
+impl<L: Lang> ConstructParser<L> for GroupParser<'_, '_, L>
 where
     L::InvocationSyntax: FromInvocation<L>,
 {
@@ -172,12 +172,10 @@ where
         );
         // The group-interior traceback frame ([§dd-dr:errors]): conditions detected inside the
         // group carry `group ‘{’` @ the open delimiter in their snapshot.
+        let open_span = cx.tokens.source_span_of(&self.open);
         let frame = Frame {
-            title: FrameTitle::Quoted {
-                label: "group",
-                name: SourceSpan::new(&cx.source, self.open_span),
-            },
-            span: SourceSpan::new(&cx.source, self.open_span),
+            title: FrameTitle::Quoted { label: "group", name: open_span.clone() },
+            span: open_span.clone(),
         };
         let child_states = self.child_states.clone();
         let (outcome, delta) = cx.with_frame(frame, |cx| {
@@ -190,48 +188,60 @@ where
             return Err(cx.implementation_error(
                 "the driver's content-loop parser returned a pass-through state delta \
                  (a nodes parser has no after-effect to report)",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
 
-        let (close, end) = match outcome.stop {
+        // The close delimiter's own span, and the stream position the group ends at.
+        let (close_span, end) = match outcome.stop {
             // The close was consumed at match time; its span becomes the recorded
             // delimiter (it cannot be re-peeked — hence the span on the cause).
-            StopCause::TokenCondition { span } => (TextContent::Spanned(span), span.end()),
+            StopCause::TokenCondition { span, after } => (Some(span), after),
             StopCause::EndOfInput => {
                 cx.recover(
                     UnclosedGroup::new(&*self.rule.close, UnclosedGroupFound::EndOfInput),
-                    SourceSpan::new(&cx.source, self.open_span),
+                    open_span.clone(),
                 )?;
-                (TextContent::empty(), cx.tokens.pos())
+                (None, cx.tokens.position_here())
             }
             // A close that matches neither field of the pairing: unwind — close this
             // group here, leave the token for an enclosing level (or the root) to claim.
-            StopCause::UnexpectedGroupClose { span } => {
+            StopCause::UnexpectedGroupClose { span, .. } => {
                 cx.recover(
                     UnclosedGroup::new(&*self.rule.close, UnclosedGroupFound::StrayClose),
-                    SourceSpan::new(&cx.source, span),
+                    span,
                 )?;
-                (TextContent::empty(), span.start())
+                (None, cx.tokens.position_here())
             }
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
                     "the driver's content-loop parser reported a node-condition stop, \
                      but the group interior's stop spec sets no node condition",
-                    Span::empty(cx.tokens.pos()),
+                    cx.here(),
                 ));
             }
         };
 
-        let data = GroupData {
-            group_type: Some(self.rule.group_type),
-            open: TextContent::Spanned(self.open_span),
-            close,
+        let span = cx
+            .source_span_within(&cx.tokens.position_at(&self.open, TokenEdge::Start), &end)?;
+        // The recorded delimiters are node-relative spans of the node's own source;
+        // a delimiter from another source is recorded as owned text instead.
+        let open = match open_span.same_source(&span) {
+            true => TextContent::Spanned(open_span.span()),
+            false => TextContent::Owned(open_span.content().into()),
         };
-        let span = Span::new(self.open_span.start(), end);
-        let id = cx.stage_node(
+        let close = match close_span {
+            Some(close_span) if close_span.same_source(&span) => {
+                TextContent::Spanned(close_span.span())
+            }
+            Some(close_span) => TextContent::Owned(close_span.content().into()),
+            None => TextContent::empty(),
+        };
+        let data = GroupData { group_type: Some(self.rule.group_type), open, close };
+        let id = cx
+            .stage_node(
                 NodeKind::group(data),
-                SourceSpan::new(&cx.source, span),
+                span.clone(),
                 Arc::clone(&cx.state),
                 outcome.nodes,
             )
@@ -240,10 +250,10 @@ where
     }
 }
 
-impl<L: Lang> core::fmt::Debug for GroupParser<'_, L> {
+impl<L: Lang> core::fmt::Debug for GroupParser<'_, '_, L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GroupParser")
-            .field("open_span", &self.open_span)
+            .field("open", &self.open)
             .field("rule", &self.rule)
             .field("child_states", &self.child_states)
             .finish()
@@ -320,7 +330,7 @@ mod tests {
             panic!("test content must start with a group open")
         };
         let rule = Arc::clone(rule);
-        reader.move_past(&open, true);
+        TokenReader::move_to_edge(&mut reader, &open, TokenEdge::EndPastPostSpace);
         let mut session = ParserSession::new();
         let driver = crate::engine::StdParseDriver::new(recovery, ());
         let mut cx = ParseContext::new(
@@ -330,10 +340,11 @@ mod tests {
             &mut session,
             &driver,
         );
-        let mut parser = GroupParser::new(open.span, rule);
+        let mut parser = GroupParser::new(open.clone(), rule);
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
-        let pos = cx.tokens.pos();
+        // The reader's position, as a byte offset, through its own answer.
+        let pos = cx.here().start();
         (session.finish(id).unwrap(), pos)
     }
 
