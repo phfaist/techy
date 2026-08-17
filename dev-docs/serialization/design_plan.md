@@ -551,7 +551,11 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
   field name and enum string (core + latexlike), the `Index` table discriminant
   rendering (name string vs ordinal), the canonical base64 form for `Bytes`; the
   region wire form's implicit content-frame discriminator (`content_parent == the
-  callable's own index` ⇔ in-region — consider an explicit tag, M4 review); the
+  callable's own index` ⇔ in-region — consider an explicit tag, M4 review); the M5
+  identifiers/keys (`core.provider-spec` — reviewer suggests `core.spec-identity`,
+  `core.package`, `core.scope`, `core.fallback-provider`, `core.error-spec`,
+  `latexlike.begin/end/paragraph-break/input`, the `key: {name}|{trigger}` shape,
+  `register_core_readers` vs `register` naming); the
   `Option` asymmetry between derive-omitted keys and verbatim `SerialValue` fields
   (`WireSource.origin` `None` renders `null` while `digest: Option` omits its key —
   M3 review); also
@@ -560,7 +564,8 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
   `SegmentTable::id` — reviewer-noted tension, 2026-08-16).
 - **Q5 (M5) — Package-builder API shape** for provenance stamping (`new_cyclic`
   threading; whether core `Package` construction changes or only the latexlike
-  builder). **PROPOSED (supervisor, 2026-08-17; M5 implements; user may amend):**
+  builder). **RESOLVED at M5 (2026-08-17; implemented as proposed; user may still
+  amend names):**
   additive core builder `Package::new_shared(name, |pkg| …) -> Arc<Package<L>>`
   (`Arc::new_cyclic`; the package keeps its own `Weak<dyn SpecsProvider<L>>` and
   hands out stamps via `provenance_for(callable_type, key)`); concrete spec types
@@ -845,10 +850,15 @@ merge outside the sandboxed primary checkout.
   trees through the same harness.)
 - **M5 — Specs, providers, latexlike.** Provenance stamp + `new_cyclic` builder (Q5);
   dispatching drivers; latexlike `SerializableLang` + object impls (pkg-spec identity,
-  macro recipes, Scope full-dump, environments/specials); namespace resolver +
-  `register` helper; vocab derives. Acceptance: real latexlike round-trips including
-  `\newcommand` scopes and environments; a `\today`-style dynamic-spec test proving
-  instance-not-lookup (D18); unregistered-identifier and dead-Weak failure tests.
+  self-contained recipes for the recipe-able types, Scope/FallbackProvider
+  full-dump, environments/specials); `register` helper (no namespace resolver was
+  needed — all identifiers are static; D28(d) is satisfied by the helper chaining
+  `register_core_readers`); vocab derives. Acceptance (as scoped by the D20 note —
+  `\newcommand` does not exist yet): real latexlike round-trips including
+  environments and the nested `minilatex.item` package; Scope full-dump with
+  recipe-able specs; a `\today`-style dynamic-spec test proving instance-not-lookup
+  (D18); unregistered-identifier, dead-Weak, missing-provider and unstamped-spec
+  failure tests. DONE 2026-08-17 (reviewed, Opus 5: APPROVE WITH NITS).
 - **M6 — Diagnostics, ParseResult, streaming, freeze prep.** Diagnostic driver +
   adapter revive; ParseResult wrapper; JSONL streaming; **Q3 wire vocabulary naming
   pass with the user**; Q7. Acceptance: full ParseResult round-trip; a written draft
@@ -1620,6 +1630,17 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M5 reviewed (Opus 5; APPROVE WITH NITS —
+  one doc line; hostile-probe crate + cross-process determinism clean; nits folded
+  into the M6 brief). Plan patches: Q5 RESOLVED, §7 M5 bullet re-scoped, Q3 list
+  extended with the M5 identifiers. Design questions queued for the user: bare
+  `SerdeSession::new()` does not pre-register core readers (reviewer judges it
+  correct: language `register` helpers chain `register_core_readers`; needs the
+  user's ack), `EndSpec`/`ParagraphBreakSpec` unstamped asymmetry, `KnownProviders`
+  name, `builtin_package()`/`minilatex_package()` now returning `Arc<Package>`
+  (breaking under the soft freeze — necessary for stamping), `StdCallableSpec.provenance`
+  as a `pub` field, the `ArgumentExt: Default` bound on latexlike `register`. Next:
+  M6.
 - 2026-08-17 — supervisor (main session) — M4 reviewed (Opus 5; REQUEST CHANGES:
   unreachable wire nodes silently dropped, missing node/callable location context,
   one inverted message, plus a plan gap: span-backed fields inside lang-opaque
