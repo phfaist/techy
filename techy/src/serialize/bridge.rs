@@ -3,7 +3,8 @@
 //! `SerialValue` ([`to_value`]) and any type implementing `Deserialize` is read from
 //! one ([`from_value`]) — the `serde_json::Value` pattern. The bridge is where the
 //! value model's policy is enforced mechanically: floating-point numbers, integers
-//! outside `i64`, and maps with non-string keys are errors.
+//! outside `i64`, maps with non-string keys, and map keys beginning with `$` (the
+//! reserved prefix) are errors.
 //!
 //! Two kinds of data have dedicated variants that serde has no native notion of, and
 //! the bridge intercepts them: byte strings travel through serde's own
@@ -26,7 +27,7 @@ use serde::de::{
 use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq, Serializer};
 
 use super::error::SerialValueError;
-use super::render::{cautious_capacity, compact_variant_name, VALUE_SENTINEL};
+use super::render::{cautious_capacity, check_map_key, compact_variant_name, VALUE_SENTINEL};
 use super::value::{SerialValue, TableId};
 
 // --- serde's error traits ---------------------------------------------------------------
@@ -219,7 +220,9 @@ pub mod serial_bytes {
 /// [`Null`](SerialValue::Null); `Some(x)` → `x`; sequences and tuples →
 /// [`List`](SerialValue::List); structs → [`Map`](SerialValue::Map) in field order;
 /// maps → `Map` (keys must be strings — `char` keys, unit enum variants, and newtype
-/// structs wrapping a string count as their string form; anything else is an error);
+/// structs wrapping a string count as their string form; anything else is an error —
+/// and no key, field name, or variant name may begin with `$`, the value model's
+/// reserved prefix);
 /// newtype structs → their content (except the table-position sentinel, which becomes
 /// [`Index`](SerialValue::Index)); enums in serde's externally tagged form (the
 /// variant name, then its data) — a unit variant → `Str` of the variant name, a
@@ -239,7 +242,9 @@ pub mod serial_bytes {
 ///
 /// [`SerialValueError::FloatRejected`] for `f32`/`f64`;
 /// [`SerialValueError::IntegerOutOfRange`] for an integer outside `i64`;
-/// [`SerialValueError::NonStringMapKey`] for a map key that is not a string; a
+/// [`SerialValueError::NonStringMapKey`] for a map key that is not a string;
+/// [`SerialValueError::ReservedMapKey`] for a map key, field name, or variant name
+/// beginning with `$`; a
 /// [`SerialValueError::Custom`] for whatever the type's own `Serialize` impl reports.
 pub fn to_value<T: Serialize + ?Sized>(value: &T) -> Result<SerialValue, SerialValueError> {
     value.serialize(ValueSerializer { human_readable: true })
@@ -257,8 +262,10 @@ struct ValueSerializer {
 }
 
 /// Wrap `payload` in `Map([(variant, payload)])`: serde's externally tagged form.
-fn tagged(variant: &str, payload: SerialValue) -> SerialValue {
-    SerialValue::Map(Vec::from([(String::from(variant), payload)]))
+/// The variant name is a map key and obeys the reserved-key rule.
+fn tagged(variant: &str, payload: SerialValue) -> Result<SerialValue, SerialValueError> {
+    check_map_key(variant)?;
+    Ok(SerialValue::Map(Vec::from([(String::from(variant), payload)])))
 }
 
 macro_rules! serialize_fitting_int {
@@ -386,7 +393,7 @@ impl Serializer for ValueSerializer {
             // The compact form's payload is the value itself.
             return value.serialize(self);
         }
-        Ok(tagged(variant, value.serialize(self)?))
+        tagged(variant, value.serialize(self)?)
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<ListSerializer, SerialValueError> {
@@ -527,7 +534,7 @@ impl ser::SerializeTupleVariant for ListVariantSerializer {
     }
 
     fn end(self) -> Result<SerialValue, SerialValueError> {
-        Ok(tagged(self.variant, SerializeSeq::end(self.list)?))
+        tagged(self.variant, SerializeSeq::end(self.list)?)
     }
 }
 
@@ -543,7 +550,9 @@ impl SerializeMap for MapSerializer {
     type Error = SerialValueError;
 
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), SerialValueError> {
-        self.pending_key = Some(key.serialize(MapKeySerializer)?);
+        let key = key.serialize(MapKeySerializer)?;
+        check_map_key(&key)?;
+        self.pending_key = Some(key);
         Ok(())
     }
 
@@ -573,6 +582,7 @@ impl ser::SerializeStruct for MapSerializer {
         key: &'static str,
         value: &T,
     ) -> Result<(), SerialValueError> {
+        check_map_key(key)?;
         let value = value.serialize(ValueSerializer { human_readable: self.human_readable })?;
         self.entries.push((String::from(key), value));
         Ok(())
@@ -602,7 +612,7 @@ impl ser::SerializeStructVariant for MapVariantSerializer {
     }
 
     fn end(self) -> Result<SerialValue, SerialValueError> {
-        Ok(tagged(self.variant, ser::SerializeStruct::end(self.map)?))
+        tagged(self.variant, ser::SerializeStruct::end(self.map)?)
     }
 }
 

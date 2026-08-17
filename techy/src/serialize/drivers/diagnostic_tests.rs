@@ -405,10 +405,10 @@ fn severity_converts_as_its_string() {
 fn a_diagnostic_value_renders_through_serde_as_its_embedding() {
     let value = DiagnosticValue::Map(vec![
         (String::from("expected_close"), DiagnosticValue::Str(String::from("}"))),
-        (String::from("$odd"), DiagnosticValue::List(vec![DiagnosticValue::Int(1), DiagnosticValue::Null])),
+        (String::from("odd$"), DiagnosticValue::List(vec![DiagnosticValue::Int(1), DiagnosticValue::Null])),
     ]);
     let json = serde_json::to_string(&value).unwrap();
-    assert_eq!(json, r#"{"expected_close":"}","$$odd":[1,null]}"#);
+    assert_eq!(json, r#"{"expected_close":"}","odd$":[1,null]}"#);
     assert_eq!(json, serde_json::to_string(&SerialValue::from(&value)).unwrap());
 }
 

@@ -13,10 +13,13 @@ use alloc::vec::Vec;
 /// rendering (JSON is the format the public serialization contract is stated in),
 /// and the rendering is designed so that two values render identically exactly when
 /// they compare equal: there are no floating-point numbers and no sized-integer
-/// variants (every integer is an [`Int`](SerialValue::Int)); map keys are strings;
-/// maps preserve insertion order; and the two variants without a native JSON form,
+/// variants (every integer is an [`Int`](SerialValue::Int)); map keys are strings
+/// and never begin with `$`; a [`Map`](SerialValue::Map) is an ordered list of
+/// entries — equality is order-sensitive and the rendering preserves the order, so
+/// two maps with the same entries in different orders are different values that
+/// render differently; and the two variants without a native JSON form,
 /// [`Bytes`](SerialValue::Bytes) and [`Index`](SerialValue::Index), render as
-/// reserved object shapes that no other value can produce.
+/// reserved object shapes (keys beginning with `$`) that no other value can produce.
 ///
 /// [`Index`](SerialValue::Index) is a reference to an object stored in a numbered
 /// table: `table` names the table, `index` the position within it. Shared objects
@@ -32,10 +35,11 @@ use alloc::vec::Vec;
 /// `List` → array, `Map` → object in entry order; `Bytes` → the one-entry object
 /// `{"$bytes": "<base64>"}` (standard alphabet, `=` padding, no line breaks); `Index`
 /// → the one-entry object `{"$index": [<table>, <index>]}` (two integers: the table's
-/// ordinal, then the position). A map key beginning with `$` is written with one
-/// extra leading `$` (`"$foo"` → `"$$foo"`) and unescaped on reading; on reading, an
-/// object key beginning with `$` that is neither a reserved key nor `$$`-escaped is
-/// an error, as are floating-point numbers, integers outside `i64`, and malformed
+/// ordinal, then the position). Those two keys are the only keys beginning with `$`
+/// the rendering ever writes: a `Map` holding a key that begins with `$` is a
+/// rendering error (there is no escaping — the prefix is reserved), and on reading,
+/// an object key beginning with `$` that is not one of the two reserved forms is an
+/// error, as are floating-point numbers, integers outside `i64`, and malformed
 /// reserved objects. Through any other format the rendering is a compact one: the
 /// externally tagged form of this enum (the variant name, then its data), `Bytes`
 /// through the format's `serialize_bytes`/`deserialize_bytes` methods, `Index` as the
@@ -57,8 +61,13 @@ pub enum SerialValue {
     Bytes(Vec<u8>),
     /// An ordered sequence of values.
     List(Vec<SerialValue>),
-    /// A string-keyed map, in insertion order. Keys are expected to be unique;
-    /// the value model itself does not enforce uniqueness.
+    /// A string-keyed map: an ordered list of entries. The order is part of the
+    /// value — equality is order-sensitive and the rendering preserves the order —
+    /// so two maps with the same entries in different orders are different values
+    /// that render differently. Keys are expected to be unique and must not begin
+    /// with `$` (the prefix is reserved for the rendering's own objects; a key that
+    /// begins with it is a rendering or bridge error); the value model itself
+    /// enforces neither at construction.
     Map(Vec<(String, SerialValue)>),
     /// A reference to the object at position `index` of the table `table`.
     Index {

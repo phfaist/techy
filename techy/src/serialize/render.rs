@@ -10,16 +10,17 @@
 //!   render as reserved one-entry objects: `Bytes` → `{"$bytes": "<base64>"}` (standard
 //!   alphabet, `=` padding, no line breaks); `Index` → `{"$index": [<table>, <index>]}`
 //!   (the table's ordinal and the position, two integers). So that no map can be
-//!   mistaken for those forms, a map key beginning with `$` is written with one more
-//!   leading `$` (`"$foo"` → `"$$foo"`) and unescaped on reading; on reading, an object
-//!   key beginning with `$` that is neither one of the reserved forms nor
-//!   `$$`-escaped is an error.
+//!   mistaken for those forms, the value model reserves every key beginning with `$`:
+//!   a map holding such a key is a rendering error (there is no escaping), and on
+//!   reading, an object key beginning with `$` that is not one of the two reserved
+//!   forms is an error.
 //! - **The compact rendering** (every other format): serde's externally tagged form of
 //!   the enum — variant index and name, then the payload; `Bytes` through the format's
 //!   `serialize_bytes`/`deserialize_bytes` methods, `Index` as the two-integer pair,
 //!   `Map` as a serde map.
 //!
-//! Both renderings read back to the identical value. Through the bridge (`to_value` /
+//! Both renderings enforce the reserved-key rule, and both read back to the identical
+//! value. Through the bridge (`to_value` /
 //! `from_value`, `bridge.rs`), a `SerialValue` converts to itself unchanged: the impls
 //! wrap the value in a newtype struct named [`VALUE_SENTINEL`] that the bridge
 //! intercepts.
@@ -29,7 +30,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use serde::de::{self, Deserialize, Deserializer, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
-use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde::ser::{self, Serialize, SerializeMap, Serializer};
 
 use super::base64;
 use super::bridge::{deserialize_index, serial_bytes, serialize_index};
@@ -107,16 +108,7 @@ fn serialize_canonical<S: Serializer>(value: &SerialValue, serializer: S) -> Res
         SerialValue::List(items) => serializer.collect_seq(items),
         SerialValue::Map(entries) => {
             let mut map = serializer.serialize_map(Some(entries.len()))?;
-            for (key, value) in entries {
-                if key.starts_with('$') {
-                    let mut escaped = String::with_capacity(key.len() + 1);
-                    escaped.push('$');
-                    escaped.push_str(key);
-                    map.serialize_entry(&escaped, value)?;
-                } else {
-                    map.serialize_entry(key, value)?;
-                }
-            }
+            serialize_entries(&mut map, entries)?;
             map.end()
         }
         SerialValue::Index { table, index } => {
@@ -160,15 +152,26 @@ impl Serialize for CompactBytes<'_> {
     }
 }
 
-/// The `Map` payload of the compact rendering: a serde map with the keys as they are.
+/// Write a map's entries, checking every key against the reserved-key rule.
+fn serialize_entries<M: SerializeMap>(map: &mut M, entries: &[(String, SerialValue)]) -> Result<(), M::Error> {
+    for (key, value) in entries {
+        // The bridge's own map serializer checks the key itself and reports the typed
+        // error; every other format takes any key, so the rule is checked here too.
+        map.serialize_key(key)?;
+        check_map_key(key).map_err(ser::Error::custom)?;
+        map.serialize_value(value)?;
+    }
+    Ok(())
+}
+
+/// The `Map` payload of the compact rendering: a serde map with the keys as they are
+/// (checked against the reserved-key rule like the canonical rendering's).
 struct CompactMap<'a>(&'a [(String, SerialValue)]);
 
 impl Serialize for CompactMap<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (key, value) in self.0 {
-            map.serialize_entry(key, value)?;
-        }
+        serialize_entries(&mut map, self.0)?;
         map.end()
     }
 }
@@ -191,7 +194,7 @@ impl Serialize for CompactIndex {
 /// human-readable format and the compact form otherwise; see the type's documentation
 /// for both forms. Everything read is untrusted input: a malformed rendering — a bad
 /// base64 text, a malformed `$index` pair, an object key beginning with `$` that is
-/// neither reserved nor `$$`-escaped, a floating-point number, an integer outside
+/// not one of the two reserved forms, a floating-point number, an integer outside
 /// `i64` — is an error.
 impl<'de> Deserialize<'de> for SerialValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -308,7 +311,7 @@ impl<'de> Visitor<'de> for CanonicalVisitor {
                     return Ok(SerialValue::Index { table: TableId::new(table), index });
                 }
             }
-            let key = unescape_key(key)?;
+            check_map_key(&key).map_err(de::Error::custom)?;
             let value: SerialValue = map.next_value()?;
             entries.push((key, value));
         }
@@ -338,20 +341,14 @@ fn expect_end<'de, A: MapAccess<'de>>(map: &mut A, key: &str) -> Result<(), A::E
     }
 }
 
-/// Undo the canonical rendering's key escaping: `$$…` → `$…`; a key beginning with a
-/// single `$` is not the escaping of anything and is rejected.
-fn unescape_key<E: de::Error>(key: String) -> Result<String, E> {
-    if let Some(rest) = key.strip_prefix('$') {
-        if rest.starts_with('$') {
-            Ok(String::from(rest))
-        } else {
-            Err(E::custom(format_args!(
-                "object key `{key}` begins with `$` but is neither a reserved key nor \
-                 `$$`-escaped"
-            )))
-        }
+/// The value model's reserved-key rule: a map key never begins with `$` (the prefix
+/// belongs to the canonical rendering's own objects, `$bytes` and `$index`). Checked
+/// wherever a map is rendered or read, and by the bridge wherever it builds a map.
+pub(super) fn check_map_key(key: &str) -> Result<(), SerialValueError> {
+    if key.starts_with('$') {
+        Err(SerialValueError::ReservedMapKey { key: String::from(key) })
     } else {
-        Ok(key)
+        Ok(())
     }
 }
 
@@ -477,6 +474,7 @@ impl<'de> Deserialize<'de> for CompactMapOwned {
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<CompactMapOwned, A::Error> {
                 let mut entries = Vec::with_capacity(cautious_capacity(map.size_hint()));
                 while let Some((key, value)) = map.next_entry::<String, SerialValue>()? {
+                    check_map_key(&key).map_err(de::Error::custom)?;
                     entries.push((key, value));
                 }
                 Ok(CompactMapOwned(entries))

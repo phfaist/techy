@@ -140,7 +140,7 @@ fn sample() -> WireAll {
         items: Vec::from([1, -2]),
         raw: Vec::from([7, 8]),
         digest: SerialBytes(Vec::from([0xde, 0xad])),
-        ext: map([("$weird", SerialValue::Bytes(Vec::new()))]),
+        ext: map([("weird$", SerialValue::Bytes(Vec::new()))]),
         inner: WireInner { id: 9, note: None },
         kinds: Vec::from([
             WireKind::Plain,
@@ -166,7 +166,7 @@ fn sample_value() -> SerialValue {
         ("items", list([SerialValue::Int(1), SerialValue::Int(-2)])),
         ("raw", list([SerialValue::Int(7), SerialValue::Int(8)])),
         ("digest", SerialValue::Bytes(Vec::from([0xde, 0xad]))),
-        ("ext", map([("$weird", SerialValue::Bytes(Vec::new()))])),
+        ("ext", map([("weird$", SerialValue::Bytes(Vec::new()))])),
         ("inner", map([("id", SerialValue::Int(9))])),
         (
             "kinds",

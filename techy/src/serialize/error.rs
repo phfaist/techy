@@ -989,7 +989,7 @@ impl core::error::Error for RegistrationError {}
 /// (`to_value`/`from_value`, available with the `serde` cargo feature) and the crate's
 /// own conversions of its wire structures report. Writes fail on data the value model
 /// cannot hold — floating-point numbers, integers outside `i64`, maps with non-string
-/// keys. Reads treat the value as untrusted input: a value of the wrong kind, an
+/// keys or with keys beginning with `$`. Reads treat the value as untrusted input: a value of the wrong kind, an
 /// unknown, missing, or repeated map key, or an unknown enum variant is an error,
 /// never a panic. The type is available without the `serde` feature: the crate's own
 /// conversions use it too.
@@ -1002,6 +1002,13 @@ pub enum SerialValueError {
     /// A map key that is not a string was to be written; the value model's maps are
     /// string-keyed.
     NonStringMapKey,
+    /// A map key beginning with `$` was to be written or read: the value model
+    /// reserves that prefix for the canonical rendering's own objects (`$bytes`,
+    /// `$index`), and no map key may begin with it.
+    ReservedMapKey {
+        /// The offending key.
+        key: String,
+    },
     /// An integer does not fit its target: on writing, an integer outside the `i64`
     /// range of [`Int`](crate::serialize::SerialValue::Int); on reading, an integer
     /// outside the range of the integer type being read.
@@ -1058,6 +1065,9 @@ impl fmt::Display for SerialValueError {
             }
             SerialValueError::NonStringMapKey => {
                 write!(f, "map keys must be strings in the serialized value form")
+            }
+            SerialValueError::ReservedMapKey { key } => {
+                write!(f, "map key `{key}` begins with `$`, which is reserved for the serialized value form's own objects")
             }
             SerialValueError::IntegerOutOfRange { value, target } => {
                 write!(f, "integer {value} does not fit {target}")

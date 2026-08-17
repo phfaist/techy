@@ -509,7 +509,8 @@ fn arbitrary_value() -> impl Strategy<Value = SerialValue> {
     leaf.prop_recursive(4, 32, 6, |inner| {
         prop_oneof![
             proptest::collection::vec(inner.clone(), 0..6).prop_map(SerialValue::List),
-            proptest::collection::vec(("[$a-z]{0,4}", inner), 0..6)
+            // Keys never begin with `$` (the reserved prefix), but may contain it.
+            proptest::collection::vec(("[a-z][$a-z]{0,3}|", inner), 0..6)
                 .prop_map(SerialValue::Map),
         ]
     })
@@ -542,16 +543,74 @@ fn serial_value_inside_a_payload_is_verbatim() {
         many: Vec<SerialValue>,
     }
     let payload = Payload {
-        ext: map([("$k", SerialValue::Bytes(Vec::from([1])))]),
+        ext: map([("k$", SerialValue::Bytes(Vec::from([1])))]),
         many: Vec::from([SerialValue::Null, index(3, 4), s("$$")]),
     };
     round_trip(
         &payload,
         map([
-            ("ext", map([("$k", SerialValue::Bytes(Vec::from([1])))])),
+            ("ext", map([("k$", SerialValue::Bytes(Vec::from([1])))])),
             ("many", list([SerialValue::Null, index(3, 4), s("$$")])),
         ]),
     );
+}
+
+#[test]
+fn a_map_key_beginning_with_dollar_is_rejected_everywhere() {
+    // The value model reserves the `$` prefix; there is no escaping. A `Map` holding
+    // such a key is refused by every rendering and by the bridge — on writing and on
+    // reading alike — while `$` anywhere else in a key is ordinary.
+    let offending = map([("a", SerialValue::Null), ("$k", SerialValue::Int(1))]);
+    let expected = SerialValueError::ReservedMapKey { key: "$k".into() };
+    assert_eq!(to_value(&offending).unwrap_err(), expected);
+    assert!(serde_json::to_string(&offending).unwrap_err().to_string().contains("reserved"));
+    // (postcard keeps no message; the failure itself is what matters.)
+    assert!(postcard::to_allocvec(&offending).is_err());
+    // Nested inside a payload: the same.
+    #[derive(Serialize)]
+    struct Payload {
+        ext: SerialValue,
+    }
+    assert_eq!(to_value(&Payload { ext: offending.clone() }).unwrap_err(), expected);
+    // Struct fields, map keys, and variant names of serde types are map keys too.
+    #[derive(Serialize)]
+    struct Renamed {
+        #[serde(rename = "$field")]
+        field: u8,
+    }
+    assert_eq!(to_value(&Renamed { field: 1 }).unwrap_err(), SerialValueError::ReservedMapKey { key: "$field".into() });
+    #[derive(Serialize)]
+    enum Tagged {
+        #[serde(rename = "$v")]
+        V(u8),
+    }
+    assert_eq!(to_value(&Tagged::V(1)).unwrap_err(), SerialValueError::ReservedMapKey { key: "$v".into() });
+    let keyed: std::collections::BTreeMap<&str, u8> = [("$m", 1)].into_iter().collect();
+    assert_eq!(to_value(&keyed).unwrap_err(), SerialValueError::ReservedMapKey { key: "$m".into() });
+    // Reading the compact form: a `$` key inside a map payload is refused too. The
+    // encoding of `{"k$": 1}` reads fine; swapping the key's bytes to `$k` (the same
+    // length, so only those two bytes change) makes it hostile.
+    let mut bytes = postcard::to_allocvec(&map([("k$", SerialValue::Int(1))])).unwrap();
+    assert!(postcard::from_bytes::<SerialValue>(&bytes).is_ok());
+    let position = bytes.windows(2).position(|w| w == b"k$").unwrap();
+    bytes[position] = b'$';
+    bytes[position + 1] = b'k';
+    assert!(postcard::from_bytes::<SerialValue>(&bytes).is_err());
+}
+
+#[test]
+fn map_equality_and_rendering_are_order_sensitive() {
+    // A `Map` is an ordered list of entries: the same entries in another order are a
+    // different value with a different rendering.
+    let ab = map([("a", SerialValue::Int(1)), ("b", SerialValue::Int(2))]);
+    let ba = map([("b", SerialValue::Int(2)), ("a", SerialValue::Int(1))]);
+    assert_ne!(ab, ba);
+    assert_eq!(json(&ab), r#"{"a":1,"b":2}"#);
+    assert_eq!(json(&ba), r#"{"b":2,"a":1}"#);
+    assert_ne!(json(&ab), json(&ba));
+    // And each reads back as itself, order included.
+    assert_eq!(serde_json::from_str::<SerialValue>(&json(&ba)).unwrap(), ba);
+    assert_ne!(postcard::to_allocvec(&ab).unwrap(), postcard::to_allocvec(&ba).unwrap());
 }
 
 // --- the canonical JSON rendering (provisional until the wire vocabulary is finalized) -----------
@@ -574,28 +633,24 @@ fn json_snapshots() {
     assert_eq!(json(&SerialValue::Bytes(Vec::from([0xff, 0xfe]))), r#"{"$bytes":"//4="}"#);
     assert_eq!(json(&index(0, 7)), r#"{"$index":[0,7]}"#);
     assert_eq!(json(&index(u32::MAX, u32::MAX)), r#"{"$index":[4294967295,4294967295]}"#);
-    // Escaping: only keys beginning with `$` change, by one extra `$`.
-    assert_eq!(
-        json(&map([("$", SerialValue::Null), ("$$x", SerialValue::Null), ("a$", SerialValue::Null)])),
-        r#"{"$$":null,"$$$x":null,"a$":null}"#
-    );
-    assert_eq!(json(&map([("$bytes", s("not bytes"))])), r#"{"$$bytes":"not bytes"}"#);
+    // No escaping: `$` inside a key is ordinary, a leading `$` is an error.
+    assert_eq!(json(&map([("a$", SerialValue::Null), ("b$$x", SerialValue::Null)])), r#"{"a$":null,"b$$x":null}"#);
+    assert!(serde_json::to_string(&map([("$bytes", s("not bytes"))])).is_err());
     // Nested, order-preserving.
     let nested = map([
-        ("z", list([SerialValue::Int(1), map([("$k", index(1, 2))]), SerialValue::Bytes(Vec::from([0]))])),
+        ("z", list([SerialValue::Int(1), map([("k$", index(1, 2))]), SerialValue::Bytes(Vec::from([0]))])),
         ("a", map([])),
     ]);
     assert_eq!(
         json(&nested),
-        r#"{"z":[1,{"$$k":{"$index":[1,2]}},{"$bytes":"AA=="}],"a":{}}"#
+        r#"{"z":[1,{"k$":{"$index":[1,2]}},{"$bytes":"AA=="}],"a":{}}"#
     );
     // And every snapshot reads back.
     for value in [
         SerialValue::Null,
         SerialValue::Bytes(b"foobar".to_vec()),
         index(u32::MAX, 3),
-        map([("$bytes", s("not bytes"))]),
-        map([("$", SerialValue::Null), ("$$x", SerialValue::Null)]),
+        map([("a$", SerialValue::Null), ("b$$x", SerialValue::Null)]),
         nested,
     ] {
         let back: SerialValue = serde_json::from_str(&json(&value)).unwrap();
@@ -623,10 +678,13 @@ fn json_reader_accepts_only_the_canonical_forms() {
     assert!(read(r#"{"$index":[1,4294967296]}"#).is_err());
     assert!(read(r#"{"$index":"1,2"}"#).is_err());
     assert!(read(r#"{"$index":[1,2],"more":0}"#).unwrap_err().contains("one entry only"));
-    // A reserved key that is not first, or any unescaped `$` key: fail closed.
-    assert!(read(r#"{"a":1,"$bytes":""}"#).unwrap_err().contains("neither a reserved key nor"));
-    assert!(read(r#"{"$other":1}"#).unwrap_err().contains("neither a reserved key nor"));
-    assert!(read(r#"{"$":1}"#).unwrap_err().contains("neither a reserved key nor"));
+    // A reserved key that is not first, or any other `$` key: fail closed (there is no
+    // escaping, so `$$…` is an error too).
+    assert!(read(r#"{"a":1,"$bytes":""}"#).unwrap_err().contains("reserved"));
+    assert!(read(r#"{"$other":1}"#).unwrap_err().contains("reserved"));
+    assert!(read(r#"{"$":1}"#).unwrap_err().contains("reserved"));
+    assert!(read(r#"{"$$k":1}"#).unwrap_err().contains("reserved"));
+    assert!(read(r#"{"a":{"$$":1}}"#).unwrap_err().contains("reserved"));
     // Numbers outside the model.
     assert!(read("1.5").unwrap_err().contains("floating-point"));
     assert!(read("1e3").unwrap_err().contains("floating-point"));
@@ -645,7 +703,7 @@ fn compact_rendering_round_trips_every_variant() {
         s("héllo"),
         SerialValue::Bytes(Vec::from([0, 1, 2, 255])),
         list([SerialValue::Null, index(1, 2)]),
-        map([("$k", SerialValue::Bytes(Vec::new())), ("", list([]))]),
+        map([("k$", SerialValue::Bytes(Vec::new())), ("", list([]))]),
         index(u32::MAX, 0),
     ];
     for value in values {
