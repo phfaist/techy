@@ -600,7 +600,9 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.extend_run_to(start, end, "the token's pre-space")
     }
 
-    /// The `Char` arm: pre-space and the character extend the pending run. Same
+    /// The `Char` arm: pre-space and the character extend the pending run — one
+    /// extension over the token's whole extent, from where its pre-space begins to
+    /// where it ends (the two coincide when the token has no pre-space). Same
     /// contiguity contract (and `Err` reporting) as
     /// [`take_pre_space`](Self::take_pre_space).
     fn extend_run(
@@ -608,10 +610,9 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &ParseContext<'_, '_, L>,
         token: &L::Token,
     ) -> Result<(), String> {
-        self.take_pre_space(cx, token)?;
-        let start = cx.tokens.position_at(token, TokenEdge::Start);
+        let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::EndPastPostSpace);
-        self.extend_run_to(start, end, "the char token")
+        self.extend_run_to(start, end, "the char token with its pre-space")
     }
 
     /// The shared run extension: `start..end` must begin exactly where the pending
@@ -762,12 +763,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         &self,
         state: &ParsingState<L>,
         token: &L::Token,
+        token_kind: TokenKind<'_, L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<Option<bool>, ParseError<L::SourceOrigin>> {
         let Some(cond) = self.stop.token.as_ref() else {
             return Ok(None);
         };
-        let token_kind = tokens.token_kind(token);
         let matches = match &cond.kind {
             TokenStopKind::Command { name } => {
                 matches!(token_kind, TokenKind::Command { name: n, .. } if n == *name)
@@ -959,7 +960,7 @@ where
 
             if !recovered {
                 if let Some(consume) = self
-                    .token_stop(&cx.state, &token, &*cx.tokens)
+                    .token_stop(&cx.state, &token, kind, &*cx.tokens)
                     .map_err(|error| cx.attach_hook_frames(error))?
                 {
                     self.flush_for_token_stop(cx, &token)?;
