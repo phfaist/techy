@@ -80,27 +80,30 @@
 //!
 //! **The standard tables.** [`SerdeSession::new`] registers the drivers of the
 //! crate's own object kinds — the sources table ([`SourceSerdeDriver`]), the states
-//! table ([`StateSerdeDriver`]), and the specs and providers tables
+//! table ([`StateSerdeDriver`]), the specs and providers tables
 //! ([`SpecSerdeDriver`], [`ProviderSerdeDriver`], dispatching tables whose readers a
-//! language or framework registers) — in that order; [`SerdeSession::standard_tables`]
-//! returns their handles ([`StandardTables`]), and the extension traits
-//! [`StandardTableInterning`] and [`StandardTableReading`] intern and read by kind
-//! (`cx.intern_source(…)`, `cx.state(…)`). A source's text is either *embedded* in
-//! its entry or *referenced* — kept outside the serialized form, described by its
-//! length and an optional *digest* (a fixed-size fingerprint of the text computed by
-//! a hash function the writer chooses, stored as the function's name and output:
-//! [`SourceDigest`]); the choice is a caller-supplied [`SourceTextPolicy`], the text
-//! and digest verification on reading a caller-supplied [`SourceTextSupplier`], and
-//! the crate implements no hash function itself. A state's entry carries its token
-//! rules, mode, ext, and scope stack; the derived caches are rebuilt on reading.
-//! Every state and every source is written once however often it is referred to,
-//! and read back as one shared object.
+//! language or framework registers), and the trees table ([`TreeSerdeDriver`]) — in
+//! that order; [`SerdeSession::standard_tables`] returns their handles
+//! ([`StandardTables`]), and the extension traits [`StandardTableInterning`],
+//! [`StandardTableReading`], and [`TreeSerialization`] intern and read by kind
+//! (`cx.intern_source(…)`, `cx.state(…)`, `session.serialize_tree(…)`). A source's
+//! text is either *embedded* in its entry or *referenced* — kept outside the
+//! serialized form, described by its length and an optional *digest* (a fixed-size
+//! fingerprint of the text computed by a hash function the writer chooses, stored as
+//! the function's name and output: [`SourceDigest`]); the choice is a caller-supplied
+//! [`SourceTextPolicy`], the text and digest verification on reading a caller-supplied
+//! [`SourceTextSupplier`], and the crate implements no hash function itself. A state's
+//! entry carries its token rules, mode, ext, and scope stack; the derived caches are
+//! rebuilt on reading. A tree's entry carries its nodes in storage order (spans, states,
+//! specs, and exts referring to the other tables); the reader rebuilds the tree through
+//! the node builder, minting a fresh layout tag. Every state and every source is written
+//! once however often it is referred to, and read back as one shared object; a tree is
+//! a value, written in full on every call.
 //!
 //! **What exists so far.** This module provides the value model, the error types, the
-//! capability traits, the engine, the drivers of the sources, states, specs, and
-//! providers tables, and (with the feature) the rendering layer; the drivers of node
-//! trees and diagnostics, and the serialization of the crate's own spec and provider
-//! types, are not yet present.
+//! capability traits, the engine, the drivers of the sources, states, specs, providers,
+//! and trees tables, and (with the feature) the rendering layer; the diagnostics driver
+//! and the serialization of the crate's own spec and provider types are not yet present.
 
 mod drivers;
 mod engine;
