@@ -89,7 +89,7 @@ use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::{SourceSpan, Span};
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenKind};
+use crate::token::{Token, TokenEdge, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
@@ -368,15 +368,19 @@ pub struct StrayGroupClose {
 
 /// How a [`NodesParser`] run ended. Abnormal endings are **data**, not errors — only the
 /// caller knows whether reaching end of input before `\end{align}` is a problem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopCause {
+pub enum StopCause<L: Lang> {
     /// The token stop condition matched. `span` is the matched token's span; whether it
     /// was consumed is the [`consume`](TokenStopCondition::consume) the caller set —
     /// consumed ⇒ the reader stands just past it, otherwise it sits unconsumed at
-    /// `span.start`, its pre-space already staged as sibling content.
+    /// its own start, its pre-space already staged as sibling content.
     TokenCondition {
         /// The matched stop token's span.
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
+        /// The stream position just past the matched token (its post-space
+        /// included) — where a caller that wants the token skipped repositions the
+        /// reader ([`move_to_position`](crate::token::TokenReader::move_to_position)),
+        /// whether or not the condition consumed it.
+        after: L::StreamPosition,
     },
     /// The node stop condition fired on the last staged node (the reader stands where
     /// that node ended: a directly staged node is consumed, a flush leaves the triggering
@@ -386,16 +390,80 @@ pub enum StopCause {
     /// node, if any, is already staged).
     EndOfInput,
     /// A group close no condition asked for; the close token is left unconsumed at
-    /// `span.start` and the caller decides (diagnose-and-skip at the root, unwind in a
-    /// group parser). The span covers the delimiter exactly as matched
+    /// its own start and the caller decides (diagnose-and-skip at the root, unwind in
+    /// a group parser). The span covers the delimiter exactly as matched
     /// ([`GroupClose`](crate::token::TokenKind::GroupClose) carries the span's slice
-    /// and nothing more), so a caller diagnosing the close slices it from the source —
-    /// re-peeking under any state but the loop's own could tokenize different bytes.
+    /// and nothing more), so a caller diagnosing the close reads it off the span
+    /// ([`SourceSpan::content`](crate::source::SourceSpan::content)) — re-peeking
+    /// under any state but the loop's own could tokenize different bytes.
     UnexpectedGroupClose {
         /// The unexpected close token's span.
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
+        /// The stream position just past the unconsumed close token — the skip
+        /// target of a caller that recovers from it.
+        after: L::StreamPosition,
     },
 }
+
+// Manual impls: derives would demand `L: Debug`/`L: Clone`/`L: PartialEq`, although
+// only the (already bounded) associated types are stored.
+impl<L: Lang> fmt::Debug for StopCause<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StopCause::TokenCondition { span, after } => f
+                .debug_struct("TokenCondition")
+                .field("span", span)
+                .field("after", after)
+                .finish(),
+            StopCause::NodeCondition => f.write_str("NodeCondition"),
+            StopCause::EndOfInput => f.write_str("EndOfInput"),
+            StopCause::UnexpectedGroupClose { span, after } => f
+                .debug_struct("UnexpectedGroupClose")
+                .field("span", span)
+                .field("after", after)
+                .finish(),
+        }
+    }
+}
+
+impl<L: Lang> Clone for StopCause<L> {
+    fn clone(&self) -> Self {
+        match self {
+            StopCause::TokenCondition { span, after } => StopCause::TokenCondition {
+                span: span.clone(),
+                after: after.clone(),
+            },
+            StopCause::NodeCondition => StopCause::NodeCondition,
+            StopCause::EndOfInput => StopCause::EndOfInput,
+            StopCause::UnexpectedGroupClose { span, after } => {
+                StopCause::UnexpectedGroupClose {
+                    span: span.clone(),
+                    after: after.clone(),
+                }
+            }
+        }
+    }
+}
+
+impl<L: Lang> PartialEq for StopCause<L> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                StopCause::TokenCondition { span, after },
+                StopCause::TokenCondition { span: other_span, after: other_after },
+            ) => span == other_span && after == other_after,
+            (StopCause::NodeCondition, StopCause::NodeCondition) => true,
+            (StopCause::EndOfInput, StopCause::EndOfInput) => true,
+            (
+                StopCause::UnexpectedGroupClose { span, after },
+                StopCause::UnexpectedGroupClose { span: other_span, after: other_after },
+            ) => span == other_span && after == other_after,
+            _ => false,
+        }
+    }
+}
+
+impl<L: Lang> Eq for StopCause<L> {}
 
 /// What a [`NodesParser`] produces: the staged sibling nodes, in source order, how the
 /// run ended, the loop's live state at the stop, and the merged record of the sibling
@@ -404,7 +472,7 @@ pub struct NodesOutcome<L: Lang> {
     /// The staged nodes, in source order (the caller claims them as children).
     pub nodes: Vec<BuildId>,
     /// How the parse ended.
-    pub stop: StopCause,
+    pub stop: StopCause<L>,
     /// The loop's live state when it returned: the entry state evolved by the sibling
     /// after-effect deltas applied so far. A caller that resumes content at the stop
     /// position (the root's tolerant stray-close skip) continues under this state —
@@ -449,7 +517,7 @@ impl<L: Lang> Clone for NodesOutcome<L> {
     fn clone(&self) -> Self {
         NodesOutcome {
             nodes: self.nodes.clone(),
-            stop: self.stop,
+            stop: self.stop.clone(),
             state: Arc::clone(&self.state),
             after_effects: self.after_effects.clone(),
         }
@@ -476,17 +544,17 @@ pub struct NodesParser<'p, L: Lang> {
     /// inherit-everywhere.
     child_states: ChildStateSpec<'p, L>,
     nodes: Vec<BuildId>,
-    /// The pending maximal chars run (invariant 1): extended by `Char` tokens and every
-    /// token's pre-space, flushed when a non-`Char` construct starts.
-    run: Option<Span>,
+    /// The pending maximal chars run (invariant 1), as the pair of stream positions
+    /// it spans: extended by `Char` tokens and every token's pre-space, flushed when
+    /// a non-`Char` construct starts.
+    run: Option<(L::StreamPosition, L::StreamPosition)>,
     /// The merged record of the sibling after-effect deltas applied so far
     /// ([`NodesOutcome::after_effects`]); drained at every return like `nodes`.
     after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
 impl<'p, L: Lang> NodesParser<'p, L> {
-    /// A parser staging nodes with spans into the context's [`source`](ParseContext::source),
-    /// stopping per `stop`.
+    /// A parser staging the nodes it reads, stopping per `stop`.
     pub fn new(stop: StopSpec<'p, L>) -> NodesParser<'p, L> {
         NodesParser {
             stop,
@@ -509,47 +577,57 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// whitespace-only run). A non-contiguous extension can only come from a token
     /// reader breaking the in-order, gap-free token contract — outer-layer input,
     /// reported as the `Err` detail rather than asserted ([§dd-dr:panic-policy]).
-    fn take_pre_space(&mut self, pre_space: Span) -> Result<(), String> {
-        if pre_space.is_empty() {
+    fn take_pre_space(
+        &mut self,
+        cx: &ParseContext<'_, '_, L>,
+        token: &Token<'_, L>,
+    ) -> Result<(), String> {
+        if token.pre_space.is_empty() {
             return Ok(());
         }
-        match &mut self.run {
-            Some(run) => {
-                if run.end() != pre_space.start() {
-                    return Err(alloc::format!(
-                        "pre-space {:?} is not contiguous with the pending chars run \
-                         {:?} (the token reader broke the in-order, gap-free token \
-                         contract)",
-                        pre_space,
-                        run
-                    ));
-                }
-                run.extend_to(pre_space.end());
-            }
-            None => self.run = Some(pre_space),
-        }
-        Ok(())
+        let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
+        let end = cx.tokens.position_at(token, TokenEdge::Start);
+        self.extend_run_to(start, end, "the token's pre-space")
     }
 
     /// The `Char` arm: pre-space and the character extend the pending run. Same
     /// contiguity contract (and `Err` reporting) as
     /// [`take_pre_space`](Self::take_pre_space).
-    fn extend_run(&mut self, token: &Token<'_, L>) -> Result<(), String> {
-        self.take_pre_space(token.pre_space)?;
+    fn extend_run(
+        &mut self,
+        cx: &ParseContext<'_, '_, L>,
+        token: &Token<'_, L>,
+    ) -> Result<(), String> {
+        self.take_pre_space(cx, token)?;
+        let start = cx.tokens.position_at(token, TokenEdge::Start);
+        let end = cx.tokens.position_at(token, TokenEdge::EndPastPostSpace);
+        self.extend_run_to(start, end, "the char token")
+    }
+
+    /// The shared run extension: `start..end` must begin exactly where the pending
+    /// run ends, or the token reader broke the in-order, gap-free token contract —
+    /// outer-layer input, reported as the `Err` detail rather than asserted
+    /// ([§dd-dr:panic-policy]).
+    fn extend_run_to(
+        &mut self,
+        start: L::StreamPosition,
+        end: L::StreamPosition,
+        what: &str,
+    ) -> Result<(), String> {
         match &mut self.run {
-            Some(run) => {
-                if run.end() != token.span.start() {
+            Some((_, run_end)) => {
+                if *run_end != start {
                     return Err(alloc::format!(
-                        "char token {:?} is not contiguous with the pending chars run \
-                         {:?} (the token reader broke the in-order, gap-free token \
-                         contract)",
-                        token.span,
-                        run
+                        "{what} starts at {:?}, which is not where the pending chars \
+                         run ends ({:?}) (the token reader broke the in-order, \
+                         gap-free token contract)",
+                        start,
+                        run_end
                     ));
                 }
-                run.extend_to(token.span.end());
+                *run_end = end;
             }
-            None => self.run = Some(token.span),
+            None => self.run = Some((start, end)),
         }
         Ok(())
     }
@@ -558,7 +636,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// Returns whether the node stop condition fired on it.
     fn flush(&mut self, cx: &mut ParseContext<'_, '_, L>) -> ConstructParserResult<L, bool> {
         match self.run.take() {
-            Some(run) => self.stage_node(cx, NodeKind::chars(run), run),
+            Some((start, end)) => {
+                let span = cx.source_span_within(&start, &end)?;
+                self.stage_node(cx, NodeKind::chars(span.span()), span)
+            }
             None => Ok(false),
         }
     }
@@ -570,10 +651,16 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn flush_through(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-        pre_space: Span,
+        token: &Token<'_, L>,
     ) -> ConstructParserResult<L, bool> {
-        self.take_pre_space(pre_space)
-            .map_err(|detail| cx.implementation_error(detail, pre_space))?;
+        self.take_pre_space(cx, token).map_err(|detail| {
+            let span = cx.tokens.source_span_between(
+                token,
+                TokenEdge::StartBeforePreSpace,
+                TokenEdge::Start,
+            );
+            cx.implementation_error(detail, span)
+        })?;
         self.flush(cx)
     }
 
@@ -589,12 +676,19 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn flush_for_token_stop(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-        pre_space: Span,
+        token: &Token<'_, L>,
     ) -> ConstructParserResult<L, ()> {
-        self.take_pre_space(pre_space)
-            .map_err(|detail| cx.implementation_error(detail, pre_space))?;
-        if let Some(run) = self.run.take() {
-            self.stage(cx, NodeKind::chars(run), run)?;
+        self.take_pre_space(cx, token).map_err(|detail| {
+            let span = cx.tokens.source_span_between(
+                token,
+                TokenEdge::StartBeforePreSpace,
+                TokenEdge::Start,
+            );
+            cx.implementation_error(detail, span)
+        })?;
+        if let Some((start, end)) = self.run.take() {
+            let span = cx.source_span_within(&start, &end)?;
+            self.stage(cx, NodeKind::chars(span.span()), span)?;
         }
         Ok(())
     }
@@ -606,9 +700,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
         kind: NodeKind<L>,
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
     ) -> ConstructParserResult<L, BuildId> {
-        let id = cx.stage_node(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), vec![])
+        let id = cx
+            .stage_node(kind, span.clone(), Arc::clone(&cx.state), vec![])
             .map_err(|error| cx.staging_error(error, span))?;
         self.nodes.push(id);
         Ok(id)
@@ -620,7 +715,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
         kind: NodeKind<L>,
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
     ) -> ConstructParserResult<L, bool> {
         let id = self.stage(cx, kind, span)?;
         self.test_node_stop(cx, id)
@@ -698,17 +793,18 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         recovered: bool,
         condition: impl DiagnosticInfo,
     ) -> ConstructParserResult<L, bool> {
-        if self.flush_through(cx, token.pre_space)? {
+        if self.flush_through(cx, token)? {
             if !recovered {
-                cx.tokens.move_to(token, false);
+                cx.tokens.move_to_edge(token, TokenEdge::Start);
             }
             return Ok(true);
         }
-        cx.recover(condition, SourceSpan::new(&cx.source, token.span))?;
+        let span = cx.tokens.source_span_of(token);
+        cx.recover(condition, span.clone())?;
         if !recovered {
-            cx.tokens.move_past(token, true);
+            cx.tokens.move_to_edge(token, TokenEdge::EndPastPostSpace);
         }
-        self.stage_node(cx, NodeKind::chars(token.span), token.span)
+        self.stage_node(cx, NodeKind::chars(span.span()), span)
     }
 
     /// Dispatch a resolved invocation (the `Command`/`Specials` arms): resolve the
@@ -742,7 +838,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         // dispatch push site, [§dd-dr:errors]): a failing factory's traceback names
         // the failing spec too.
         let frame = invocation_frame(cx, &invocation);
-        cx.tokens.move_past(invocation.token, true);
+        cx.tokens.move_to_edge(invocation.token, TokenEdge::EndPastPostSpace);
         let driver = cx.driver;
         let result = cx.with_frame(frame, |cx| {
             // The parser comes from the driver's interception seam (default: the
@@ -773,7 +869,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
 
     /// Drain the collected siblings (and the merged after-effect record) into the
     /// outcome.
-    fn outcome(&mut self, state: &Arc<ParsingState<L>>, stop: StopCause) -> NodesOutcome<L> {
+    fn outcome(&mut self, state: &Arc<ParsingState<L>>, stop: StopCause<L>) -> NodesOutcome<L> {
         NodesOutcome {
             nodes: mem::take(&mut self.nodes),
             stop,
@@ -848,34 +944,40 @@ where
                     .token_stop(&cx.state, &token)
                     .map_err(|error| cx.attach_hook_frames(error))?
                 {
-                    self.flush_for_token_stop(cx, token.pre_space)?;
+                    self.flush_for_token_stop(cx, &token)?;
+                    let span = cx.tokens.source_span_of(&token);
+                    let after = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
                     if consume {
                         // Take the whole token, syntactic post-space included; its
                         // pre-space is already housed in the flushed sibling nodes.
-                        cx.tokens.move_past(&token, true);
+                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                     } else {
-                        cx.tokens.move_to(&token, false);
+                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
                     }
-                    let span = token.span;
-                    return Ok((self.outcome(&cx.state, StopCause::TokenCondition { span }), None));
+                    return Ok((
+                        self.outcome(&cx.state, StopCause::TokenCondition { span, after }),
+                        None,
+                    ));
                 }
             }
 
             match &token.kind {
                 TokenKind::Char(_) => {
-                    self.extend_run(&token)
-                        .map_err(|detail| cx.implementation_error(detail, token.span))?;
+                    self.extend_run(cx, &token).map_err(|detail| {
+                        let span = cx.tokens.source_span_of(&token);
+                        cx.implementation_error(detail, span)
+                    })?;
                     if !recovered {
-                        cx.tokens.move_past(&token, true);
+                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                     }
                 }
 
                 TokenKind::EndOfStream => {
                     // Invariant 4: the terminal token's pre-space is the input's
                     // trailing whitespace and reaches the tree.
-                    let fired = self.flush_through(cx, token.pre_space)?;
+                    let fired = self.flush_through(cx, &token)?;
                     if !recovered {
-                        cx.tokens.move_to(&token, false);
+                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
                     }
                     let cause =
                         if fired { StopCause::NodeCondition } else { StopCause::EndOfInput };
@@ -885,14 +987,19 @@ where
                 TokenKind::GroupClose { .. } => {
                     // A close the stop condition did not ask for: report it as data and
                     // let the caller decide ([§dd-dr:panic-policy] rule 2); the token stays unconsumed.
-                    let fired = self.flush_through(cx, token.pre_space)?;
+                    let fired = self.flush_through(cx, &token)?;
                     if !recovered {
-                        cx.tokens.move_to(&token, false);
+                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
                     }
                     let cause = if fired {
                         StopCause::NodeCondition
                     } else {
-                        StopCause::UnexpectedGroupClose { span: token.span }
+                        StopCause::UnexpectedGroupClose {
+                            span: cx.tokens.source_span_of(&token),
+                            after: cx
+                                .tokens
+                                .position_at(&token, TokenEdge::EndPastPostSpace),
+                        }
                     };
                     return Ok((self.outcome(&cx.state, cause), None));
                 }
@@ -906,29 +1013,26 @@ where
                             "a ParagraphBreak token reached content dispatch although \
                              the language declares the paragraphs feature absent \
                              (token-source contract violation)",
-                            token.span,
+                            cx.tokens.source_span_of(&token),
                         ));
                     }
-                    if self.flush_through(cx, token.pre_space)? {
+                    if self.flush_through(cx, &token)? {
                         if !recovered {
-                            cx.tokens.move_to(&token, false);
+                            cx.tokens.move_to_edge(&token, TokenEdge::Start);
                         }
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     // Invariant 2: the break is its own node — the hook's kind, staged
                     // by the loop over the full token span (a driver cannot stage nodes
                     // itself); runs never merge across it. The hook receives the
-                    // source's content so a callable-shaped kind can record the
-                    // break's actual spelling (name-as-written).
-                    let kind = cx.driver.make_paragraph_break_node(
-                        &cx.state,
-                        &token,
-                        cx.source.content(),
-                    );
+                    // break's span so a callable-shaped kind can record the break's
+                    // actual spelling (name-as-written).
+                    let span = cx.tokens.source_span_of(&token);
+                    let kind = cx.driver.make_paragraph_break_node(&cx.state, &span);
                     if !recovered {
-                        cx.tokens.move_past(&token, true);
+                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                     }
-                    if self.stage_node(cx, kind, token.span)? {
+                    if self.stage_node(cx, kind, span)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
@@ -942,12 +1046,12 @@ where
                             "a Comment token reached content dispatch although the \
                              language declares the comments feature absent \
                              (token-source contract violation)",
-                            token.span,
+                            cx.tokens.source_span_of(&token),
                         ));
                     }
-                    if self.flush_through(cx, token.pre_space)? {
+                    if self.flush_through(cx, &token)? {
                         if !recovered {
-                            cx.tokens.move_to(&token, false);
+                            cx.tokens.move_to_edge(&token, TokenEdge::Start);
                         }
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
@@ -955,10 +1059,11 @@ where
                     // post-space.
                     let content_span = Span::new(start.end(), post_space.start());
                     let kind = NodeKind::comment(*start, content_span, *post_space);
+                    let span = cx.tokens.source_span_of(&token);
                     if !recovered {
-                        cx.tokens.move_past(&token, true);
+                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                     }
-                    if self.stage_node(cx, kind, token.span)? {
+                    if self.stage_node(cx, kind, span)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
@@ -972,7 +1077,7 @@ where
                             "a Command token reached content dispatch although the \
                              language declares the commands feature absent \
                              (token-source contract violation)",
-                            token.span,
+                            cx.tokens.source_span_of(&token),
                         ));
                     }
                     // Resolution runs under the loop's own state — coherent with the
@@ -991,8 +1096,8 @@ where
                     };
                     match resolved {
                         CommandResolution::Resolved(resolved) => {
-                            if self.flush_through(cx, token.pre_space)? {
-                                cx.tokens.move_to(&token, false);
+                            if self.flush_through(cx, &token)? {
+                                cx.tokens.move_to_edge(&token, TokenEdge::Start);
                                 return Ok((
                                     self.outcome(&cx.state, StopCause::NodeCondition),
                                     None,
@@ -1047,7 +1152,7 @@ where
                             "a Specials token reached content dispatch although the \
                              language declares the specials feature absent \
                              (token-source contract violation)",
-                            token.span,
+                            cx.tokens.source_span_of(&token),
                         ));
                     }
                     // Recognition = resolution: the token carries the full resolution
@@ -1063,8 +1168,8 @@ where
                         }
                         continue;
                     }
-                    if self.flush_through(cx, token.pre_space)? {
-                        cx.tokens.move_to(&token, false);
+                    if self.flush_through(cx, &token)? {
+                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     let invocation = Invocation {
@@ -1087,7 +1192,7 @@ where
                             "a GroupOpen token reached content dispatch although the \
                              language declares the groups feature absent \
                              (token-source contract violation)",
-                            token.span,
+                            cx.tokens.source_span_of(&token),
                         ));
                     }
                     // A recovery placeholder GroupOpen (no current TokenRecovery emits
@@ -1103,8 +1208,8 @@ where
                         }
                         continue;
                     }
-                    if self.flush_through(cx, token.pre_space)? {
-                        cx.tokens.move_to(&token, false);
+                    if self.flush_through(cx, &token)? {
+                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     // The interior's *base* state per the descent policy (the group
@@ -1121,13 +1226,13 @@ where
                     // Consume the trigger token here, at the site that peeked it and
                     // under the state that tokenized it (the at-match-time atomicity
                     // rule); the group parser gets its two facts — open span and rule.
-                    cx.tokens.move_past(&token, true);
+                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                     // The parser's input state is the policy's answer, scoped to the
                     // descent; the parser itself comes from the driver's factory
                     // (Phase 7.2 uniform routing).
                     let (id, _delta) = cx.parse_group(
                         base,
-                        token.span,
+                        &token,
                         Arc::clone(rule),
                         ChildStateSpec::inherit(),
                         None,
@@ -1445,8 +1550,28 @@ mod tests {
 
     struct Parsed<L: Lang> {
         result: ParseResult<L>,
-        stop: StopCause,
+        stop: StopCause<L>,
+        /// The reader's exit position, as a byte offset (for assertions).
         pos: usize,
+        /// The reader's exit position itself — what a test resumes a fresh reader
+        /// over the same content from.
+        position: L::StreamPosition,
+    }
+
+    /// A stop cause rendered for assertions: the variant, plus the matched span's
+    /// byte range where the variant carries one. (The `after` position is opaque;
+    /// tests that care about it resume the reader from it.)
+    fn stop_shape<L: Lang>(stop: &StopCause<L>) -> String {
+        match stop {
+            StopCause::TokenCondition { span, .. } => {
+                alloc::format!("token {:?}", span.range())
+            }
+            StopCause::UnexpectedGroupClose { span, .. } => {
+                alloc::format!("close {:?}", span.range())
+            }
+            StopCause::NodeCondition => String::from("node"),
+            StopCause::EndOfInput => String::from("end of input"),
+        }
     }
 
     impl<L: Lang> fmt::Debug for Parsed<L> {
@@ -1455,6 +1580,7 @@ mod tests {
                 .field("shapes", &shapes(&self.result))
                 .field("stop", &self.stop)
                 .field("pos", &self.pos)
+                .field("position", &self.position)
                 .finish()
         }
     }
@@ -1496,7 +1622,10 @@ mod tests {
         let mut parser = NodesParser::new(stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
-        let pos = cx.tokens.pos();
+        // The reader's exit position: as a byte offset (for assertions) and as
+        // itself (for resuming).
+        let position = cx.tokens.position_here();
+        let pos = cx.here().start();
         // The root `List` spans exactly the parsed extent (its content interior — the
         // partition invariant the checker verifies); a consumed stop token lies outside.
         let root_span = {
@@ -1525,7 +1654,7 @@ mod tests {
         };
         let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);
-        Ok(Parsed { result, stop: outcome.stop, pos })
+        Ok(Parsed { result, stop: outcome.stop, pos, position })
     }
 
     /// Scan `source` into the full token list (including the terminal `EndOfStream`).
@@ -1754,8 +1883,7 @@ mod tests {
             fn make_paragraph_break_node(
                 &self,
                 _state: &ParsingState<MarkLang>,
-                _token: &Token<'_, MarkLang>,
-                _source_content: &str,
+                _break_span: &SourceSpan,
             ) -> NodeKind<MarkLang> {
                 NodeKind::chars("¶") // owned content, unlike the spanned default
             }
@@ -1844,17 +1972,39 @@ mod tests {
         // The stop token's pre-space is interior content: it lands in the flushed run.
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
         // The reported span covers the whole `\end` token (name + terminating space).
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 8) });
+        assert_eq!(stop_shape(&parsed.stop), "token 3..8");
         assert_eq!(parsed.pos, 3);
 
         // Re-peeking from the seam yields the stop token itself, with empty pre-space —
         // no byte is represented twice.
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(&source);
-        reader.move_to_pos(parsed.pos);
+        TokenReader::<'_, TestLang>::move_to_position(&mut reader, &parsed.position);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         assert!(matches!(token.kind, TokenKind::Command { name: "end", .. }));
         assert!(token.pre_space.is_empty());
+    }
+
+    #[test]
+    fn the_stop_causes_after_position_skips_the_unconsumed_token() {
+        // An unconsumed stop token sits at its own start; the cause's `after`
+        // position is where a caller that skips it resumes — no re-peek needed.
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab}c"));
+        let mut reader = StdTokenReader::new(&source);
+        let parsed: Parsed<TestLang> =
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
+        let StopCause::UnexpectedGroupClose { span, after } = parsed.stop else {
+            panic!("expected an unexpected group close");
+        };
+        assert_eq!(span.range(), 2..3);
+        assert_eq!(span.content(), "}");
+        // The close is left unconsumed, at its own start …
+        assert_eq!(parsed.pos, 2);
+        // … and `after` stands just past it.
+        TokenReader::<'_, TestLang>::move_to_position(&mut reader, &after);
+        let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
+        assert!(matches!(token.kind, TokenKind::Char('c')));
     }
 
     #[test]
@@ -1868,7 +2018,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..1 \" \""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(1, 5) });
+        assert_eq!(stop_shape(&parsed.stop), "token 1..5");
         assert_eq!(parsed.pos, 1);
     }
 
@@ -1883,7 +2033,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "token 2..3");
         assert_eq!(parsed.pos, 2);
     }
 
@@ -1903,7 +2053,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_MATH, close: "$" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"a b\""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 4) });
+        assert_eq!(stop_shape(&parsed.stop), "token 3..4");
         assert_eq!(parsed.pos, 3);
     }
 
@@ -1924,7 +2074,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_MATH, close: "$" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "close 2..3");
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1949,7 +2099,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "close 2..3");
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1975,7 +2125,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "close 2..3");
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1986,7 +2136,7 @@ mod tests {
         let parsed =
             run_both("ab}c", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "close 2..3");
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -2002,7 +2152,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::ParagraphBreak, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(2, 4) });
+        assert_eq!(stop_shape(&parsed.stop), "token 2..4");
         assert_eq!(parsed.pos, 2);
     }
 
@@ -2019,7 +2169,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::Predicate(&predicate), false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 6) });
+        assert_eq!(stop_shape(&parsed.stop), "token 3..6");
         assert_eq!(parsed.pos, 3);
     }
 
@@ -2083,13 +2233,13 @@ mod tests {
         // syntactic post-space, taken with the token — so the reader lands past it (8),
         // not at the token start (3).
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 8) });
+        assert_eq!(stop_shape(&parsed.stop), "token 3..8");
         assert_eq!(parsed.pos, 8);
 
         // The next read is the following content, its pre-space empty (nothing re-read).
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(&source);
-        reader.move_to_pos(parsed.pos);
+        TokenReader::<'_, TestLang>::move_to_position(&mut reader, &parsed.position);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         assert!(matches!(token.kind, TokenKind::Char('r')));
         assert!(token.pre_space.is_empty());
@@ -2106,7 +2256,7 @@ mod tests {
             StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, true),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "token 2..3");
         // The close is consumed (reader past `}`); `}` carries no post-space, so the
         // following space is not the close's — it stays for the enclosing content as the
         // next token's pre-space, unclaimed here.
@@ -2255,7 +2405,7 @@ mod tests {
             },
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
-        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 8) });
+        assert_eq!(stop_shape(&parsed.stop), "token 3..8");
         assert_eq!(parsed.pos, 8);
         assert_eq!(calls_std, 0, "the token-stop flush consulted the node condition");
         assert_eq!(calls_list, 0, "the token-stop flush consulted the node condition");
@@ -2360,7 +2510,7 @@ mod tests {
             self.inner().pos()
         }
 
-        fn move_to_edge(&mut self, tok: &Token<'s, TestLang>, edge: TokenEdge) {
+        fn move_to_edge(&mut self, tok: &Token<'_, TestLang>, edge: TokenEdge) {
             self.inner_mut().move_to_edge(tok, edge);
         }
 
@@ -2370,7 +2520,7 @@ mod tests {
 
         fn source_span_between(
             &self,
-            tok: &Token<'s, TestLang>,
+            tok: &Token<'_, TestLang>,
             a: TokenEdge,
             b: TokenEdge,
         ) -> SourceSpan {
@@ -2381,7 +2531,7 @@ mod tests {
             self.inner().position_here()
         }
 
-        fn position_at(&self, tok: &Token<'s, TestLang>, edge: TokenEdge) -> StdStreamPosition {
+        fn position_at(&self, tok: &Token<'_, TestLang>, edge: TokenEdge) -> StdStreamPosition {
             self.inner().position_at(tok, edge)
         }
 
@@ -2533,7 +2683,7 @@ mod tests {
             self.inner().pos()
         }
 
-        fn move_to_edge(&mut self, tok: &Token<'s, TabooLang>, edge: TokenEdge) {
+        fn move_to_edge(&mut self, tok: &Token<'_, TabooLang>, edge: TokenEdge) {
             self.inner_mut().move_to_edge(tok, edge);
         }
 
@@ -2543,7 +2693,7 @@ mod tests {
 
         fn source_span_between(
             &self,
-            tok: &Token<'s, TabooLang>,
+            tok: &Token<'_, TabooLang>,
             a: TokenEdge,
             b: TokenEdge,
         ) -> SourceSpan {
@@ -2554,7 +2704,7 @@ mod tests {
             self.inner().position_here()
         }
 
-        fn position_at(&self, tok: &Token<'s, TabooLang>, edge: TokenEdge) -> StdStreamPosition {
+        fn position_at(&self, tok: &Token<'_, TabooLang>, edge: TokenEdge) -> StdStreamPosition {
             self.inner().position_at(tok, edge)
         }
 
@@ -3309,30 +3459,42 @@ mod tests {
             > {
                 // The trigger is already consumed whole; its span becomes the "open
                 // delimiter". Raw content runs from there to the `!` marker.
-                let open_span = self.invocation.token.span;
-                let mut content = Span::empty(open_span.end());
-                let close_span = loop {
+                let open_span = cx.tokens.source_span_of(self.invocation.token);
+                let content_start = cx.tokens.position_here();
+                let (content_end, close_span, end) = loop {
                     let token = cx.tokens.peek(&cx.state).expect("clean test content");
-                    cx.tokens.move_past(&token, true);
+                    let at = cx.tokens.position_at(&token, TokenEdge::Start);
+                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                     match token.kind {
-                        TokenKind::Char('!') => break token.span,
+                        TokenKind::Char('!') => {
+                            break (
+                                at,
+                                cx.tokens.source_span_of(&token),
+                                cx.tokens.position_here(),
+                            )
+                        }
                         TokenKind::EndOfStream => panic!("test content has a marker"),
-                        _ => content.extend_to(token.span.end()),
+                        _ => {}
                     }
                 };
+                let content = cx.source_span_within(&content_start, &content_end)?;
                 let child = cx.stage_node(
-                    NodeKind::chars(content),
-                    SourceSpan::new(&cx.source, content),
+                    NodeKind::chars(content.span()),
+                    content,
                     Arc::clone(&cx.state),
                     vec![],
                 ).unwrap();
                 let data: GroupData<CmdLang> = GroupData::untyped(
-                    TextContent::Spanned(open_span),
-                    TextContent::Spanned(close_span),
+                    TextContent::Spanned(open_span.span()),
+                    TextContent::Spanned(close_span.span()),
                 );
+                let span = cx.source_span_within(
+                    &cx.tokens.position_at(self.invocation.token, TokenEdge::Start),
+                    &end,
+                )?;
                 let id = cx.stage_node(
                     NodeKind::group(data),
-                    SourceSpan::new(&cx.source, open_span.start()..close_span.end()),
+                    span,
                     Arc::clone(&cx.state),
                     vec![child],
                 ).unwrap();
@@ -3698,7 +3860,7 @@ mod tests {
         let group = parsed.result.tree.root().child(0).unwrap();
         assert_eq!(group.group_delimiters(), Some(("{", "")));
         assert_eq!(group.child(0).unwrap().chars(), Some("a"));
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
+        assert_eq!(stop_shape(&parsed.stop), "close 2..3");
         assert_eq!(parsed.pos, 2);
         assert_eq!(parsed.result.diagnostics.len(), 1);
         assert_eq!(
@@ -3766,17 +3928,16 @@ mod tests {
             let (outcome, _) = parser.parse(&mut cx).unwrap();
             nodes.extend(outcome.nodes);
             match outcome.stop {
-                StopCause::UnexpectedGroupClose { span } => {
+                StopCause::UnexpectedGroupClose { span, after } => {
                     session
                         .recover(
                             Recovery::Tolerant,
                             Box::new(StrayGroupClose { delim: "}".into() }),
-                            SourceSpan::new(&source, span),
+                            span,
                         )
                         .unwrap();
-                    let stray: Token<'_, TestLang> =
-                        TokenReader::peek(&mut reader, &st).unwrap();
-                    reader.move_past(&stray, true);
+                    // The skip target rides on the cause: no re-peek.
+                    <dyn TokenReader<'_, TestLang>>::move_to_position(&mut reader, &after);
                 }
                 other => break other,
             }
@@ -4396,15 +4557,19 @@ mod tests {
                 Ok(Box::new(NodesParser::new(stop).with_child_states(child_states)))
             }
 
-            fn make_group_parser<'p>(
+            fn make_group_parser<'p, 's>(
                 &'p self,
-                open_span: Span,
+                open: &Token<'s, DriveLang>,
                 rule: Arc<GroupRule<DriveLang>>,
                 child_states: ChildStateSpec<'p, DriveLang>,
             ) -> Result<Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'p>, ParseError>
+            where
+                's: 'p,
             {
                 self.group_parsers.fetch_add(1, Ordering::Relaxed);
-                Ok(Box::new(GroupParser::new(open_span, rule).with_child_states(child_states)))
+                Ok(Box::new(
+                    GroupParser::new(open.clone(), rule).with_child_states(child_states),
+                ))
             }
 
             fn make_invocation_parser<'a, 's>(
