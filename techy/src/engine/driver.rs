@@ -62,7 +62,7 @@ use crate::error::{DiagnosticData, Diagnostics, ParseError, Recovery};
 use crate::node::{BuildId, NodeKind};
 use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{
-    IntoSourceResolver, Source, SourceOrigin, SourceResolver, SourceSpan, Span,
+    IntoSourceResolver, Source, SourceOrigin, SourceResolver, SourceSpan,
 };
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
@@ -298,9 +298,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// itself); a preset may return a callable-shaped kind (FLM's paragraph
     /// constructs) without any core change.
     ///
-    /// `source_content` is the content of the source being parsed — the bytes the
-    /// token's span indexes into — so a callable-shaped kind can record the break's
-    /// actual spelling (name-as-written) as owned node data.
+    /// `break_span` is the paragraph-break token's span, as the reader answers it:
+    /// its range ([`span`](crate::source::SourceSpan::span)) is what a span-backed
+    /// kind records, and its text ([`content`](crate::source::SourceSpan::content))
+    /// is what a callable-shaped kind records as the break's actual spelling
+    /// (name-as-written, owned node data).
     ///
     /// **Constraint:** the kind is staged with *no children*, so a callable-shaped
     /// kind must carry no argument regions and no slots — the builder's region-tiling
@@ -317,15 +319,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// whitespace-as-chars default requires no computation that could fail.
     /// Embedding or binding code whose implementation can still fail should report
     /// the failure through the embedding's own channel and answer the default node
-    /// (`NodeKind::chars(token.span)`).
+    /// (`NodeKind::chars(break_span.span())`).
     fn make_paragraph_break_node(
         &self,
         state: &ParsingState<L>,
-        token: &Token<'_, L>,
-        source_content: &str,
+        break_span: &SourceSpan<L::SourceOrigin>,
     ) -> NodeKind<L> {
-        let _ = (state, source_content);
-        NodeKind::chars(token.span)
+        let _ = state;
+        NodeKind::chars(break_span.span())
     }
 
     /// Condition refinement: replace a condition payload
@@ -577,7 +578,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     }
 
     /// The factory producing the parser for one group descent (the consumed
-    /// `GroupOpen` token's facts: open span and resolved rule) — a fresh boxed parser
+    /// `GroupOpen` token and its resolved rule) — a fresh boxed parser
     /// per descent. Reached through [`ParseContext::parse_group`](crate::constructs::ParseContext::parse_group) at every group
     /// descent site.
     ///
@@ -596,9 +597,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// implementation wraps its parser in `Ok(...)` and that is the only change.
     // The decided factory signature, as for `make_nodes_parser`.
     #[allow(clippy::type_complexity)]
-    fn make_group_parser<'p>(
+    fn make_group_parser<'p, 's>(
         &'p self,
-        open_span: Span,
+        open: &Token<'s, L>,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
     ) -> Result<
@@ -607,8 +608,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     >
     where
         L::InvocationSyntax: FromInvocation<L>,
+        's: 'p,
     {
-        Ok(Box::new(GroupParser::new(open_span, rule).with_child_states(child_states)))
+        Ok(Box::new(
+            GroupParser::new(open.clone(), rule).with_child_states(child_states),
+        ))
     }
 
     /// The interception point over

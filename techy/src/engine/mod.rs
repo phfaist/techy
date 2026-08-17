@@ -993,16 +993,17 @@ mod tests {
     #[test]
     fn default_paragraph_break_node_is_spanned_whitespace_chars() {
         let st = state();
-        let token: Token<'static, PlainLang> =
-            Token::new(TokenKind::ParagraphBreak, Span::new(3, 5), Span::new(1, 3));
+        let source: Arc<crate::source::Source> =
+            Arc::new(crate::source::Source::new("x  \n\nz"));
+        let break_span = crate::source::SourceSpan::new(&source, 3..5);
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
-        let kind = driver.make_paragraph_break_node(&st, &token, "x  \n\nz");
+        let kind: NodeKind<PlainLang> =
+            driver.make_paragraph_break_node(&st, &break_span);
         match kind {
             NodeKind::Chars { content, .. } => {
-                // Span-backed over the full token span (newlines included), per the
+                // Span-backed over the full break span (newlines included), per the
                 // whitespace-as-chars invariant ([§dd-dr:nodes]).
                 assert!(!content.is_owned());
-                let source: crate::source::Source = crate::source::Source::new("x  \n\nz");
                 assert_eq!(content.resolve(&source), "\n\n");
             }
             other => panic!("expected a Chars kind, got {:?}", other),

@@ -25,14 +25,14 @@ use crate::constructs::{FromInvocation, Invocation};
 use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
-use crate::source::{IntoSourceResolver, Source, SourceResolver};
+use crate::source::{IntoSourceResolver, Source, SourceResolver, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{
     CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
     ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
     TokenRulesOverrides, WhitespaceOverrides,
 };
-use crate::token::{GroupRule, StdTokenReader, Token, TokenReader};
+use crate::token::{GroupRule, StdTokenReader, Token, TokenKind, TokenReader};
 
 use super::{
     Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeLang,
@@ -251,31 +251,38 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
 /// the given [`ParagraphBreakStyle`] — the core default whitespace `Chars` shape,
 /// or a `Specials`-formed `Callable` named by the actual whitespace run (see
 /// [`ParagraphBreakStyle::Specials`] for the exact contract; the stamped spec is
-/// the canonical [`ParagraphBreakSpec`]). `source_content` is the parsed source's
-/// content — the bytes the token's span indexes into — which the `Specials` shape
-/// records its name-as-written from.
+/// the canonical [`ParagraphBreakSpec`]). `break_span` is the break token's span, as
+/// the reader answers it — its text is what the `Specials` shape records its
+/// name-as-written from.
 ///
-/// **Parse-side only**: the returned kind is built around a live token (the
-/// span-backed `Chars` shape resolves against the token's source; the node is
+/// **Parse-side only**: the returned kind is built around a live break span (the
+/// span-backed `Chars` shape resolves against the break's own source; the node is
 /// staged childless by the core). Post-parse synthesis of paragraph-break-like
-/// material stages `Chars` nodes directly and never mints tokens.
+/// material stages `Chars` nodes directly.
 pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
     style: ParagraphBreakStyle,
     state: &ParsingState<LLL>,
-    token: &Token<'_, LLL>,
-    source_content: &str,
+    break_span: &SourceSpan<LLL::SourceOrigin>,
 ) -> NodeKind<LLL> {
     let _ = state;
     match style {
-        ParagraphBreakStyle::Chars => NodeKind::chars(token.span),
+        ParagraphBreakStyle::Chars => NodeKind::chars(break_span.span()),
         // The canonical ZST is minted per break rather than cached: the
         // allocation is negligible (once per paragraph break, cold next to a
         // parse), and identity is type identity (downcast), so distinct `Arc`s
         // are indistinguishable to consumers.
         ParagraphBreakStyle::Specials => {
             let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(ParagraphBreakSpec);
-            // Name-as-written: the actual whitespace run under the token's span.
-            let name = &source_content[token.span.range()];
+            // Name-as-written: the actual whitespace run the break span covers.
+            let name = break_span.content();
+            // The synthetic trigger token the standard constructor reads: the break
+            // token this hook was called for, rebuilt from its span. (The invocation
+            // bundle still carries a token in this stage of the token rework.)
+            let token: Token<'_, LLL> = Token::new(
+                TokenKind::ParagraphBreak,
+                break_span.span(),
+                Span::empty(break_span.start()),
+            );
             // The preset's specials staging site consults the standard
             // constructor ([`FromInvocation`]) like every std site — over a
             // synthetic invocation bundling the break token — so a family
@@ -285,7 +292,7 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
                 callable_type: LLL::CallableTypeId::specials_callable(),
                 name,
                 spec: &spec,
-                token,
+                token: &token,
             };
             let invocation_syntax = LLL::InvocationSyntax::from_invocation(&invocation);
             NodeKind::callable(CallableData {
@@ -467,10 +474,9 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     fn make_paragraph_break_node(
         &self,
         state: &ParsingState<LLL>,
-        token: &Token<'_, LLL>,
-        source_content: &str,
+        break_span: &SourceSpan<LLL::SourceOrigin>,
     ) -> NodeKind<LLL> {
-        make_paragraph_break_node(self.paragraph_break_style, state, token, source_content)
+        make_paragraph_break_node(self.paragraph_break_style, state, break_span)
     }
 
     /// One-line delegation to the [`math_group_interior_delta`] behavior function
@@ -690,20 +696,16 @@ mod tests {
 
     #[test]
     fn paragraph_break_pillar_is_the_driver_behavior() {
-        use crate::source::Span;
-        use crate::token::TokenKind;
-
         let state = ParsingState::<Latexlike>::lang_initial().expect("seed state");
-        let content = "a\n \t\nb";
-        let token: Token<'static, Latexlike> =
-            Token::new(TokenKind::ParagraphBreak, Span::new(1, 5), Span::empty(1));
+        let source: Arc<Source> = Arc::new(Source::new("a\n \t\nb"));
+        let break_span = SourceSpan::new(&source, 1..5);
 
         let chars =
-            make_paragraph_break_node(ParagraphBreakStyle::Chars, &state, &token, content);
+            make_paragraph_break_node(ParagraphBreakStyle::Chars, &state, &break_span);
         assert!(matches!(chars, NodeKind::Chars { .. }));
 
         let specials =
-            make_paragraph_break_node(ParagraphBreakStyle::Specials, &state, &token, content);
+            make_paragraph_break_node(ParagraphBreakStyle::Specials, &state, &break_span);
         let NodeKind::Callable(data) = specials else {
             panic!("expected a Callable kind")
         };
