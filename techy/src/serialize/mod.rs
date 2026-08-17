@@ -76,9 +76,11 @@
 //! types uses the [`DispatchingSerdeDriver`], whose reading side dispatches on the
 //! entry's identifier through registered [`ObjectReader`]s and
 //! [`IdentifierResolver`]s. Reads treat everything as untrusted input: a malformed
-//! segment, a reference out of range or into the wrong table, a reference cycle, or
-//! an unknown identifier is an error naming the culprit — never a panic — and a
-//! failed absorption leaves the session as it was.
+//! segment, a reference out of range or into the wrong table, a reference cycle, an
+//! unknown identifier, or a value nesting deeper than the bound
+//! ([`SerialValue::MAX_NESTING_DEPTH`], checked before any value is walked) is an
+//! error naming the culprit — never a panic — and a failed absorption leaves the
+//! session as it was.
 //!
 //! **Cargo features.** Everything in this module is unconditional plain Rust with no
 //! external dependency (`no_std` + `alloc`): sessions produce and absorb in-memory

@@ -727,6 +727,148 @@ fn compact_rendering_round_trips_every_variant() {
     assert_eq!(postcard::from_bytes::<Holder>(&bytes).unwrap(), holder);
 }
 
+// --- the nesting bound through serde -----------------------------------------------------------
+
+/// A value at the bound reads through JSON, postcard, and the bridge; one level deeper
+/// is the nesting error in all three — checked on the way down, so a hostile depth
+/// far beyond what the stack could take (100 000 levels) is refused without overflow
+/// in the format that has no recursion limit of its own (postcard) and in JSON.
+#[test]
+fn a_value_nesting_too_deep_is_refused_by_every_reader() {
+    use super::tests::{nested_lists, nested_maps};
+    const LIMIT: usize = SerialValue::MAX_NESTING_DEPTH;
+    let message = SerialValueError::NestingTooDeep { limit: LIMIT }.to_string();
+
+    // At the bound: lists and maps, ending in a leaf and in a reserved object (a
+    // table position, which counts no level of its own though it renders as an
+    // object in JSON).
+    for value in [
+        nested_lists(LIMIT, SerialValue::Null),
+        nested_maps(LIMIT, index(1, 2)),
+        nested_lists(LIMIT - 1, map([])),
+        nested_maps(LIMIT - 1, list([SerialValue::Bytes(Vec::from([1]))])),
+    ] {
+        assert_eq!(value.nesting_depth(), LIMIT);
+        assert_eq!(serde_json::from_str::<SerialValue>(&json(&value)).unwrap(), value);
+        let bytes = postcard::to_allocvec(&value).unwrap();
+        assert_eq!(postcard::from_bytes::<SerialValue>(&bytes).unwrap(), value);
+        assert_eq!(from_value::<SerialValue>(&value).unwrap(), value);
+    }
+    // One level deeper: refused by every reader with the nesting error.
+    for value in [
+        nested_lists(LIMIT + 1, SerialValue::Null),
+        nested_maps(LIMIT + 1, index(1, 2)),
+        nested_lists(LIMIT, map([])),
+        nested_lists(LIMIT, list([])),
+    ] {
+        assert_eq!(value.nesting_depth(), LIMIT + 1);
+        let error = serde_json::from_str::<SerialValue>(&json(&value)).unwrap_err().to_string();
+        assert!(error.contains(&message), "{error}");
+        let error = postcard::from_bytes::<SerialValue>(&postcard::to_allocvec(&value).unwrap()).unwrap_err();
+        assert!(matches!(error, postcard::Error::SerdeDeCustom), "{error:?}");
+        assert_eq!(from_value::<SerialValue>(&value), Err(SerialValueError::Custom(message.clone())));
+    }
+
+    // Far beyond the bound, in the input the reader sees, without ever building the
+    // value: JSON text — an error (ours, or the JSON reader's own recursion limit,
+    // which is deeper than the bound); postcard bytes — ours.
+    const HOSTILE: usize = 100_000;
+    let mut text = String::new();
+    for _ in 0..HOSTILE {
+        text.push('[');
+    }
+    text.push_str("null");
+    for _ in 0..HOSTILE {
+        text.push(']');
+    }
+    assert!(serde_json::from_str::<SerialValue>(&text).is_err());
+    let text = format!("{}null{}", "{\"k\":".repeat(HOSTILE), "}".repeat(HOSTILE));
+    assert!(serde_json::from_str::<SerialValue>(&text).is_err());
+    // Between the bound and the JSON reader's own limit, the error is ours.
+    let text = format!("{}null{}", "[".repeat(100), "]".repeat(100));
+    let error = serde_json::from_str::<SerialValue>(&text).unwrap_err().to_string();
+    assert!(error.contains(&message), "{error}");
+
+    // The compact encoding of nested lists is the `List` variant tag and a length of
+    // one, repeated, then the `Null` tag — pinned on a small value, then repeated.
+    let three = postcard::to_allocvec(&nested_lists(3, SerialValue::Null)).unwrap();
+    assert_eq!(three, [5, 1, 5, 1, 5, 1, 0]);
+    let mut bytes = Vec::with_capacity(2 * HOSTILE + 1);
+    for _ in 0..HOSTILE {
+        bytes.extend_from_slice(&[5, 1]);
+    }
+    bytes.push(0);
+    let error = postcard::from_bytes::<SerialValue>(&bytes).unwrap_err();
+    assert!(matches!(error, postcard::Error::SerdeDeCustom), "{error:?}");
+    // Nested maps likewise (`Map` tag, one entry, key `k`, value…).
+    let three = postcard::to_allocvec(&nested_maps(3, SerialValue::Null)).unwrap();
+    assert_eq!(three, [6, 1, 1, b'k', 6, 1, 1, b'k', 6, 1, 1, b'k', 0]);
+    let mut bytes = Vec::with_capacity(4 * HOSTILE + 1);
+    for _ in 0..HOSTILE {
+        bytes.extend_from_slice(&[6, 1, 1, b'k']);
+    }
+    bytes.push(0);
+    let error = postcard::from_bytes::<SerialValue>(&bytes).unwrap_err();
+    assert!(matches!(error, postcard::Error::SerdeDeCustom), "{error:?}");
+}
+
+/// A segment read through serde is bounded the same way: its own four levels count,
+/// so an entry deeper than `MAX_NESTING_DEPTH - 4` is refused — from JSON and from
+/// postcard — and the segment's `Deserialize` never sees the value.
+#[test]
+fn a_segment_with_an_entry_nesting_too_deep_is_refused_by_serde() {
+    use super::engine::MAX_ENTRY_NESTING_DEPTH;
+    use super::tests::nested_lists;
+    use super::Segment;
+    fn segment_json(entry: &SerialValue) -> String {
+        format!(
+            r#"{{"version":1,"meta":{{}},"tables":[{{"name":"leaves","table":0,"start":0,"entries":[{}]}}]}}"#,
+            json(entry)
+        )
+    }
+    let at_bound = nested_lists(MAX_ENTRY_NESTING_DEPTH, SerialValue::Null);
+    let segment: Segment = serde_json::from_str(&segment_json(&at_bound)).unwrap();
+    assert_eq!(segment.tables()[0].entries()[0], at_bound);
+    let bytes = postcard::to_allocvec(&segment).unwrap();
+    assert_eq!(postcard::from_bytes::<Segment>(&bytes).unwrap(), segment);
+
+    let too_deep = nested_lists(MAX_ENTRY_NESTING_DEPTH + 1, SerialValue::Null);
+    let error = serde_json::from_str::<Segment>(&segment_json(&too_deep)).unwrap_err().to_string();
+    assert!(error.contains("nests deeper than 64 levels"), "{error}");
+    // The same segment value through postcard: the value's own encoding renders it
+    // (no session ever accepts it, so the bytes are made from the value directly).
+    let value = segment.to_serial_value();
+    let deep_value = match value {
+        SerialValue::Map(mut top) => {
+            let SerialValue::List(tables) = &mut top[2].1 else { panic!("tables") };
+            let SerialValue::Map(table) = &mut tables[0] else { panic!("table") };
+            table[3].1 = SerialValue::List(Vec::from([too_deep]));
+            SerialValue::Map(top)
+        }
+        _ => panic!("a segment is a map"),
+    };
+    let bytes = postcard::to_allocvec(&deep_value).unwrap();
+    let error = postcard::from_bytes::<Segment>(&bytes).unwrap_err();
+    assert!(matches!(error, postcard::Error::SerdeDeCustom), "{error:?}");
+}
+
+/// The `meta` object is always present by contract: a segment without it is refused
+/// on reading (through serde and from a value), before any session sees it.
+#[test]
+fn a_segment_without_meta_is_refused() {
+    use super::Segment;
+    let without = r#"{"version":1,"tables":[{"name":"leaves","table":0,"start":0,"entries":[]}]}"#;
+    let error = serde_json::from_str::<Segment>(without).unwrap_err().to_string();
+    assert!(error.contains("missing key `meta`"), "{error}");
+    let value: SerialValue = serde_json::from_str(without).unwrap();
+    assert_eq!(Segment::from_serial_value(&value), Err(SerialValueError::MissingField { name: "meta" }));
+    // With an empty `meta` object the same segment reads.
+    let with = r#"{"version":1,"meta":{},"tables":[{"name":"leaves","table":0,"start":0,"entries":[]}]}"#;
+    let segment: Segment = serde_json::from_str(with).unwrap();
+    assert_eq!(segment.meta().profile(), None);
+    assert_eq!(serde_json::to_string(&segment).unwrap(), with);
+}
+
 // --- SerialValueError as a serde error -------------------------------------------------------------
 
 #[test]

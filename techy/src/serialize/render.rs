@@ -29,7 +29,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use serde::de::{self, Deserialize, Deserializer, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
+use serde::de::{
+    self, Deserialize, DeserializeSeed, Deserializer, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor,
+};
 use serde::ser::{self, Serialize, SerializeMap, Serializer};
 
 use super::base64;
@@ -195,16 +197,45 @@ impl Serialize for CompactIndex {
 /// for both forms. Everything read is untrusted input: a malformed rendering — a bad
 /// base64 text, a malformed `$index` pair, an object key beginning with `$` that is
 /// not one of the two reserved forms, a floating-point number, an integer outside
-/// `i64` — is an error.
+/// `i64` — is an error, and so is a value nesting deeper than
+/// [`SerialValue::MAX_NESTING_DEPTH`] (the depth is checked as the value is read, so
+/// a hostile input cannot exhaust the stack whatever the format).
 impl<'de> Deserialize<'de> for SerialValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_newtype_struct(VALUE_SENTINEL, RenderingVisitor)
+        ValueAt { depth: 0 }.deserialize(deserializer)
+    }
+}
+
+/// A `SerialValue` being read at nesting depth `depth` — the number of lists and maps
+/// enclosing it. The seed carries the depth into the nested reads, so that the bound
+/// [`SerialValue::MAX_NESTING_DEPTH`] is checked as each list or map is entered, on
+/// the way down, in every format alike.
+#[derive(Clone, Copy)]
+struct ValueAt {
+    depth: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for ValueAt {
+    type Value = SerialValue;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<SerialValue, D::Error> {
+        deserializer.deserialize_newtype_struct(VALUE_SENTINEL, RenderingVisitor(self))
+    }
+}
+
+/// Entering a list or a map whose enclosing depth is `depth`: the depth of its items,
+/// or the nesting error when the bound is exceeded.
+fn enter<E: de::Error>(depth: usize) -> Result<usize, E> {
+    if depth >= SerialValue::MAX_NESTING_DEPTH {
+        Err(E::custom(SerialValueError::NestingTooDeep { limit: SerialValue::MAX_NESTING_DEPTH }))
+    } else {
+        Ok(depth + 1)
     }
 }
 
 /// Unwraps the sentinel newtype struct (JSON and the common binary formats read it as
 /// its content; the bridge intercepts it) and reads the rendering the format uses.
-struct RenderingVisitor;
+struct RenderingVisitor(ValueAt);
 
 impl<'de> Visitor<'de> for RenderingVisitor {
     type Value = SerialValue;
@@ -215,15 +246,15 @@ impl<'de> Visitor<'de> for RenderingVisitor {
 
     fn visit_newtype_struct<D: Deserializer<'de>>(self, deserializer: D) -> Result<SerialValue, D::Error> {
         if deserializer.is_human_readable() {
-            deserializer.deserialize_any(CanonicalVisitor)
+            deserializer.deserialize_any(CanonicalVisitor(self.0))
         } else {
-            deserializer.deserialize_enum(VALUE_SENTINEL, COMPACT_VARIANTS, CompactVisitor)
+            deserializer.deserialize_enum(VALUE_SENTINEL, COMPACT_VARIANTS, CompactVisitor(self.0))
         }
     }
 }
 
 /// Reads the canonical rendering from a self-describing format.
-struct CanonicalVisitor;
+struct CanonicalVisitor(ValueAt);
 
 impl<'de> Visitor<'de> for CanonicalVisitor {
     type Value = SerialValue;
@@ -241,7 +272,7 @@ impl<'de> Visitor<'de> for CanonicalVisitor {
     }
 
     fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<SerialValue, D::Error> {
-        SerialValue::deserialize(deserializer)
+        self.0.deserialize(deserializer)
     }
 
     fn visit_bool<E: de::Error>(self, v: bool) -> Result<SerialValue, E> {
@@ -284,39 +315,54 @@ impl<'de> Visitor<'de> for CanonicalVisitor {
         Ok(SerialValue::Bytes(v))
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<SerialValue, A::Error> {
-        let mut items = Vec::with_capacity(cautious_capacity(seq.size_hint()));
-        while let Some(item) = seq.next_element::<SerialValue>()? {
-            items.push(item);
-        }
-        Ok(SerialValue::List(items))
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<SerialValue, A::Error> {
+        read_list(self.0.depth, seq)
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<SerialValue, A::Error> {
         let mut entries: Vec<(String, SerialValue)> =
             Vec::with_capacity(cautious_capacity(map.size_hint()));
-        let mut first = true;
+        // The depth of the entries' values, once the object is known to be a map (the
+        // reserved objects stand for values that are not lists or maps and count no
+        // level; an empty object is a map).
+        let mut inner: Option<usize> = None;
         while let Some(key) = map.next_key::<String>()? {
-            if first {
-                first = false;
-                if key == BYTES_KEY {
-                    let text: String = map.next_value()?;
-                    let bytes = base64::decode(&text).map_err(de::Error::custom)?;
-                    expect_end(&mut map, BYTES_KEY)?;
-                    return Ok(SerialValue::Bytes(bytes));
+            let inner = match inner {
+                Some(inner) => inner,
+                None => {
+                    if key == BYTES_KEY {
+                        let text: String = map.next_value()?;
+                        let bytes = base64::decode(&text).map_err(de::Error::custom)?;
+                        expect_end(&mut map, BYTES_KEY)?;
+                        return Ok(SerialValue::Bytes(bytes));
+                    }
+                    if key == INDEX_KEY {
+                        let (table, index): (u32, u32) = map.next_value()?;
+                        expect_end(&mut map, INDEX_KEY)?;
+                        return Ok(SerialValue::Index { table: TableId::new(table), index });
+                    }
+                    *inner.insert(enter(self.0.depth)?)
                 }
-                if key == INDEX_KEY {
-                    let (table, index): (u32, u32) = map.next_value()?;
-                    expect_end(&mut map, INDEX_KEY)?;
-                    return Ok(SerialValue::Index { table: TableId::new(table), index });
-                }
-            }
+            };
             check_map_key(&key).map_err(de::Error::custom)?;
-            let value: SerialValue = map.next_value()?;
+            let value = map.next_value_seed(ValueAt { depth: inner })?;
             entries.push((key, value));
+        }
+        if inner.is_none() {
+            enter::<A::Error>(self.0.depth)?;
         }
         Ok(SerialValue::Map(entries))
     }
+}
+
+/// Read a list whose enclosing depth is `depth`: the items at the next depth.
+fn read_list<'de, A: SeqAccess<'de>>(depth: usize, mut seq: A) -> Result<SerialValue, A::Error> {
+    let inner = enter(depth)?;
+    let mut items = Vec::with_capacity(cautious_capacity(seq.size_hint()));
+    while let Some(item) = seq.next_element_seed(ValueAt { depth: inner })? {
+        items.push(item);
+    }
+    Ok(SerialValue::List(items))
 }
 
 /// An `Int` outside `i64` in the rendering: the same message as the bridge's error.
@@ -353,7 +399,7 @@ pub(super) fn check_map_key(key: &str) -> Result<(), SerialValueError> {
 }
 
 /// Reads the compact rendering: the externally tagged enum.
-struct CompactVisitor;
+struct CompactVisitor(ValueAt);
 
 impl<'de> Visitor<'de> for CompactVisitor {
     type Value = SerialValue;
@@ -373,8 +419,8 @@ impl<'de> Visitor<'de> for CompactVisitor {
             CompactTag::Int => SerialValue::Int(variant.newtype_variant()?),
             CompactTag::Str => SerialValue::Str(variant.newtype_variant()?),
             CompactTag::Bytes => SerialValue::Bytes(variant.newtype_variant::<CompactBytesOwned>()?.0),
-            CompactTag::List => SerialValue::List(variant.newtype_variant()?),
-            CompactTag::Map => SerialValue::Map(variant.newtype_variant::<CompactMapOwned>()?.0),
+            CompactTag::List => variant.newtype_variant_seed(CompactListAt(self.0))?,
+            CompactTag::Map => variant.newtype_variant_seed(CompactMapAt(self.0))?,
             CompactTag::Index => {
                 let CompactIndex { table, index } = variant.newtype_variant()?;
                 SerialValue::Index { table, index }
@@ -457,31 +503,62 @@ impl<'de> Deserialize<'de> for CompactBytesOwned {
     }
 }
 
-/// The `Map` payload of the compact rendering, read as a serde map.
-struct CompactMapOwned(Vec<(String, SerialValue)>);
+/// The `List` payload of the compact rendering, read as a serde sequence at the
+/// enclosing depth it carries.
+struct CompactListAt(ValueAt);
 
-impl<'de> Deserialize<'de> for CompactMapOwned {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct EntriesVisitor;
+impl<'de> DeserializeSeed<'de> for CompactListAt {
+    type Value = SerialValue;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<SerialValue, D::Error> {
+        struct ItemsVisitor(ValueAt);
+
+        impl<'de> Visitor<'de> for ItemsVisitor {
+            type Value = SerialValue;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a sequence of serialized values")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<SerialValue, A::Error> {
+                read_list(self.0.depth, seq)
+            }
+        }
+
+        deserializer.deserialize_seq(ItemsVisitor(self.0))
+    }
+}
+
+/// The `Map` payload of the compact rendering, read as a serde map at the enclosing
+/// depth it carries.
+struct CompactMapAt(ValueAt);
+
+impl<'de> DeserializeSeed<'de> for CompactMapAt {
+    type Value = SerialValue;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<SerialValue, D::Error> {
+        struct EntriesVisitor(ValueAt);
 
         impl<'de> Visitor<'de> for EntriesVisitor {
-            type Value = CompactMapOwned;
+            type Value = SerialValue;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str("a map with string keys")
             }
 
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<CompactMapOwned, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<SerialValue, A::Error> {
+                let inner = enter(self.0.depth)?;
                 let mut entries = Vec::with_capacity(cautious_capacity(map.size_hint()));
-                while let Some((key, value)) = map.next_entry::<String, SerialValue>()? {
+                while let Some(key) = map.next_key::<String>()? {
                     check_map_key(&key).map_err(de::Error::custom)?;
+                    let value = map.next_value_seed(ValueAt { depth: inner })?;
                     entries.push((key, value));
                 }
-                Ok(CompactMapOwned(entries))
+                Ok(SerialValue::Map(entries))
             }
         }
 
-        deserializer.deserialize_map(EntriesVisitor)
+        deserializer.deserialize_map(EntriesVisitor(self.0))
     }
 }
 

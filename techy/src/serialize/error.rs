@@ -79,9 +79,10 @@ pub enum SerializeError {
         cause: Option<SharedCause>,
     },
     /// A value could not be represented in the value model — an integer outside
-    /// `i64`, a floating-point number, a map with non-string keys (the
-    /// [`SerialValueError`] says which); the conversion of a serialized structure or
-    /// of a payload through the serde bridge reported it.
+    /// `i64`, a floating-point number, a map with non-string keys, an entry nesting
+    /// deeper than the bound (the [`SerialValueError`] says which); the conversion of
+    /// a serialized structure or of a payload through the serde bridge reported it,
+    /// or the session refused the entry.
     Value(SerialValueError),
     /// The table handle names no table of the session it was used with — it comes
     /// from another session, or the table at that ordinal is registered with a
@@ -400,8 +401,8 @@ pub enum DeserializeError {
         cause: Option<SharedCause>,
     },
     /// A serialized value has the wrong shape — a value of the wrong kind, a missing,
-    /// unknown, or repeated key, an integer that does not fit, an unknown variant (the
-    /// [`SerialValueError`] says which).
+    /// unknown, or repeated key, an integer that does not fit, an unknown variant, a
+    /// value nesting deeper than the bound (the [`SerialValueError`] says which).
     Value(SerialValueError),
     /// The table handle names no table of the session it was used with — it comes
     /// from another session, or the table at that ordinal is registered with a
@@ -1037,10 +1038,11 @@ impl core::error::Error for RegistrationError {}
 /// (`to_value`/`from_value`, available with the `serde` cargo feature) and the crate's
 /// own conversions of its wire structures report. Writes fail on data the value model
 /// cannot hold — floating-point numbers, integers outside `i64`, maps with non-string
-/// keys or with keys beginning with `$`. Reads treat the value as untrusted input: a value of the wrong kind, an
-/// unknown, missing, or repeated map key, or an unknown enum variant is an error,
-/// never a panic. The type is available without the `serde` feature: the crate's own
-/// conversions use it too.
+/// keys or with keys beginning with `$`, values nesting deeper than the bound. Reads
+/// treat the value as untrusted input: a value of the wrong kind, an unknown,
+/// missing, or repeated map key, an unknown enum variant, or a value nesting deeper
+/// than the bound is an error, never a panic. The type is available without the
+/// `serde` feature: the crate's own conversions use it too.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SerialValueError {
@@ -1100,6 +1102,17 @@ pub enum SerialValueError {
         /// The variant names the enum has.
         expected: &'static [&'static str],
     },
+    /// A value nests deeper than the value model allows: more than `limit` lists and
+    /// maps enclose some part of it (see
+    /// [`SerialValue::MAX_NESTING_DEPTH`](crate::serialize::SerialValue::MAX_NESTING_DEPTH),
+    /// which is `limit`, and how a segment's own structure counts). Reported when a
+    /// value is read through serde, when a segment is converted from its serialized
+    /// form or absorbed by a session, and when a session interns an object whose
+    /// entry would exceed the bound.
+    NestingTooDeep {
+        /// The bound: the greatest nesting depth allowed.
+        limit: usize,
+    },
     /// Any other failure, described in words — what a serde `Serialize` or
     /// `Deserialize` implementation reports through serde's `Error::custom`.
     Custom(String),
@@ -1132,6 +1145,9 @@ impl fmt::Display for SerialValueError {
             SerialValueError::UnknownVariant { name, expected } => {
                 write!(f, "unknown variant `{name}`; expected ")?;
                 write_name_list(f, expected)
+            }
+            SerialValueError::NestingTooDeep { limit } => {
+                write!(f, "the value nests deeper than {limit} levels of lists and maps")
             }
             SerialValueError::Custom(message) => f.write_str(message),
         }

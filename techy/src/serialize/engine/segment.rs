@@ -56,7 +56,10 @@ use super::super::wire::{index_from_serial_value, FromSerialValue, ToSerialValue
 /// rendering that `SerialValue` (see [`SerialValue`]'s rendering), so a segment
 /// encodes through any serde format; in JSON, one segment per line is the canonical
 /// stream rendering (each line an independently valid segment; the stream ends with
-/// the input).
+/// the input). The serialized form is one value and is bounded like every value: it
+/// nests at most [`SerialValue::MAX_NESTING_DEPTH`] levels, its own four levels (the
+/// segment map, `tables`, a table's map, `entries`) counted — the session refuses to
+/// intern an entry that would exceed the bound, and to absorb one.
 #[derive(Clone, Debug, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub struct Segment {
     #[serial(name = "version")]
@@ -138,6 +141,28 @@ pub(super) struct WireEntry {
     pub(super) data: SerialValue,
 }
 
+/// The greatest nesting depth of an entry's stored form: a segment's serialized form
+/// nests the stored entries four levels deep (the segment map, its table list, a
+/// table's map, its entry list — see [`Segment`]'s serialized form), and the whole
+/// must stay within [`SerialValue::MAX_NESTING_DEPTH`]. The session refuses to
+/// intern an entry nesting deeper (the writer learns at once, instead of emitting a
+/// segment no reader accepts) and to absorb one.
+pub(crate) const MAX_ENTRY_NESTING_DEPTH: usize = SerialValue::MAX_NESTING_DEPTH - ENTRY_WRAPPING_DEPTH;
+
+/// The levels of nesting a segment's serialized form adds around a stored entry.
+const ENTRY_WRAPPING_DEPTH: usize = 4;
+
+/// The nesting error a stored entry deeper than [`MAX_ENTRY_NESTING_DEPTH`] gets:
+/// the bound named is the value model's, which the entry's stored form exceeds once
+/// the segment's own wrapping is counted.
+pub(crate) fn check_entry_nesting(stored: &SerialValue) -> Result<(), SerialValueError> {
+    if stored.nesting_depth() > MAX_ENTRY_NESTING_DEPTH {
+        Err(SerialValueError::NestingTooDeep { limit: SerialValue::MAX_NESTING_DEPTH })
+    } else {
+        Ok(())
+    }
+}
+
 impl Segment {
     /// The version of the segment layout this crate writes and reads. A segment
     /// declaring any other version is rejected.
@@ -194,14 +219,20 @@ impl Segment {
     }
 
     /// Read a segment from its serialized form (see the type documentation). The value
-    /// is untrusted input: a value of the wrong shape is an error. Reading validates
-    /// the shape only; the version and the contents are validated when the segment is
-    /// pushed into a session.
+    /// is untrusted input: a value of the wrong shape is an error, and so is a value
+    /// nesting deeper than [`SerialValue::MAX_NESTING_DEPTH`] (checked first, without
+    /// recursion, so that a hostile depth is refused before anything walks the value).
+    /// Reading validates the shape and the depth only; the version and the contents
+    /// are validated when the segment is pushed into a session.
     ///
     /// # Errors
     ///
-    /// The [`SerialValueError`] describing the shape mismatch.
+    /// [`SerialValueError::NestingTooDeep`] for a value nesting deeper than the bound;
+    /// otherwise the [`SerialValueError`] describing the shape mismatch.
     pub fn from_serial_value(value: &SerialValue) -> Result<Segment, SerialValueError> {
+        if value.nesting_depth() > SerialValue::MAX_NESTING_DEPTH {
+            return Err(SerialValueError::NestingTooDeep { limit: SerialValue::MAX_NESTING_DEPTH });
+        }
         FromSerialValue::from_serial_value(value)
     }
 

@@ -21,7 +21,7 @@ use super::super::value::{SerialEntry, SerialIndex, SerialValue, TableId};
 use super::super::wire::{FromSerialValue, ToSerialValue};
 use super::context::{DeserializeContext, SerializeContext};
 use super::driver::{ObjectSerdeDriver, TableHandle};
-use super::segment::{Segment, SegmentMeta, SegmentTable, WireEntry};
+use super::segment::{check_entry_nesting, Segment, SegmentMeta, SegmentTable, WireEntry};
 
 /// A serialization session: the tables of objects, read and write unified.
 ///
@@ -403,9 +403,13 @@ impl<L: SerializableLang> SerdeSession<L> {
     ///
     /// The handle is not one of this session's ([`SerializeError::UnknownTable`]);
     /// the driver's failure, wrapped in [`SerializeError::InTable`]; the object refers
-    /// back to itself ([`SerializeError::ReferenceCycle`]); the nesting exceeds the
-    /// descent limit ([`SerializeError::DescentLimitExceeded`]); the table is full
-    /// ([`SerializeError::TableFull`]).
+    /// back to itself ([`SerializeError::ReferenceCycle`]); the nesting of interning
+    /// calls exceeds the descent limit ([`SerializeError::DescentLimitExceeded`]);
+    /// the entry the driver produced nests too deep for a segment
+    /// ([`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
+    /// in [`SerializeError::Value`], wrapped in `InTable`; see
+    /// [`SerialValue::MAX_NESTING_DEPTH`] — the object is not interned then); the
+    /// table is full ([`SerializeError::TableFull`]).
     pub fn intern<D: ObjectSerdeDriver<L>>(
         &mut self,
         table: TableHandle<D>,
@@ -467,6 +471,10 @@ impl<L: SerializableLang> SerdeSession<L> {
             }
             None => WireEntry { identifier: entry.identifier, data: entry.data }.to_serial_value()?,
         };
+        // The nesting bound: an entry whose stored form nests too deep for a segment
+        // is refused here, where the culprit is known, instead of being emitted into a
+        // segment no reader accepts.
+        check_entry_nesting(&wire).map_err(|error| SerializeError::from(error).in_table(name))?;
         let position = u32::try_from(state.slots.len()).map_err(|_| SerializeError::TableFull { table: name })?;
         if position == u32::MAX {
             return Err(SerializeError::TableFull { table: name });
@@ -601,7 +609,12 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// [`UnknownWriterTable`](DeserializeError::UnknownWriterTable) for a segment that
     /// does not fit the session (the last two also for a main entry naming a table
     /// the directory does not list, or a position beyond the table's end after the
-    /// push: [`IndexOutOfRange`](DeserializeError::IndexOutOfRange)); then, from
+    /// push: [`IndexOutOfRange`](DeserializeError::IndexOutOfRange)); an entry
+    /// nesting too deep for a segment
+    /// ([`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
+    /// in [`Value`](DeserializeError::Value), wrapped in
+    /// [`InEntry`](DeserializeError::InEntry) — checked without recursion before any
+    /// entry is walked; see [`SerialValue::MAX_NESTING_DEPTH`]); then, from
     /// rebuilding the entries, a driver's failure
     /// wrapped in [`InEntry`](DeserializeError::InEntry), a reference cycle
     /// ([`ReferenceCycle`](DeserializeError::ReferenceCycle)), a reference beyond a
@@ -657,6 +670,16 @@ impl<L: SerializableLang> SerdeSession<L> {
             match fits {
                 Some(end) if end < u32::MAX => {}
                 _ => return Err(DeserializeError::TableFull { table: table.name }),
+            }
+            // The nesting bound, checked without recursion before any entry is walked
+            // (translated, parsed, or handed to a driver): every entry of this
+            // segment must fit a segment's serialized form.
+            for (offset, entry) in entries.iter().enumerate() {
+                if let Err(error) = check_entry_nesting(entry) {
+                    // `offset < entries.len()`, which fits `u32` (checked above).
+                    let position = len.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX));
+                    return Err(DeserializeError::from(error).in_entry(table.name, position, None));
+                }
             }
             planned.push((ordinal, entries));
         }

@@ -423,6 +423,15 @@ fn a_diagnostic_value_renders_through_serde_as_its_embedding() {
     let error = serde_json::from_str::<DiagnosticValue>(r#"{"$index":[0,1]}"#).unwrap_err();
     assert!(error.to_string().contains("kind `index` at its root"), "{error}");
     assert!(crate::serialize::from_value::<DiagnosticValue>(&SerialValue::Bytes(vec![])).is_err());
+    // The nesting bound of the value model applies (the value is read as a
+    // `SerialValue` first): one level beyond it is refused, however it is encoded.
+    let limit = SerialValue::MAX_NESTING_DEPTH;
+    let text = format!("{}null{}", "[".repeat(limit + 1), "]".repeat(limit + 1));
+    let error = serde_json::from_str::<DiagnosticValue>(&text).unwrap_err().to_string();
+    assert!(error.contains("nests deeper than 64 levels"), "{error}");
+    let text = format!("{}null{}", "[".repeat(limit), "]".repeat(limit));
+    let at_bound = serde_json::from_str::<DiagnosticValue>(&text).unwrap();
+    assert_eq!(SerialValue::from(&at_bound).nesting_depth(), limit);
 }
 
 // --- hostile input ------------------------------------------------------------------------

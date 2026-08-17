@@ -221,8 +221,8 @@ pub mod serial_bytes {
 /// [`List`](SerialValue::List); structs → [`Map`](SerialValue::Map) in field order;
 /// maps → `Map` (keys must be strings — `char` keys, unit enum variants, and newtype
 /// structs wrapping a string count as their string form; anything else is an error —
-/// and no key, field name, or variant name may begin with `$`, the value model's
-/// reserved prefix);
+/// and no key, field name, or variant name used as a map key may begin with `$`, the
+/// value model's reserved prefix);
 /// newtype structs → their content (except the table-position sentinel, which becomes
 /// [`Index`](SerialValue::Index)); enums in serde's externally tagged form (the
 /// variant name, then its data) — a unit variant → `Str` of the variant name, a
@@ -244,7 +244,7 @@ pub mod serial_bytes {
 /// [`SerialValueError::IntegerOutOfRange`] for an integer outside `i64`;
 /// [`SerialValueError::NonStringMapKey`] for a map key that is not a string;
 /// [`SerialValueError::ReservedMapKey`] for a map key, field name, or variant name
-/// beginning with `$`; a
+/// used as a map key beginning with `$`; a
 /// [`SerialValueError::Custom`] for whatever the type's own `Serialize` impl reports.
 pub fn to_value<T: Serialize + ?Sized>(value: &T) -> Result<SerialValue, SerialValueError> {
     value.serialize(ValueSerializer { human_readable: true })

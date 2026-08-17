@@ -17,7 +17,7 @@ use crate::state::TrivialLang;
 use crate::serialize::{
     DeserializableObject, DeserializeContext, DeserializeError, DispatchingSerdeDriver,
     IdentifierResolver, ObjectReader, ObjectSerdeDriver, RegistrationError, SerdeSession,
-    Segment, SegmentMeta, SerialEntry, SerialIndex, SerialValue, SerialValueError, SerializableLang,
+    Segment, SegmentMeta, SegmentTable, SerialEntry, SerialIndex, SerialValue, SerialValueError, SerializableLang,
     SerializableObject, SerializeContext, SerializeError, TableId,
 };
 
@@ -1127,6 +1127,126 @@ fn a_deep_hostile_chain_hits_the_depth_guard() {
     assert!(cause_is_depth(&err), "{err:?}");
     // The session is still usable after the failed push (rolled back).
     assert_eq!(session.take_segment().tables()[0].entries().len(), 0);
+}
+
+// --- the nesting bound at the segment rim ---------------------------------------------
+
+/// A homogeneous-table object whose entry is `depth` nested lists.
+struct Nested {
+    depth: usize,
+}
+
+crate::serial_index! { pub struct NestedIndex; }
+
+struct NestedDriver;
+
+impl ObjectSerdeDriver<ToyLang> for NestedDriver {
+    type Object = Nested;
+    type Index = NestedIndex;
+
+    fn table_name(&self) -> &'static str {
+        "nested"
+    }
+
+    fn homogeneous_identifier(&self) -> Option<&'static str> {
+        Some("toy.nested")
+    }
+
+    fn serialize_object(
+        &self,
+        nested: &Arc<Nested>,
+        _cx: &mut SerializeContext<'_, ToyLang>,
+    ) -> Result<SerialEntry, SerializeError> {
+        Ok(SerialEntry {
+            identifier: "toy.nested".into(),
+            data: crate::serialize::tests::nested_lists(nested.depth, SerialValue::Null),
+        })
+    }
+
+    fn deserialize_object(
+        &self,
+        entry: &SerialEntry,
+        _cx: &mut DeserializeContext<'_, ToyLang>,
+    ) -> Result<Arc<Nested>, DeserializeError> {
+        Ok(Arc::new(Nested { depth: entry.data.nesting_depth() }))
+    }
+}
+
+/// The nesting error, whichever wrapper the session put around it.
+fn is_nesting_too_deep_write(err: &SerializeError) -> bool {
+    match err {
+        SerializeError::InTable { cause, .. } => is_nesting_too_deep_write(cause),
+        SerializeError::Value(SerialValueError::NestingTooDeep { limit }) => {
+            *limit == SerialValue::MAX_NESTING_DEPTH
+        }
+        _ => false,
+    }
+}
+
+fn is_nesting_too_deep_read(err: &DeserializeError) -> bool {
+    matches!(
+        cause_of(err),
+        DeserializeError::Value(SerialValueError::NestingTooDeep { limit }) if *limit == SerialValue::MAX_NESTING_DEPTH
+    )
+}
+
+/// The writer refuses to intern an entry that would nest too deep for a segment —
+/// where the culprit is known, before anything is emitted — and accepts one at the
+/// bound; the reader refuses such an entry in a segment before walking any entry.
+#[test]
+fn an_entry_nesting_too_deep_is_refused_at_interning_and_at_absorption() {
+    use super::MAX_ENTRY_NESTING_DEPTH;
+    use crate::serialize::tests::nested_lists;
+
+    let mut session = SerdeSession::<ToyLang>::empty();
+    let nested = session.register_table(NestedDriver).unwrap();
+    // At the bound: interned, and the segment's serialized form is exactly at the
+    // value model's bound.
+    let at_bound = session.intern(nested, &Arc::new(Nested { depth: MAX_ENTRY_NESTING_DEPTH })).unwrap();
+    assert_eq!(at_bound.index(), 0);
+    // One level more: refused, nothing interned; the session goes on.
+    let err = session.intern(nested, &Arc::new(Nested { depth: MAX_ENTRY_NESTING_DEPTH + 1 })).unwrap_err();
+    assert!(is_nesting_too_deep_write(&err), "{err:?}");
+    assert!(matches!(&err, SerializeError::InTable { table: "nested", .. }), "{err:?}");
+    assert_eq!(session.table_len(0), 1);
+    let segment = session.take_segment();
+    assert_eq!(segment.tables()[0].entries().len(), 1);
+    assert_eq!(segment.to_serial_value().nesting_depth(), SerialValue::MAX_NESTING_DEPTH);
+
+    // The reader absorbs the segment at the bound…
+    let mut reader = SerdeSession::<ToyLang>::empty();
+    let nested = reader.register_table(NestedDriver).unwrap();
+    reader.push_segment(segment).unwrap();
+    assert_eq!(reader.object(nested, at_bound).unwrap().depth, MAX_ENTRY_NESTING_DEPTH);
+    // …and refuses a hand-built one whose entry nests one level more, or a hostile
+    // depth far beyond the stack's reach, before touching anything: the error
+    // names the entry, and the session is unchanged.
+    for depth in [MAX_ENTRY_NESTING_DEPTH + 1, 2_000] {
+        let deep = nested_lists(depth, SerialValue::Null);
+        let table = SegmentTable::new(String::from("nested"), nested.id(), 1, Vec::from([deep]));
+        let segment = Segment::new(Segment::VERSION, SegmentMeta::default(), Vec::from([table]), None);
+        let err = reader.push_segment(segment).unwrap_err();
+        assert!(is_nesting_too_deep_read(&err), "depth {depth}: {err:?}");
+        assert!(matches!(&err, DeserializeError::InEntry { table: "nested", index: 1, .. }), "{err:?}");
+        assert_eq!(reader.table_len(0), 1);
+    }
+
+    // A heterogeneous table's entry wrapper (`{identifier, data}`) counts as one
+    // level of the entry's stored form.
+    let (mut reader, tables) = full_session();
+    let stored = |data: SerialValue| {
+        SerialValue::Map(Vec::from([
+            (String::from("identifier"), SerialValue::Str("toy.square".into())),
+            (String::from("data"), data),
+        ]))
+    };
+    let deep = stored(nested_lists(MAX_ENTRY_NESTING_DEPTH, SerialValue::Null));
+    let table = SegmentTable::new(String::from("shapes"), tables.shapes.id(), 0, Vec::from([deep]));
+    let err = reader
+        .push_segment(Segment::new(Segment::VERSION, SegmentMeta::default(), Vec::from([table]), None))
+        .unwrap_err();
+    assert!(is_nesting_too_deep_read(&err), "{err:?}");
+    assert!(matches!(&err, DeserializeError::InEntry { table: "shapes", index: 0, .. }), "{err:?}");
 }
 
 #[test]

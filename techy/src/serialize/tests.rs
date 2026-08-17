@@ -309,3 +309,92 @@ fn errors_display() {
     assert_eq!(in_node.to_string(), "while rebuilding node #0 of the tree: deserialization failed: x");
     assert!(in_node.source().is_some());
 }
+
+// --- the nesting bound ------------------------------------------------------------------
+
+/// `depth` lists nested one inside the other around `innermost`, built without
+/// recursion (`0` returns `innermost` itself). Shared by the nesting-bound tests of
+/// the foundation, the engine, and the rendering layer.
+pub(crate) fn nested_lists(depth: usize, innermost: SerialValue) -> SerialValue {
+    let mut value = innermost;
+    for _ in 0..depth {
+        value = SerialValue::List(Vec::from([value]));
+    }
+    value
+}
+
+/// `depth` one-entry maps (key `k`) nested one inside the other around `innermost`.
+pub(crate) fn nested_maps(depth: usize, innermost: SerialValue) -> SerialValue {
+    let mut value = innermost;
+    for _ in 0..depth {
+        value = SerialValue::Map(Vec::from([(String::from("k"), value)]));
+    }
+    value
+}
+
+#[test]
+fn nesting_depth_counts_the_enclosing_lists_and_maps() {
+    assert_eq!(SerialValue::Null.nesting_depth(), 0);
+    assert_eq!(SerialValue::Int(3).nesting_depth(), 0);
+    assert_eq!(SerialValue::Bytes(Vec::from([1u8])).nesting_depth(), 0);
+    assert_eq!(SerialValue::Index { table: TableId::new(0), index: 0 }.nesting_depth(), 0);
+    assert_eq!(SerialValue::List(Vec::new()).nesting_depth(), 1);
+    assert_eq!(SerialValue::Map(Vec::new()).nesting_depth(), 1);
+    assert_eq!(nested_lists(2, SerialValue::Int(1)).nesting_depth(), 2);
+    assert_eq!(nested_maps(3, SerialValue::Null).nesting_depth(), 3);
+    // The deepest branch counts, wherever it sits.
+    let mixed = SerialValue::Map(Vec::from([
+        ("a".into(), SerialValue::Int(1)),
+        ("b".into(), nested_lists(4, SerialValue::Null)),
+        ("c".into(), nested_maps(2, SerialValue::Null)),
+    ]));
+    assert_eq!(mixed.nesting_depth(), 5);
+    // Measured without recursion: a value far deeper than the bound is measured
+    // fine (dropped recursively afterwards, which this depth still permits — a
+    // value's drop is the cost of whoever built it).
+    assert_eq!(nested_lists(2_000, SerialValue::Null).nesting_depth(), 2_000);
+    assert_eq!(SerialValue::MAX_NESTING_DEPTH, 64);
+}
+
+/// A segment's serialized form is checked against the bound before it is walked:
+/// an entry at the greatest depth a segment allows round-trips; one level more is
+/// refused by `from_serial_value` (the whole value, the segment's own four levels
+/// counted) — for a hostile depth far beyond the bound as much as for one level over.
+#[test]
+fn a_segment_value_nesting_too_deep_is_refused_before_it_is_walked() {
+    use super::engine::MAX_ENTRY_NESTING_DEPTH;
+    use super::{Segment, SerialValueError};
+
+    fn segment_value(entry: SerialValue) -> SerialValue {
+        SerialValue::Map(Vec::from([
+            ("version".into(), SerialValue::Int(1)),
+            ("meta".into(), SerialValue::Map(Vec::new())),
+            (
+                "tables".into(),
+                SerialValue::List(Vec::from([SerialValue::Map(Vec::from([
+                    ("name".into(), SerialValue::Str("leaves".into())),
+                    ("table".into(), SerialValue::Int(0)),
+                    ("start".into(), SerialValue::Int(0)),
+                    ("entries".into(), SerialValue::List(Vec::from([entry]))),
+                ]))])),
+            ),
+        ]))
+    }
+
+    assert_eq!(MAX_ENTRY_NESTING_DEPTH, SerialValue::MAX_NESTING_DEPTH - 4);
+    let at_the_bound = segment_value(nested_lists(MAX_ENTRY_NESTING_DEPTH, SerialValue::Null));
+    assert_eq!(at_the_bound.nesting_depth(), SerialValue::MAX_NESTING_DEPTH);
+    let segment = Segment::from_serial_value(&at_the_bound).expect("a segment at the bound reads");
+    assert_eq!(segment.to_serial_value(), at_the_bound);
+
+    for depth in [MAX_ENTRY_NESTING_DEPTH + 1, 500, 2_000] {
+        let too_deep = segment_value(nested_maps(depth, SerialValue::Null));
+        assert_eq!(
+            Segment::from_serial_value(&too_deep).unwrap_err(),
+            SerialValueError::NestingTooDeep { limit: SerialValue::MAX_NESTING_DEPTH },
+            "depth {depth}"
+        );
+    }
+    let message = alloc::string::ToString::to_string(&SerialValueError::NestingTooDeep { limit: 64 });
+    assert_eq!(message, "the value nests deeper than 64 levels of lists and maps");
+}

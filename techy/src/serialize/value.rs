@@ -26,6 +26,15 @@ use alloc::vec::Vec;
 /// are written into tables once and referred to by such indices, so identity and
 /// sharing survive a round trip.
 ///
+/// # Nesting depth
+///
+/// A value's *nesting depth* is the number of lists and maps that enclose its most
+/// deeply nested part ([`nesting_depth`](SerialValue::nesting_depth)); it is bounded
+/// by [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH) wherever a value crosses
+/// the serialization boundary — read through serde, converted to or from a
+/// [`Segment`](crate::serialize::Segment), interned into a session — so that a
+/// hostile input cannot make a reader recurse without limit. See the constant.
+///
 /// # Rendering through serde
 ///
 /// With the `serde` cargo feature the type implements `Serialize` and `Deserialize`.
@@ -79,6 +88,60 @@ pub enum SerialValue {
 }
 
 impl SerialValue {
+    /// The greatest nesting depth a serialized value may have: the number of lists
+    /// and maps enclosing any part of the value, [`nesting_depth`](SerialValue::nesting_depth),
+    /// is at most this. The bound is enforced wherever a value crosses the
+    /// serialization boundary: reading a value through serde (the `Deserialize`
+    /// impls of `SerialValue` and of [`Segment`](crate::serialize::Segment), with the
+    /// `serde` cargo feature), converting a segment from its serialized form
+    /// ([`Segment::from_serial_value`](crate::serialize::Segment::from_serial_value)),
+    /// absorbing a segment ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)),
+    /// and interning an object ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern)) —
+    /// a deeper value is a [`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
+    /// error there, so that a hostile input cannot exhaust the stack of a reader
+    /// that walks values recursively, and so that a writer learns at once when an
+    /// entry would be unreadable. A segment's serialized form counts as one value:
+    /// its own structure — the segment map, its table list, a table's map, its entry
+    /// list — takes four levels, so an entry's stored form may nest at most four
+    /// levels less than this (a table that stores identifiers with the data wraps
+    /// each entry in one more map).
+    ///
+    /// The bound is well above what any serialized object of this crate needs (a
+    /// tree's entry nests about ten levels), and below the default recursion limit
+    /// of the common JSON reader (128), so that the same bound is in force whatever
+    /// the format.
+    pub const MAX_NESTING_DEPTH: usize = 64;
+
+    /// The value's nesting depth: the number of lists and maps that enclose its most
+    /// deeply nested part — `0` for a value that is not a list or a map, `1` for a
+    /// list or map holding no list or map, and so on (`[[1]]` has depth `2`). Computed
+    /// without recursion, so any value can be measured. Compare with
+    /// [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH).
+    pub fn nesting_depth(&self) -> usize {
+        let mut deepest = 0;
+        let mut pending: Vec<(&SerialValue, usize)> = Vec::from([(self, 0)]);
+        while let Some((value, enclosing)) = pending.pop() {
+            let inner = enclosing + 1;
+            match value {
+                SerialValue::List(items) => {
+                    deepest = deepest.max(inner);
+                    pending.extend(items.iter().map(|item| (item, inner)));
+                }
+                SerialValue::Map(entries) => {
+                    deepest = deepest.max(inner);
+                    pending.extend(entries.iter().map(|(_, item)| (item, inner)));
+                }
+                SerialValue::Null
+                | SerialValue::Bool(_)
+                | SerialValue::Int(_)
+                | SerialValue::Str(_)
+                | SerialValue::Bytes(_)
+                | SerialValue::Index { .. } => {}
+            }
+        }
+        deepest
+    }
+
     /// The name of this value's kind — `null`, `bool`, `int`, `str`, `bytes`, `list`,
     /// `map`, or `index` — as error messages report it (the `found` of a
     /// [`SerialValueError::TypeMismatch`](crate::serialize::SerialValueError::TypeMismatch)).
