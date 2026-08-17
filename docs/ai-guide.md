@@ -257,6 +257,7 @@ Sub-chapters (load the one matching the task):
 | read/navigate trees; extract, visit, transform, recompose | [AI guide: node trees](crate::guide::ai_guide_trees) |
 | implement a `Lang`, driver, token rules, construct parsers | [AI guide: custom languages](crate::guide::ai_guide_custom_lang) |
 | bindings, threading, multi-source, tooling positions, `no_std`, streaming | [AI guide: embedding](crate::guide::ai_guide_embedding) |
+| serialize parses, trees, states, diagnostics; read them back; opt a language in | [AI guide: serialization](crate::guide::ai_guide_serialize) |
 | translate pylatexenc code or concepts | [AI guide: pylatexenc migration](crate::guide::ai_guide_pylatexenc) |
 
 Human guides (narrative depth): [Guide index](crate::guide) ·

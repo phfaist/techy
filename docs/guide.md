@@ -88,5 +88,9 @@ it explains what the library is for and where each part of this guide fits.
 - [AI guide: embedding](crate::guide::ai_guide_embedding) — condensed
   reference for embedding techy: bindings and threading facts, multi-source
   parsing, tooling entry points, and `no_std` use.
+- [AI guide: serialization](crate::guide::ai_guide_serialize) — condensed
+  reference for serializing parses and reading them back: the write and read
+  sequences, registration obligations, errors, invariants, and how a language
+  or framework of your own opts in.
 - [AI guide: pylatexenc migration](crate::guide::ai_guide_pylatexenc) —
   condensed pylatexenc-to-techy mapping tables.

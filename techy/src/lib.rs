@@ -250,6 +250,9 @@ pub mod guide {
     #[doc = include_str!("../../docs/ai-guide-embedding.md")]
     pub mod ai_guide_embedding {}
 
+    #[doc = include_str!("../../docs/ai-guide-serialize.md")]
+    pub mod ai_guide_serialize {}
+
     #[doc = include_str!("../../docs/ai-guide-pylatexenc.md")]
     pub mod ai_guide_pylatexenc {}
 }
