@@ -209,7 +209,16 @@ pub enum TokenKind<'t, L: Lang> {
   today (`pre_space.end() == span.start()`; post-space a trailing sub-range of `span`;
   a comment start a leading sub-range ending before its post-space) — these
   constructors inherit `Token::new`'s registered always-on-assert exception; update the
-  documentation Panics list in `docs/panics.md` accordingly.
+  documentation Panics list in `docs/panics.md` accordingly: the
+  `- [`Token::new`](crate::core::Token::new) — requires the documented coherence of the
+  token's spans;` line (`docs/panics.md:22-23`) is **replaced** by one line per
+  `StdToken` constructor family — or one line naming all eight constructors — stating
+  the coherence asserts, and the sentence above it ("**Precondition asserts.** Six value
+  functions …", `docs/panics.md:9`) has its count corrected. Use the current rustdoc
+  link spelling `[Panics list](techy::guide::panics)` on the constructors.
+  *(CLAUDE.md rule 4's parenthetical also names `Token::new` among the six approved
+  value functions. **No code stage edits CLAUDE.md** — orchestrator decision pending on
+  who does.)*
 - `pub(crate)` accessors used by the two in-crate readers: `span()`, `pre_space()`,
   `post_space()`, `edge_offset(TokenEdge) -> usize`, `kind_data()`. **Not public**: a
   third-party reader over `StdToken`s interprets them by delegating to a
@@ -396,7 +405,21 @@ way.
 
 ### 1.9 `ParseContext` (`techy/src/constructs/mod.rs`)
 
-- **Remove the `source` field.** `ParseContext::new(tokens, state, session, driver)`.
+- **Remove the `source` field.** The constructor (`techy/src/constructs/mod.rs:179`)
+  loses its second parameter and keeps the other four in order — verbatim:
+
+  ```rust
+  pub fn new(
+      tokens: &'a mut dyn TokenReader<'s, L>,
+      state: Arc<ParsingState<L>>,
+      session: &'a mut ParserSession<L>,
+      driver: &'a L::Driver,
+  ) -> ParseContext<'a, 's, L>
+  ```
+
+  (its rustdoc says "Bundle the **five** parse inputs" — make it "four"). `ParseContext`
+  keeps **both** lifetime parameters (`'s` still comes from `TokenReader<'s, L>`), so no
+  `ParseContext<'_, '_, L>` mention anywhere in the crate changes shape.
 - `implementation_error(detail, span: SourceSpan)` and `staging_error(error, span:
   SourceSpan)` take source-qualified spans (they paired a `Span` with `self.source`).
 - New helpers (thin, documented as the preferred spellings):
@@ -406,8 +429,11 @@ way.
   - `source_span_within(&self, begin, end) -> ConstructParserResult<L, SourceSpan>` —
     lifts the reader's `None` to an `ImplementationError` ("positions do not delimit
     one range of one source").
-- `probe_token(&mut self, state)` unchanged for callers; the driver method loses its
-  `source` parameter (§1.10).
+- `probe_token(&mut self, state)` unchanged for callers. On the driver
+  (`techy/src/engine/driver.rs:181-187`) it happens in two steps: **Stage 1 drops the
+  `source: &Arc<Source<L::SourceOrigin>>` parameter** and leaves the return type alone
+  (`ConstructParserResult<L, Option<Token<'s, L>>>`); **Stage 3b** changes the return
+  type to `ConstructParserResult<L, Option<L::Token>>` (and drops the `'s`).
 - `stage_invocation(&mut self, invocation, arguments, slots, children, end: Option<&L::StreamPosition>)`.
   Let `trigger = self.tokens.source_span_of(invocation.token)` (the trigger's span,
   `Start..EndPastPostSpace`, in the trigger's source) and
@@ -540,6 +566,12 @@ in a touched file must honor them:
 Site inventory (every non-test use of `move_to_pos`/`pos()`/`cx.source` outside the
 token module, with its replacement). Test-only sites follow the same rules.
 
+Until the end of Stage 2b the new edge-based method is spelled
+`move_to_edge(&tok, TokenEdge)`; every `move_to(&x, TokenEdge::…)` written in this
+table means `move_to_edge` while the old two-flag `move_to` still exists; 2b deletes the
+old method and renames `move_to_edge` → `move_to` in one commit (afterwards
+`grep -rn move_to_edge techy docs` is empty).
+
 | Site | Today | Replacement |
 |---|---|---|
 | `argument_parsers.rs:148,174` `ArgumentNoise` | `start = pos()`, `move_to_pos(start)` | `start = position_here()`, `move_to_position(&start)` |
@@ -630,7 +662,10 @@ and passes; only the reader interprets"). On `TokenRecovery::resume`: the advanc
 contract. On `ParseContext`: "no source handle — spans come from `cx.tokens`; the
 preferred spellings are `here()`, `source_span_within()`, `cx.tokens.source_span_of()`".
 On `stage_invocation`: the standard end rule as spelled out in §1.9 (three cases). On
-`StdToken` constructors: the coherence asserts (+ `docs/panics.md` Panics list). On the
+`StdToken` constructors: the coherence asserts (+ the `docs/panics.md` Panics list —
+the `Token::new` entry replaced by the constructors and the "Six value functions" count
+corrected; CLAUDE.md rule 4 is *not* edited by a code stage, orchestrator decision
+pending). On the
 `docs/construct-parsers.md` guide: the "how do I get a span / go back" FAQ rewritten
 in terms of tokens, edges, and positions.
 
@@ -781,10 +816,25 @@ Steps:
 6. `engine/driver.rs`: `make_token_reader` with the default; route
    `Language::parse_source` and `parse_attached_source` through it.
 7. `source/source.rs`: `SourceSpan::at(&SourcePos)`.
-8. `TokenListReader` (test): construct with `(source, tokens)`; implement the new
-   methods; add issued-token/position validation (§1.8).
-9. Rustdoc for every new item (`missing_docs` is deny); contract clauses 1–6 (§1.6)
-   on the trait now (they hold for the std readers already).
+8. `TokenListReader` (test): the constructor
+   (`techy/src/token/list_reader.rs:57`) goes from
+   `pub fn new(tokens: Vec<Token<'s, L>>) -> TokenListReader<'s, L>` to
+   `pub fn new(source: &'s Arc<Source<L::SourceOrigin>>, tokens: Vec<Token<'s, L>>)`.
+   **25 construction sites** at `9a3c0ac` (`grep -rn "TokenListReader::new(" techy/src
+   techy/tests docs`): `engine/mod.rs` 11, `token/list_reader.rs` 8,
+   `constructs/mod.rs` 3, `constructs/argument_parsers.rs` 1,
+   `constructs/environment_parser.rs` 1, `constructs/nodes_parser.rs` 1 — update all.
+   Implement the new methods; add issued-token/position validation (§1.8).
+9. **Facade exports** — new public types get their one canonical public path in the
+   stage that introduces them (CLAUDE.md: exactly one public path per item). Add
+   `TokenEdge`, `StdStreamPosition`, `SpecialsScanError` to the internal module facade
+   `techy/src/token/mod.rs:50-67`, then to the public facade — the single
+   `pub use crate::token::{ … };` block at **`techy/src/core/mod.rs:60-66`**, next to the
+   existing `StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenReader,
+   TokenRecovery, TokenResult, TokenRules` entries. Nothing is removed. (`Span` and
+   `SourceSpan` are *not* re-exported from `techy::core`; they live on `techy::source`.)
+10. Rustdoc for every new item (`missing_docs` is deny); contract clauses 1–6 (§1.6)
+    on the trait now (they hold for the std readers already).
 
 Gates (all stages): `cargo build`, `cargo test` (unit + integration + doctests),
 `cargo clippy --all-targets -- -D warnings`, `rm -rf target/doc && cargo docs`
@@ -844,17 +894,46 @@ Then **delete**:
 `TokenReader::{move_past, move_to(bool), move_to_pos, pos}`, `StdTokenReader::{pos,
 move_to_pos}`, `TokenListReader::move_to_pos`, `ParseContext::source` (and the
 `source` parameter of `ParseContext::new`), and rename `move_to_edge` → `move_to`;
-`next()` default = `peek` + `move_to(EndPastPostSpace)`. Sweep:
-`grep -rn "move_to_pos\|\.pos()\|move_past\|cx\.source\b\|self\.source\b\|&source, " techy/src techy/tests docs`
-must show only legitimate hits (e.g. `SourceSpan::entire(&source)` in
-`Language::parse_source`; `SourcePos::pos()` in `node/tree.rs`).
+`next()` default = `peek` + `move_to(EndPastPostSpace)`. Sweep — both greps must come
+out as described:
 
-Gates: as Stage 1; plus the **timing check**: a temporary `examples/bt_timing.rs` (not
-merged) parsing a synthetic ~5 MB LaTeX-like text (mixed chars, commands, groups,
-comments) with `Latexlike` under `--release`, run 5× on `main` and on the branch;
-acceptance ≤ 10 % median slowdown. If exceeded, optimize the chars-run path (e.g. a
-reader method that answers "does `tok` extend the run ending at `pos`?" in one call)
-before merging; report numbers in PROGRESS.md.
+- `grep -rn move_to_edge techy docs` — **empty** (the temporary name is gone).
+- `grep -rn "move_to_pos\|\.pos()\|move_past\|cx\.source\b\|self\.source\b\|&source, " techy/src techy/tests docs`
+  — only the legitimate hits below. The list was enumerated at `9a3c0ac`; a hit outside
+  it is a missed port.
+
+| Where (glob) | Why it is legitimate |
+|---|---|
+| `techy/src/source/{source,span,line_index,text_content}.rs` | the `self.source` fields of `SourceSpan`/`SourcePos`, `SourcePos::pos()`, and `SourceSpan::new(&source, …)` in their own rustdoc/tests |
+| `techy/src/node/{mod,invariants,display,node_ref,tree}.rs` | `SourceSpan::new(&source, …)` in unit tests, `self.source` on the S0 values they hold, and `SourcePos::pos()` at `node/tree.rs:328` |
+| `techy/src/error.rs`, `techy/src/visit.rs`, `techy/src/lib.rs:93`, `techy/src/recompose/tests.rs`, `techy/src/transform/tests.rs`, `techy/tests/derive_conditions.rs` | `SourceSpan::new(&source, …)` built from a local `source` binding in doc examples and tests — no parse context involved |
+| `techy/src/serialize/**` | `SourceSpan::new(&source, …)` in tests, and `cx.source(wire.source)` at `drivers/source.rs:382` — that `cx` is a `DeserializeContext`, an unrelated method |
+| `techy/src/scopes/mod.rs:2846` | `SourceSpan::new(&source, …)` in a unit test |
+| `techy/src/engine/language.rs` | `SourceSpan::entire(&source)` for the root node — `source` is the parse's own binding, not a context field |
+| `techy/src/token/reader.rs` | `StdTokenReader`'s **own** `self.source` field (introduced in Stage 1) |
+
+`ParseContext::source` itself must have **zero** hits: `grep -rn "cx\.source\b\|self\.source\b" techy/src/constructs techy/src/engine techy/src/latexlike techy/src/scopes`
+returns nothing outside `techy/src/token/`.
+
+Gates: as Stage 1; plus the **timing check**, run exactly as follows:
+
+1. Write `techy/examples/bt_timing.rs` on this branch. It generates a deterministic
+   ~5 MB LaTeX-like `String` (fixed seed; mixed chars, commands, groups, comments,
+   paragraph breaks), parses it with `Latexlike` (the default driver) and prints the
+   elapsed wall-clock **milliseconds of the parse only** (generation excluded).
+   **Commit it on the branch and delete it in Stage 4** — so the reviewer can re-run it.
+2. On the branch: `cargo run --release --example bt_timing`, **5 times**; record all
+   five numbers.
+3. Create a throwaway worktree of `main` at
+   `/Users/philippe/projects/techy/.claude/worktrees/bt-timing-main`, copy the *same*
+   example file into it (untracked), run it 5 times there, then remove the worktree
+   (`git worktree remove --force`).
+4. Compare **medians**. Acceptance: ≤ 10 % slowdown. Record both five-number series and
+   both medians in PROGRESS.md.
+
+If the 10 % is exceeded, optimize the chars-run path (e.g. a reader method that answers
+"does `tok` extend the run ending at `pos`?" in one call) before merging; if it is still
+exceeded, report and ask.
 
 Reviewer checklist (2a/2b): every site in the §1.11 inventory handled as specified;
 no `Span` from a token is paired with anything but through the reader; node data
@@ -871,7 +950,13 @@ in the report); docs doctests green; lockstep harness green; timing numbers repo
 view type** next to the current stored `TokenKind<'s, L>` — to avoid two types with one
 name during the transition, introduce the view under the temporary name
 `TokenKindView<'t, L>` and `TokenReader::token_kind(&tok) -> TokenKindView<'t, L> where
-'s: 't` (std: built from the stored kind's strings; list reader: same). Port **every**
+'s: 't` (std: built from the stored kind's strings; list reader: same). During 3a
+`TokenKindView` is `pub` in its crate-internal module but is **not** re-exported from
+`techy::core` — it is renamed to `TokenKind` in 3b *before* it becomes public, so the
+name `TokenKindView` never reaches a public path. It still needs a `missing_docs`-clean
+rustdoc (the lint fires on `pub` items regardless of reachability). During 3a
+`Invocation` **keeps its `'s` parameter** (`Invocation<'a, 's, L>`) and its new `kind`
+field has type `TokenKindView<'a, L>`; 3b renames the type in place and drops the `'s`. Port **every**
 `token.kind` / `TokenKind::…` match outside `token/*` to `cx.tokens.token_kind(&token)`
 (files: `nodes_parser.rs`, `argument_parsers.rs`, `environment_parser.rs`,
 `verbatim_parser.rs`, `embellishments_parser.rs`, `tack_on_parser.rs`,
@@ -1012,14 +1097,36 @@ sections and `Documentation_Structure.md` — read them first):
    — on `ParseDriver`, default std, both construction sites route through it.
    Rejected: a parameter on the parse entry point (misses attached sources); a session
    field.
-7. Amend in place: `[§dd-dr:token-contract-hardening]` item 4 (`move_to_pos` — record
-   the reversal), `[§dd-dr:token-reader]` (protocol description), `[§dd-dr:zero-copy-tokens]`
-   (still zero-copy; the "revisit if" is now answered by opacity), `[§dd-dr:token-model]`
-   (`Token<'s, L>` shape → view + `StdToken`), `[§dd-dr:source-cursor-retired]` if it
-   cites `move_to_pos` as a requirement, `[§dd-dr:superseded-names]` (add §1.14's
-   list), `[§dd-dr:token-list-reader-demoted]` (now also the forged-token guard).
-   Run `git grep -n 'move_to_pos\|resume_pos\|Token::new\|Token<.s' dev-docs` and fix
-   every stale mention.
+7. Amend in place. The **complete** list of entries that name a superseded symbol was
+   produced at `9a3c0ac` by mapping every hit of
+   `grep -n "Token::new\|move_to_pos\|resume_pos\|Token<'s\|\.pos()\|move_past\|cx\.source" dev-docs/DESIGN_RATIONALE.md dev-docs/ARCHITECTURE.md`
+   to its enclosing `#### … [§dd-dr:…]` heading:
+
+   | Entry | What it names | Line(s) |
+   |---|---|---|
+   | `[§dd-dr:source-cursor-retired]` | `move_to_pos` as a requirement, `TokenRecovery::resume_pos` | 311, 312 |
+   | `[§dd-dr:token-model]` | `Token<'s, L> { kind, span, pre_space }`, `Token::post_space()`, `move_past`/`move_to` | 496, 555, 605 |
+   | `[§dd-dr:zero-copy-tokens]` | `Token<'s, L>` holding `&'s str` (still zero-copy; the "revisit if" is now answered by opacity) | 624 |
+   | `[§dd-dr:token-reader]` | the peek/`move_past`/`move_to` protocol | 638 |
+   | `[§dd-dr:token-contract-hardening]` | item 4: `move_to_pos(pos: usize)` is a required method — **record the reversal**; `resume_pos` | 733, 746 |
+   | `[§dd-dr:invocation-parser-factory]` | `move_to_pos(token.post_space().start())` | 3424 |
+   | `[§dd-dr:stop-conditions]` | `move_past(token, true)` as the consume spelling | 3584, 3595 |
+   | `[§dd-dr:panic-policy]` | `Token::new` among the always-on-assert value functions — **the eight `StdToken` constructors inherit that slot** | 5140 |
+   | `[§dd-dr:tolerant-parsing]` | the placeholder token + explicit `resume_pos` | 5229 |
+   | `[§dd-dr:err-means-abort]` | "the reader is already repositioned via `resume_pos`" | 5249 |
+   | `[§dd-dr:resume-pos-contract]` | the whole entry is about `resume_pos` + `move_to_pos` | 5268-5285 |
+   | `[§dd-dr:preset-driver-pillars]` | "an accessor serves `move_past`" | 7284 |
+
+   Also amend `[§dd-dr:superseded-names]` (add §1.14's list) and
+   `[§dd-dr:token-list-reader-demoted]` (now also the forged-token guard) — neither
+   currently names a superseded symbol, so neither shows in the table.
+
+   ARCHITECTURE sections with hits: `[§dd-arch:arch]` (the S1 line of the layer
+   diagram, `ARCHITECTURE.md:103`, spells `Token<'s, L>`) and `[§dd-arch:errors]`
+   (`:807`, "an explicit `resume_pos`").
+
+   After the edits, `git grep -n 'move_to_pos\|resume_pos\|Token::new\|Token<.s' dev-docs`
+   must show no stale mention.
 
 **ARCHITECTURE — updates**: [§dd-arch:token] (token as opaque `Lang::Token`, the view,
 `StdToken`, edges, positions, the reader trait's method families and contract
@@ -1091,7 +1198,8 @@ check naming against dev-docs/ARCHITECTURE.md [§dd-arch:naming] and the registe
 exceptions named in §1); check that no site of the §1.11 inventory was missed
 (grep). Report PASS/FAIL per checklist item with file:line evidence, plus a list of
 required fixes. Do not fix things yourself."
-**Spawn implementers and reviewers with `model: "opus"`.**
+**Every subagent this plan spawns — implementers, reviewers, and any helper agent —
+runs with `model: "opus"`** (user directive, 2026-08-17).
 Reviewers get a fresh context (never the implementer's).
 
 **Fix loop.** Reviewer FAIL → send the required-fixes list to the implementer
