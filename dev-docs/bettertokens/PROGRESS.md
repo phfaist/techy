@@ -153,7 +153,7 @@ The stage came back NOT READY; every point below is addressed on the branch.
 
 - **Branch**: `bt-1-positions` (off `main` at `7825789`).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-1-positions`.
-- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Status**: reviewed and merged (`main` d5f37e0). Date: 2026-08-17.
 - **Commits** (`git log --oneline main..bt-1-positions`, oldest last):
 
 ```
@@ -397,3 +397,250 @@ The nine failing lints:
 2. **`StdTokenReader::source()` visibility** (deviation 4) — public inherent accessor
    or `pub(crate)`? Public reads naturally next to `content()`, and a third-party
    reader wrapping a `StdTokenReader` plausibly wants it.
+
+---
+
+## Stage 2a — core: the construct-parser layer off bare positions (§4)
+
+- **Branch**: `bt-2a-core` (off `main` at `d5f37e0`, which already contains Stage 1).
+- **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-2a-core`.
+- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Commits** (`git log --oneline main..bt-2a-core`, oldest last):
+
+```
+<this commit> bettertokens: PROGRESS.md — Stage 1 merged, Stage 2a implemented
+65fe206 core: adapt the callers Stage 2a's signatures force
+396862a core: the error-callable parser and one renamed-parameter doc comment
+741151b core: the root and attached-source loops skip by position
+21f588b core: argument parsing on stream positions
+a2b6fc7 core: the driver's group and paragraph-break hooks take reader answers
+26bdcd4 core: the group parser holds its open token
+714f6f5 core: the nodes parser's run, stops and anchors on positions
+ef326ab core: ParseContext spans come from the reader
+e29adbf token: reader queries take a token of any lifetime
+```
+
+The commits are thematic, not individually buildable: the stage changes several
+signatures at once (`implementation_error`/`staging_error`, `stage_invocation`,
+`parse_group`, `make_group_parser`, `make_paragraph_break_node`, `StopCause`), and
+their callers live in the later commits. The branch tip is green on every gate.
+
+### What changed, per file
+
+| File | Change |
+|---|---|
+| `techy/src/token/reader.rs`, `token/list_reader.rs` | `move_to_edge`, `source_span_between`, `source_span_of`, `position_at` take `&Token<'_, L>` (any lifetime) instead of the reader's own `'s` — see deviation 1 |
+| `techy/src/constructs/mod.rs` | `ParseContext::here()` and `::source_span_within()` (+ the "spans come from the reader" clause on the type, the `source` field's doc reworded); `implementation_error`/`staging_error` take a `SourceSpan`; `stage_invocation(end: Option<&L::StreamPosition>)` with §1.9's three cases and the two invalid-span aborts; `invocation_frame` from reader spans; `parse_group(open: &Token<'s, L>, ..)`; descent-guard and derive-failure anchors `self.here()`; `Debug` prints `at` (the reader-answered span) instead of `pos`/`source`; the prose naming `move_past`/`move_to_pos` reworded; 6 new unit tests |
+| `techy/src/constructs/nodes_parser.rs` | `StopCause<L>` (`SourceSpan` + `after`, manual `Debug`/`Clone`/`PartialEq`/`Eq`, no longer `Copy`); `NodesOutcome::stop: StopCause<L>`; the chars run as `Option<(L::StreamPosition, L::StreamPosition)>` (`take_pre_space`/`extend_run`/`flush_through`/`flush_for_token_stop` take the token, the shared `extend_run_to` reports the gap with both positions); `stage`/`stage_node` take a `SourceSpan`; every anchor and every move ported; the harness reports its exit position; assertions on a cause's span go through the new `stop_shape` helper; 1 new test (`after` skips the unconsumed token) |
+| `techy/src/constructs/group_parser.rs` | `GroupParser<'p, 's, L> { open: Token<'s, L> }`; end position from `StopCause::after` / `position_here()`; node span via `source_span_within`; the recorded delimiters through `same_source` (else `TextContent::Owned`) |
+| `techy/src/constructs/argument_parsers.rs` | `ArgumentNoise::start: L::StreamPosition` + `rewind`; `stage_pre_space(cx, nodes, tok)`; free `stage(.., SourceSpan)`; the five `cx.here()` anchors; the marker run on positions; all moves by edge |
+| `techy/src/constructs/invocation_parser.rs` | `parse_declared_arguments(.., name: &SourceSpan)`; the argument frame anchored at `cx.here()`; the two prose sentences naming deleted methods reworded |
+| `techy/src/constructs/attached_source.rs` | the stray-close arm reads `span.content()`, resumes at `after`, stages with the cause's span; the fixtures take the test's own `Arc<Source>` (`with_context` lends it) |
+| `techy/src/engine/language.rs` | the same root-loop arm; the contract-violation anchors; the root staging error anchored at the source's start; the `BogusLang` test cause built from `cx.here()` |
+| `techy/src/engine/driver.rs` | `make_group_parser<'p, 's>(open: &Token<'s, L>, ..) where 's: 'p`; `make_paragraph_break_node(state, break_span: &SourceSpan)` |
+| `techy/src/scopes/mod.rs` | `ErrorInvocationParser` takes its trigger's span from the reader (recover + chars fallback + staging error) |
+| `techy/src/latexlike/invariants.rs` | the `end_pos: Some` doc comment → `end: Some(&position)` |
+| **2b-owned, forced by the signatures** — `constructs/{embellishments,environment,tack_on,verbatim,chars_group}_parser.rs`, `latexlike/{driver,environments,input,invocation_syntax}.rs`, `engine/mod.rs`, `docs/construct-parsers.md` | the minimum that compiles: `cx.here()` where the site anchored at `Span::empty(cx.tokens.pos())`, `cx.tokens.source_span_of(&token)` where the span was a whole token's, otherwise the interim wrap `SourceSpan::new(&cx.source, ..)` that 2b's sweep finds; the `stage_invocation`/`stage_pre_space`/`parse_group`/`make_paragraph_break_node` callers ported properly (positions cannot be forged) |
+
+### Gate results (verbatim)
+
+```
+$ cargo build
+   Compiling techy v0.1.0 (…/bt-2a-core/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.30s
+
+$ cargo test
+     Running unittests src/lib.rs (target/debug/deps/techy-94158093885f6495)
+running 1034 tests
+test result: ok. 1034 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+     Running tests/acceptance.rs
+running 30 tests
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/derive_conditions.rs
+running 9 tests
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lang_features.rs
+running 13 tests
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/recompose_oracle.rs
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/serialize_golden.rs / serialize_perf.rs / serialize_stream.rs
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out (each)
+     Running unittests src/lib.rs (techy_derive)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests techy
+running 89 tests
+test result: ok. 84 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 21.51s
+   Doc-tests techy_derive
+running 2 tests
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy --all-targets -- -D warnings
+    Checking techy v0.1.0 (…/bt-2a-core/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.19s
+(clean — no warnings, exit 0)
+
+$ rm -rf target/doc && cargo docs
+ Documenting techy-derive v0.1.0 (…/bt-2a-core/techy-derive)
+ Documenting techy v0.1.0 (…/bt-2a-core/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.46s
+   Generated …/target/doc/techy/index.html and 1 other file
+(no broken intra-doc links)
+
+$ cargo test -p techy --lib constructs::nodes_parser
+running 79 tests
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 955 filtered out; finished in 0.05s
+
+$ cargo test -p techy --lib token::list_reader
+running 11 tests
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1023 filtered out; finished in 0.00s
+```
+
+### Semver report (`scripts/check_semver.sh`)
+
+Breaking changes are expected (soft freeze) and were not "fixed".
+
+```
+    Checking techy v0.1.0 -> v0.1.0 (no change; assume minor)
+     Checked [   0.044s] 196 checks: 182 pass, 14 fail, 0 warn, 58 skip
+     Summary semver requires new major version: 14 major and 0 minor checks failed
+    Finished [   9.631s] techy
+```
+
+The 14 failing lints — the nine Stage 1 already reported, plus five from this stage:
+
+| Lint | Item | Stage |
+|---|---|---|
+| `auto_trait_impl_removed` | `BeginSpec` no longer `UnwindSafe`/`RefUnwindSafe` | pre-existing |
+| `constructible_struct_adds_field` | `StdCallableSpec.provenance` (pre-existing); `TokenRecovery.resume` | 1 |
+| `constructible_struct_adds_private_field` | `SpecialsSpec.provenance` | pre-existing |
+| `struct_pub_field_missing` | `TokenRecovery::resume_pos`; `SpecialsMatch::name` | 1 |
+| `trait_added_supertrait` | `CallableSpec`/`SpecsProvider` gained `SerializableObject` | pre-existing |
+| `trait_associated_type_added` | `Lang::StreamPosition` | 1 |
+| `trait_method_added` | `ParseDriver::make_token_reader` | 1 |
+| `trait_method_parameter_count_changed` | `ParseDriver::probe_token` 4 → 3 (Stage 1); `ParseDriver::make_paragraph_break_node` 3 → 2 | 1, **2a** |
+| `type_mismatched_generic_lifetimes` | `SpecialsMatch` 1 → 0 (Stage 1); `GroupParser` 1 → 2 lifetimes | 1, **2a** |
+| `derive_trait_impl_removed` | `StopCause` no longer derives `Copy` | **2a** |
+| `enum_struct_variant_field_added` | `StopCause::{TokenCondition, UnexpectedGroupClose}::after` | **2a** |
+| `trait_requires_more_generic_type_params` / `type_requires_more_generic_type_params` | `StopCause` 0 → 1 generic type | **2a** |
+| `function_parameter_count_changed` | `techy::latexlike::make_paragraph_break_node` 4 → 3 | **2a** |
+
+### The 2a completion grep
+
+```
+$ grep -n "cx\.source\b\|self\.source\b\|SourceSpan::new(&cx\.source\|Span::empty(cx\.tokens\.pos())\|move_to_pos\b\|\.pos()\|move_past\|move_to(&" \
+    techy/src/constructs/{mod,nodes_parser,group_parser,argument_parsers,invocation_parser,attached_source}.rs \
+    techy/src/engine/language.rs techy/src/engine/driver.rs
+techy/src/constructs/argument_parsers.rs:2006:            fn move_past(&mut self, tok: &Token<'s, ArgLang>, skip_post_space: bool) {
+techy/src/constructs/argument_parsers.rs:2007:                self.inner_mut().move_past(tok, skip_post_space);
+techy/src/constructs/argument_parsers.rs:2010:            fn move_to(&mut self, tok: &Token<'s, ArgLang>, rewind_pre_space: bool) {
+techy/src/constructs/argument_parsers.rs:2014:            fn move_to_pos(&mut self, pos: usize) {
+techy/src/constructs/argument_parsers.rs:2015:                self.inner_mut().move_to_pos(pos);
+techy/src/constructs/argument_parsers.rs:2019:                self.inner().pos()
+techy/src/constructs/nodes_parser.rs:2485:            let pos = self.inner().pos();
+techy/src/constructs/nodes_parser.rs:2497:        fn move_past(&mut self, tok: &Token<'s, TestLang>, skip_post_space: bool) {
+techy/src/constructs/nodes_parser.rs:2498:            self.inner_mut().move_past(tok, skip_post_space);
+techy/src/constructs/nodes_parser.rs:2501:        fn move_to(&mut self, tok: &Token<'s, TestLang>, rewind_pre_space: bool) {
+techy/src/constructs/nodes_parser.rs:2505:        fn move_to_pos(&mut self, pos: usize) {
+techy/src/constructs/nodes_parser.rs:2506:            self.inner_mut().move_to_pos(pos);
+techy/src/constructs/nodes_parser.rs:2510:            self.inner().pos()
+techy/src/constructs/nodes_parser.rs:2654:            let pos = self.inner.pos();
+techy/src/constructs/nodes_parser.rs:2670:        fn move_past(&mut self, tok: &Token<'s, TabooLang>, skip_post_space: bool) {
+techy/src/constructs/nodes_parser.rs:2671:            self.inner_mut().move_past(tok, skip_post_space);
+techy/src/constructs/nodes_parser.rs:2674:        fn move_to(&mut self, tok: &Token<'s, TabooLang>, rewind_pre_space: bool) {
+techy/src/constructs/nodes_parser.rs:2678:        fn move_to_pos(&mut self, pos: usize) {
+techy/src/constructs/nodes_parser.rs:2679:            self.inner_mut().move_to_pos(pos);
+techy/src/constructs/nodes_parser.rs:2683:            self.inner().pos()
+```
+
+Every remaining hit is a **required trait method of a `cfg(test)` delegating reader**
+(`BrokenReader`, `StuckRecoveryReader`, `TabooReader`): `TokenReader` still declares
+`move_past`, `move_to(tok, bool)`, `move_to_pos` and `pos`, so an implementor must
+provide them until 2b deletes them; the bodies only forward to the inner reader. No
+production site, no `cx.source`/`self.source` read, no `SourceSpan::new(&cx.source, ..)`,
+no `Span::empty(cx.tokens.pos())` anywhere in the 2a-owned files. (`\b` is needed after
+`move_to_pos` in the grep — otherwise it also matches the *new* `move_to_position`.) The
+`ParseContext.source` field itself remains, declared at `constructs/mod.rs:154` and
+initialized at `:194`, read nowhere in these files; 2b removes it.
+
+### Decisions taken under §1.16
+
+- **`StopCause` gains an `L` parameter** with **manual** `Debug`/`Clone`/`PartialEq` and
+  a plain `impl Eq` — a derive would demand `L:` bounds. It also loses `Copy`
+  (a `SourceSpan` holds an `Arc`), so `NodesOutcome::clone` clones the cause.
+- **Chars-run contiguity failure** stays an `ImplementationError`, now naming both
+  positions' `Debug` renderings ("… starts at `StdStreamPosition(5)`, which is not
+  where the pending chars run ends (`StdStreamPosition(4)`) …").
+- **`Invocation.kind` is not added here** — the view arrives in Stage 3a; this stage
+  only ports positions and spans, kind matching still reads `token.kind`.
+- **`ArgumentNoise` keeps `next: Option<Token<'s, L>>`**, as prescribed.
+- Test-only choices: the nodes-parser harness reports the reader's exit position
+  *and* its byte offset (`cx.here().start()`), so numeric assertions survive and the
+  re-peek tests resume a fresh reader over the same content with
+  `move_to_position`; a stop cause's variant + span range are asserted through a
+  `stop_shape` helper (the `after` position is opaque and is checked by resuming
+  from it instead).
+
+### Deviations from §1/§4
+
+1. **The reader's token-taking queries take `&Token<'_, L>`, not `&Token<'s, L>`**
+   (`move_to_edge`, `source_span_between`, `source_span_of`, `position_at`). §1 spells
+   them `&L::Token`, which in the final tree carries no lifetime; the mechanical Stage 2a
+   transcription `&Token<'s, L>` (the reader's own `'s`) **does not compile** at the sites
+   this stage must port. A `ConstructParser::parse` receives `cx: &mut ParseContext<'_, '_, L>`
+   whose `'s` is fresh per call and unrelated to the `'s` of the `Invocation`/`Token`
+   stored in the parser, and `ParseContext` is invariant in `'s` (`&mut dyn TokenReader<'s, L>`),
+   so `cx.tokens.source_span_of(self.invocation.token)` cannot type-check with the tied
+   spelling. Since none of these four methods borrows anything from the token (they read
+   the reader's record of where it is), the untied spelling is sound, is what §1's
+   `&L::Token` means, and disappears in Stage 3b. The tied spelling is kept where it is
+   real: `peek`/`next` still return `Token<'s, L>`.
+   Consequence: `GroupParser` gains an `'s` (`GroupParser<'p, 's, L>`) and
+   `make_group_parser` an `'s` with `'s: 'p`, both dropped again in 3b.
+2. **`parse_declared_arguments` takes `name: &SourceSpan<L::SourceOrigin>`** (was
+   `name_span: Span`). §1.11 does not list it, but it is in a 2a-owned file and paired a
+   bare `Span` with `cx.source` for the argument frames' title. Its three callers are
+   adapted (properly in `latexlike/input.rs`, with the interim wrap in the two
+   environment parsers, which 2b ports).
+3. **`ParseContext`'s `Debug` prints `at` instead of `pos` + `source`** — one
+   reader-answered `SourceSpan` carries both facts, and the `source` field it printed is
+   removed in 2b.
+4. **The latexlike `Specials` paragraph-break shape synthesizes a token.** The hook now
+   receives only the break's span, but the payload still comes from
+   `FromInvocation::from_invocation(&Invocation { token, .. })`, so the behavior function
+   rebuilds a `ParagraphBreak` token from the span it was handed. This is an interim: in
+   Stage 3b `from_invocation` also needs a *reader*, which this hook does not have — see
+   open question 2.
+5. **`stage_invocation`'s invalid-span error keeps its own wording** (an
+   `invocation_span_within` helper) rather than reusing
+   `ParseContext::source_span_within`'s message, because §1.9 pins the "invalid computed
+   span" wording (and `latexlike/invocation_syntax.rs` asserts on it).
+6. **The bad-end test loses two of its four cases.** `stage_invocation`'s explicit end is
+   a stream position now, so an end *outside the content* or *off a character boundary*
+   cannot be expressed at all — the reader only ever hands out valid positions. The
+   remaining case (an end before the trigger's start, taken from the trigger's own
+   pre-space edge) is exercised strict and tolerant, plus once over multi-byte content.
+   The `SourceSpan::new` assert that test used to guard against is now unreachable from
+   this path by construction.
+
+### Open questions
+
+1. **No existing test's expected node span changed.** The §1.9 rule was implemented as
+   written and the whole suite passes unmodified (1034 unit + 75 integration + 84
+   doctests), including the environment/`\input`/expression-position span assertions and
+   the parse-tree byte-partition oracle. Nothing to rule on — recorded because §1.9 asked
+   for it explicitly.
+2. **The paragraph-break hook and `FromInvocation` (deviation 4).** In the final design
+   `from_invocation(invocation, tokens)` needs a reader and an `L::Token`, and
+   `make_paragraph_break_node` has neither. Stage 3b must decide how a callable-shaped
+   paragraph break mints its invocation-syntax payload — a `Default`-ish payload, a
+   dedicated hook parameter, or handing the hook the token after all. The interim
+   (rebuild a token from the span) keeps today's behavior exactly and is confined to
+   `latexlike/driver.rs`.
+3. **`GroupParser`'s extra lifetime** (deviation 1) is churn that 3b undoes. If a
+   reviewer prefers, the alternative is for `GroupParser` to store the open token's
+   `SourceSpan` plus its `Start` position instead of the token — no lifetime, but it
+   diverges from §1.9's "`GroupParser::new(open: L::Token, rule)`" and would have to be
+   put back in 3b.

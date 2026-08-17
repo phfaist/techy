@@ -1500,7 +1500,9 @@ mod tests {
         range: core::ops::Range<usize>,
     ) -> impl FnOnce(&mut ParseContext<'_, '_, PlainLang>) -> Vec<BuildId> {
         move |cx| {
-            let span = SourceSpan::new(&Arc::clone(&cx.source), range.clone());
+            // The source the reader is serving, as the reader reports it.
+            let here = cx.here();
+            let span = SourceSpan::new(here.source(), range.clone());
             let id = cx
                 .stage_node(
                     NodeKind::chars(span.span()),
