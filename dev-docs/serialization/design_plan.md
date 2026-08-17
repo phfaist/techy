@@ -188,7 +188,9 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   this determinism rule binds every driver, core and custom). Segment methods (provisional, finalized M2):
   `take_segment()` / `push_segment(...)`. JSONL is the canonical stream rendering;
   segments may equally be separate files/payloads consumed in order. `Segment` is the
-  one public wire struct (feature-gated serde impls).
+  one public wire struct (feature-gated serde impls) — with its two public parts
+  `SegmentTable` (directory row) and `SegmentMeta` (the `meta` object: `profile`),
+  M6b.
 - **D11 — `ObjectSerdeDriver`: one per table, uniform method names**
   (`serialize_object` / `deserialize_object` — names never vary by object kind).
   Associated `type Index`: a newtype satisfying the `SerialIndex` bound
@@ -738,7 +740,7 @@ let seg = s.take_segment();                          // in-memory Segment, featu
 let mut r = SerdeSession::<Latexlike>::new();
 r.set_user_data(env);
 latexlike::serialize::register(&mut r);              // resolver + std entries, one line
-r.push_segment(seg)?;                                // validate + materialize
+let main = r.push_segment(seg)?;                     // validate + materialize; returns the segment's `main` position (reader ids)
 let tree = r.tree(trees.position(0))?;                  // positions are session-scoped: rebuilt on the reader side
 ```
 
@@ -1913,6 +1915,11 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M6b rulings pass landed (see its entry;
+  `meta.profile` per the user's amendment) → targeted Opus review + M7a hardening
+  started in parallel. Plan patches: D10 wire structs note, §6 usage `push_segment`
+  return. Naming flag for the user: `profile` (alternatives considered `reader`/
+  `target`).
 - 2026-08-17 — supervisor (main session) — Q3/Q7 RESOLVED by the user (see §4);
   additional rulings: `SerialValue::Map` equality is order-sensitive (D5), no `$`
   escaping, segment `main` + `profile`. M7 documentation scope adjusted by the user
