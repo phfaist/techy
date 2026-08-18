@@ -121,6 +121,13 @@
 //! accuracy rule,
 //! [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)).
 //!
+//! The same rule fixes what a source reemitter promises for a language with
+//! [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`: it
+//! reemits the tree **as stored** — the owned text the parser recorded where
+//! the content did not lie in the node's own source — and claims no
+//! byte-equality with any one source, since the tree's content need not be a
+//! range of one. Nothing else changes: the fold reads node data in both cases.
+//!
 //! # The fold is depth-guarded
 //!
 //! The fold recurses once per tree nesting level (at a small, constant stack
