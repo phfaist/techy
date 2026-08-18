@@ -4785,6 +4785,47 @@ multiplying delta helpers).
 
 Revisit if: the staging-door shape itself changes (the helper follows it).
 
+#### `override_all`: the wholesale-install counterpart of `disable_all` [§dd-dr:override-all]
+
+Status: DECIDED (user, API-review session).
+
+**`TokenRulesOverrides::override_all(&TokenRules<L>)`** — the overrides value setting
+every present feature's block to its new per-block `override_all(&block)` value, so
+applying it makes the target's rules equal to the source's. The counterpart of
+`disable_all()` ([§dd-dr:takeover-staging-sugar]) along the same axes: feature-aware by
+construction, infallible, and living on the overrides type so it composes with a
+struct update. It is what a party holding a rules value it wants installed elsewhere
+hand-builds — the shape `exit_math_context_delta` spells out by hand
+([§dd-dr:enclosing-state-stack]).
+
+**The two transient group fields are never carried**, at both levels: `temporary` and
+`expecting_close` stay `None` in `GroupOverrides::override_all` and therefore in the
+whole-value constructor. This generalizes the math-exit ruling — they describe in-flight
+structural expectations of one live parse position, not lexical context — into a single
+family rule, and it keeps the whole-value constructor exactly the composition of the
+seven block constructors (a `GroupOverrides::override_all` carrying all four fields
+would force the whole-value one to un-set two of them, so the same name would mean two
+things one level apart). A parser that wants an expected close installs it on top:
+`GroupOverrides { expecting_close: Some(Some(rule)), ..GroupOverrides::override_all(&r) }`
+— the shape verbatim staging already writes over `disable()`.
+
+Consequence accepted: the exhaustive-literal tripwire of the hand-built sites (a new
+field in any block breaks their build until a carry-or-exclude decision is made) does
+not extend to `override_all`, which silently carries a new field. The gain — one
+audited definition of "install these rules" — was judged worth it; `exit_math_context_delta`
+keeps its hand-written literal and its tripwire.
+
+Rejected alternatives: `set_rules()` (mutator verb for what is a constructor, and
+"rules" restates the type name), `set_all()`, `from_rules()` (idiomatic but silent
+about *all* fields being set — the point of the constructor); a group block carrying
+all four fields (above); keeping the seven block constructors private or omitting them
+(they are what makes the documented struct-update idiom work for the new base, and the
+per-block `disable()` family already sets the precedent).
+
+Revisit if: a caller genuinely needs a verbatim group-block copy including the
+transients — the block constructor would then grow an explicit second spelling, never
+a changed `override_all`.
+
 #### `\input` engine wiring: driver resolver accessor + the `parse_attached_source` door [§dd-dr:input-wiring]
 
 Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).

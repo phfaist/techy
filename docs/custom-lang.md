@@ -313,13 +313,18 @@ language whose command set is fixed resolves every command from a table on
 its driver (its [`CommandResolver`](crate::core::CommandResolver)) and can
 declare the scope stack absent.
 
-The declarations also shape one runtime helper.
+The declarations also shape the two whole-value override constructors.
 [`TokenRulesOverrides::disable_all()`](crate::core::TokenRulesOverrides::disable_all)
 disables every feature the language *has*: it consults the presence
 declarations and flips the `enabled` flag of exactly the present features
 (forbidden characters, which have no flag, are never touched) — absent
 features are simply not mentioned by the value it returns — so it
-can never fail, whatever the language declares. Finally, one short note
+can never fail, whatever the language declares. Its counterpart
+[`TokenRulesOverrides::override_all()`](crate::core::TokenRulesOverrides::override_all)
+reads the same declarations the other way round: it copies the given
+[`TokenRules`](crate::core::TokenRules) into overrides for exactly the
+present features, so applying it installs those rules wholesale (the two
+transient group fields excepted — see its documentation). Finally, one short note
 that matters mainly to custom tooling: the frozen state's two derived
 lookup caches follow the declarations —
 [`ParsingState::prefix_table()`](crate::core::ParsingState::prefix_table)

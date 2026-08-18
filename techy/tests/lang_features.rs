@@ -670,6 +670,37 @@ mod groups_only {
             .expect("disable_all() applies cleanly under a partially-absent language");
         assert!(!derived.rules().groups_enabled());
     }
+
+    // `override_all()` mirrors exactly the present features' blocks: here only the
+    // groups block, and within it only the persistent fields — the two transient
+    // ones are never carried. The absent features' fields are zero-sized stores
+    // with nothing to mirror, so the value stays their default and applying it
+    // always succeeds.
+    #[test]
+    fn override_all_mirrors_only_the_groups_block() {
+        let seed = ParsingState::<GroupsOnlyLang>::lang_initial().expect("seed state");
+        let overrides = TokenRulesOverrides::override_all(seed.rules());
+
+        let mut expected = TokenRulesOverrides::<GroupsOnlyLang>::default();
+        expected.groups.enabled = Some(true);
+        expected.groups.rules = Some(seed.rules().group_rules().to_vec());
+        assert_eq!(overrides, expected);
+        // The seed does carry a temporary rule; `override_all` leaves it behind.
+        assert!(!seed.rules().temporary_group_rules().is_empty());
+        assert!(overrides.groups.temporary.is_none());
+
+        // Installing them over a state whose groups were disabled restores the seed
+        // rules wholesale (gate included), still without the transients.
+        let disabled = seed
+            .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides::disable_all()))
+            .expect("the scoped off applies");
+        assert!(!disabled.rules().groups_enabled());
+        let restored = disabled
+            .derived(&ParsingStateDelta::new().rules(overrides))
+            .expect("override_all() applies cleanly under a partially-absent language");
+        assert!(restored.rules().groups_enabled());
+        assert_eq!(restored.rules().group_rules().len(), seed.rules().group_rules().len());
+    }
 }
 
 // -------------------------------------------------------------------------------------

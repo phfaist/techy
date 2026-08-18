@@ -31,6 +31,13 @@ impl WhitespaceOverrides {
         WhitespaceOverrides { enabled: Some(false), ..WhitespaceOverrides::default() }
     }
 
+    /// Overrides that replace the whole block with `rules`: every field set to
+    /// `Some` of the corresponding value — the block-level piece of
+    /// [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &WhitespaceRules) -> WhitespaceOverrides {
+        WhitespaceOverrides { enabled: Some(rules.enabled), chars: Some(rules.chars.clone()) }
+    }
+
     pub(crate) fn merge_from(&mut self, stronger: WhitespaceOverrides) {
         if let Some(v) = stronger.enabled {
             self.enabled = Some(v);
@@ -63,6 +70,13 @@ impl ParagraphOverrides {
     /// paragraphs feature.
     pub fn disable() -> ParagraphOverrides {
         ParagraphOverrides { enabled: Some(false) }
+    }
+
+    /// Overrides that replace the whole block with `rules`: the gate set to `Some`
+    /// of its value — the block-level piece of
+    /// [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &ParagraphRules) -> ParagraphOverrides {
+        ParagraphOverrides { enabled: Some(rules.enabled) }
     }
 
     pub(crate) fn merge_from(&mut self, stronger: ParagraphOverrides) {
@@ -101,6 +115,32 @@ impl<L: Lang> GroupOverrides<L> {
     /// literal spreads from (see the struct-update note on [`TokenRulesOverrides`]).
     pub fn disable() -> GroupOverrides<L> {
         GroupOverrides { enabled: Some(false), ..GroupOverrides::default() }
+    }
+
+    /// Overrides that carry `rules`' **persistent** group data: the
+    /// [`enabled`](GroupRules::enabled) gate and the delimiter
+    /// [`rules`](GroupRules::rules) list. The list is cloned as `Arc` handles, so
+    /// rule identity survives (see the identity section on [`GroupRule`]).
+    ///
+    /// [`temporary`](GroupRules::temporary) and
+    /// [`expecting_close`](GroupRules::expecting_close) are deliberately left
+    /// `None`: they are in-flight structural expectations belonging to one live
+    /// parse position, not rules data to install elsewhere — and an override
+    /// setting both would additionally engage the explicit-temporary-list rule of
+    /// [`ParsingState::derived`](super::ParsingState::derived). A parser that wants
+    /// an expected close installs it on top of this base:
+    /// `GroupOverrides { expecting_close: Some(Some(rule)), ..GroupOverrides::override_all(&rules) }`
+    /// (the shape [`verbatim_state_delta`](crate::constructs::verbatim_state_delta)
+    /// writes over [`disable()`](Self::disable)).
+    ///
+    /// The block-level piece of [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &GroupRules<L>) -> GroupOverrides<L> {
+        GroupOverrides {
+            enabled: Some(rules.enabled),
+            rules: Some(rules.rules.clone()),
+            temporary: None,
+            expecting_close: None,
+        }
     }
 
     pub(crate) fn merge_from(&mut self, stronger: GroupOverrides<L>) {
@@ -151,6 +191,14 @@ impl CommandOverrides {
         CommandOverrides { enabled: Some(false), ..CommandOverrides::default() }
     }
 
+    /// Overrides that replace the whole block with `rules`: every field set to
+    /// `Some` of the corresponding value (the syntaxes are cloned as `Arc`
+    /// handles) — the block-level piece of
+    /// [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &CommandRules) -> CommandOverrides {
+        CommandOverrides { enabled: Some(rules.enabled), rules: Some(rules.rules.clone()) }
+    }
+
     pub(crate) fn merge_from(&mut self, stronger: CommandOverrides) {
         if let Some(v) = stronger.enabled {
             self.enabled = Some(v);
@@ -187,6 +235,14 @@ impl CommentOverrides {
         CommentOverrides { enabled: Some(false), ..CommentOverrides::default() }
     }
 
+    /// Overrides that replace the whole block with `rules`: every field set to
+    /// `Some` of the corresponding value (the syntaxes are cloned as `Arc`
+    /// handles) — the block-level piece of
+    /// [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &CommentRules) -> CommentOverrides {
+        CommentOverrides { enabled: Some(rules.enabled), rules: Some(rules.rules.clone()) }
+    }
+
     pub(crate) fn merge_from(&mut self, stronger: CommentOverrides) {
         if let Some(v) = stronger.enabled {
             self.enabled = Some(v);
@@ -221,6 +277,13 @@ impl SpecialsOverrides {
         SpecialsOverrides { enabled: Some(false) }
     }
 
+    /// Overrides that replace the whole block with `rules`: the gate set to `Some`
+    /// of its value — the block-level piece of
+    /// [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &SpecialsRules) -> SpecialsOverrides {
+        SpecialsOverrides { enabled: Some(rules.enabled) }
+    }
+
     pub(crate) fn merge_from(&mut self, stronger: SpecialsOverrides) {
         if let Some(v) = stronger.enabled {
             self.enabled = Some(v);
@@ -249,6 +312,13 @@ impl ForbiddenCharsOverrides {
     /// language has the forbidden-characters feature.
     pub fn disable() -> ForbiddenCharsOverrides {
         ForbiddenCharsOverrides { chars: Some("".into()) }
+    }
+
+    /// Overrides that replace the whole block with `rules`: the forbidden-character
+    /// set overridden to `rules`' own (the block has no gate) — the block-level
+    /// piece of [`TokenRulesOverrides::override_all`].
+    pub fn override_all(rules: &ForbiddenCharsRules) -> ForbiddenCharsOverrides {
+        ForbiddenCharsOverrides { chars: Some(rules.chars.clone()) }
     }
 
     pub(crate) fn merge_from(&mut self, stronger: ForbiddenCharsOverrides) {
@@ -384,6 +454,80 @@ impl<L: Lang> TokenRulesOverrides<L> {
                 ForbiddenCharsOverrides::disable,
             ),
         }
+    }
+
+    /// The wholesale install of `rules`: for every feature the language declares
+    /// present ([`Lang::Features`]) the block is set to its `override_all()` value,
+    /// so applying the result makes the target's rules equal to `rules`. Features
+    /// the language declares absent are simply not mentioned by the returned value:
+    /// their fields hold the zero-sized store, which carries nothing.
+    ///
+    /// Exactly the composition of the seven per-block constructors
+    /// ([`WhitespaceOverrides::override_all`], [`GroupOverrides::override_all`], …),
+    /// and the counterpart of [`disable_all`](Self::disable_all): that one flips the
+    /// gates and leaves the data in place, this one replaces the data and sets each
+    /// gate to `rules`' own. The rule lists are cloned as `Arc` handles, so rule
+    /// identity survives (see the identity section on [`GroupRule`]).
+    ///
+    /// **The two transient group fields are not carried.** Whatever `rules` holds in
+    /// [`temporary`](GroupRules::temporary) and
+    /// [`expecting_close`](GroupRules::expecting_close) is left `None` — they are
+    /// in-flight structural expectations of one live parse position, not rules data
+    /// to install elsewhere ([`GroupOverrides::override_all`] has the full reasoning;
+    /// a parser wanting an expected close installs it on top). Every other field of
+    /// every present block is `Some`.
+    pub fn override_all(rules: &TokenRules<L>) -> TokenRulesOverrides<L> {
+        // Matched projections per feature, as in `apply`: the rules store and the
+        // override store carry the same presence marker, so a present feature's
+        // block is built from its rules block, and an absent feature's field stays
+        // the zero-sized store `default()` put there — there is nothing on either
+        // side to carry.
+        let mut overrides = TokenRulesOverrides::<L>::default();
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::Whitespace::store_get_mut(&mut overrides.whitespace),
+            <L::Features as LangFeatures>::Whitespace::store_get(&rules.whitespace),
+        ) {
+            *slot = WhitespaceOverrides::override_all(block);
+        }
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::Paragraphs::store_get_mut(&mut overrides.paragraphs),
+            <L::Features as LangFeatures>::Paragraphs::store_get(&rules.paragraphs),
+        ) {
+            *slot = ParagraphOverrides::override_all(block);
+        }
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::Groups::store_get_mut(&mut overrides.groups),
+            <L::Features as LangFeatures>::Groups::store_get(&rules.groups),
+        ) {
+            *slot = GroupOverrides::override_all(block);
+        }
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::Commands::store_get_mut(&mut overrides.commands),
+            <L::Features as LangFeatures>::Commands::store_get(&rules.commands),
+        ) {
+            *slot = CommandOverrides::override_all(block);
+        }
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::Comments::store_get_mut(&mut overrides.comments),
+            <L::Features as LangFeatures>::Comments::store_get(&rules.comments),
+        ) {
+            *slot = CommentOverrides::override_all(block);
+        }
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::Specials::store_get_mut(&mut overrides.specials),
+            <L::Features as LangFeatures>::Specials::store_get(&rules.specials),
+        ) {
+            *slot = SpecialsOverrides::override_all(block);
+        }
+        if let (Some(slot), Some(block)) = (
+            <L::Features as LangFeatures>::ForbiddenChars::store_get_mut(
+                &mut overrides.forbidden_chars,
+            ),
+            <L::Features as LangFeatures>::ForbiddenChars::store_get(&rules.forbidden_chars),
+        ) {
+            *slot = ForbiddenCharsOverrides::override_all(block);
+        }
+        overrides
     }
 
     /// Merge `stronger` into `self`: every `Some` field of `stronger` replaces
@@ -914,5 +1058,112 @@ mod tests {
         expected.specials.enabled = Some(false);
         expected.forbidden_chars.chars = Some("".into());
         assert_eq!(overrides, expected);
+    }
+
+    /// A populated rules value to mirror: every block carries data, including the
+    /// two transient group fields (the ones `override_all` must *not* carry).
+    fn populated_rules() -> TokenRules<PlainLang> {
+        let brace = Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
+        let bracket = Arc::new(GroupRule { group_type: 1, open: "[".into(), close: "]".into() });
+        TokenRules {
+            whitespace: WhitespaceRules { enabled: true, chars: " \t".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::clone(&brace)],
+                temporary: vec![Arc::clone(&bracket)],
+                expecting_close: Some(Arc::clone(&bracket)),
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule { escape_char: '\\', name_chars: "az".into() })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "#".into() },
+        }
+    }
+
+    // `override_all()` sets every field of every present block from the source
+    // rules — except the two transient group fields, which are in-flight
+    // structural expectations and are never carried (user ruling 2026-08-18,
+    // matching the exclusion `exit_math_context_delta` already spells out).
+    #[test]
+    fn override_all_mirrors_every_field_but_the_transient_group_ones() {
+        let rules = populated_rules();
+        let overrides = TokenRulesOverrides::<PlainLang>::override_all(&rules);
+
+        assert_eq!(overrides.whitespace.enabled, Some(true));
+        assert_eq!(overrides.whitespace.chars.as_deref(), Some(" \t"));
+        assert_eq!(overrides.paragraphs.enabled, Some(true));
+        assert_eq!(overrides.groups.enabled, Some(true));
+        assert_eq!(overrides.groups.rules.as_deref(), Some(&rules.groups.rules[..]));
+        assert_eq!(overrides.commands.enabled, Some(true));
+        assert_eq!(overrides.commands.rules.as_deref(), Some(&rules.commands.rules[..]));
+        assert_eq!(overrides.comments.enabled, Some(true));
+        assert_eq!(overrides.comments.rules.as_deref(), Some(&rules.comments.rules[..]));
+        assert_eq!(overrides.specials.enabled, Some(true));
+        assert_eq!(overrides.forbidden_chars.chars.as_deref(), Some("#"));
+
+        // The two transient fields stay untouched, whatever the source held.
+        assert!(overrides.groups.temporary.is_none());
+        assert!(overrides.groups.expecting_close.is_none());
+
+        // The whole value is exactly the composition of the seven block
+        // constructors — no field decided anywhere else.
+        assert_eq!(
+            overrides,
+            TokenRulesOverrides::<PlainLang> {
+                whitespace: WhitespaceOverrides::override_all(&rules.whitespace),
+                paragraphs: ParagraphOverrides::override_all(&rules.paragraphs),
+                groups: GroupOverrides::override_all(&rules.groups),
+                commands: CommandOverrides::override_all(&rules.commands),
+                comments: CommentOverrides::override_all(&rules.comments),
+                specials: SpecialsOverrides::override_all(&rules.specials),
+                forbidden_chars: ForbiddenCharsOverrides::override_all(&rules.forbidden_chars),
+            }
+        );
+    }
+
+    // Applying `override_all(&source)` to any starting value installs `source`'s
+    // rules wholesale — the transient group fields excepted, which keep the
+    // target's own (here: the all-empty target's).
+    #[test]
+    fn applying_override_all_installs_the_source_rules() {
+        let source = populated_rules();
+        let mut target = TokenRules::<PlainLang>::empty();
+        TokenRulesOverrides::override_all(&source).apply(&mut target);
+
+        assert_eq!(target.whitespace, source.whitespace);
+        assert_eq!(target.paragraphs, source.paragraphs);
+        assert_eq!(target.commands, source.commands);
+        assert_eq!(target.comments, source.comments);
+        assert_eq!(target.specials, source.specials);
+        assert_eq!(target.forbidden_chars, source.forbidden_chars);
+        assert_eq!(target.groups.enabled, source.groups.enabled);
+        // Rule identity survives the round trip: the `Arc`s are the source's own,
+        // not data-equal copies (the identity comparisons of `GroupRule`).
+        assert!(Arc::ptr_eq(&target.groups.rules[0], &source.groups.rules[0]));
+        // …while the transients were not carried.
+        assert!(target.groups.temporary.is_empty());
+        assert!(target.groups.expecting_close.is_none());
+    }
+
+    // The gate-carrying blocks mirror a *disabled* source just as faithfully:
+    // `override_all` is a copy of the source's own gates, not an enable-all.
+    #[test]
+    fn override_all_carries_the_source_gates_as_they_are() {
+        let mut source = populated_rules();
+        source.commands.enabled = false;
+        source.comments.enabled = false;
+        let overrides = TokenRulesOverrides::<PlainLang>::override_all(&source);
+        assert_eq!(overrides.commands.enabled, Some(false));
+        assert_eq!(overrides.comments.enabled, Some(false));
+        // The disabled features' data still travels — the scoped off keeps it in
+        // place for a later re-enable.
+        assert_eq!(overrides.commands.rules.as_deref(), Some(&source.commands.rules[..]));
     }
 }

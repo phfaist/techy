@@ -857,7 +857,9 @@ split; the deliberately infallible remainder), [§dd-dr:parse-driver],
 `StdParseDriver`'s `R` parameter, with the generic/dyn resolver asymmetry and
 constructor doctrine; supersedes the [§dd-dr:scopes-resolving-driver] component
 struct), [§dd-dr:takeover-staging-sugar] (`disable_all`, collection constructors,
-the `stage_invocation` helper with its end-position rule), [§dd-dr:input-wiring]
+the `stage_invocation` helper with its end-position rule), [§dd-dr:override-all]
+(`override_all`, its per-block family, and the transient group fields it never
+carries), [§dd-dr:input-wiring]
 (driver resolver accessor, the `parse_attached_source` door,
 `attach_source_reference`), [§dd-dr:ext-minting] (parse staging only via
 `ParseContext::stage_node`; the session's builder is crate-private),
