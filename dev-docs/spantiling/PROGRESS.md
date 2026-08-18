@@ -195,8 +195,8 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 ## Stage 2 — parsers
 
 Status: **implemented** (branch `st-2-parsers`, worktree
-`.claude/worktrees/st-2-parsers`; commits `df520fe`, `e40424d`, `8e3ffa3`, `048c6b9`,
-`0df3bc9`, plus this file).
+`.claude/worktrees/st-2-parsers`, rebased onto `st-1-contract` at `d525660`; commits
+`07b853e`, `9ac1335`, `28418f6`, `fdbd5ed`, `16e2eb4`, `f2e6cfa`, plus this file).
 
 ### Files changed
 
@@ -249,6 +249,11 @@ Status: **implemented** (branch `st-2-parsers`, worktree
 - `techy/src/latexlike/invariants.rs` (**R6**) — `check_latexlike_tree_invariants`
   gates its payload pins the same way (they are byte accounting too), with the docs
   renamed and the gate explained.
+
+After the rebase onto the Stage 1 review's wording fixes (`d525660`), one follow-up
+commit (`f2e6cfa`) generalizes the owned-content docs the same way the const doc was
+generalized: multi-token content is owned because the tokens need not form one
+contiguous stretch of one source, of which a seam between two sources is one example.
 
 ### R2 — "node span == fact span, bare `Spanned` kept" (checked list)
 
