@@ -84,11 +84,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.86.0
       - uses: Swatinem/rust-cache@v2
-      # Library code only, no `--all-targets`: the rust-version in Cargo.toml is a
-      # promise about what consumers compile, not about the test harness and its
-      # dev-dependencies.
+      # `--all-targets`, so the test harness and the dev-dependencies are held to the
+      # declared minimum too, not just the library a consumer compiles: a contributor
+      # on the MSRV must be able to run the suite, and nothing else pins that. `check`
+      # rather than `test` — the gate is that everything *builds* there; the behavior
+      # of the tests is the stable job's business, on every OS.
       - name: Check on the declared minimum toolchain
-        run: cargo check --workspace --all-features
+        run: cargo check --workspace --all-features --all-targets
 
   no-std:
     name: no_std (wasm32-unknown-unknown)

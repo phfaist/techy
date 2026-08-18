@@ -970,39 +970,35 @@ mod tests {
         let one = spec();
         let same = Arc::clone(&one);
         let other = spec();
-        let view = |spec| TokenKind::<PlainLang>::Specials {
-            callable_type: 0,
-            name: "~",
-            spec,
-        };
+        // The language is pinned by the signature rather than by a turbofish on the
+        // path: `TokenKind::<PlainLang>::Specials { … }` is a struct-variant expression
+        // whose generic arguments rustc attributes to the *variant* before 1.97, which
+        // no spelling of the turbofish gets past. Same for the three sites below.
+        fn view(spec: &Arc<dyn CallableSpec<PlainLang>>) -> TokenKind<'_, PlainLang> {
+            TokenKind::Specials { callable_type: 0, name: "~", spec }
+        }
         assert_eq!(view(&one), view(&same));
         assert_ne!(view(&one), view(&other));
 
         // Rules are plain data: two equal rules in different allocations compare equal.
         let one_rule = rule();
         let twin = rule();
-        assert_eq!(
-            TokenKind::<PlainLang>::GroupOpen { delim: "{", rule: &one_rule },
-            TokenKind::GroupOpen { delim: "{", rule: &twin }
-        );
+        let opened: TokenKind<'_, PlainLang> =
+            TokenKind::GroupOpen { delim: "{", rule: &one_rule };
+        assert_eq!(opened, TokenKind::GroupOpen { delim: "{", rule: &twin });
     }
 
     #[test]
     fn the_views_display_renders_the_written_spelling() {
         use alloc::string::ToString;
-        assert_eq!(
-            TokenKind::<PlainLang>::Command { name: "vec", escape_char: '@' }
-                .to_string(),
-            "Command(@vec)"
-        );
-        assert_eq!(
-            TokenKind::<PlainLang>::Comment {
-                start_delim: "%",
-                content: "0123456789012345678901234567890",
-            }
-            .to_string(),
-            "Comment(\"012345678901234567890123\"…)"
-        );
+        let command: TokenKind<'_, PlainLang> =
+            TokenKind::Command { name: "vec", escape_char: '@' };
+        assert_eq!(command.to_string(), "Command(@vec)");
+        let comment: TokenKind<'_, PlainLang> = TokenKind::Comment {
+            start_delim: "%",
+            content: "0123456789012345678901234567890",
+        };
+        assert_eq!(comment.to_string(), "Comment(\"012345678901234567890123\"…)");
     }
 
     #[test]
