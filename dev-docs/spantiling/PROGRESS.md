@@ -198,9 +198,20 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 
 ## Stage 4 — consumers
 
-Status: **implemented** (branch `st-4-consumers`, worktree
-`.claude/worktrees/st-4-consumers`, base `st-1-contract` at `0fc88ad`; commits
-`3d75f1b`, `28d2056`, `507ea59`, `b601d08`, `7134f93`, plus this file).
+Status: **reviewed** (branch `st-4-consumers`, worktree
+`.claude/worktrees/st-4-consumers`; commits `51f05ad`, `57060ca`, `25bc44c`,
+`a169ce3`, `17f2ac9`, `bdecb5c`, plus this file).
+
+Review **PASS**, no blocking fixes; the four non-blocking suggestions are applied
+(`node_at` and the shared descent carry `covering_slice`'s conditional; the split
+examples name `content_as_chars` as the content reader beside `source_text`'s
+coordinates; the three byte-exactness claims in `docs/custom-lang.md`,
+`docs/ai-guide-trees.md` and `docs/learn-by-example.md` name span tiling; the
+`false` case in `latexlike/recompose.rs` is phrased as the const's definition has
+it — parsers assume nothing about where tokens come from — instead of "several
+sources"). Rebased onto `main` at `d525660` (Stage 1 merged, including its own
+wording commit); the rebase was clean, and `cargo test --workspace` and
+`cargo docs --all-features` were re-run after it (results below).
 
 ### Files changed
 
@@ -324,6 +335,9 @@ Read; **no tiling claim found**, nothing edited.
 | `extract.rs:30` | "parse-tree byte accounting" | rewritten ("the byte accounting of span tiling") |
 | `docs/learn-by-example.md:75` | "the tree's span partition invariant" | rewritten (span tiling, preset named) |
 | `docs/node-trees.md:23`, `docs/ai-guide-trees.md:13,56,233` | "exact byte range", "byte-exact for parsed trees" | conditional added |
+| `docs/custom-lang.md:376` | "byte-exact re-emission is possible exactly to the extent the language records spelling facts here" | conditional added (review suggestion 3) |
+| `docs/ai-guide-trees.md:259`, `docs/learn-by-example.md:697` | "byte-exact for parsed trees" (doctest comments) | rewritten ("trees parsed from a language that obeys span tiling") |
+| `techy/src/extract.rs:92` doctest, `docs/learn-by-example.md:636`, `docs/ai-guide-trees.md:133`, `docs/ai-guide.md:155` | `segment().source_text()` taught as the segment reader | caveat added pointing at `content_as_chars` (review suggestion 2) |
 | `token/reader.rs:2641` | "partition invariant" (test comment) | **left** — `token/` is Stage 1's file (see open question 3) |
 | `constructs/nodes_parser.rs:38,54,590,621,636,682,1653,1794`, `constructs/verbatim_parser.rs:37`, `constructs/environment_parser.rs:700` | "partition invariant", "in-order, gap-free token contract" | **left for Stage 2** (R1/R6 rewrite these) |
 | `node/invariants.rs:4,7,11,41,557,821,832,1213`, `latexlike/invariants.rs:1,31` | "parse-tree law", "partition invariant" (message text + test) | **left for Stage 2** (R6 renames and gates the oracle) |
