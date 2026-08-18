@@ -122,9 +122,18 @@ pub(crate) fn invocation_frame<L: Lang>(
 /// the node's own source, the fact's text itself otherwise.
 ///
 /// The one spelling of the node-data rule: a bare span means nothing without the
-/// source it indexes, so a fact from another source (only reachable under a reader
-/// that serves one parse from several sources) is recorded as owned text instead of
-/// as a span that would read against the wrong content.
+/// source it indexes, so a fact from another source is recorded as owned text instead
+/// of as a span that would read against the wrong content. A fact can only come from
+/// another source under a language with
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, whose reader
+/// may serve one parse from several sources: at a seam between two of them a single
+/// token can even have edges in two sources, so one of its sub-spans may lie outside
+/// the node's own.
+///
+/// The rule assumes nothing about the tokens: both arms read the very same
+/// reader-answered span, and which arm applies is decided by the source the fact lies
+/// in — the residency the all-trees law
+/// ([`validate_tree`](crate::node::validate_tree)) checks.
 pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
     fact: &SourceSpan<O>,
     node_span: &SourceSpan<O>,
@@ -136,24 +145,26 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
 }
 
 /// The `Comment` node kind for a comment token, plus the node's span: the delimiter,
-/// the text, and the syntactic post-space, each as a span of the node's own source.
+/// the text, and the syntactic post-space, each recorded as node data.
 ///
 /// All four spans are reader answers about the token's edges — the delimiter is
 /// `Start..ContentStart`, the content `ContentStart..End`, the post-space
 /// `End..EndPastPostSpace`, and the node's span the token's own. The parser computes
-/// none of them itself.
+/// none of them itself, and records the three sub-spans through the node-data rule
+/// ([`node_text_content`]): a span of the node's own source where the answer lies in
+/// it, the text itself otherwise — which is what a token whose edges fall in two
+/// sources needs (a seam, reachable only under
+/// [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`).
 pub(crate) fn comment_node_kind<L: Lang>(
     cx: &ParseContext<'_, '_, L>,
     token: &Token<L>,
 ) -> (NodeKind<L>, SourceSpan<L::SourceOrigin>) {
     let span = cx.tokens.source_span_of(token);
     let between = |a, b| cx.tokens.source_span_between(token, a, b);
-    // The three sub-spans tile the token, so each lies in the node's own source and is
-    // recorded as a bare span of it (§1.12's node-data rule, trivially satisfied here).
     let kind = NodeKind::comment(
-        between(TokenEdge::Start, TokenEdge::ContentStart).span(),
-        between(TokenEdge::ContentStart, TokenEdge::End).span(),
-        between(TokenEdge::End, TokenEdge::EndPastPostSpace).span(),
+        node_text_content(&between(TokenEdge::Start, TokenEdge::ContentStart), &span),
+        node_text_content(&between(TokenEdge::ContentStart, TokenEdge::End), &span),
+        node_text_content(&between(TokenEdge::End, TokenEdge::EndPastPostSpace), &span),
     );
     (kind, span)
 }
@@ -354,17 +365,26 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///   reader's current stream position — which, for a childless invocation staged
     ///   in the ordinary flow, is just past the trigger's own post-space.
     ///
+    /// For a language with
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the last
+    /// two cases are one: a staged child's span end says nothing about where the
+    /// trigger's own source stands, so the node's span is always the one the reader
+    /// describes for the stretch from the trigger's start to where the stream now
+    /// stands — just past the last child in the ordinary flow.
+    ///
     /// Deliberately **no `callable_type`/`name` overrides**: a composition that
     /// overrides both and whose span outruns its children (the environment shape)
     /// stays on [`stage_node`](ParseContext::stage_node) itself with
     /// an explicit [`CallableData`]. No ext/annotation parameters — staging
     /// mints the ext, and parse annotations are `()`.
     ///
-    /// `Err` reports an **invalid computed span** — a node end (from the standard
-    /// rule or from `end`) that precedes the trigger's start, or that lies in
-    /// another source than the trigger: a contract violation by the calling parser,
-    /// lifted as an [`ImplementationError`] that aborts under any recovery policy,
-    /// never a panic — or a
+    /// `Err` reports an **invalid computed span** — for a language that obeys span
+    /// tiling, a node end (from the standard rule or from `end`) that precedes the
+    /// trigger's start, or that lies in another source than the trigger: a contract
+    /// violation by the calling parser, lifted as an [`ImplementationError`] that
+    /// aborts under any recovery policy, never a panic (a language with
+    /// `OBEYS_SPAN_TILING = false` claims nothing about the span and reports no such
+    /// error) — or a
     /// [`stage_node`](ParseContext::stage_node) failure lifted per that method's
     /// split (contract violations as [`ImplementationError`], the ext mint's
     /// reported failure as [`HookFailed`](crate::error::HookFailed); both abort
@@ -386,6 +406,17 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let span = match end {
             // The explicit end: the takeover claims its consumed extent.
             Some(end) => self.invocation_span_within(&trigger, &trigger_start, end)?,
+            // The standard rule needs a byte comparison between a child's span and
+            // the trigger's, which presupposes span tiling. Where the language does
+            // not declare it, no assumption is made about the children at all: the
+            // only position this method holds that means "past the last child" is the
+            // one the reader stands at (children are staged nodes — spans, not stream
+            // positions), so the span is what the reader describes for the stretch
+            // from the trigger's start to there.
+            None if !L::OBEYS_SPAN_TILING => {
+                let here = self.tokens.position_here();
+                self.invocation_span_within(&trigger, &trigger_start, &here)?
+            }
             None => {
                 // The standard rule: the last staged child's span end, in the
                 // trigger's own source. A last child no parser ever staged (an
