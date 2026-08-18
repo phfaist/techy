@@ -196,7 +196,8 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 
 Status: **implemented** (branch `st-2-parsers`, worktree
 `.claude/worktrees/st-2-parsers`, rebased onto `st-1-contract` at `d525660`; commits
-`07b853e`, `9ac1335`, `28418f6`, `fdbd5ed`, `16e2eb4`, `f2e6cfa`, plus this file).
+`07b853e`, `9ac1335`, `28418f6`, `fdbd5ed`, `16e2eb4`, `f2e6cfa`, `cb5891d`, plus this
+file).
 
 ### Files changed
 
@@ -235,8 +236,19 @@ Status: **implemented** (branch `st-2-parsers`, worktree
   and `raw_content_text` records `Owned`/`Spanned` at both content sites (the delimited
   argument and the environment body). Module docs state the two representations; the
   "partition invariants" phrase is gone.
+- `techy/src/constructs/argument_parsers.rs` (**R1/R4 by the user's ruling**) —
+  `MarkerArgumentParser`'s node covers one token per marker character; under `false` it
+  records `TextContent::Owned(self.marker)`, which is exactly what was read (every token
+  was checked to spell the expected character, consecutively). Unchanged under `true`.
 - `techy/src/constructs/environment_parser.rs` — wording only ("the gap-free tiling
   contract" → "span tiling, where the language obeys it").
+- `techy/src/latexlike/environments.rs` (**R1/R4 by the user's ruling**) — the
+  orphan-`\end` recovery node covers the trigger and, when one was read, the name group;
+  under `false` its content is assembled from what the site has in hand about each piece
+  — the trigger's own span (one reader answer about one token, taken from its `Start` so
+  the pre-space the content loop already staged stays out) plus the name group's
+  delimiters as written (the rule cloned off the matched open token) around the name.
+  Unchanged under `true`.
 - `techy/src/latexlike/invocation_syntax.rs` (**R3**) — `from_invocation`'s macro arm
   records `post_space` as `Spanned` under `true` and `Owned` under `false`, with the
   comment rewritten (the "sound because the node starts at this very token" argument
@@ -266,15 +278,26 @@ Complete against `grep -n "NodeKind::chars(\|TextContent::Spanned("` over
 | `constructs/argument_parsers.rs:207` | `stage_pre_space`: a pre-space-only chars node | node span == fact span → `Spanned` kept |
 | `constructs/argument_parsers.rs:263` | expression-position chars over one token | node span == fact span → `Spanned` kept |
 | `constructs/argument_parsers.rs:307`, `:318` | unresolvable / failed command fallback over one token | node span == fact span → `Spanned` kept |
-| `constructs/argument_parsers.rs:999` | `MarkerArgumentParser`'s chars node (**several tokens**) | `Spanned` kept per R2/R5 — flagged, open question 1 |
+| `constructs/argument_parsers.rs:1010` | `MarkerArgumentParser`'s chars node (**several tokens**) | `Owned` under `false` (user ruling) |
 | `constructs/nodes_parser.rs:908` | `recover_as_chars` over one token's span | node span == fact span → `Spanned` kept |
 | `constructs/verbatim_parser.rs:785` | the gobbled leading newline (one token) | node span == fact span → `Spanned` kept |
 | `latexlike/driver.rs:267` | the paragraph-break `Chars` shape over the break span | node span == fact span → `Spanned` kept |
 | `latexlike/environments.rs:862` | malformed-`\begin` chars fallback over the trigger | node span == fact span → `Spanned` kept |
-| `latexlike/environments.rs:1066` | orphan-`\end` recovery chars (**several tokens**) | `Spanned` kept — flagged, open question 1 |
+| `latexlike/environments.rs:1097` | orphan-`\end` recovery chars (**several tokens**) | `Owned` under `false` (user ruling) |
 | `constructs/environment_parser.rs:992`, `:1194` | inside `mod tests` (a test language's raw-body parser) | test code; goes through the dispatch already |
 | `constructs/mod.rs:142` | `node_text_content` itself | the rule |
 | `constructs/nodes_parser.rs:620`, `verbatim_parser.rs:177`, `latexlike/invocation_syntax.rs:148` | the three sites this stage changed (R1, R4, R3) | dispatch on the const |
+
+**Multi-token sweep (user ruling, 2026-08-19).** `NodeKind::chars(<span>.span())` was
+re-grepped crate-wide for a node covering more than one token — the test is where the
+span comes from: two stream positions (`cx.source_span_within`) rather than one token's
+`source_span_of`/`source_span_between`. Outside test modules there are none left: the
+two sites above now record text, the chars run (R1) and the two verbatim sites (R4)
+already did, and every other production site takes one token's span —
+`engine/language.rs:246` and `constructs/attached_source.rs:192` (the stop cause's span,
+the close delimiter as matched), `scopes/mod.rs:1637` and `latexlike/environments.rs:862`
+(the trigger), `latexlike/driver.rs:267` (the paragraph break),
+`argument_parsers.rs:207/263/307/318`, `nodes_parser.rs:908`, `verbatim_parser.rs:785`.
 
 The single-token facts already going through `node_text_content` before this stage —
 group delimiters (`group_parser.rs`), verbatim delimiters (`verbatim_parser.rs`),
@@ -336,6 +359,21 @@ declaration through the shared helpers. Nothing to make generic.
   `a_language_that_does_not_obey_span_tiling_is_held_to_the_all_trees_law_only` — the
   sibling-gap tree that `rejects_a_gap_between_siblings` panics on passes the oracle
   under `RelaxedStdLang`.
+- `constructs/nodes_parser.rs`:
+  `a_marker_argument_owns_its_text_where_the_language_does_not_obey_span_tiling` — a
+  `\opt**` marker argument under both declarations: same structure and same node span,
+  `Owned("**")` against `Spanned`.
+- `latexlike/environments.rs`:
+  `the_orphan_end_recovery_owns_its_text_where_the_language_does_not_obey_span_tiling` —
+  `"a\end{itemize}b"` and `"\end x"` (the name-group arm and the malformed arm) under
+  `Latexlike` and under the new `RelaxedLatexlike`: same recovered text, `Owned` against
+  `Spanned`, `check_latexlike_tree_invariants` and `validate_tree` OK.
+
+`RelaxedLatexlike` (test-only, in `latexlike/environments.rs`'s test module) is a
+latexlike-family language with the preset's vocabularies and seed and
+`OBEYS_SPAN_TILING = false`. It is **R7's concrete demonstration**: the preset's generic
+parsers, driver and node-ext types serve a non-tiled family member unchanged. Stage 3b's
+`LatexlikeLang` over `ScriptedTokenization` can build on it.
 
 Test-language plumbing (reuse, no duplicate): `constructs::tests` is now
 `pub(crate) mod tests` (test builds only) and exports `RelaxedStdLang`, its tiled twin
@@ -351,51 +389,50 @@ language for the same reason.
 ```
 ### cargo build
    Compiling techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.53s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.33s
 
 ### cargo test --workspace
-test result: ok. 1073 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
-test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1075 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 12.82s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.33s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo test --workspace --all-features
-test result: ok. 1112 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.73s
+test result: ok. 1114 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.53s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 15.97s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.85s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo clippy --workspace --all-targets -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.86s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.17s
 
 ### cargo clippy --workspace --all-targets --all-features -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.18s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.07s
 
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.18s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.74s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/target/doc/techy/index.html and 1 other file
 ```
 
-Baseline: Stage 1 ran 1067 / 1106 lib tests; Stage 2 adds 6 (the five new tests plus
-the `constructs::tests` split is unchanged) — 1073 / 1112. No existing test changed its
+Baseline: Stage 1 ran 1067 / 1106 lib tests; Stage 2 adds 8 — 1075 / 1114. No existing test changed its
 expectations except `node::invariants::rejects_a_gap_between_siblings`, whose
 `should_panic` string follows the renamed assertion message. `cargo docs --all-features`
 emits no warnings.
@@ -427,11 +464,13 @@ emits no warnings.
    `verbatim_parser.rs ~760` — changed. Likewise `verbatim_parser.rs ~736` (listed
    under R4) is the gobbled leading newline: one token, node span == fact span, so it
    keeps the bare span under R2.
-3. **No environment test through the preset.** §3 step 8 makes it optional ("if
-   cheap"); a `LatexlikeLang` declaring `false` is Stage 3b's subject, and the preset's
-   environment path is exercised generically by the R3 unit test and the
-   `stage_invocation` coverage in the nodes-parser comparison. The relaxed *verbatim*
-   body path is covered through `VerbatimArgumentParser`.
+3. **No `\begin…\end` environment parse under a relaxed preset language.** §3 step 8
+   makes it optional ("if cheap"), and a `LatexlikeLang` over a multi-source reader is
+   Stage 3b's subject. The user's ruling did make a relaxed family member necessary for
+   the orphan-`\end` site, so `RelaxedLatexlike` now exists (test-only, over
+   `StdTokenization`) and covers that path; a full environment body under it is left to
+   Stage 3b, which has the reader to make it meaningful. The relaxed *verbatim* body
+   recipe is covered through `VerbatimArgumentParser`.
 4. **Test-language sharing changed `constructs::tests` to `pub(crate) mod tests`** and
    gave `RelaxedStdLang` a scope-stack command resolver (see "Tests added"). The
    alternative — a second relaxed language per test module — was rejected as the
@@ -439,23 +478,30 @@ emits no warnings.
 
 ### Open questions for the user
 
-1. **Two multi-token chars nodes keep `Spanned` under `false`** (both listed as
-   "checked" per R2, both flagged here): the marker argument's node
-   (`MarkerArgumentParser`, `constructs/argument_parsers.rs:999` — a multi-character
-   marker is read one `Char` token at a time) and
-   the orphan-`\end` recovery node (`latexlike/environments.rs:1066`). Their span is
-   their own fact, so the all-trees law holds (residency), and §1.5 R2/R5 leaves them
-   alone; but under `OBEYS_SPAN_TILING = false` the content then reads back as the
-   *described* span's text rather than as what was consumed, which is exactly the
-   inaccuracy R1/R4 exist to avoid. Cheap fixes exist (the marker's text is
-   `self.marker` by construction; the recovery node would need the R1 accumulation).
-   Should they follow R1/R4, or is "as described" acceptable for a recovery/noise node?
-2. **`recover_as_chars` and the other one-token fallbacks record `Spanned`** even though
+1. **Answered (user, 2026-08-19): follow R1/R4** — under `OBEYS_SPAN_TILING = false` a
+   multi-token `Chars` node must not record `Spanned` content, recovery and noise nodes
+   included ("as described" text is exactly the inaccuracy R1/R4 exist to avoid). Both
+   sites now record text (see "Files changed" and the sweep above), with a test each;
+   the crate-wide re-grep found no third site outside test modules.
+
+   One **residual**, reported rather than fixed because it changes a public core type:
+   `NameGroup::name` (`constructs/environment_parser.rs`, filled by `read_name_chars`)
+   is itself a `cx.source_span_within` span over several `Char` tokens, so under `false`
+   *its* `content()` is the described span's text. It feeds the environment node's
+   `name` (an owned `String`), the `OrphanEnd` condition's name, and — through the
+   orphan-`\end` node above — the name part of that recovery text. Making it exact means
+   accumulating the characters in `read_name_chars` and carrying them on `NameGroup`
+   (a new public field, or a `TextContent`), which is a design decision for the user,
+   not a Stage 2 fix. Same shape: the `quoted` terminator spelling just above the
+   recovery node (`latexlike/environments.rs`), which renders a described span into the
+   diagnostic's message.
+2. **Confirmed (user, 2026-08-19).** `recover_as_chars` and the other one-token
+   fallbacks record `Spanned` even though
    the node's span is a reader answer about a token that may have edges in two sources
    at a seam. `SourceSpan::span()` names one range of one source, so residency holds by
    construction; flagging it only because the seam case makes "the token's span" less
    obviously the token's text than it reads.
-3. **`docs/panics.md` untouched** (as in Stage 1): no new panicking public item; the
+3. **Confirmed (user, 2026-08-19): `docs/panics.md` untouched** (as in Stage 1): no new panicking public item; the
    owned-text accumulation only calls `SourceSpan::content()`, whose bounds come from
    the reader's own answer.
 
