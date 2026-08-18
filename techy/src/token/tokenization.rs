@@ -120,7 +120,9 @@ pub trait Tokenization<L: Lang> {
     /// [`position_at`](super::TokenReader::position_at)). Nothing else reads anything
     /// off a token. That is what lets a reader serve tokens from more than one source
     /// during one parse — a macro expander, say — while construct parsers stay written
-    /// against one API.
+    /// against one API. A reader does that at one nesting level only for a language
+    /// that declares [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)
+    /// `= false` ([`TokenReader`](super::TokenReader) contract clause 8).
     ///
     /// The bounds are what the machinery needs of any token: `Clone` (parsers keep a
     /// token while they read on), `Debug` (diagnostics and test failures), `PartialEq`
@@ -144,7 +146,11 @@ pub trait Tokenization<L: Lang> {
     /// way to build a position from a number, and no ordering — only equality, which is
     /// what "did the reader move?" needs. This is what lets a reader serving several
     /// sources during one parse name places its own way, while parsers stay written
-    /// against one API.
+    /// against one API — a reader serves several sources at one nesting level only for
+    /// a language that declares
+    /// [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`
+    /// ([`TokenReader`](super::TokenReader) contract clause 8), and the positions on
+    /// the two sides of a source seam compare equal (that contract's *Seams* section).
     ///
     /// Languages tokenized by [`StdTokenReader`](super::StdTokenReader) use
     /// [`StdStreamPosition`](super::StdStreamPosition), through [`StdTokenization`].
@@ -362,6 +368,13 @@ mod tests {
             end: &StdStreamPosition,
         ) -> Option<SourceSpan> {
             self.inner().source_span_within(begin, end)
+        }
+        fn source_span_describing(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> SourceSpan {
+            self.inner().source_span_describing(begin, end)
         }
     }
 

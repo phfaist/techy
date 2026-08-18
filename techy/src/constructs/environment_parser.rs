@@ -2116,6 +2116,14 @@ mod tests {
         ) -> Option<SourceSpan> {
             self.inner().source_span_within(begin, end)
         }
+
+        fn source_span_describing(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> SourceSpan {
+            self.inner().source_span_describing(begin, end)
+        }
     }
 
     /// Parse `\begin{A}b\end{A}` with the reader betraying the terminator's re-peek

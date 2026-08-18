@@ -299,6 +299,55 @@ pub trait Lang: Sized + 'static {
     /// defaults this to [`StdParseDriver`].
     type Driver: ParseDriver<Self>;
 
+    /// Whether this language's parse trees are **span-tiled**.
+    ///
+    /// *Span tiling* is the property that:
+    ///
+    /// - the children of every [`List`](crate::node::NodeKind::List) and
+    ///   [`Group`](crate::node::NodeKind::Group) node tile the parent's interior —
+    ///   they lie in one source, in reading order, with no gaps and no overlaps;
+    /// - a [`Callable`](crate::node::NodeKind::Callable)'s children block is
+    ///   span-contiguous within the node's span (with the documented exclusions for
+    ///   attached and hidden regions, which lie outside it);
+    /// - every positional payload sits at its pinned position: a
+    ///   [`Chars`](crate::node::NodeKind::Chars) node's content is its whole span, a
+    ///   comment's start delimiter, content and post-space partition the comment
+    ///   node's span, a group's delimiters are the prefix and the suffix of the group
+    ///   node's span, and so on.
+    ///
+    /// A tree with this property is *span-tiled*. That every node carries exactly one
+    /// span is a separate, unconditional rule — it holds either way.
+    ///
+    /// This is a fact about the language's tokenization and parsers, not a choice: the
+    /// property holds exactly when the language's token readers serve each parse in
+    /// reading order, without gaps, from one source, and a source changes only where a
+    /// parser builds a new reader over another source
+    /// ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
+    /// Hence the name: the language *obeys* span tiling, or it does not.
+    ///
+    /// `true` (the default): the parsing machinery enforces the property — a token
+    /// stream that breaks it is reported as an implementation error — and every
+    /// span-based accessor answers exactly:
+    /// [`NodeSlice::span`](crate::node::NodeSlice::span) and
+    /// [`source_text`](crate::node::NodeSlice::source_text) cover a sibling run with
+    /// no holes, [`NodeRef::span_content`](crate::node::NodeRef::span_content) reads
+    /// back the text the node was parsed from, and the source recomposer re-emits the
+    /// input byte for byte.
+    ///
+    /// `false`: the language's readers may serve tokens from several sources at one
+    /// nesting level (a reader that expands macros as it reads is the motivating
+    /// case). The parsers then make no assumption about where tokens come from: a node
+    /// covering several tokens is recorded with the span the reader *describes*
+    /// ([`TokenReader::source_span_describing`](crate::token::TokenReader::source_span_describing));
+    /// its content is recorded as owned text
+    /// ([`TextContent::Owned`](crate::source::TextContent::Owned)) unless it lies in the
+    /// node's own source; and no tiling holds — span-based accessors answer the
+    /// coordinates the parser recorded, nothing more. Trees still satisfy every rule
+    /// [`validate_tree`](crate::node::validate_tree) checks, and every consumer that
+    /// reads node *data* (text content, names, delimiters, payloads) works exactly as
+    /// documented.
+    const OBEYS_SPAN_TILING: bool = true;
+
     /// The language's canonical initial (seed) state data: base token rules, the seed
     /// scope stack (fallback providers included), and the initial state ext.
     /// The crate freezes the returned data into the seed state

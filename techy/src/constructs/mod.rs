@@ -244,15 +244,28 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// ([`position_here`](crate::token::TokenReader::position_here),
     /// [`position_at`](crate::token::TokenReader::position_at)).
     ///
-    /// `Err` reports an [`ImplementationError`]: the two positions do not delimit one
-    /// range of one source (`end` before `begin`, or the two in different sources).
-    /// That is a contract violation by the calling parser — it aborts under any
-    /// recovery policy, and never panics.
+    /// The answer follows the language's [`Lang::OBEYS_SPAN_TILING`] declaration:
+    ///
+    /// - `true` (the default): the span is the range the two positions delimit
+    ///   ([`TokenReader::source_span_within`](crate::token::TokenReader::source_span_within)).
+    ///   `Err` reports an [`ImplementationError`] when they delimit no such range
+    ///   (`end` before `begin`, or the two in different sources) — a contract violation
+    ///   by the calling parser or by the reader; it aborts under any recovery policy,
+    ///   and never panics.
+    /// - `false`: the span is the one the reader *describes* for that stretch of stream
+    ///   ([`TokenReader::source_span_describing`](crate::token::TokenReader::source_span_describing)),
+    ///   and there is no error case — the two positions need not delimit one range of
+    ///   one source, and an inverted pair is not an error either. The returned span is
+    ///   a coordinate hint that becomes the node's span: callers must derive no content
+    ///   and no structure from it.
     pub fn source_span_within(
         &self,
         begin: &StreamPosition<L>,
         end: &StreamPosition<L>,
     ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
+        if !L::OBEYS_SPAN_TILING {
+            return Ok(self.tokens.source_span_describing(begin, end));
+        }
         match self.tokens.source_span_within(begin, end) {
             Some(span) => Ok(span),
             None => Err(self.implementation_error(
@@ -422,12 +435,19 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// [`stage_invocation`](ParseContext::stage_invocation)'s span computation from
     /// two stream positions, with the invalid-span wording (and anchor) of that
     /// method.
+    ///
+    /// Dispatches on [`Lang::OBEYS_SPAN_TILING`] exactly like
+    /// [`source_span_within`](ParseContext::source_span_within): the delimited range
+    /// under `true`, the reader's described span (never an error) under `false`.
     fn invocation_span_within(
         &self,
         trigger: &SourceSpan<L::SourceOrigin>,
         begin: &StreamPosition<L>,
         end: &StreamPosition<L>,
     ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
+        if !L::OBEYS_SPAN_TILING {
+            return Ok(self.tokens.source_span_describing(begin, end));
+        }
         match self.tokens.source_span_within(begin, end) {
             Some(span) => Ok(span),
             None => Err(self.invalid_invocation_span(trigger)),

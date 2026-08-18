@@ -2038,6 +2038,14 @@ mod tests {
             ) -> Option<SourceSpan> {
                 self.inner().source_span_within(begin, end)
             }
+
+            fn source_span_describing(
+                &self,
+                begin: &StdStreamPosition,
+                end: &StdStreamPosition,
+            ) -> SourceSpan {
+                self.inner().source_span_describing(begin, end)
+            }
         }
 
         let source: Arc<Source> = Arc::new(Source::new("x"));

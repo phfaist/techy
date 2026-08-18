@@ -133,8 +133,12 @@ impl StdStreamPosition {
 ///
 /// Locations leave a reader in exactly one form: a
 /// [`SourceSpan`]/[`SourcePos`], which carries its own source. That is what lets a
-/// reader serve tokens from more than one source during a parse without its caller
-/// having to know.
+/// reader serve tokens from more than one source during one parse without its caller
+/// having to know — which a reader may do at one nesting level only when the language
+/// declares [`Lang::OBEYS_SPAN_TILING`] `= false` (contract clause 8). A language that
+/// obeys span tiling has one source per parse; further sources enter such a parse only
+/// through a nested parse over another source
+/// ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
 ///
 /// # Contract
 ///
@@ -155,8 +159,8 @@ impl StdStreamPosition {
 /// 3. **Tokens and positions stay usable for the whole parse:** every token and every
 ///    position a reader hands out remains a valid argument to `move_to`,
 ///    `move_to_position`, `position_at`, `source_span_between` and `source_span_within`
-///    until the parse ends — a reader serving several sources must keep them all
-///    addressable.
+///    until the parse ends — a reader serving several sources (clause 8) must keep them
+///    all addressable.
 /// 4. **Interpretation stays with the issuing reader** (or a reader over the same
 ///    content): handing a token or a position to a reader that did not produce it is a
 ///    caller-contract violation. [`StdTokenReader`] cannot detect it and answers from
@@ -184,10 +188,82 @@ impl StdStreamPosition {
 /// 6. **Edge order does not matter to `source_span_between`:** the result is the span
 ///    between the two edges in reading order, whichever order they are named in. Two
 ///    equal edges give the empty span at that edge.
+/// 7. **Moving sets the position:** after `move_to(&tok, edge)`, `position_here()`
+///    equals `position_at(&tok, edge)`; after `move_to_position(&p)`,
+///    `position_here()` equals `p`. Together with clause 2 this fixes where two
+///    consecutive tokens meet: for a token `next` peeked right after the stream was
+///    moved past `prev`, `position_at(next, StartBeforePreSpace) == position_at(prev,
+///    EndPastPostSpace)` — in every reader, including where `next` is the first token
+///    of another source (see *Seams* below). The content loop of the standard nodes
+///    parser checks this equality and reports a mismatch as an implementation error,
+///    whatever the language's [`Lang::OBEYS_SPAN_TILING`] says.
+/// 8. **One source, in reading order, without gaps** — required of the readers of a
+///    language that declares [`OBEYS_SPAN_TILING`](Lang::OBEYS_SPAN_TILING) `= true`
+///    (the default). Such a reader serves one parse from one source, tokens in reading
+///    order, with every byte between two consecutive tokens' [`Start`](TokenEdge::Start)
+///    edges belonging to exactly one of them — as the earlier token's post-space or the
+///    later one's pre-space; the source a parse reads changes only where a parser builds
+///    a new reader over another source
+///    ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
+///    This is what makes the language's parse trees span-tiled, and the machinery
+///    enforces it: a pair of stream positions that does not delimit one forward range of
+///    one source is reported as an implementation error
+///    ([`ParseContext::source_span_within`](crate::constructs::ParseContext::source_span_within)).
+///    Under `OBEYS_SPAN_TILING = false` none of this is promised, and the reader answers
+///    [`source_span_describing`](TokenReader::source_span_describing) for the spans of
+///    multi-token constructs.
 ///
 /// At the end of the stream `peek` returns the terminal, idempotent
 /// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); the reader
 /// reports the input's final whitespace as that token's pre-space.
+///
+/// # Seams — readers that serve several sources at one nesting level
+///
+/// A **seam** is a place in the stream where the next token comes from a different
+/// source than the previous one; only a reader of a language with
+/// [`OBEYS_SPAN_TILING`](Lang::OBEYS_SPAN_TILING) `= false` has any (clause 8).
+/// Clauses 2 and 7 hold there too, and that determines what the positions at a seam
+/// mean:
+///
+/// - The first token drawn from a new source carries the **trigger position** — where
+///   the stream stood in the outer source when the new source was entered — as its
+///   [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) edge. Un-consuming that
+///   token (`move_to(&tok, StartBeforePreSpace)`) therefore returns the stream to the
+///   trigger, and the next `peek` produces the same first token again (clause 1).
+/// - The position past the last token of an exhausted source is the **resume
+///   position** — where reading continues in the outer source.
+///
+/// One position value names such a shared place. Which value that is, and what
+/// [`source_position_at`](TokenReader::source_position_at) reports for it, is the
+/// reader's choice — an outer coordinate, an inner one, or a composite of both;
+/// reporting the outer (trigger or resume) coordinate is the recommended answer,
+/// since that is the location a reader of a diagnostic can act on. A token may
+/// consequently have edges in two different sources; its sub-spans are asked for one
+/// at a time through [`source_span_between`](TokenReader::source_span_between), and
+/// each of those is a span of a single source. Because the positions on the two sides
+/// of a seam compare equal, a run of content characters may legitimately extend
+/// across one — which is why the parsers of such a language record multi-token
+/// content as owned text rather than as a span.
+///
+/// Four further rules for these readers:
+///
+/// - **Termination is the reader's responsibility.** An expansion that never ends is
+///   simply an endless token stream; the engine's descent guard counts parser nesting,
+///   not tokens, and will not stop it.
+/// - **Positions and tokens stay valid inside sources the stream has already left**
+///   (clause 3): parsers rewind across seams — an argument probe that fails, a stop
+///   token that is peeked and left unconsumed — and every position they kept must
+///   still be accepted by `move_to_position`.
+/// - **Mint an expansion's source with**
+///   [`SourceProvenance::Synthesized`](crate::source::SourceProvenance::Synthesized)
+///   (its `description` naming what produced the content, its `triggered_at` the span
+///   the expansion was triggered at), so that a diagnostic reported inside the
+///   expansion carries the provenance chain back to the input. Entering an expansion
+///   pushes no [`Frame`](crate::engine::Frame) — it is not a construct parse.
+/// - **[`EndOfStream`](TokenKind::EndOfStream) is the end of the *whole* input.** An
+///   exhausted expansion is not end of stream: the reader continues in the outer
+///   source. The rule that the input's final whitespace surfaces as the end-of-stream
+///   token's pre-space applies to the end of the whole input only.
 ///
 /// # Writing a reader over standard tokens
 ///
@@ -277,6 +353,13 @@ impl StdStreamPosition {
 /// #        end: &StdStreamPosition,
 /// #    ) -> Option<SourceSpan> {
 /// #        self.inner().source_span_within(begin, end)
+/// #    }
+/// #    fn source_span_describing(
+/// #        &self,
+/// #        begin: &StdStreamPosition,
+/// #        end: &StdStreamPosition,
+/// #    ) -> SourceSpan {
+/// #        self.inner().source_span_describing(begin, end)
 /// #    }
 ///     // … the remaining position and span methods delegate the same way.
 /// }
@@ -377,6 +460,30 @@ pub trait TokenReader<'s, L: Lang> {
         begin: &StreamPosition<L>,
         end: &StreamPosition<L>,
     ) -> Option<SourceSpan<L::SourceOrigin>>;
+
+    /// A source span **describing** the stretch of stream from `begin` to `end` — what
+    /// a node covering several tokens is recorded with when the language does not obey
+    /// span tiling ([`Lang::OBEYS_SPAN_TILING`] `= false`), where the two positions
+    /// need not delimit one range of one source.
+    ///
+    /// The answer is the reader's to choose: any [`SourceSpan`] it considers a useful
+    /// description of that stretch. The parsing machinery derives nothing from it — no
+    /// content, no structure, no ordering; the span becomes the node's span and shows
+    /// in diagnostics. The recommended answer is `begin`'s source, running from `begin`
+    /// to wherever the stream last stood in that source before reaching `end`. When the
+    /// two positions *do* delimit one range of one source, answer that range — what
+    /// [`source_span_within`](TokenReader::source_span_within) returns. This method
+    /// always answers: the empty span at `begin` ([`SourceSpan::at`] of
+    /// [`source_position_at`](TokenReader::source_position_at)) is always available.
+    ///
+    /// The parsers of a language that obeys span tiling never call this method: they
+    /// use [`source_span_within`](TokenReader::source_span_within) and treat its `None`
+    /// as an implementation error.
+    fn source_span_describing(
+        &self,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
+    ) -> SourceSpan<L::SourceOrigin>;
 }
 
 /// End position of the whitespace run starting at `pos` (= `pos` if none, if
@@ -944,6 +1051,20 @@ where
         // One source, so the only incoherent pair is an inverted one.
         (begin.offset() <= end.offset())
             .then(|| SourceSpan::new(self.source, begin.offset()..end.offset()))
+    }
+
+    fn source_span_describing(
+        &self,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
+    ) -> SourceSpan<L::SourceOrigin> {
+        // This reader serves one source, so an ordered pair describes its own exact
+        // range. An inverted pair is a caller bug — the same one `source_span_within`
+        // answers `None` to; here the answer is the empty span at `begin`.
+        match begin.offset() <= end.offset() {
+            true => SourceSpan::new(self.source, begin.offset()..end.offset()),
+            false => SourceSpan::new(self.source, begin.offset()..begin.offset()),
+        }
     }
 }
 

@@ -560,6 +560,14 @@ mod plain_chars {
             ) -> Option<SourceSpan> {
                 self.inner().source_span_within(begin, end)
             }
+
+            fn source_span_describing(
+                &self,
+                begin: &StdStreamPosition,
+                end: &StdStreamPosition,
+            ) -> SourceSpan {
+                self.inner().source_span_describing(begin, end)
+            }
         }
 
         let driver = StdParseDriver::new(Recovery::Tolerant, ());

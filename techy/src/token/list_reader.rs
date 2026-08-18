@@ -263,6 +263,21 @@ where
         (begin.offset() <= end.offset())
             .then(|| SourceSpan::new(self.source, begin.offset()..end.offset()))
     }
+
+    fn source_span_describing(
+        &self,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
+    ) -> SourceSpan<L::SourceOrigin> {
+        self.check_position(begin.offset(), "source_span_describing");
+        self.check_position(end.offset(), "source_span_describing");
+        // One source, exactly like `StdTokenReader`: the ordered pair's own range, and
+        // the empty span at `begin` for an inverted pair.
+        match begin.offset() <= end.offset() {
+            true => SourceSpan::new(self.source, begin.offset()..end.offset()),
+            false => SourceSpan::new(self.source, begin.offset()..begin.offset()),
+        }
+    }
 }
 
 impl<L: Lang> core::fmt::Debug for TokenListReader<'_, L> {
