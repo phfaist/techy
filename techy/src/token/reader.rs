@@ -599,17 +599,82 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         self.pos >= self.content.len()
     }
 
+    /// The parser-facing view of `tok` — the interpretation behind
+    /// [`TokenReader::token_kind`], with `L: Lang` as its only requirement.
+    ///
+    /// A reader of a language whose [`Lang::Tokenization`] declares its own token type
+    /// keeps an inner `StdTokenReader` per source and interprets the standard tokens it
+    /// stores through this method (in-crate: the scripted test reader); it cannot go
+    /// through the trait method, whose implementation here is available only to
+    /// languages tokenized in `StdToken`/`StdStreamPosition`. The view borrows the
+    /// token and this reader's content, never the reader.
+    pub(crate) fn token_kind_of<'t, L: Lang>(&self, tok: &'t StdToken<L>) -> TokenKind<'t, L>
+    where
+        's: 't,
+    {
+        // Every written spelling is a run of this reader's content between two of the
+        // token's edges — that is where a token's spans live (contract clause 4). A
+        // token this reader never issued — a caller-contract violation it cannot
+        // detect — may carry offsets this content does not have; such a run reads as
+        // empty rather than panicking.
+        let text = |a: TokenEdge, b: TokenEdge| -> &'t str {
+            self.content.get(tok.edge_offset(a)..tok.edge_offset(b)).unwrap_or("")
+        };
+        match tok.kind_data() {
+            StdTokenKindData::Char(c) => TokenKind::Char(*c),
+            StdTokenKindData::GroupOpen { rule } => TokenKind::GroupOpen {
+                delim: text(TokenEdge::Start, TokenEdge::End),
+                rule,
+            },
+            StdTokenKindData::GroupClose => {
+                TokenKind::GroupClose { delim: text(TokenEdge::Start, TokenEdge::End) }
+            }
+            StdTokenKindData::Command { escape_char, .. } => TokenKind::Command {
+                name: text(TokenEdge::ContentStart, TokenEdge::End),
+                escape_char: *escape_char,
+            },
+            StdTokenKindData::Specials { callable_type, spec } => TokenKind::Specials {
+                callable_type: *callable_type,
+                name: text(TokenEdge::Start, TokenEdge::End),
+                spec,
+            },
+            StdTokenKindData::Comment { .. } => TokenKind::Comment {
+                start_delim: text(TokenEdge::Start, TokenEdge::ContentStart),
+                content: text(TokenEdge::ContentStart, TokenEdge::End),
+            },
+            StdTokenKindData::ParagraphBreak => TokenKind::ParagraphBreak,
+            StdTokenKindData::EndOfStream => TokenKind::EndOfStream,
+        }
+    }
+
     // --- scanning core ------------------------------------------------------------------
 
-    fn peek_impl<L>(&self, state: &ParsingState<L>) -> TokenResult<L, StdToken<L>>
+    /// Scan the token beginning at `start` under `state`, without moving this reader.
+    ///
+    /// This is the scanning core behind [`peek`](TokenReader::peek), and it is also
+    /// what a reader of a language whose [`Lang::Tokenization`] declares **its own**
+    /// token or stream-position types reuses: such a language is not the
+    /// `Token = StdToken<L>, StreamPosition = StdStreamPosition` one this reader's
+    /// [`TokenReader`] implementation requires, so it cannot call `peek` here, yet the
+    /// tokens it wants are exactly the ones this scan produces (in-crate: the scripted
+    /// test reader). Everything the scan needs of `L` is `L: Lang<SourceOrigin = O>`
+    /// — except the one step below.
+    ///
+    /// `recovery_for` builds the [`TokenRecovery`] offered with a recoverable failure,
+    /// from the placeholder token and the offset to resume at. That is the single step
+    /// that needs the *language's* token and stream-position types, which the scan
+    /// cannot name; a caller that cannot describe a recovery answers `None`.
+    pub(crate) fn scan_token_at<L>(
+        &self,
+        start: usize,
+        state: &ParsingState<L>,
+        recovery_for: impl FnOnce(StdToken<L>, usize) -> Option<TokenRecovery<L>>,
+    ) -> TokenResult<L, StdToken<L>>
     where
         L: Lang<SourceOrigin = O>,
-        L::Tokenization:
-            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let s = self.content;
         let rules = state.rules();
-        let start = self.pos;
 
         // The position was set through outer-layer hands (`move_to` and
         // `move_to_position` accept caller-held tokens and positions, and a token
@@ -658,7 +723,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 
         if <L::Features as LangFeatures>::Commands::PRESENT && rules.commands_enabled() {
             if let Some(rule) = rules.command_rules().iter().find(|r| c == r.escape_char) {
-                return self.read_command(pos, pre_space, rules, rule);
+                return self.read_command(pos, pre_space, rules, rule, recovery_for);
             }
         }
 
@@ -715,10 +780,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             return Err(TokenError::new(
                 TokenErrorKind::ForbiddenChar(ForbiddenChar::new(c)),
                 SourceSpan::new(self.source, span),
-                Some(TokenRecovery {
-                    token: placeholder,
-                    resume: StdStreamPosition::at(span.end()),
-                }),
+                recovery_for(placeholder, span.end()),
             ));
         }
 
@@ -740,8 +802,6 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     ) -> TokenError<L>
     where
         L: Lang<SourceOrigin = O>,
-        L::Tokenization:
-            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let span = error.span;
         let valid = span.end() <= self.content.len()
@@ -778,8 +838,6 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     ) -> Option<StdToken<L>>
     where
         L: Lang<SourceOrigin = O>,
-        L::Tokenization:
-            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         if !(<L::Features as LangFeatures>::Paragraphs::PRESENT
             && <L::Features as LangFeatures>::Whitespace::PRESENT
@@ -822,8 +880,6 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     ) -> Option<StdToken<L>>
     where
         L: Lang<SourceOrigin = O>,
-        L::Tokenization:
-            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let rules = state.rules();
         let rest = &self.content[pos..];
@@ -857,11 +913,10 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         pre_space: Span,
         rules: &TokenRules<L>,
         rule: &CommandRule,
+        recovery_for: impl FnOnce(StdToken<L>, usize) -> Option<TokenRecovery<L>>,
     ) -> TokenResult<L, StdToken<L>>
     where
         L: Lang<SourceOrigin = O>,
-        L::Tokenization:
-            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let s = self.content;
         let name_start = pos + rule.escape_char.len_utf8();
@@ -879,10 +934,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                     rule.escape_char,
                 )),
                 SourceSpan::new(self.source, span),
-                Some(TokenRecovery {
-                    token: placeholder,
-                    resume: StdStreamPosition::at(span.end()),
-                }),
+                recovery_for(placeholder, span.end()),
             ));
         }
 
@@ -931,8 +983,6 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     ) -> Option<StdToken<L>>
     where
         L: Lang<SourceOrigin = O>,
-        L::Tokenization:
-            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         if !<L::Features as LangFeatures>::Comments::PRESENT || !rules.comments_enabled() {
             return None;
@@ -972,7 +1022,9 @@ where
     L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>> {
-        self.peek_impl(state)
+        self.scan_token_at(self.pos, state, |token, resume| {
+            Some(TokenRecovery { token, resume: StdStreamPosition::at(resume) })
+        })
     }
 
     fn move_to(&mut self, tok: &Token<L>, edge: TokenEdge) {
@@ -987,39 +1039,7 @@ where
     where
         's: 't,
     {
-        // Every written spelling is a run of this reader's content between two of the
-        // token's edges — that is where a token's spans live (contract clause 4). A
-        // token this reader never issued — a caller-contract violation it cannot
-        // detect — may carry offsets this content does not have; such a run reads as
-        // empty rather than panicking.
-        let text = |a: TokenEdge, b: TokenEdge| -> &'t str {
-            self.content.get(tok.edge_offset(a)..tok.edge_offset(b)).unwrap_or("")
-        };
-        match tok.kind_data() {
-            StdTokenKindData::Char(c) => TokenKind::Char(*c),
-            StdTokenKindData::GroupOpen { rule } => TokenKind::GroupOpen {
-                delim: text(TokenEdge::Start, TokenEdge::End),
-                rule,
-            },
-            StdTokenKindData::GroupClose => {
-                TokenKind::GroupClose { delim: text(TokenEdge::Start, TokenEdge::End) }
-            }
-            StdTokenKindData::Command { escape_char, .. } => TokenKind::Command {
-                name: text(TokenEdge::ContentStart, TokenEdge::End),
-                escape_char: *escape_char,
-            },
-            StdTokenKindData::Specials { callable_type, spec } => TokenKind::Specials {
-                callable_type: *callable_type,
-                name: text(TokenEdge::Start, TokenEdge::End),
-                spec,
-            },
-            StdTokenKindData::Comment { .. } => TokenKind::Comment {
-                start_delim: text(TokenEdge::Start, TokenEdge::ContentStart),
-                content: text(TokenEdge::ContentStart, TokenEdge::End),
-            },
-            StdTokenKindData::ParagraphBreak => TokenKind::ParagraphBreak,
-            StdTokenKindData::EndOfStream => TokenKind::EndOfStream,
-        }
+        self.token_kind_of(tok)
     }
 
     fn source_span_between(
