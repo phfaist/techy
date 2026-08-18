@@ -4,7 +4,7 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 
 | Stage | Branch | Base | Worktree | Status |
 |---|---|---|---|---|
-| 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | implemented |
+| 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | reviewed |
 | 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | planned |
 | 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | planned |
 | 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | planned |
@@ -13,8 +13,17 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 
 ## Stage 1 — contract surface
 
-Status: **implemented** (branch `st-1-contract`, worktree
+Status: **reviewed** (branch `st-1-contract`, worktree
 `.claude/worktrees/st-1-contract`; commits `dc082d1`, `9942bab`, plus this file).
+
+Review PASS, no blocking fixes; four non-blocking wording fixes applied: clause 7's
+enforcement sentence narrowed to what the content loop actually checks (the token it is
+about to add to a pending chars run, not every consecutive pair); clause 8's "no gaps"
+rephrased to the bytes between the earlier token's `End` edge and the later token's
+`Start` edge (the earlier token's own spelling also lies between the two `Start` edges);
+the const doc's `false` arm now says several sources are the typical but not the only
+reason to declare it (open question 2 below, answered); "the engine's descent guard"
+linked as [`DescentGuard`](crate::engine::DescentGuard).
 
 ### Files changed
 

@@ -194,16 +194,18 @@ impl StdStreamPosition {
 ///    consecutive tokens meet: for a token `next` peeked right after the stream was
 ///    moved past `prev`, `position_at(next, StartBeforePreSpace) == position_at(prev,
 ///    EndPastPostSpace)` — in every reader, including where `next` is the first token
-///    of another source (see *Seams* below). The content loop of the standard nodes
-///    parser checks this equality and reports a mismatch as an implementation error,
-///    whatever the language's [`Lang::OBEYS_SPAN_TILING`] says.
+///    of another source (see *Seams* below). Where the standard nodes parser is
+///    accumulating a run of content characters, its content loop checks this equality
+///    for the token it is about to add to the pending run, and reports a mismatch as
+///    an implementation error, whatever the language's [`Lang::OBEYS_SPAN_TILING`]
+///    says.
 /// 8. **One source, in reading order, without gaps** — required of the readers of a
 ///    language that declares [`OBEYS_SPAN_TILING`](Lang::OBEYS_SPAN_TILING) `= true`
 ///    (the default). Such a reader serves one parse from one source, tokens in reading
-///    order, with every byte between two consecutive tokens' [`Start`](TokenEdge::Start)
-///    edges belonging to exactly one of them — as the earlier token's post-space or the
-///    later one's pre-space; the source a parse reads changes only where a parser builds
-///    a new reader over another source
+///    order, with every byte between the earlier token's [`End`](TokenEdge::End) edge
+///    and the later token's [`Start`](TokenEdge::Start) edge belonging to exactly one of
+///    them — as the earlier token's post-space or the later one's pre-space; the source
+///    a parse reads changes only where a parser builds a new reader over another source
 ///    ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
 ///    This is what makes the language's parse trees span-tiled, and the machinery
 ///    enforces it: a pair of stream positions that does not delimit one forward range of
@@ -248,8 +250,9 @@ impl StdStreamPosition {
 /// Four further rules for these readers:
 ///
 /// - **Termination is the reader's responsibility.** An expansion that never ends is
-///   simply an endless token stream; the engine's descent guard counts parser nesting,
-///   not tokens, and will not stop it.
+///   simply an endless token stream; the engine's descent guard
+///   ([`DescentGuard`](crate::engine::DescentGuard)) counts parser nesting, not tokens,
+///   and will not stop it.
 /// - **Positions and tokens stay valid inside sources the stream has already left**
 ///   (clause 3): parsers rewind across seams — an argument probe that fails, a stop
 ///   token that is peeked and left unconsumed — and every position they kept must

@@ -336,8 +336,13 @@ pub trait Lang: Sized + 'static {
     ///
     /// `false`: the language's readers may serve tokens from several sources at one
     /// nesting level (a reader that expands macros as it reads is the motivating
-    /// case). The parsers then make no assumption about where tokens come from: a node
-    /// covering several tokens is recorded with the span the reader *describes*
+    /// case). Several sources are the typical reason to declare `false`, not the only
+    /// one: a language declares it for any tokenization its parsers must make no
+    /// assumption about — a reader over a single source that skips bytes or serves
+    /// them out of order, for instance. The const states what the parsers may assume,
+    /// nothing about how many sources a reader draws on. The parsers then make no
+    /// assumption about where tokens come from: a node covering several tokens is
+    /// recorded with the span the reader *describes*
     /// ([`TokenReader::source_span_describing`](crate::token::TokenReader::source_span_describing));
     /// its content is recorded as owned text
     /// ([`TextContent::Owned`](crate::source::TextContent::Owned)) unless it lies in the
