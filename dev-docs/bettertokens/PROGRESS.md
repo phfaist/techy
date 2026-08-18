@@ -2210,3 +2210,11 @@ $ git diff --stat main..bt-5-docs
       (measured after this section was written; the three files are the only ones the
        branch touches.)
 ```
+
+---
+
+**Superseded (2026-08-18)** — ruling O-4 (`make_token_reader` is a required `ParseDriver`
+method; the `Lang`-side factory rejected) no longer holds. A language now declares its
+tokenization as one associated type, `Lang::Tokenization`, and the hook is defaulted:
+see `dev-docs/tokenization/PLAN.md` and `[§dd-dr:tokenization]`. Nothing else in this
+record changes.

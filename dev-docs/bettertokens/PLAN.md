@@ -824,6 +824,10 @@ the normative text; this list is the audit trail.
   Stage 1: the one-liner in every in-crate driver, the std bound on
   `StdParseDriver`/`LatexlikeLang`); rejected: option C, a `Lang`-side factory. Folded
   into §1.10 and §7 item 6. Status: closed.*
+  ***Superseded (2026-08-18): see `dev-docs/tokenization/PLAN.md`, `[§dd-dr:tokenization]`.***
+  *The rejected option C returns in a different shape — a **static** factory on a separate
+  `Lang::Tokenization` bundle type, not an instance on `Lang` — and `make_token_reader`
+  becomes defaulted.*
 - **O-5 — `Invocation::kind` and the reader-less hooks** (raised with O-1b). *Ruling
   (user, 2026-08-17): drop `Invocation::kind` (partial token information carried next
   to the token itself; consumers ask the reader when they need it); a reader reference
@@ -1294,6 +1298,10 @@ sections and `Documentation_Structure.md` — read them first):
    attached sources); a session field; a `Lang`-side factory (data types on `Lang`,
    the instance from the driver — and the trivial-lang blanket impl would be the only
    place a default could live).
+   ***Superseded (2026-08-18): see `dev-docs/tokenization/PLAN.md`,
+   `[§dd-dr:tokenization]`.*** *The hook is defaulted; the language declares its
+   tokenization as `Lang::Tokenization`, and the entry that shipped is
+   `[§dd-dr:token-reader-hook]`.*
 7. Amend in place. The **complete** list of entries that name a superseded symbol was
    produced at `9a3c0ac` by mapping every hit of
    `grep -n "Token::new\|move_to_pos\|resume_pos\|Token<'s\|\.pos()\|move_past\|cx\.source" dev-docs/DESIGN_RATIONALE.md dev-docs/ARCHITECTURE.md`

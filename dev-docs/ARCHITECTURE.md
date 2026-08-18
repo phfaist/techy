@@ -100,8 +100,9 @@ The crate is organized in **three strata**:
 S2  presets      latexlike (module; [§dd-arch:latexlike]); later: flm (separate crate)
 S1  core         ONE mutually-recursive stratum, organized as topic modules:
                    Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · token/
-                   (the Token trait + StdToken, the TokenKind view, TokenEdge,
-                   StdStreamPosition, TokenRules, TokenReader, StdTokenReader) · spec/ +
+                   (the Tokenization bundle + StdTokenization, the Token/StreamPosition
+                   aliases, StdToken, the TokenKind view, TokenEdge, StdStreamPosition,
+                   TokenRules, TokenReader, StdTokenReader) · spec/ +
                    scopes/ (CallableSpec; SpecsProvider, Package, Scope, ScopeStack)
                    · node/ (NodeTree, NodeKind, NodeRef) · constructs/ (ConstructParser
                    + standard parsers) · engine/ (Language<L>, ParseDriver,
@@ -219,10 +220,19 @@ seam), [§dd-dr:span-extend-to], [§dd-dr:include-chain-helpers]
 
 A **token** is a value produced by a token reader, held and passed on by construct
 parsers, and read by nobody but the reader that produced it. Its type is the language's
-own — `Lang::Token`, bounded by the marker trait `Token<L>` (`Clone + Debug + PartialEq +
-Send + Sync`) — and it is **opaque**: a parser asks the reader *what* a token is and
-*where* it is ([§dd-dr:token-opacity]). Tokens are transient, they never enter the node
-tree, and tokenization copies nothing out of the source ([§dd-dr:zero-copy-tokens]).
+own — `Token<L>`, bounded `Clone + Debug + PartialEq + Send + Sync` — and it is
+**opaque**: a parser asks the reader *what* a token is and *where* it is
+([§dd-dr:token-opacity]). Tokens are transient, they never enter the node tree, and
+tokenization copies nothing out of the source ([§dd-dr:zero-copy-tokens]).
+
+A language declares its whole tokenization as **one** associated type,
+`Lang::Tokenization: Tokenization<Self>` — a lifetime-free zero-sized bundle naming the
+token type (`Tokenization::Token`), the stream-position type
+(`Tokenization::StreamPosition`) and the static factory `make_token_reader(source)` that
+builds the reader for one parse. `Token<L>` and `StreamPosition<L>` are type aliases
+projecting through it; there is no marker trait. `StdTokenization` is the standard bundle
+— `StdToken<L>`, `StdStreamPosition`, `StdTokenReader` — and what `TrivialLang` and every
+language of this crate declares ([§dd-dr:tokenization]).
 
 The reader answers three families of questions:
 
@@ -241,7 +251,7 @@ The reader answers three families of questions:
   comment's start delimiter, after a command's escape character; `= Start` otherwise).
   Edges may coincide.
 - **Where the stream stands** — `position_here()` and `position_at(&token, edge)` answer
-  values of `Lang::StreamPosition`, opaque and obtainable only from the reader;
+  values of `StreamPosition<L>`, opaque and obtainable only from the reader;
   `source_position_at` and `source_span_within(&begin, &end)` turn positions back into
   text locations ([§dd-dr:stream-position]). Repositioning is `move_to(&token, edge)` and
   `move_to_position(&position)`, and nothing else.
@@ -293,13 +303,19 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   same content), a foreign token being a caller-contract violation the standard reader
   cannot detect; a token kind belonging to an absent language feature is never produced;
   and `source_span_between` is indifferent to the order of its two edges. A reader is
-  installed through `ParseDriver::make_token_reader` ([§dd-arch:engine],
+  installed by the language, as its `Lang::Tokenization` ([§dd-dr:tokenization]); a
+  driver whose reader needs configuration the driver instance holds overrides the defaulted
+  `ParseDriver::make_token_reader` instead ([§dd-arch:engine],
   [§dd-dr:token-reader-hook]).
 - **A custom reader over standard tokens** does not reimplement interpretation: it keeps
   an inner `StdTokenReader` over the same content, builds tokens with the `StdToken`
   constructors, and delegates `token_kind`, the span answers and the position answers to
-  the inner reader. `TokenListReader` — internal test infrastructure only — is the second
-  in-crate reader: the two-reader agreement harness runs every construct-parser parse
+  the inner reader. Such a language declares a `Tokenization` of its own while keeping
+  `Token = StdToken<L>` and `StreamPosition = StdStreamPosition`, which is why in-crate
+  code requiring standard tokens bounds on that equality and never on
+  `Lang<Tokenization = StdTokenization>` ([§dd-dr:tokenization]).
+  `TokenListReader` — internal test infrastructure only — is the second in-crate
+  reader: the two-reader agreement harness runs every construct-parser parse
   against both and, since the list reader rejects tokens and positions it never issued,
   catches a parser that invents either ([§dd-dr:token-list-reader-demoted]).
 - Tokenization priority: paragraph break → expected group close → longest delimiter →
@@ -308,6 +324,8 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   ([§dd-dr:expecting-group-close]), not by privileged mode state.
 
 Decisions behind this section (full topic: [§dd-dr:tokens]): [§dd-dr:minimal-tokens], [§dd-dr:token-model],
+[§dd-dr:tokenization] (the `Lang::Tokenization` bundle, the `Token<L>`/`StreamPosition<L>`
+aliases, `StdTokenization`, and the two bound rules),
 [§dd-dr:token-opacity] (opaque tokens, the reader-answered view),
 [§dd-dr:stream-position] (opaque positions, the five edges, the two moves),
 [§dd-dr:zero-copy-tokens], [§dd-dr:token-reader],
@@ -761,16 +779,17 @@ staging; restaged copies carry their exts verbatim, never re-minted;
 
 **`ParseDriver` is the parse-behavior instance** ([§dd-dr:parse-driver]): everything
 that only runs while a parse is driven lives on `Lang::Driver` — the token reader for the
-parse (`make_token_reader`, the one item with no default body: both construction sites,
-the root parse and each attached source, go through it, so installing a custom tokenizer
-is one method — [§dd-dr:token-reader-hook]), construct-parser
+parse (`make_token_reader`, defaulted to the reader the language's `Lang::Tokenization`
+names; both construction sites, the root parse and each attached source, go through it, so
+one override retokenizes a whole parse — [§dd-dr:tokenization],
+[§dd-dr:token-reader-hook]), construct-parser
 provision (`make_nodes_parser`/`make_group_parser`/`make_invocation_parser`
 interception; one override applies to every descent site through the `cx` wrappers),
 the group descent-delta channel (`group_interior_delta` — the math plug is one line of
 mode-bearing data), the context-dependent event lowering (`resolve_state_event` over
 the lent enclosing-state stack; [§dd-dr:enclosing-state-stack]), the `Recovery`
 policy and the recover path, the probing peek (`probe_token`, reading through the reader
-it is handed and answering an `Option<L::Token>` under that policy), and the parse-time
+it is handed and answering an `Option<Token<L>>` under that policy), and the parse-time
 hooks (`resolve_command` — receiving the triggering token together with a shared
 reference to the reader that produced it, and answering the three-outcome
 `CommandResolution` ([§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
@@ -779,8 +798,8 @@ reference to the reader that produced it, and answering the three-outcome
 `observe_parse_start` — parse-initialization diagnostics, e.g. the preset's
 all-escape-shadowed provider check). Drivers are instances, so behavior carries
 configuration static hooks never could; preset parsers reach preset helper methods
-fully typed. Every item but `make_token_reader` is defaulted — a driver writes that one
-method and inherits the rest. The parsing-depth guard is engine-fixed, not a driver choice:
+fully typed. **Every item is defaulted** — `impl ParseDriver<L> for D {}` is a complete
+driver, tokenization included. The parsing-depth guard is engine-fixed, not a driver choice:
 the engine always uses `StdDescentGuard` (the `DescentGuard` trait states its
 contract; wiring in another implementation is deliberately not offered). The
 guard's per-language **configuration** travels on `Language`
@@ -842,8 +861,10 @@ documents": `Language` owns no per-parse state ([§dd-dr:stateless-language]).
 
 Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initial
 state; the seed+packages construction path),
-[§dd-dr:token-reader-hook] (`make_token_reader`: the one required driver method, and
-where a custom tokenizer is installed), [§dd-dr:hook-fallibility] (which
+[§dd-dr:token-reader-hook] (`make_token_reader`: the defaulted per-instance override
+for a custom reader), [§dd-dr:tokenization] (the language-side declaration it defaults
+to),
+[§dd-dr:hook-fallibility] (which
 hooks return `Result`; the `HookFailed` condition and the three-way condition
 split; the deliberately infallible remainder), [§dd-dr:parse-driver],
 [§dd-dr:descent-guard] (the engine-fixed `StdDescentGuard`, the

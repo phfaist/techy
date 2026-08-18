@@ -18,9 +18,14 @@
     several sources — flush the run when the source changes, or let a reader declare
     that it may skip bytes.  Only needed once such a reader exists.
   - `LatexlikeDriver::with_token_reader(...)`: a knob for installing a custom reader
-    in the preset family.  Same "only once such a reader exists".
+    *instance* in the preset family.  Partly answered: a latexlike language now
+    declares its reader as `Lang::Tokenization` ([§dd-dr:tokenization]), so only a
+    reader configured per driver instance still needs the knob.  Same "only once such
+    a reader exists".
   - `StdStreamPosition` public constructor: graduate on demonstrated need (a
-    third-party reader over standard tokens that hands out positions of its own).
+    third-party reader over standard tokens that hands out positions of its own —
+    such a language declares its own `Tokenization` with
+    `StreamPosition = StdStreamPosition`).
   - The expanding reader itself (in-place macro expansion) lives in `techy-xp`, not
     here.
   - Naming polish over the port's new fields: `NameGroup::name` is a span, while

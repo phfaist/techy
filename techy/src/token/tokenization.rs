@@ -77,7 +77,7 @@ pub trait Tokenization<L: Lang> {
     /// to [`peek`](super::TokenReader::peek), or is built instead by a driver
     /// overriding
     /// [`ParseDriver::make_token_reader`](crate::engine::ParseDriver::make_token_reader) —
-    /// the per-instance door, whose default body calls this function.
+    /// the per-instance override, whose default body calls this function.
     fn make_token_reader<'s>(
         source: &'s Arc<Source<L::SourceOrigin>>,
     ) -> Box<dyn TokenReader<'s, L> + 's>;

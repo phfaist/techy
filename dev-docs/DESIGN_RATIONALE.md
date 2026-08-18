@@ -626,13 +626,76 @@ this hybrid):*
 - *Spec-carrying `Command` tokens* — commands need no lookup at token time; data-only
   tokens keep peeks cheap and the token stream fully `dbg!`-able.
 
+#### A language declares its tokenization as one type [§dd-dr:tokenization]
+
+Status: DECIDED (user).
+
+`Lang` names one associated type for tokenization — `Tokenization: Tokenization<Self>` —
+in place of the former pair `Lang::Token` + `Lang::StreamPosition` (both in
+[§dd-dr:superseded-names]). The bundle is a lifetime-free zero-sized type declaring three
+things: the token type its readers produce (`Tokenization::Token`), the type naming a
+place in its token stream (`Tokenization::StreamPosition`), and a static factory
+`make_token_reader(source) -> Box<dyn TokenReader<'s, L> + 's>` that builds the reader for
+one parse over one source. The two types are spelled `Token<L>` and `StreamPosition<L>`
+everywhere else — type aliases projecting through the bundle, following the
+`NodeExt<L>`/`ArgumentExt<L>`/`SlotExt<L>` precedent. `StdTokenization` is the standard
+bundle (`StdToken<L>`, `StdStreamPosition`, `StdTokenReader`), and what `TrivialLang` and
+every language of this crate declares.
+
+The decisive reason: with the reader named by the *language*, a driver no longer pins it,
+so one driver implementation serves a language whatever its tokenization is.
+`ParseDriver::make_token_reader` becomes defaulted (its body is
+`L::Tokenization::make_token_reader(source)`), so every `ParseDriver` item is defaulted
+again and `impl ParseDriver<L> for D {}` is a complete driver; `StdParseDriver` drops its
+token/position bounds and serves every language; and `LatexlikeLang` no longer pins its
+token and position types, so a latexlike language may plug a different reader in while
+reusing `LatexlikeDriver`. The hook remains the **per-instance override**: a driver whose
+reader needs configuration the driver instance holds overrides it, and a reader needing no
+such data belongs on the language instead ([§dd-dr:token-reader-hook]).
+
+Two bound rules follow, and swapping them does not compile:
+
+- `StdTokenization`'s own impl is bounded `L: Lang<Tokenization = StdTokenization>`. The
+  equality form there cycles through the very projection the impl is defining and trips
+  the recursion limit (E0275).
+- Every *other* site that requires standard tokens — `StdTokenReader`'s `TokenReader` impl
+  and its scanning core, `TokenListReader`, the scan helpers of the construct-parser test
+  suites — states the equality form
+  `L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>`,
+  never `Lang<Tokenization = StdTokenization>`. A language with a tokenization type of its
+  own whose reader wraps an inner `StdTokenReader` (the documented
+  reader-over-standard-tokens pattern) has `Tokenization != StdTokenization` but
+  `Token = StdToken<L>`; the pinning form would shut it out.
+
+The marker trait `Token<L>` is deleted with the change: its bounds
+(`Clone + Debug + PartialEq + Send + Sync`) sit on `Tokenization::Token` directly, which
+is symmetric with `StreamPosition` — that member never had a marker. The name `Token` now
+belongs to the alias.
+
+Rejected alternatives: a reader *type* on `Lang` (it would have to be a GAT, since a
+reader carries the source lifetime, and that pushes `'s` into every token-holding type;
+the `dyn` reader is needed regardless, [§dd-dr:token-opacity]); a constructor on
+`TokenReader` (presumes source-only construction, which `TokenListReader` — built from a
+token list — already refutes); keeping `Lang::Token`/`Lang::StreamPosition` *beside* the
+bundle (two places would state the same fact, with nothing keeping them in agreement);
+keeping the marker trait under a new name such as `TokenBase` (it carries no methods, and
+`StreamPosition` shows a bound list needs no trait of its own); a supertrait carrying
+`Token`/`StreamPosition` with a blanket impl, so that the `L::Token` spelling could stay
+(verified not to work: the param-env candidate shadows the blanket impl and the projection
+never normalizes — hence the aliases).
+
+Revisit if: a language needs two tokenizations at once — the bundle is one type per
+language by construction — or Rust gains a way to normalize the supertrait projection,
+which would let `L::Token` return as the spelling.
+
 #### Tokens are opaque; only their reader interprets them [§dd-dr:token-opacity]
 
 Status: DECIDED (user-led, token-layer redesign).
 
 A *token* is a value a construct parser holds and passes on but never reads. Its type is
-the language's own (`Lang::Token`, bounded by the marker trait `Token<L>`, which asks only
-for `Clone + Debug + PartialEq + Send + Sync`), and the reader that produced it answers
+the language's own — `Token<L>`, the member its `Lang::Tokenization` declares
+([§dd-dr:tokenization]), whose bounds ask only for
+`Clone + Debug + PartialEq + Send + Sync` — and the reader that produced it answers
 the two questions a parser has about it: **what it is** — `TokenReader::token_kind`
 returns the `TokenKind<'t, L>` *view*, the closed enum of kinds carrying the written
 spellings as `&str` and no spans at all — and **where it is** — `source_span_of` /
@@ -650,7 +713,7 @@ wrong location, and no signature says so. An unreadable token removes the possib
 instead of warning against it.
 
 The view borrows the token and — for a reader that scans borrowed content — that content;
-never the reader: `fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L> where
+never the reader: `fn token_kind<'t>(&self, tok: &'t Token<L>) -> TokenKind<'t, L> where
 's: 't`, with the receiver's lifetime deliberately absent from the return type. A
 reader-borrowed view would keep the reader borrowed for as long as the view lives, and a
 parser that has learned what its trigger is keeps that answer across a sub-parse which
@@ -672,10 +735,11 @@ reader's token is not a scanner's); a `Cow` of the source content on the token (
 plus copying); a span-only kind enum that parsers resolve against a source of their own
 (the "relative to which source?" assumption again, and still unenforceable); a view
 borrowing the reader (locks the reader for as long as the view lives, per the paragraph
-above); a `Lang::TokenReader` associated type in place of the `dyn` reader (loses object
-safety — the context's `&mut dyn TokenReader`, the two-reader agreement suites — and puts
-an instance on `Lang`, which declares data types; the instance comes from the driver,
-[§dd-dr:token-reader-hook]); a cached view stored on `Invocation` (partial token detail
+above); a reader *type* on `Lang` in place of the `dyn` reader (loses object
+safety — the context's `&mut dyn TokenReader`, the two-reader agreement suites — and a
+reader type carries the source lifetime, so it would have to be a GAT; what the language
+names instead is the lifetime-free `Lang::Tokenization` bundle, whose factory returns the
+`dyn` reader, [§dd-dr:tokenization]); a cached view stored on `Invocation` (partial token detail
 sitting next to the token it came from, and redundant since every consumer holds a reader
 — [§dd-dr:invocation-parser-factory]); giving the reader-less hooks the view alone instead
 of the token (a view is strictly less than a token plus its reader, so a language taking
@@ -683,16 +747,17 @@ over resolution would be limited for no gain); a reader reference stored *inside
 `Invocation` (the invocation is held across the parse that borrows the same reader
 mutably — it does not compile).
 
-Revisit if: a reader needs per-token data that the marker trait cannot express — that is a
-change to `Lang::Token`'s bounds, not a return to readable token fields.
+Revisit if: a reader needs per-token data the bounds cannot express — that is a change to
+`Tokenization::Token`'s bounds, not a return to readable token fields.
 
 #### Stream positions are opaque and cannot be forged [§dd-dr:stream-position]
 
 Status: DECIDED (user-led, token-layer redesign).
 
 A *stream position* names a place in a reader's token stream. Its type is the language's
-own (`Lang::StreamPosition`; for the standard reader `StdStreamPosition`, a byte offset
-behind a private field). A parser obtains one only from the reader (`position_here`,
+own — `StreamPosition<L>`, the member its `Lang::Tokenization` declares
+([§dd-dr:tokenization]); for the standard reader `StdStreamPosition`, a byte offset behind
+a private field. A parser obtains one only from the reader (`position_here`,
 `position_at`) and gives it back to the reader (`move_to_position`, `source_span_within`,
 `source_position_at`). There is no public constructor and no arithmetic, so a position
 cannot be invented or shifted outside the reader that issued it; the test-only
@@ -743,8 +808,9 @@ the `Arc`s a `GroupOpen` or `Specials` token already carries — no `String`s, a
 lifetime at all; the standard reader slices its borrowed `&'s str` when a parser asks what
 a token is, and that borrow never enters the AST ([§dd-dr:token-opacity]). The earlier
 revisit condition — a token source that cannot expose stable slices — is answered by
-opacity: such a reader chooses its own `Lang::Token` and interprets it itself, so the token
-type no longer has to fit every reader.
+opacity: the language of such a reader declares its own `Tokenization::Token` and the
+reader interprets it itself ([§dd-dr:tokenization]), so the token type no longer has to fit
+every reader.
 Revisit if: the standard reader itself must serve content it cannot slice out of a single
 `&str` — the copy-free story is then `StdToken`'s to re-settle, not the trait's.
 
@@ -774,8 +840,10 @@ not memoize yet — no premature optimization; the contract permits it.)
 Status: DECIDED (user).
 
 `TokenReader::peek` receives `&Arc<ParsingState<L>>` and nothing else — no session, no
-driver, no parse context. A reader that needs more takes it at construction, which is
-where its driver builds it ([§dd-dr:token-reader-hook]).
+driver, no parse context. A reader that needs more takes it at construction: from the
+language's `Lang::Tokenization` factory ([§dd-dr:tokenization]) for data the *type* knows,
+or from a driver overriding `make_token_reader` for data the driver *instance* holds
+([§dd-dr:token-reader-hook]).
 
 Decisive reason: the reader is called from inside the parse loop, which holds the session
 and the context mutably; passing either back into `peek` asks for a second mutable borrow
@@ -4560,9 +4628,9 @@ delegating sugar kept on cx; invariant-bearing plumbing (`parse_construct` — t
 single normative descent entry point, its frame folding absorbing the separate
 `with_frame` composition at descent sites — `with_frame`,
 `implementation_error`) stays as non-overridable cx methods — pairing invariants must
-not be overridable. Every trait item but one is defaulted — a driver writes
-`make_token_reader` and inherits the rest ([§dd-dr:token-reader-hook]); the descent guard
-is engine-fixed, not a driver item ([§dd-dr:descent-guard]).
+not be overridable. Every trait item is defaulted, `make_token_reader` included since
+the language declares its tokenization ([§dd-dr:tokenization], [§dd-dr:token-reader-hook]);
+the descent guard is engine-fixed, not a driver item ([§dd-dr:descent-guard]).
 Rationale: the session-purity argument (user) — `ParserSession` is organized scratch
 space, and a parser *provider* conceptually drives the parse; it was misfiled there, as
 was `Recovery`. One seam for provision + one home for parse behavior + typed preset
@@ -4602,34 +4670,40 @@ behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 custom driver `recover` uses for per-condition decisions. The default
 `resolve_command` detail now names `ParseDriver::resolve_command`.
 
-#### `make_token_reader` is where a custom tokenizer is installed [§dd-dr:token-reader-hook]
+#### `make_token_reader`: the driver's per-instance reader override [§dd-dr:token-reader-hook]
 
-Status: DECIDED (user, ruling on the implementation finding below).
+Status: DECIDED (user).
 
 `ParseDriver::make_token_reader(&'s self, source) -> Box<dyn TokenReader<'s, L> + 's>`
 builds the reader for a parse, and both construction sites go through it — the root parse
 and each attached (included) source — so one implementation covers a whole parse,
-inclusions included. The language fixes the *types* (`Lang::Token`,
-`Lang::StreamPosition`); the driver supplies the *instance*, and may hand it configuration
-it holds. The `make_*` spelling is the factory-hook naming rule ([§dd-dr:naming]).
+inclusions included. The language fixes the *types*, and names the reader, through
+`Lang::Tokenization` ([§dd-dr:tokenization]); this hook supplies the *instance*, and may
+hand it configuration the driver holds. The `make_*` spelling is the factory-hook naming
+rule ([§dd-dr:naming]).
 
-It is the one `ParseDriver` item without a default body, so the trait's documented
-property reads "every hook but this one is defaulted". A default is not expressible: the
-standard reader implements `TokenReader<'s, L>` only where `L::Token = StdToken<L>` and
-`L::StreamPosition = StdStreamPosition`, while a trait method's default body must
-type-check for every `L`; moving those equalities into a `where` clause on the method
-would instead stop the generic parse entry point from calling it at all. The standard body
-is one line — `Box::new(StdTokenReader::new(source))` — written once by every language
-that tokenizes with the standard reader.
+It is **defaulted**, like every other `ParseDriver` item: the default body is
+`L::Tokenization::make_token_reader(source)`, and the standard one-liner
+`Box::new(StdTokenReader::new(source))` lives once, in `StdTokenization`'s impl. Overriding
+is for a reader that needs data only the driver instance has; a reader needing none belongs
+on the language, as its `Tokenization`.
 
 Rejected alternatives: a reader argument on the parse entry point (an attached source
 builds its reader mid-parse, where such an argument never reaches); a reader field on the
 session (a reader borrows the source it scans, and one parse builds one reader per source
-— the session is the wrong lifetime and the wrong multiplicity); a factory on `Lang` (it
-would put an instance where `Lang` declares data types, and would land the cost on every
-`impl Lang` rather than on the drivers, where parse-time behavior already lives).
+— the session is the wrong lifetime and the wrong multiplicity).
 
-Revisit if: Rust gains specialization, which is what a defaulted standard body would need.
+*Reversal note (2026-08-18, user).* This entry previously recorded the hook as the one
+`ParseDriver` item **without** a default, and rejected "a factory on `Lang`" on the grounds
+that it would put an instance where `Lang` declares data types and would land the cost on
+every `impl Lang`. Both are superseded by [§dd-dr:tokenization]: the factory is *static*, so
+no instance lands on `Lang`; it lives on a separate bundle type, so the cost is one
+associated type per `impl Lang` — replacing two — and the reader stops being pinned by the
+driver. The old "revisit if Rust gains specialization" clause is likewise void: the default
+body needs no specialization, only the projection through the bundle.
+
+Revisit if: a reader must be chosen per *parse* rather than per language or per driver —
+the hook takes `&self` and the source, and nothing else.
 
 #### `ScopesResolvingDriver`: the canned command-resolving driver component [§dd-dr:scopes-resolving-driver]
 
@@ -6386,8 +6460,8 @@ re-opens a settled argument:
   derive — the serde bridge ([§dd-dr:serial-value-model]).
 - From the token-layer redesign ([§dd-dr:token-opacity], [§dd-dr:stream-position],
   [§dd-dr:no-context-source]): `Token<'s, L>` as a struct with a lifetime — the token
-  type is `StdToken<L>`, opaque and lifetime-free, and `Token` is now the marker
-  **trait** on `Lang::Token`; with it `Token::new` — one constructor per kind
+  type is `StdToken<L>`, opaque and lifetime-free, and `Token` now names the type
+  **alias** `Token<L>` ([§dd-dr:tokenization]); with it `Token::new` — one constructor per kind
   (`StdToken::char`, `group_open`, …); `TokenKind` variants carrying spans — the
   stored-token field names `TokenKind::Comment::{start, post_space}` and
   `TokenKind::Command::post_space` (the view carries written spellings, and a span is a
@@ -6411,6 +6485,13 @@ re-opens a settled argument:
   `resolve_command(.., token: &Token)` without the reader;
   `make_paragraph_break_node(.., token, source_content)` — the hook takes the break's
   `SourceSpan`; and `probe_token(.., source, ..)` — no source parameter.
+- From the tokenization-bundle change ([§dd-dr:tokenization]): the `Lang` associated types
+  `Lang::Token` and `Lang::StreamPosition` — a language declares one `Lang::Tokenization`
+  instead, and the two types are read off it as `Token<L>`/`StreamPosition<L>`; the marker
+  **trait** `Token<L>` (`pub trait Token<L: Lang>: Clone + …`) and the considered rename
+  `TokenBase` — the bounds sit on `Tokenization::Token`, and the name `Token` belongs to
+  the alias; a `Lang::TokenReader` associated type (a reader *type* on `Lang`) — the
+  language names the lifetime-free bundle, whose factory returns the `dyn` reader.
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
