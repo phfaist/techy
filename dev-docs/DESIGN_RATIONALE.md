@@ -5471,6 +5471,67 @@ a cache line (then box it, following the boxed-deltas discipline of
 
 ---
 
+#### A group may leak an after-effect: the `GroupAfterEffectsFn` hook [§dd-dr:group-after-effects]
+
+Status: DECIDED (user, this session).
+
+`GroupParser` carries an optional per-descent hook
+(`new_with_after_effects`, a borrowed `&'p dyn Fn`) that maps the interior content run's
+merged after-effect record (`NodesOutcome::after_effects`) to the group's own after-effect
+for its caller; with no hook it returns `None`, the unchanged scoped-descent behavior. The
+`GroupOpen` arm of the content loop applies and records that delta exactly as it does an
+invocation's, so an escaping effect holds for the following siblings *and* joins the
+enclosing run's record. The motivating construct is TeX's `\gdef` — a definition whose
+whole point is to outlive the group it is written in — which the delta channel could not
+express at all before, group scoping being structural (the evolved interior state is simply
+dropped with the descent).
+
+Three points carried the shape:
+
+- **Installed through `make_group_parser`, not per descent site.** A language gets the hook
+  at *every* group, which is what makes an escape compose outward through nested groups: one
+  hook per level, each seeing the level below's escape in its own record. A per-site opt-in
+  would leak at one depth and swallow at the next.
+- **The hook is a filter over ops, because the record has no provenance.** The record is one
+  merged delta (`merge_from`: rules last-writer-wins, scope ops concatenated), so it cannot
+  say which construct contributed what. A `\gdef`-vs-`\def` split is therefore expressed
+  *structurally* — the language tags its own ops, `\gdef` defining into a globally-named
+  scope via `ScopeOp::Define` and `\def` into a local one, and the hook keeps the
+  globally-targeted ops. Rules/mode/ext overrides carry no such tag; for those a hook can
+  only answer all or nothing. This is a real expressiveness limit and is documented as one.
+- **Fallible and borrowed, matching the descent-policy callbacks.** `Err` aborts under any
+  recovery policy with the traceback attached at the descent site (the hook has no session
+  access) — the panic policy leaves outer-layer code no other channel ([§dd-dr:panic-policy]
+  rule 3). `&'p dyn Fn` over a bare `fn` pointer for the same reason as
+  [§dd-dr:child-state-spec]'s compute arms: a driver must be able to close over its own
+  configuration (which scope name counts as global), and `GroupParser<'p, L>` already
+  carries `'p`.
+
+The hook receives four things: the matched `GroupRule` (so a language may let an effect
+escape `{…}` but not `$…$`), the interior's *initial* state, the interior's *exit* state
+(`NodesOutcome::state` — the only reader of what the interior actually defined; it dies with
+the descent immediately after), and the record itself **by value**, so a hook filters in
+place rather than cloning.
+
+Rejected alternatives: *always propagate the record and let the caller filter* — the caller
+is the content loop, which has no idea what the language means by "global", and every
+language without a `\gdef` would pay for a filter it does not want. *A boolean
+`persist_state` knob* as `\input` carries — right for inclusion, where the choice is genuinely
+all-or-nothing per call site, but useless here: the whole difficulty is that one group holds
+both escaping and non-escaping definitions. *A `ScopeOp` marked "global" that the core
+recognizes* — a privileged language concept in the core ([§dd-dr:no-privileged-concepts]);
+scope naming already expresses it as data.
+
+Known remaining hole: group-delimited **arguments** still drop what their groups leak. They
+descend through `cx.parse_group` like anything else, but an `ArgumentParser` has no
+after-effect channel to its caller, so `\gdef` inside `\foo{…}` does not escape. Closing it
+means giving the argument route a delta channel — a separate decision, not taken here.
+
+Revisit if: a language needs escapes out of argument extents or environment bodies (the
+argument channel above), or the op-tagging filter proves too weak for a real `\gdef` — the
+next step would be per-op provenance in the record, which was deliberately not built
+speculatively.
+
 ## Generics strategy [§dd-dr:generics]
 
 #### Defer `Rc`/`Arc` genericity [§dd-dr:defer-rc-arc]

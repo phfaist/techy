@@ -6,7 +6,9 @@
 //! (via [`ParseDriver::make_paragraph_break_node`]), comments, and end of stream. The
 //! `GroupOpen` arm (6.3) descends: it resolves the interior's base state through the
 //! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
-//! [`GroupParser`] under the policy's state (structural swap/revert). The
+//! [`GroupParser`] under the policy's state (structural swap/revert), applying the delta
+//! it returns like an invocation's (normally `None` — a group leaks an after-effect only
+//! where the language installed [`GroupAfterEffectsFn`]). The
 //! `Command`/`Specials` invocation arms (6.4) descend the same way: a `Command` token
 //! resolves through [`ParseDriver::resolve_command`] under the loop's own state (resolution
 //! precedes the descent policy), a `Specials` token carries its resolution; the
@@ -1243,14 +1245,26 @@ where
                     // The parser's input state is the policy's answer, scoped to the
                     // descent; the parser itself comes from the driver's factory
                     // (Phase 7.2 uniform routing).
-                    let (id, _delta) = cx.parse_group(
+                    let (id, delta) = cx.parse_group(
                         base,
                         &token,
                         Arc::clone(rule),
                         ChildStateSpec::inherit(),
                         None,
-                    )?; // groups have no after-effect
+                    )?;
                     self.nodes.push(id);
+                    if let Some(delta) = delta {
+                        // A group that leaks an after-effect (the `\gdef` shape — a
+                        // language installs
+                        // [`GroupAfterEffectsFn`](super::GroupAfterEffectsFn) through its
+                        // `make_group_parser`; the standard group returns `None` here).
+                        // Applied and recorded exactly like an invocation's after-effect:
+                        // to the loop's own state, so it holds for the following
+                        // siblings, and into this run's merged record — which is what
+                        // makes an escape compose outward, one level per enclosing group's
+                        // own hook.
+                        cx.state = cx.derive_state_recording(&delta, &mut self.after_effects)?;
+                    }
                     if self.test_node_stop(cx, id)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
@@ -4598,6 +4612,309 @@ mod tests {
         let after = result.tree.root().child(3).unwrap().child(0).unwrap();
         assert_eq!(after.chars(), Some("y"));
         assert_eq!(after.parsing_state().mode(), Mode::Text);
+    }
+
+    // --- the group after-effect leak channel (the `\gdef` shape) -----------------------
+
+    /// End to end: a driver installs a [`GroupAfterEffectsFn`](super::super::GroupAfterEffectsFn)
+    /// on every group descent, `\gdef` tags its definition op with a globally-named
+    /// scope and `\def` with a local one, and the hook keeps exactly the
+    /// globally-targeted ops. `\gdef`'s definition then outlives its group — through
+    /// nesting, one hook per level — while `\def`'s dies with it, and the same driver
+    /// with the hook uninstalled leaks nothing at all.
+    #[test]
+    fn a_group_leaks_the_after_effects_its_hook_keeps() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::super::{GroupAfterEffectsFn, GroupParser};
+        use crate::scopes::{Scope, ScopeOp};
+        use crate::state::{FeaturePresence, LangFeatures};
+
+        /// The scope `\gdef` defines into — the tag that survives the group.
+        const GLOBAL: &str = "global";
+        /// The scope `\def` defines into — dropped at the group boundary.
+        const LOCAL: &str = "local";
+
+        #[derive(Debug, Clone, Copy)]
+        struct GdefLang;
+        impl Lang for GdefLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type Tokenization = crate::token::StdTokenization;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = GdefDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
+            }
+        }
+
+        /// A definition macro: the standard node, plus a scope-op delta as its
+        /// after-effect (the `\newcommand` shape, `MacroSpec::with_after_effect`'s
+        /// mechanism spelled out for a bare test lang).
+        #[derive(Debug)]
+        struct DefiningSpec {
+            delta: ParsingStateDelta<GdefLang>,
+        }
+
+        impl crate::serialize::SerializableObject<GdefLang> for DefiningSpec {}
+
+        impl CallableSpec<GdefLang> for DefiningSpec {
+            fn make_invocation_parser<'a>(
+                &'a self,
+                invocation: Invocation<'a, GdefLang>,
+            ) -> Result<Box<dyn ConstructParser<GdefLang, Output = BuildId> + 'a>, ParseError>
+            {
+                Ok(Box::new(DefiningParser {
+                    inner: StdInvocationParser::new(invocation),
+                    delta: &self.delta,
+                }))
+            }
+        }
+
+        struct DefiningParser<'a> {
+            inner: StdInvocationParser<'a, GdefLang>,
+            delta: &'a ParsingStateDelta<GdefLang>,
+        }
+
+        impl ConstructParser<GdefLang> for DefiningParser<'_> {
+            type Output = BuildId;
+
+            fn parse(
+                &mut self,
+                cx: &mut ParseContext<'_, '_, GdefLang>,
+            ) -> ConstructParserResult<
+                GdefLang,
+                (BuildId, Option<Box<ParsingStateDelta<GdefLang>>>),
+            > {
+                let (id, _) = self.inner.parse(cx)?;
+                Ok((id, Some(Box::new(self.delta.clone()))))
+            }
+        }
+
+        /// `scope`-targeted definition of the zero-arg macro `name`.
+        fn defining(scope: &str, name: &str) -> ParsingStateDelta<GdefLang> {
+            ParsingStateDelta::new().scope_op(ScopeOp::Define {
+                scope: scope.into(),
+                callable_type: CT_MACRO,
+                name: name.into(),
+                spec: Arc::new(StdCallableSpec::default()),
+            })
+        }
+
+        /// Is `name` resolvable as a macro under `state`?
+        fn defined(state: &ParsingState<GdefLang>, name: &str) -> bool {
+            let query =
+                CallableQuery::new(CT_MACRO, name, CallableSyntax::Command { escape_char: '\\' });
+            state.scopes().retrieve_spec(&query, state).unwrap().is_some()
+        }
+
+        /// The leak hook: keep the ops the language tagged as global, drop the rest.
+        /// The merged record carries no provenance — a `\gdef`-vs-`\def` split *is* this
+        /// structural filter (the type's documentation).
+        #[allow(clippy::type_complexity)]
+        type Hook = Box<
+            dyn Fn(
+                    &Arc<GroupRule<GdefLang>>,
+                    &Arc<ParsingState<GdefLang>>,
+                    &Arc<ParsingState<GdefLang>>,
+                    Option<Box<ParsingStateDelta<GdefLang>>>,
+                ) -> Result<Option<Box<ParsingStateDelta<GdefLang>>>, ParseError>
+                + Send
+                + Sync,
+        >;
+
+        struct GdefDriver {
+            /// `None` = the stock behavior (nothing escapes a group).
+            hook: Option<Hook>,
+            /// Hook calls, so the test can pin one call per group descent.
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl fmt::Debug for GdefDriver {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("GdefDriver").finish_non_exhaustive()
+            }
+        }
+
+        impl GdefDriver {
+            fn new(leak: bool) -> GdefDriver {
+                let calls = Arc::new(AtomicUsize::new(0));
+                // The closure captures the counter — the reason the hook is a borrowed
+                // `dyn Fn` and not a bare `fn` pointer.
+                let counter = Arc::clone(&calls);
+                let hook: Hook = Box::new(move |rule, initial, exit, record| {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    // Argument 1: the class of the group that is closing.
+                    assert_eq!(rule.group_type, GT_BRACE);
+                    // Arguments 2 and 3: the interior's own two states. The exit state
+                    // is the only reader of what the interior defined — it dies with
+                    // the descent right after this call.
+                    assert!(!defined(initial, "g") && !defined(initial, "d"));
+                    let Some(record) = record else {
+                        assert!(Arc::ptr_eq(initial, exit));
+                        return Ok(None);
+                    };
+                    // Argument 4: one merged delta, no provenance — so the filter is
+                    // structural, over the ops the language tagged.
+                    let ops = <<GdefLang as Lang>::Features as LangFeatures>::Scopes::store_get(
+                        &record.scope_ops,
+                    )
+                    .expect("the lang declares the scopes feature present");
+                    let kept: Vec<ScopeOp<GdefLang>> = ops
+                        .iter()
+                        .filter(|op| matches!(op, ScopeOp::Define { scope, .. } if &**scope == GLOBAL))
+                        .cloned()
+                        .collect();
+                    if kept.is_empty() {
+                        return Ok(None);
+                    }
+                    let mut escaping = ParsingStateDelta::new();
+                    for op in kept {
+                        escaping = escaping.scope_op(op);
+                    }
+                    Ok(Some(Box::new(escaping)))
+                });
+                GdefDriver { hook: leak.then_some(hook), calls }
+            }
+        }
+
+        impl ParseDriver<GdefLang> for GdefDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, GdefLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
+            fn recovery(&self) -> Recovery {
+                Recovery::Tolerant
+            }
+
+            fn resolve_command(
+                &self,
+                state: &ParsingState<GdefLang>,
+                token: &StdToken<GdefLang>,
+                tokens: &dyn TokenReader<'_, GdefLang>,
+            ) -> Result<CommandResolution<GdefLang>, ParseError> {
+                resolve_macro_in_scopes(state, token, tokens)
+            }
+
+            /// The plug-in point: every group descent of this language carries the hook,
+            /// which is what makes an escape compose outward through nested groups.
+            fn make_group_parser<'p>(
+                &'p self,
+                open: &StdToken<GdefLang>,
+                rule: Arc<GroupRule<GdefLang>>,
+                child_states: ChildStateSpec<'p, GdefLang>,
+            ) -> Result<Box<dyn ConstructParser<GdefLang, Output = BuildId> + 'p>, ParseError>
+            {
+                Ok(match &self.hook {
+                    None => Box::new(
+                        GroupParser::new(open.clone(), rule).with_child_states(child_states),
+                    ),
+                    Some(hook) => {
+                        let hook: GroupAfterEffectsFn<'p, GdefLang> = &**hook;
+                        Box::new(
+                            GroupParser::new_with_after_effects(open.clone(), rule, hook)
+                                .with_child_states(child_states),
+                        )
+                    }
+                })
+            }
+        }
+
+        /// Parse `content` at the root and report the final root state plus the
+        /// diagnostics count.
+        fn run(
+            content: &str,
+            driver: &GdefDriver,
+        ) -> (ParseResult<GdefLang>, Arc<ParsingState<GdefLang>>) {
+            let mut scopes = ScopeStack::new();
+            let mut base: Scope<GdefLang> = Scope::new("base");
+            base.insert(CT_MACRO, "gdef", Arc::new(DefiningSpec { delta: defining(GLOBAL, "g") }));
+            base.insert(CT_MACRO, "def", Arc::new(DefiningSpec { delta: defining(LOCAL, "d") }));
+            scopes.push(Arc::new(base));
+            // The document-level scope `\gdef` defines into.
+            scopes.push(Arc::new(Scope::<GdefLang>::new(GLOBAL)));
+            let st = Arc::new(ParsingState::new(StateData {
+                rules: rules(),
+                scopes,
+                mode: (),
+                ext: (),
+            }));
+            let source: Arc<Source> = Arc::new(Source::new(content));
+            let mut reader = StdTokenReader::new(&source);
+            let mut session: ParserSession<GdefLang> = ParserSession::new();
+            let mut cx =
+                ParseContext::new(&mut reader, Arc::clone(&st), &mut session, driver);
+            let (outcome, delta) = cx
+                .parse_nodes(Arc::clone(&st), StopSpec::none(), ChildStateSpec::inherit())
+                .unwrap();
+            // The content loop never reports a pass-through delta of its own; its run's
+            // effects travel on the outcome.
+            assert!(delta.is_none());
+            let exit = Arc::clone(&outcome.state);
+            let root = session
+                .builder
+                .add(
+                    NodeKind::list(),
+                    SourceSpan::new(&source, 0..content.len()),
+                    Arc::clone(&st),
+                    outcome.nodes,
+                    (),
+                    (),
+                )
+                .unwrap();
+            (session.finish(root).unwrap(), exit)
+        }
+
+        // `\gdef` and `\def` both define inside the group — both `\g` and `\d` resolve
+        // there — but only the globally-tagged one is still resolvable after the close.
+        let driver = GdefDriver::new(true);
+        let (result, exit) = run("{\\gdef\\def\\g\\d}\\g\\d", &driver);
+        crate::node::check_tree_invariants(&result.tree);
+        assert_eq!(driver.calls.load(Ordering::Relaxed), 1);
+        let root = result.tree.root();
+        // The group's four children all parsed cleanly…
+        assert_eq!(root.child(0).unwrap().child_count(), 4);
+        // …and after it, `\g` is a callable while `\d` fell back to chars.
+        assert_eq!(root.child(1).unwrap().name(), Some("g"));
+        assert_eq!(root.child(2).unwrap().chars(), Some("\\d"));
+        assert_eq!(result.diagnostics.len(), 1);
+        // The escaped op reached the enclosing run's state — and only it.
+        assert!(defined(&exit, "g"));
+        assert!(!defined(&exit, "d"));
+
+        // Nesting: one hook per level, so the escape composes outward.
+        let driver = GdefDriver::new(true);
+        let (result, exit) = run("{{\\gdef}}\\g", &driver);
+        crate::node::check_tree_invariants(&result.tree);
+        assert_eq!(driver.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(result.tree.root().child(1).unwrap().name(), Some("g"));
+        assert!(result.diagnostics.is_empty());
+        assert!(defined(&exit, "g"));
+
+        // Control: the same language with no hook installed keeps the stock behavior —
+        // the interior record dies with the descent, both definitions with it.
+        let driver = GdefDriver::new(false);
+        let (result, exit) = run("{\\gdef\\def}\\g\\d", &driver);
+        crate::node::check_tree_invariants(&result.tree);
+        assert_eq!(driver.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(result.diagnostics.len(), 2);
+        assert!(!defined(&exit, "g"));
+        assert!(!defined(&exit, "d"));
     }
 
     #[test]

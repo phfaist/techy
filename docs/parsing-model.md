@@ -211,7 +211,14 @@ Two conventions govern where a state change *applies* — both pinned in the
   for callers that propagate effects further. That a definition made inside
   a group ends with the group falls out structurally: the loop's evolved
   state is dropped with the descent, and parsing resumes under the outer
-  state.
+  state. A language whose constructs may *escape* their group — TeX's
+  `\gdef` — installs the
+  [`GroupAfterEffectsFn`](crate::core::constructs::GroupAfterEffectsFn) hook
+  through its
+  [`make_group_parser`](crate::core::ParseDriver::make_group_parser), which
+  maps the interior's record to the group's own after-effect; the content
+  loop then applies and records it like an invocation's, so an escape
+  composes outward one nesting level per hook.
 
 ## How problems flow
 

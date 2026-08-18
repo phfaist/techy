@@ -593,6 +593,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// the delta channel for state-shaped customization; override this factory only
     /// for structurally different group parses.
     ///
+    /// This factory is also where a language installs the **after-effect leak hook**
+    /// ([`GroupParser::new_with_after_effects`], the `\gdef` shape): a group otherwise
+    /// returns no after-effect, dropping its interior run's merged record with the
+    /// descent. Installing it here rather than per descent site is what gives the
+    /// language the hook at every group, which is what lets an escape compose outward
+    /// through nested groups — see
+    /// [`GroupAfterEffectsFn`](crate::constructs::GroupAfterEffectsFn).
+    ///
     /// # Errors
     ///
     /// `Err` means **the parser could not be built** and aborts the parse under

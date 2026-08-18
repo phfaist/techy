@@ -223,6 +223,20 @@ declarative route is
 — a preset macro whose every invocation leaves a given delta behind, no
 custom parser involved.
 
+A **group** answers `None` here: its interior's merged record is dropped with
+the descent, which is what makes a definition group-scoped. A language whose
+constructs may outlive their group (TeX's `\gdef`) installs the
+[`GroupAfterEffectsFn`](crate::core::constructs::GroupAfterEffectsFn) hook
+through its
+[`make_group_parser`](crate::core::ParseDriver::make_group_parser) — it maps
+that record to the group's own after-effect, and because the hook sits on the
+factory it applies at every nesting level, so an escape composes outward. The
+record is one *merged* delta with no provenance, so the hook discriminates
+structurally, over ops the language tagged (a globally-named
+[`ScopeOp::Define`](crate::core::specs::ScopeOp) target for `\gdef`, a local
+one for `\def`). Group-delimited *arguments* drop what their groups leak: an
+argument parser has no after-effect channel to its caller.
+
 ## The invocation route: a spec takes over its own parsing
 
 When the content loop dispatches a resolved callable, the parser it runs

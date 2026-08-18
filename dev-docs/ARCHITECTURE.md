@@ -694,6 +694,13 @@ returns (nodes, StopCause) — the caller interprets the ending.
   state-scoped temporary rules, with brace protection at any depth
   ([§dd-dr:optional-group-balancing], [§dd-dr:temporary-group-rules],
   [§dd-dr:brace-protection-limits]).
+- **A group may leak an after-effect** ([§dd-dr:group-after-effects]): by default a group
+  returns none — its interior's merged record dies with the descent, which is what makes a
+  definition group-scoped — but a language installing `GroupAfterEffectsFn` through
+  `make_group_parser` maps that record to the group's own after-effect for its caller (the
+  `\gdef` shape). The `GroupOpen` arm applies and records it like an invocation's, so escapes
+  compose outward, one hook per nesting level; the argument route still drops them (it has no
+  delta channel).
 - **Environment bodies** run through the core, parameterized `EnvironmentBodyParser`
   (terminator command + rigid name group + invocation-name back-reference); a
   terminator mismatch closes without consuming, letting enclosing levels claim their

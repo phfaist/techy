@@ -270,8 +270,10 @@ where
             let rule = Arc::clone(rule);
             cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
             let base = Arc::clone(&cx.state);
+            // A group's after-effect (the `\gdef` shape) is dropped on the argument
+            // route: an argument parser has no delta channel to its caller.
             let (id, _delta) =
-                cx.parse_group(base, next, rule, ChildStateSpec::inherit(), None)?; // groups have no after-effect
+                cx.parse_group(base, next, rule, ChildStateSpec::inherit(), None)?;
             nodes.push(id);
             Ok(Some(id))
         }

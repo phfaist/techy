@@ -66,7 +66,9 @@ pub use environment_parser::{
     EnvironmentTerminatorSyntaxData, MalformedEnvironmentTerminator,
     MissingEnvironmentTerminator, MissingTerminatorFound, NameGroup,
 };
-pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
+pub use group_parser::{
+    GroupAfterEffectsFn, GroupParser, UnclosedGroup, UnclosedGroupFound,
+};
 pub use invocation_parser::{parse_declared_arguments, StdInvocationParser};
 pub use nodes_parser::{
     CommandResolutionFailed, ExpressionCallableRequiresContent, NodesOutcome, NodesParser,
@@ -1035,6 +1037,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// rule) with `base` as the group's input state. `frame`, when `Some`, is pushed
     /// around the whole descent
     /// ([`parse_construct`](ParseContext::parse_construct)'s frame semantics).
+    ///
+    /// The returned delta is the group's **after-effect for the caller** — `None` for the
+    /// standard group, which drops its interior's state changes with the descent, and
+    /// `Some` only where the language installed the leak hook
+    /// ([`GroupAfterEffectsFn`], the `\gdef` shape). A caller with an after-effect channel
+    /// of its own (the content loop) applies it; one without (the argument parsers) drops
+    /// it.
     // Same decided pair as above.
     #[allow(clippy::type_complexity)]
     pub fn parse_group<'p>(
