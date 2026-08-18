@@ -1439,7 +1439,7 @@ mod tests {
     use crate::node::GroupData;
     use crate::source::{Source, SourcePos, TextContent};
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
-    use super::super::argument_parsers::GroupArgumentParser;
+    use super::super::argument_parsers::{GroupArgumentParser, MarkerArgumentParser};
     use super::super::{InvocationChildState, StdInvocationParser};
     use crate::state::{
         CommentOverrides, NodeExtTypes, TrivialLang, StateData, TokenRulesOverrides,
@@ -5457,6 +5457,15 @@ mod tests {
                 GroupArgumentParser::new(GT_BRACE),
             ))])),
         );
+        // A two-character marker: one token per character, so the argument's node
+        // covers several tokens.
+        lib.insert(
+            CT_MACRO,
+            "opt",
+            Arc::new(StdCallableSpec::new([ArgumentSpec::new_unnamed(Arc::new(
+                MarkerArgumentParser::new("**"),
+            ))])),
+        );
         Arc::new(lib)
     }
 
@@ -5720,5 +5729,52 @@ mod tests {
         )
         .expect_err("the reader breaks clause 7 whatever the language declares");
         assert_eq!(detail_of(&error), detail);
+    }
+    /// A marker argument's node covers one token per marker character, so its content
+    /// follows the same rule as a chars run: the text for a language with
+    /// `OBEYS_SPAN_TILING = false`, the exact span slice for a tiled one.
+    #[test]
+    fn a_marker_argument_owns_its_text_where_the_language_does_not_obey_span_tiling() {
+        fn marker_node<L: Lang>(result: &ParseResult<L>) -> crate::node::NodeRef<'_, L> {
+            let call = result.tree.root().child(0).expect("the callable");
+            let region: Vec<_> =
+                call.argument_nodes(0).expect("provided argument").iter().collect();
+            *region.last().expect("the marker node ends the region")
+        }
+
+        let tiled = run_both::<CmdLang>(
+            "\\opt** x",
+            &span_tiling_state(),
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        let relaxed = run_both::<RelaxedStdLang>(
+            "\\opt** x",
+            &span_tiling_state(),
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        assert_eq!(shapes(&tiled.result), shapes(&relaxed.result));
+
+        let tiled_marker = marker_node(&tiled.result);
+        assert_eq!(tiled_marker.chars(), Some("**"));
+        assert!(matches!(
+            tiled_marker.kind(),
+            NodeKind::Chars { content: TextContent::Spanned(_), .. }
+        ));
+
+        let relaxed_marker = marker_node(&relaxed.result);
+        assert_eq!(relaxed_marker.chars(), Some("**"));
+        assert!(
+            matches!(
+                relaxed_marker.kind(),
+                NodeKind::Chars { content: TextContent::Owned(_), .. }
+            ),
+            "a relaxed parse records the marker as text, got {:?}",
+            relaxed_marker.kind()
+        );
+        assert_eq!(tiled_marker.span().range(), relaxed_marker.span().range());
     }
 }

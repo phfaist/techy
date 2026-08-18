@@ -51,7 +51,7 @@ use crate::node::{
     ArgumentExt, BuildId, ContentNodes, NodeKind, ParsedArgument, ParsedArguments,
     ParsedSlots,
 };
-use crate::source::SourceSpan;
+use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{
@@ -996,7 +996,18 @@ where
         }
         let span = cx.source_span_within(&start, &end)?;
         stage_pre_space(cx, &mut noise.nodes, &first)?;
-        noise.nodes.push(stage(cx, NodeKind::chars(span.span()), span)?);
+        // The node covers one token per marker character, so its content is not a
+        // span for a language with
+        // [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`:
+        // there the recorded span is only what the reader *describes* for the stretch,
+        // and the marker's tokens need not form one contiguous stretch of one source.
+        // What was read is known exactly — every token was checked to spell the
+        // expected character, consecutively — so the marker itself is the text.
+        let content = match L::OBEYS_SPAN_TILING {
+            true => TextContent::Spanned(span.span()),
+            false => TextContent::Owned(self.marker.clone()),
+        };
+        noise.nodes.push(stage(cx, NodeKind::chars(content), span)?);
         Ok(Some(region_with_last_as_content(mem::take(&mut noise.nodes))))
     }
 

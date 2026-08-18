@@ -80,7 +80,7 @@ use crate::node::{
 use core::marker::PhantomData;
 
 use crate::scopes::{CallableQuery, CallableSyntax, SpecProvenance};
-use crate::source::SourceSpan;
+use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 use crate::token::{GroupRule, TokenEdge};
@@ -1043,27 +1043,58 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
             _ => TokenEdge::EndPastPostSpace,
         };
         let after_trigger = cx.tokens.position_at(trigger, TokenEdge::EndPastPostSpace);
-        let (name, end, quoted_end) =
-            match read_rigid_name_group(cx, LLL::GroupTypeId::content_group())? {
-                Some(group) => {
-                    (Some(String::from(group.name.content())), group.end.clone(), group.end)
-                }
-                // Malformed name group: nothing past the trigger was consumed.
-                None => (
-                    None,
-                    after_trigger,
-                    cx.tokens.position_at(trigger, command_end),
-                ),
-            };
+        let name_group = read_rigid_name_group(cx, LLL::GroupTypeId::content_group())?;
+        let (name, end, quoted_end) = match &name_group {
+            Some(group) => (
+                Some(String::from(group.name.content())),
+                group.end.clone(),
+                group.end.clone(),
+            ),
+            // Malformed name group: nothing past the trigger was consumed.
+            None => (
+                None,
+                after_trigger,
+                cx.tokens.position_at(trigger, command_end),
+            ),
+        };
         let span = cx.source_span_within(&trigger_start, &end)?;
         // The condition quotes the terminator as written — its command name is this
         // spec's registration name, not a fixed spelling.
         let quoted = cx.source_span_within(&trigger_start, &quoted_end)?;
         let terminator = String::from(quoted.content());
         cx.recover(OrphanEnd::new(name, terminator), span.clone())?;
+        // The node covers the trigger and, when one was read, the name group — several
+        // tokens. For a language with
+        // [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
+        // recorded span is only what the reader *describes* for that stretch, so the
+        // content is assembled from what the site has in hand about each piece: the
+        // trigger's own span (one reader answer about one token, from its start so the
+        // pre-space the content loop already staged stays out) and the name group's
+        // delimiters as written — the rule cloned off the matched open token — around
+        // the name.
+        let content = match LLL::OBEYS_SPAN_TILING {
+            true => TextContent::Spanned(span.span()),
+            false => {
+                let mut text = String::from(
+                    cx.tokens
+                        .source_span_between(
+                            trigger,
+                            TokenEdge::Start,
+                            TokenEdge::EndPastPostSpace,
+                        )
+                        .content(),
+                );
+                if let Some(group) = &name_group {
+                    text.push_str(&group.rule.open);
+                    text.push_str(group.name.content());
+                    text.push_str(&group.rule.close);
+                }
+                TextContent::Owned(text.into())
+            }
+        };
         let id = cx
             .stage_node(
-                NodeKind::chars(span.span()),
+                NodeKind::chars(content),
                 span.clone(),
                 Arc::clone(&cx.state),
                 vec![],
@@ -1087,7 +1118,7 @@ mod tests {
     use crate::node::NodeRef;
     use crate::recompose::TreeRecomposer;
     use crate::scopes::{Package, ScopeOp};
-    use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
+    use crate::state::{CommentOverrides, Lang, ParsingState, TokenRulesOverrides};
     use crate::token::GroupRule;
     use alloc::string::ToString;
 
@@ -1958,5 +1989,108 @@ mod tests {
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.span().range(), 0..20);
         assert_eq!(body_shapes(env), ["chars(abc)"]);
+    }
+    // --- a latexlike-family language that does not obey span tiling (PLAN §1.5 R7) ----
+
+    /// A member of the latexlike family whose parse trees are **not** span-tiled: the
+    /// preset's vocabularies and behavior, only the declaration differs. The preset's
+    /// parsers are generic over the family, so they serve it unchanged — which is what
+    /// makes the recovery node below the site under test.
+    #[derive(Debug, Clone, Copy)]
+    struct RelaxedLatexlike;
+
+    impl Lang for RelaxedLatexlike {
+        const OBEYS_SPAN_TILING: bool = false;
+
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = GroupType;
+        type CallableTypeId = CallableType;
+        type ModeId = Mode;
+        type StateExt = ();
+        type Event = crate::latexlike::Event;
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = crate::latexlike::LatexlikeNodeExts;
+        type InvocationSyntax =
+            crate::latexlike::InvocationSyntaxData<crate::latexlike::StdEnvironmentSyntax<Self>>;
+        type Driver = LatexlikeDriver<Self>;
+
+        /// The preset's own seed, for this language's vocabularies.
+        fn initial_state_data() -> Result<crate::state::StateData<Self>, crate::state::FinalizeError>
+        {
+            let mut scopes = crate::scopes::ScopeStack::new();
+            scopes.push(crate::latexlike::builtin_package());
+            Ok(crate::state::StateData {
+                rules: crate::latexlike::default_token_rules(),
+                scopes,
+                mode: Mode::Text,
+                ext: (),
+            })
+        }
+
+        fn scan_specials(
+            state: &ParsingState<Self>,
+            content: &str,
+            pos: usize,
+        ) -> Result<Option<crate::token::SpecialsMatch<Self>>, crate::token::SpecialsScanError>
+        {
+            state.scopes().scan_specials(state, content, pos)
+        }
+
+        fn specials_trigger_chars(
+            data: &crate::state::StateData<Self>,
+        ) -> crate::token::TriggerChars {
+            data.scopes.specials_trigger_chars()
+        }
+
+        fn make_node_ext(
+            _kind: &NodeKind<Self>,
+            _span: &SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    impl LatexlikeLang for RelaxedLatexlike {}
+
+    /// The orphan-`\end` recovery node covers the trigger and its name group — several
+    /// tokens — so for a language with `OBEYS_SPAN_TILING = false` its content is the
+    /// text of what was consumed, not the recorded span (which is only what the reader
+    /// describes for the stretch).
+    #[test]
+    fn the_orphan_end_recovery_owns_its_text_where_the_language_does_not_obey_span_tiling() {
+        let relaxed: Language<RelaxedLatexlike> = Language::new(
+            LatexlikeDriver::new(Recovery::Tolerant),
+            ParsingState::lang_initial().expect("seed state"),
+        );
+
+        for (input, recovered) in [("a\\end{itemize}b", "\\end{itemize}"), ("\\end x", "\\end ")] {
+            // The tiled parse of the same input, for comparison.
+            let tiled = parse_tolerant(input);
+            let index = usize::from(input.starts_with('a'));
+            let tiled_node = tiled.tree.root().child(index).expect("the recovery node");
+            assert_eq!(tiled_node.chars(), Some(recovered));
+            assert!(
+                matches!(
+                    tiled_node.kind(),
+                    NodeKind::Chars { content: TextContent::Spanned(_), .. }
+                ),
+                "a tiled parse records the recovered extent as a span"
+            );
+
+            let result = relaxed.parse(input).expect("tolerant recovery");
+            crate::latexlike::check_latexlike_tree_invariants(&result.tree);
+            let node = result.tree.root().child(index).expect("the recovery node");
+            assert_eq!(node.chars(), Some(recovered), "the recovered text differs from {input:?}");
+            assert!(
+                matches!(node.kind(), NodeKind::Chars { content: TextContent::Owned(_), .. }),
+                "a relaxed parse records the recovered extent as text, got {:?}",
+                node.kind()
+            );
+            crate::node::validate_tree(&result.tree).expect("the all-trees law holds");
+        }
     }
 }
