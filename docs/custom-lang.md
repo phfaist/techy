@@ -82,13 +82,20 @@ canonical rules
 worked example of rules as data.
 
 A language whose tokenization *behavior* — not just data — differs
-implements the [`TokenReader`](crate::core::TokenReader) trait instead, and
-its driver returns that reader from
+implements the [`TokenReader`](crate::core::TokenReader) trait instead. It
+declares that reader in one place: a zero-sized type implementing
+[`Tokenization`](crate::core::Tokenization), named as
+[`Lang::Tokenization`](crate::core::Lang::Tokenization). The bundle states
+the token type the reader produces
+([`Tokenization::Token`](crate::core::Tokenization::Token), spelled
+[`Token<L>`](crate::core::Token) elsewhere), the type naming a place in the
+stream
+([`Tokenization::StreamPosition`](crate::core::Tokenization::StreamPosition),
+spelled [`StreamPosition<L>`](crate::core::StreamPosition)), and how the
+reader for one parse is built; construct parsers read neither type directly,
+they ask the reader. A driver may still swap the reader per instance, through
 [`make_token_reader`](crate::core::ParseDriver::make_token_reader) (see
-[The driver](#the-driver)). What such a reader produces is the language's
-own choice, declared as [`Lang::Token`](crate::core::Lang::Token) and
-[`Lang::StreamPosition`](crate::core::Lang::StreamPosition); construct
-parsers read neither directly, they ask the reader. Keeping the standard
+[The driver](#the-driver)). Keeping the standard
 token type ([`StdToken`](crate::core::StdToken)) is the least work: hold an
 inner [`StdTokenReader`](crate::core::StdTokenReader) over the same content,
 build tokens with the `StdToken` constructors, and delegate every question
@@ -185,8 +192,8 @@ name. A complete braces-only language:
 # use techy::source::SourceSpan;
 use techy::core::{
     FeatureAbsent, FeaturePresent, FinalizeError, GroupRule, GroupRules, Lang,
-    LangFeatures, Language, ParsingState, StateData, StdParseDriver, StdStreamPosition,
-    StdToken, TokenRules,
+    LangFeatures, Language, ParsingState, StateData, StdParseDriver, StdTokenization,
+    TokenRules,
 };
 
 // The declaration: group delimiters present, the seven other features absent.
@@ -216,8 +223,7 @@ impl Lang for BracesOnlyLang {
 #     type Event = ();
 #     type SessionExt = ();
 #     type SourceOrigin = Option<String>;
-#     type Token = StdToken<Self>;
-#     type StreamPosition = StdStreamPosition;
+#     type Tokenization = StdTokenization;
 #     type NodeExts = ();
 #     type InvocationSyntax = ();
 #     type Driver = StdParseDriver;
@@ -438,13 +444,16 @@ so behavior can carry configuration (a recovery policy) that static hooks
 could not. The trait's page groups its five concerns: recovery policy,
 parse-time hooks (command resolution, paragraph-break emission, diagnostic
 refinement, transition observation, event lowering), source resolution,
-the group descent-delta channel, and construct provision. Every method but
-[`make_token_reader`](crate::core::ParseDriver::make_token_reader) has a
-working default, and that one's standard body is the one-liner
-`Box::new(StdTokenReader::new(source))`, so a driver that supplies it is
-already complete; override what else your language needs. That hook is also
-where a custom reader is installed ([Token rules and specials
-recognition](#token-rules-and-specials-recognition) above). (Parsing depth is
+the group descent-delta channel, and construct provision. Every method has a
+working default — `impl ParseDriver<MyLang> for MyDriver {}` is already a
+complete driver — so override only what your language needs. Tokenization is
+defaulted too:
+[`make_token_reader`](crate::core::ParseDriver::make_token_reader) builds the
+reader the language's own
+[`Tokenization`](crate::core::Lang::Tokenization) names ([Token rules and
+specials recognition](#token-rules-and-specials-recognition) above). Override
+that hook when the reader needs data the driver *instance* holds; a reader
+needing none belongs on the language. (Parsing depth is
 limited by the engine's own guard, configured on the language value with
 [`with_descent_guard_init`](crate::core::Language::with_descent_guard_init)
 — it is not a driver concern.)

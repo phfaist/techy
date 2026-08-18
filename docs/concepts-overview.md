@@ -33,9 +33,11 @@ policy tools.
 ## Tokens and token rules
 
 [`Token`](crate::core::Token)s are minimal, structural, opaque values produced
-by a [`TokenReader`](crate::core::TokenReader). Which token type a language
-uses is its own declaration ([`Lang::Token`](crate::core::Lang::Token)); the
-standard reader ([`StdTokenReader`](crate::core::StdTokenReader)) produces
+by a [`TokenReader`](crate::core::TokenReader). A language declares which
+reader tokenizes it, and which types that reader works in, as one bundle:
+[`Lang::Tokenization`](crate::core::Lang::Tokenization). The standard bundle
+([`StdTokenization`](crate::core::StdTokenization)) names the standard reader
+([`StdTokenReader`](crate::core::StdTokenReader)), which produces
 [`StdToken`](crate::core::StdToken)s. Nothing is read off a token directly: a
 parser asks the reader what a token *is*
 ([`token_kind`](crate::core::TokenReader::token_kind)) and where it is
@@ -45,7 +47,8 @@ byte range in it — for the whole token or for the stretch between two of its
 [edges](crate::core::TokenEdge), the five boundaries running from where its
 leading whitespace begins to where its trailing whitespace ends). A place in
 the token *stream*, as opposed to a place in the text, is a
-[`Lang::StreamPosition`](crate::core::Lang::StreamPosition): opaque as well,
+[`StreamPosition`](crate::core::StreamPosition) — the bundle's second type:
+opaque as well,
 handed out by the reader alone
 ([`position_here`](crate::core::TokenReader::position_here),
 [`position_at`](crate::core::TokenReader::position_at)), and the value a

@@ -94,7 +94,7 @@ use crate::node::{
     StagedNodes,
 };
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{GroupRule, TokenEdge, TokenReader};
+use crate::token::{GroupRule, StreamPosition, Token, TokenEdge, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
@@ -142,7 +142,7 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
 /// none of them itself.
 pub(crate) fn comment_node_kind<L: Lang>(
     cx: &ParseContext<'_, '_, L>,
-    token: &L::Token,
+    token: &Token<L>,
 ) -> (NodeKind<L>, SourceSpan<L::SourceOrigin>) {
     let span = cx.tokens.source_span_of(token);
     let between = |a, b| cx.tokens.source_span_between(token, a, b);
@@ -248,8 +248,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// recovery policy, and never panics.
     pub fn source_span_within(
         &self,
-        begin: &L::StreamPosition,
-        end: &L::StreamPosition,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
     ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
         match self.tokens.source_span_within(begin, end) {
             Some(span) => Ok(span),
@@ -360,7 +360,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         arguments: ParsedArguments<L>,
         slots: ParsedSlots<L>,
         children: Vec<BuildId>,
-        end: Option<&L::StreamPosition>,
+        end: Option<&StreamPosition<L>>,
     ) -> ConstructParserResult<L, BuildId>
     where
         L::InvocationSyntax: FromInvocation<L>,
@@ -423,8 +423,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     fn invocation_span_within(
         &self,
         trigger: &SourceSpan<L::SourceOrigin>,
-        begin: &L::StreamPosition,
-        end: &L::StreamPosition,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
     ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
         match self.tokens.source_span_within(begin, end) {
             Some(span) => Ok(span),
@@ -471,7 +471,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub fn probe_token(
         &mut self,
         state: &Arc<ParsingState<L>>,
-    ) -> ConstructParserResult<L, Option<L::Token>> {
+    ) -> ConstructParserResult<L, Option<Token<L>>> {
         self.driver.probe_token(self.tokens, self.session, state)
     }
 
@@ -1040,7 +1040,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub fn parse_group<'p>(
         &mut self,
         base: Arc<ParsingState<L>>,
-        open: &L::Token,
+        open: &Token<L>,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
         frame: Option<Frame<L>>,
@@ -1264,7 +1264,7 @@ pub struct Invocation<'a, L: Lang> {
     pub spec: &'a Arc<dyn CallableSpec<L>>,
     /// The token that triggered this invocation. Only a [`TokenReader`] interprets
     /// it: hand it back to `cx.tokens` to learn what the trigger is and where it lies.
-    pub token: &'a L::Token,
+    pub token: &'a Token<L>,
 }
 
 impl<L: Lang> fmt::Debug for Invocation<'_, L> {

@@ -1210,8 +1210,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ExtBundle;
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1304,8 +1303,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = RoleBundle;
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1472,8 +1470,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = MintExts;
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1542,8 +1539,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = crate::engine::StdParseDriver;

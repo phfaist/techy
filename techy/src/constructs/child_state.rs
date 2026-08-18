@@ -40,7 +40,7 @@ use core::fmt;
 
 use crate::error::ParseError;
 use crate::state::{Lang, ParsingState};
-use crate::token::TokenReader;
+use crate::token::{Token, TokenReader};
 
 use super::Invocation;
 
@@ -78,7 +78,7 @@ pub enum GroupChildState<'p, L: Lang> {
     Compute(
         &'p dyn Fn(
             &Arc<ParsingState<L>>,
-            &L::Token,
+            &Token<L>,
             &dyn TokenReader<'_, L>,
         )
             -> Result<Arc<ParsingState<L>>, ParseError<L::SourceOrigin>>,

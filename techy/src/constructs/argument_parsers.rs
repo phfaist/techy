@@ -57,7 +57,7 @@ use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{
     GroupOverrides, Lang, LangHasGroups, ParsingState, ParsingStateDelta, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, TokenEdge, TokenKind};
+use crate::token::{GroupRule, StreamPosition, Token, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{
@@ -130,14 +130,14 @@ pub struct ArgumentNoise<L: Lang> {
     pub nodes: Vec<BuildId>,
     /// The stream position before the scan: where [`rewind`](ArgumentNoise::rewind)
     /// returns to when the argument is absent.
-    pub start: L::StreamPosition,
+    pub start: StreamPosition<L>,
     /// The first non-noise token, peeked and left unconsumed; its `pre_space` is *not*
     /// staged (the parser stages it via [`stage_pre_space`] once it commits to the
     /// argument being present). `None` when a tokenizer error sits at the position
     /// (tolerant mode): the error is neither consumed nor diagnosed by the argument
     /// parser — it reports the argument absent, and the enclosing content loop
     /// re-reads and recovers the token itself.
-    pub next: Option<L::Token>,
+    pub next: Option<Token<L>>,
 }
 
 impl<L: Lang> ArgumentNoise<L> {
@@ -196,7 +196,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
 pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
-    tok: &L::Token,
+    tok: &Token<L>,
 ) -> ConstructParserResult<L, ()> {
     let pre_space = cx.tokens.source_span_between(
         tok,
@@ -248,7 +248,7 @@ pub(super) fn stage<L: Lang>(
 ///   [`ArgumentParser::parse_argument`] deliberately has no delta channel.
 pub(super) fn parse_expression_node<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
-    next: &L::Token,
+    next: &Token<L>,
     nodes: &mut Vec<BuildId>,
 ) -> ConstructParserResult<L, Option<BuildId>>
 where
@@ -701,7 +701,7 @@ pub(super) fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: Buil
 /// A successful minted-group probe ([`probe_minted_group`]): the unconsumed opening
 /// token, the rule that matched it, and the state the group's contents parse under.
 struct MintedGroupMatch<L: Lang> {
-    open: L::Token,
+    open: Token<L>,
     rule: Arc<GroupRule<L>>,
     contents_state: Arc<ParsingState<L>>,
 }
@@ -1074,8 +1074,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = ArgDriver;
@@ -1095,13 +1094,6 @@ mod tests {
     }
 
     impl ParseDriver<ArgLang> for ArgDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ArgLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }

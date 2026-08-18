@@ -14,7 +14,7 @@ use crate::engine::{ParseDriver, StdParseDriver};
 use crate::node::{NodeBuildError, NodeExt, NodeKind, StagedChildren};
 use crate::source::{Source, SourceOrigin, SourceSpan};
 use crate::token::{
-    SpecialsMatch, SpecialsScanError, StdStreamPosition, StdToken, Token, TriggerChars,
+    SpecialsMatch, SpecialsScanError, StdTokenization, Tokenization, TriggerChars,
 };
 
 use super::features::{AllLangFeatures, LangFeatures};
@@ -241,38 +241,26 @@ pub trait Lang: Sized + 'static {
     /// `Option<String>`.
     type SourceOrigin: SourceOrigin;
 
-    /// The token type this language's readers produce.
-    ///
-    /// **Opaque:** a construct parser holds a token and passes it back to the reader;
-    /// it never reads anything off one. What a token *is* comes from
-    /// [`token_kind`](crate::token::TokenReader::token_kind) (a
-    /// [`TokenKind`](crate::token::TokenKind) view), where it is from the reader's
-    /// span and position answers. That is what lets a reader serve tokens from more
-    /// than one source during a parse — a macro expander, say — while construct
-    /// parsers stay written against one API.
-    ///
-    /// The bound is the marker contract [`Token`](crate::token::Token). Languages
-    /// tokenized by [`StdTokenReader`](crate::token::StdTokenReader) — every language
-    /// of this crate — use [`StdToken<Self>`](crate::token::StdToken).
-    type Token: Token<Self>;
-
-    /// The type naming a place in this language's token stream — the value a
-    /// [`TokenReader`](crate::token::TokenReader) hands out from
-    /// [`position_here`](crate::token::TokenReader::position_here) and
-    /// [`position_at`](crate::token::TokenReader::position_at), and accepts back at
-    /// [`move_to_position`](crate::token::TokenReader::move_to_position).
-    ///
-    /// **Opaque:** a construct parser holds a stream position and gives it back to the
-    /// reader; it never interprets one. There is deliberately no way to build a
-    /// position from a number, and no ordering — only equality, which is what "did the
-    /// reader move?" needs. This is what lets a reader serving several sources during
-    /// one parse (a macro expander, say) name places its own way, while parsers stay
-    /// written against one API.
+    /// The language's tokenization, declared as one type
+    /// ([`Tokenization`](crate::token::Tokenization)): the token type its readers
+    /// produce ([`Token<Self>`](crate::token::Token)), the stream-position type they
+    /// hand out ([`StreamPosition<Self>`](crate::token::StreamPosition)), and how the
+    /// reader for a parse over one source is built.
     ///
     /// Languages tokenized by [`StdTokenReader`](crate::token::StdTokenReader) — every
-    /// language of this crate — use
-    /// [`StdStreamPosition`](crate::token::StdStreamPosition).
-    type StreamPosition: Clone + fmt::Debug + PartialEq + Eq + Send + Sync;
+    /// language of this crate — declare
+    /// [`StdTokenization`](crate::token::StdTokenization), which supplies
+    /// [`StdToken<Self>`](crate::token::StdToken),
+    /// [`StdStreamPosition`](crate::token::StdStreamPosition), and that reader. A
+    /// language tokenized differently declares a zero-sized type of its own that
+    /// implements [`Tokenization`](crate::token::Tokenization).
+    ///
+    /// The declaration fixes the *types* for the whole parse; which reader **instance**
+    /// serves one parse is still a driver decision, through
+    /// [`ParseDriver::make_token_reader`](crate::engine::ParseDriver::make_token_reader) —
+    /// whose default body builds the reader this declaration names. A driver that hands
+    /// its reader configuration it holds overrides that hook.
+    type Tokenization: Tokenization<Self>;
 
     /// The node extension type bundle ([`NodeExtTypes`]); `()` for languages without
     /// custom node data.
@@ -547,7 +535,7 @@ pub trait Lang: Sized + 'static {
 /// MyLang {}` yields a [`Lang`] with every associated type defaulted
 /// (`Features` = [`AllLangFeatures`], `ModeId`/`StateExt`/`Event`/`SessionExt`/
 /// `NodeExts` = `()`, `SourceOrigin` = `Option<String>`,
-/// `StreamPosition` = [`StdStreamPosition`](crate::token::StdStreamPosition),
+/// `Tokenization` = [`StdTokenization`](crate::token::StdTokenization),
 /// `GroupTypeId`/`CallableTypeId` = `u32`) and the default method
 /// behavior — the workaround for associated-type defaults being unstable. The default
 /// driver resolves nothing.
@@ -566,8 +554,7 @@ impl<T: TrivialLang> Lang for T {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
-    type Token = StdToken<Self>;
-    type StreamPosition = StdStreamPosition;
+    type Tokenization = StdTokenization;
     type NodeExts = ();
     type InvocationSyntax = ();
     type Driver = StdParseDriver;

@@ -368,8 +368,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
@@ -506,8 +505,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = CapDriver;
@@ -530,13 +528,6 @@ mod tests {
     struct CapDriver;
 
     impl ParseDriver<CapLang> for CapDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CapLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             Recovery::Tolerant
         }
@@ -567,8 +558,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = ObserveDriver;
@@ -590,13 +580,6 @@ mod tests {
     struct ObserveDriver;
 
     impl ParseDriver<ObserveLang> for ObserveDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ObserveLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -736,8 +719,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = BogusDriver;
@@ -780,13 +762,6 @@ mod tests {
         }
 
         impl ParseDriver<BogusLang> for BogusDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, BogusLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -925,9 +900,10 @@ mod tests {
 
     #[test]
     fn an_empty_driver_impl_is_complete() {
-        // Every `ParseDriver` item is defaulted (the guard is engine-owned, not a
-        // driver choice): `impl ParseDriver<L> for D {}` is a whole driver, and
-        // the language parses.
+        // Every `ParseDriver` item is defaulted — tokenization included, since
+        // `make_token_reader` falls back to the language's `Lang::Tokenization` (the
+        // guard is engine-owned, not a driver choice either): `impl ParseDriver<L> for
+        // D {}` is a whole driver, and the language parses.
         #[derive(Debug, Clone, Copy)]
         struct OneLineLang;
         impl Lang for OneLineLang {
@@ -939,8 +915,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = OneLineDriver;
@@ -955,14 +930,7 @@ mod tests {
         }
         #[derive(Debug, Clone, Copy)]
         struct OneLineDriver;
-        impl ParseDriver<OneLineLang> for OneLineDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, OneLineLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-        }
+        impl ParseDriver<OneLineLang> for OneLineDriver {}
         let language: Language<OneLineLang> =
             Language::new(OneLineDriver, ParsingState::lang_initial().expect("seed state"));
         assert!(language.parse("hello").is_ok());

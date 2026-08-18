@@ -66,9 +66,7 @@ use crate::source::{
 };
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
-use crate::token::{
-    GroupRule, StdStreamPosition, StdToken, StdTokenReader, TokenKind, TokenReader,
-};
+use crate::token::{GroupRule, Token, TokenKind, TokenReader, Tokenization};
 
 
 use super::ParserSession;
@@ -76,12 +74,11 @@ use super::ParserSession;
 /// The Lang-provided parse-behavior object, grouping five concerns: the recovery
 /// policy, the parse-time hooks (command resolution, paragraph-break emission,
 /// diagnostic refinement, transition observation, event lowering), source
-/// resolution, the group descent-delta channel, and construct provision. Every
-/// method but [`make_token_reader`](ParseDriver::make_token_reader) is defaulted,
-/// and that one's standard body is the one-liner
-/// `Box::new(StdTokenReader::new(source))`, so
-/// `impl ParseDriver<MyLang> for MyDriver { /* make_token_reader */ }` is a complete
-/// driver.
+/// resolution, the group descent-delta channel, and construct provision. **Every
+/// method is defaulted**, so `impl ParseDriver<MyLang> for MyDriver {}` is a complete
+/// driver — including its tokenization, which
+/// [`make_token_reader`](ParseDriver::make_token_reader) takes by default from the
+/// language's [`Lang::Tokenization`](crate::state::Lang::Tokenization).
 /// (Parsing depth is limited by the engine-owned
 /// [`StdDescentGuard`](super::StdDescentGuard), not a driver
 /// concern; its configuration travels on the [`Language`](super::Language) value,
@@ -172,39 +169,33 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- tokenization ---------------------------------------------------------
 
-    /// Build the token reader for one parse over `source` — **the one place custom
-    /// tokenization is installed**.
+    /// Build the token reader for one parse over `source` — **the per-instance door
+    /// for custom tokenization**.
     ///
     /// Both reader-construction sites go through this hook:
     /// [`Language::parse_source`](super::Language::parse_source) for the root parse and
     /// [`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)
     /// for an attached (included) source. A driver that returns its own reader thereby
     /// tokenizes the whole parse its way, while the *types* involved stay fixed by the
-    /// language ([`Lang::StreamPosition`](crate::state::Lang::StreamPosition)).
+    /// language ([`Token<L>`](crate::token::Token) and
+    /// [`StreamPosition<L>`](crate::token::StreamPosition), both declared by
+    /// [`Lang::Tokenization`](crate::state::Lang::Tokenization)).
     ///
-    /// The standard body — right for every language tokenized by
-    /// [`StdTokenReader`](crate::token::StdTokenReader), which is every language whose
-    /// `StreamPosition` is [`StdStreamPosition`](crate::token::StdStreamPosition):
-    ///
-    /// ```ignore
-    /// fn make_token_reader<'s>(
-    ///     &'s self,
-    ///     source: &'s Arc<Source<L::SourceOrigin>>,
-    /// ) -> Box<dyn TokenReader<'s, L> + 's> {
-    ///     Box::new(StdTokenReader::new(source))
-    /// }
-    /// ```
-    ///
-    /// This method has no default: the default body would have to name a concrete
-    /// reader type, and no single reader type serves a language whose stream positions
-    /// are its own.
-    ///
-    /// The returned reader borrows both `self` and `source` for the parse's extent, so
-    /// a driver may hand it configuration it holds.
+    /// The default builds the reader the language's own
+    /// [`Tokenization`](crate::token::Tokenization) names —
+    /// `L::Tokenization::make_token_reader(source)`, which for
+    /// [`StdTokenization`](crate::token::StdTokenization) is a
+    /// [`StdTokenReader`](crate::token::StdTokenReader) over `source`. Override it when
+    /// the reader needs data the driver *instance* holds: the returned reader borrows
+    /// both `self` and `source` for the parse's extent, so a driver may hand it
+    /// configuration of its own. A reader needing no per-instance data is better
+    /// installed by the language, as its `Tokenization`.
     fn make_token_reader<'s>(
         &'s self,
         source: &'s Arc<Source<L::SourceOrigin>>,
-    ) -> Box<dyn TokenReader<'s, L> + 's>;
+    ) -> Box<dyn TokenReader<'s, L> + 's> {
+        <L::Tokenization as Tokenization<L>>::make_token_reader(source)
+    }
 
     /// Probe the token at the reader's position under `state`, mapping a tokenizer
     /// error per the recovery policy (the default reads it through
@@ -225,7 +216,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         tokens: &mut dyn TokenReader<'s, L>,
         session: &ParserSession<L>,
         state: &Arc<ParsingState<L>>,
-    ) -> ConstructParserResult<L, Option<L::Token>> {
+    ) -> ConstructParserResult<L, Option<Token<L>>> {
         match tokens.peek(state) {
             Ok(token) => Ok(Some(token)),
             Err(error) => {
@@ -301,7 +292,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         CommandResolver::resolve_command(&(), state, token, tokens)
@@ -613,7 +604,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     #[allow(clippy::type_complexity)]
     fn make_group_parser<'p>(
         &'p self,
-        open: &L::Token,
+        open: &Token<L>,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
     ) -> Result<
@@ -691,7 +682,7 @@ pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>>;
 }
@@ -703,7 +694,7 @@ impl<L: Lang> CommandResolver<L> for () {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         let _ = (state, token, tokens);
@@ -737,7 +728,7 @@ impl<L: Lang> CommandResolver<L> for ScopesCommandResolver<L> {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         Ok(resolve_command_in_scopes(state, token, tokens, self.command_type))
@@ -838,21 +829,10 @@ impl<R, O: SourceOrigin> StdParseDriver<R, O> {
     }
 }
 
-// The `Token`/`StreamPosition` bounds are what let the ready-made driver build the
-// ready-made reader: `StdTokenReader` serves exactly the languages whose tokens are
-// `StdToken` and whose stream positions are `StdStreamPosition`. A language with its
-// own token or position type brings its own driver.
-impl<L, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::SourceOrigin>
-where
-    L: Lang<Token = StdToken<L>, StreamPosition = StdStreamPosition>,
-{
-    fn make_token_reader<'s>(
-        &'s self,
-        source: &'s Arc<Source<L::SourceOrigin>>,
-    ) -> Box<dyn TokenReader<'s, L> + 's> {
-        Box::new(StdTokenReader::new(source))
-    }
-
+// No tokenization bound: the ready-made driver takes its reader from the language's
+// own `Lang::Tokenization` (the defaulted `make_token_reader`), so it serves every
+// language, whatever its tokens and stream positions are.
+impl<L: Lang, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::SourceOrigin> {
     fn recovery(&self) -> Recovery {
         self.recovery
     }
@@ -862,7 +842,7 @@ where
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         self.command_resolver.resolve_command(state, token, tokens)
@@ -994,7 +974,7 @@ pub enum CommandResolution<L: Lang> {
 /// `check_provider_commands_shadowed_by_escape` fires regardless of fallbacks).
 pub fn resolve_command_in_scopes<L: Lang>(
     state: &ParsingState<L>,
-    token: &L::Token,
+    token: &Token<L>,
     tokens: &dyn TokenReader<'_, L>,
     callable_type: L::CallableTypeId,
 ) -> CommandResolution<L> {

@@ -59,7 +59,7 @@ use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::Lang;
-use crate::token::{TokenEdge, TokenKind};
+use crate::token::{Token, TokenEdge, TokenKind};
 
 use super::argument_parsers::{
     parse_expression_node, scan_argument_noise, stage_pre_space,
@@ -239,7 +239,7 @@ impl EmbellishmentsArgumentParser {
     fn scan_marker<'s, L: Lang>(
         &self,
         cx: &mut ParseContext<'_, 's, L>,
-        first: &L::Token,
+        first: &Token<L>,
         used: &[bool],
     ) -> ConstructParserResult<L, Option<(usize, SourceSpan<L::SourceOrigin>)>> {
         let TokenKind::Char(first_char) = cx.tokens.token_kind(first) else {
@@ -269,7 +269,7 @@ impl EmbellishmentsArgumentParser {
         cx.tokens.move_to(first, TokenEdge::EndPastPostSpace);
         // The best-so-far match is kept as the *token* it ends on: only the reader can
         // say where that is.
-        let mut best: Option<(usize, L::Token)> =
+        let mut best: Option<(usize, Token<L>)> =
             available(&run).map(|index| (index, first.clone()));
 
         let state = Arc::clone(&cx.state);

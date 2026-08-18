@@ -97,8 +97,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = techy::core::StdToken<Self>;
-        type StreamPosition = techy::core::StdStreamPosition;
+        type Tokenization = techy::core::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
@@ -165,8 +164,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = techy::core::StdToken<Self>;
-        type StreamPosition = techy::core::StdStreamPosition;
+        type Tokenization = techy::core::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
@@ -251,8 +249,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = techy::core::StdToken<Self>;
-        type StreamPosition = techy::core::StdStreamPosition;
+        type Tokenization = techy::core::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver<FixedTableResolver>;

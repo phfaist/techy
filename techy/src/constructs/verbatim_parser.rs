@@ -56,7 +56,7 @@ use crate::state::{
     LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState, ParsingStateDelta,
     SpecialsOverrides, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, TokenEdge, TokenKind};
+use crate::token::{GroupRule, StreamPosition, TokenEdge, TokenKind};
 
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
@@ -141,13 +141,13 @@ pub fn verbatim_state_delta<L: LangHasGroups>(
 /// terminator was actually consumed (with its span).
 struct RawContentEnd<L: Lang> {
     /// End of the raw content (= the terminator's start when one was found).
-    content_end: L::StreamPosition,
+    content_end: StreamPosition<L>,
     /// The consumed terminator's span, or `None` when the region ended without one
     /// (end of input, or a tolerated unreadable token).
     terminator: Option<SourceSpan<L::SourceOrigin>>,
     /// Just past the consumed terminator — equal to `content_end` when the region
     /// ended without one.
-    end: L::StreamPosition,
+    end: StreamPosition<L>,
 }
 
 /// Read raw content under `state` (a [`verbatim_state_delta`]-derived state) until the
@@ -541,7 +541,7 @@ impl<L: Lang> VerbatimBodyTerminator<'_, L> {
     fn syntax_data(
         &self,
         span: SourceSpan<L::SourceOrigin>,
-        end: L::StreamPosition,
+        end: StreamPosition<L>,
     ) -> EnvironmentTerminatorSyntaxData<L> {
         match self {
             VerbatimBodyTerminator::Literal { .. } => {
@@ -854,8 +854,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = VerbDriver;
@@ -875,13 +874,6 @@ mod tests {
     }
 
     impl ParseDriver<VerbLang> for VerbDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, VerbLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }

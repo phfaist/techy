@@ -40,6 +40,7 @@ use crate::state::{Lang, ParsingState};
 use super::error::TokenResult;
 use super::reader::{StdStreamPosition, TokenEdge, TokenReader};
 use super::token::{StdToken, StdTokenKindData, TokenKind};
+use super::tokenization::{StreamPosition, Token, Tokenization};
 
 /// A [`TokenReader`] serving tokens from a pre-built list (see the module docs for the
 /// fidelity contract).
@@ -76,7 +77,11 @@ pub struct TokenListReader<'s, L: Lang> {
     issued: RefCell<BTreeSet<usize>>,
 }
 
-impl<'s, L: Lang<Token = StdToken<L>>> TokenListReader<'s, L> {
+impl<'s, L> TokenListReader<'s, L>
+where
+    L: Lang,
+    L::Tokenization: Tokenization<L, Token = StdToken<L>>,
+{
     /// Create a reader positioned before the first token. The source-order contract
     /// (type docs) is the caller's; it is debug-asserted here, and an out-of-order
     /// list is not rejected — the parse's span bookkeeping reports the breakage as an
@@ -147,9 +152,10 @@ const EVERY_EDGE: [TokenEdge; 5] = [
 
 impl<'s, L> TokenReader<'s, L> for TokenListReader<'s, L>
 where
-    L: Lang<Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    L: Lang,
+    L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
-    fn peek(&mut self, _state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
+    fn peek(&mut self, _state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>> {
         match self.current() {
             Some(token) => {
                 // Clip the recorded pre-space to the current position: peeking from
@@ -172,17 +178,17 @@ where
         }
     }
 
-    fn move_to(&mut self, tok: &L::Token, edge: TokenEdge) {
+    fn move_to(&mut self, tok: &Token<L>, edge: TokenEdge) {
         self.check_issued(tok, "move_to");
         self.pos = self.issue(tok.edge_offset(edge));
     }
 
-    fn move_to_position(&mut self, at: &L::StreamPosition) {
+    fn move_to_position(&mut self, at: &StreamPosition<L>) {
         self.check_position(at.offset(), "move_to_position");
         self.pos = at.offset();
     }
 
-    fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L>
+    fn token_kind<'t>(&self, tok: &'t Token<L>) -> TokenKind<'t, L>
     where
         's: 't,
     {
@@ -224,7 +230,7 @@ where
 
     fn source_span_between(
         &self,
-        tok: &L::Token,
+        tok: &Token<L>,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin> {
@@ -233,24 +239,24 @@ where
         SourceSpan::new(self.source, a.min(b)..a.max(b))
     }
 
-    fn position_here(&self) -> L::StreamPosition {
+    fn position_here(&self) -> StreamPosition<L> {
         StdStreamPosition::at(self.issue(self.pos))
     }
 
-    fn position_at(&self, tok: &L::Token, edge: TokenEdge) -> L::StreamPosition {
+    fn position_at(&self, tok: &Token<L>, edge: TokenEdge) -> StreamPosition<L> {
         self.check_issued(tok, "position_at");
         StdStreamPosition::at(self.issue(tok.edge_offset(edge)))
     }
 
-    fn source_position_at(&self, at: &L::StreamPosition) -> SourcePos<L::SourceOrigin> {
+    fn source_position_at(&self, at: &StreamPosition<L>) -> SourcePos<L::SourceOrigin> {
         self.check_position(at.offset(), "source_position_at");
         SourcePos::new(self.source, at.offset())
     }
 
     fn source_span_within(
         &self,
-        begin: &L::StreamPosition,
-        end: &L::StreamPosition,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
     ) -> Option<SourceSpan<L::SourceOrigin>> {
         self.check_position(begin.offset(), "source_span_within");
         self.check_position(end.offset(), "source_span_within");

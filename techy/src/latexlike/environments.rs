@@ -1045,9 +1045,8 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
         let after_trigger = cx.tokens.position_at(trigger, TokenEdge::EndPastPostSpace);
         let (name, end, quoted_end) =
             match read_rigid_name_group(cx, LLL::GroupTypeId::content_group())? {
-                // The preset's stream positions are `Copy` (`StdStreamPosition`).
                 Some(group) => {
-                    (Some(String::from(group.name.content())), group.end, group.end)
+                    (Some(String::from(group.name.content())), group.end.clone(), group.end)
                 }
                 // Malformed name group: nothing past the trigger was consumed.
                 None => (

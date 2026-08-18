@@ -1286,8 +1286,7 @@ impl Lang for ParseLang {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
-    type Token = crate::token::StdToken<Self>;
-    type StreamPosition = crate::token::StdStreamPosition;
+    type Tokenization = crate::token::StdTokenization;
     type NodeExts = ();
     type InvocationSyntax = ();
     type Driver = StdParseDriver<ScopesCommandResolver<ParseLang>>;
@@ -1405,8 +1404,7 @@ impl Lang for SyntaxLang {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
-    type Token = crate::token::StdToken<Self>;
-    type StreamPosition = crate::token::StdStreamPosition;
+    type Tokenization = crate::token::StdTokenization;
     type NodeExts = ();
     type InvocationSyntax = ToySyntax;
     type Driver = StdParseDriver;

@@ -19,6 +19,7 @@ use crate::error::{DiagnosticData, DiagnosticInfo};
 use crate::source::SourceSpan;
 use crate::state::Lang;
 
+use super::tokenization::{StreamPosition, Token};
 
 /// Result type of tokenization operations.
 pub type TokenResult<L, T> = core::result::Result<T, TokenError<L>>;
@@ -127,11 +128,11 @@ pub struct TokenError<L: Lang> {
 /// positions compare only for equality, so the check is "different", not "greater".
 pub struct TokenRecovery<L: Lang> {
     /// The placeholder token to emit in place of the failed read.
-    pub token: L::Token,
+    pub token: Token<L>,
     /// The stream position at which to resume reading — one the reader produced, and not
     /// the position the failed read started from (see the
     /// [advancement contract](TokenRecovery#contract-resume-must-move-the-stream)).
-    pub resume: L::StreamPosition,
+    pub resume: StreamPosition<L>,
 }
 
 impl<L: Lang> TokenError<L> {

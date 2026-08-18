@@ -12,10 +12,13 @@
 //!   [`ParsingState`] and its reified [`ParsingStateDelta`]s, [`StateData`],
 //!   [`TokenRulesOverrides`], the [`NodeExtTypes`] ext bundle, and the
 //!   [`TrivialLang`] test lang.
-//! - **Tokens** — opaque tokens ([`Token`], the standard [`StdToken`], the
-//!   parser-facing [`TokenKind`] view), data-driven [`TokenRules`], the
-//!   [`TokenReader`] trait and standard reader ([`StdTokenReader`]), specials
-//!   scanning ([`SpecialsMatch`], [`TriggerChars`]), and the token error family.
+//! - **Tokens** — a language's tokenization declared as one type ([`Tokenization`],
+//!   the standard [`StdTokenization`]) with its two projections, the opaque
+//!   [`Token`] and [`StreamPosition`]; the standard [`StdToken`] and
+//!   [`StdStreamPosition`]; the parser-facing [`TokenKind`] view; data-driven
+//!   [`TokenRules`]; the [`TokenReader`] trait and standard reader
+//!   ([`StdTokenReader`]); specials scanning ([`SpecialsMatch`], [`TriggerChars`]);
+//!   and the token error family.
 //! - **Engine** — the [`Language`] runtime bundle and its `parse()` entry,
 //!   [`ParserSession`], the [`ParseDriver`] customization point ([`StdParseDriver`]),
 //!   [`ParseResult`], the live parse-frame stack ([`Frame`], [`FrameTitle`],
@@ -62,7 +65,7 @@ pub use crate::token::{
     skip_whitespace, CommandRule, CommandRules, CommentRule, CommentRules,
     EndOfStreamAfterEscape, ForbiddenChar, ForbiddenCharsRules, GroupRule, GroupRules,
     ParagraphRules, PrefixEntry, PrefixTable, SpecialsMatch, SpecialsRules,
-    SpecialsScanError, StdStreamPosition, StdToken, StdTokenReader, Token, TokenEdge,
-    TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery, TokenResult,
-    TokenRules, TriggerChars, WhitespaceRules,
+    SpecialsScanError, StdStreamPosition, StdToken, StdTokenReader, StdTokenization,
+    StreamPosition, Token, TokenEdge, TokenError, TokenErrorKind, TokenKind, TokenReader,
+    TokenRecovery, TokenResult, TokenRules, Tokenization, TriggerChars, WhitespaceRules,
 };

@@ -38,8 +38,7 @@ method has a working default. Contracts live on
 | [`Event`](crate::core::Lang::Event) | semantic transition events on deltas; two classes (see below) | `()` |
 | [`SessionExt`](crate::core::Lang::SessionExt) | parse-global mutable extension on the session (history accumulation, caches) | `()` |
 | [`SourceOrigin`](crate::core::Lang::SourceOrigin) | origin metadata type of sources | `Option<String>` |
-| [`Token`](crate::core::Lang::Token) | the token type this language's readers produce — opaque to construct parsers, which hold and pass tokens but read nothing off them | [`StdToken`](crate::core::StdToken)`<Self>` |
-| [`StreamPosition`](crate::core::Lang::StreamPosition) | the reader-defined place in the token stream — opaque too, and obtainable only from a reader | [`StdStreamPosition`](crate::core::StdStreamPosition) |
+| [`Tokenization`](crate::core::Lang::Tokenization) | the language's tokenization as one type: the token type its readers produce ([`Token<L>`](crate::core::Token), opaque to construct parsers, which hold and pass tokens but read nothing off them), the reader-defined place in the stream ([`StreamPosition<L>`](crate::core::StreamPosition), opaque too and obtainable only from a reader), and how the reader for one parse is built | [`StdTokenization`](crate::core::StdTokenization) |
 | [`NodeExts`](crate::core::Lang::NodeExts) | per-node / per-argument / per-slot extension type bundle | `()` |
 | [`InvocationSyntax`](crate::core::Lang::InvocationSyntax) | recorded trigger-spelling facts per callable invocation — this channel makes recomposition accuracy the language's choice | `()` |
 | [`Driver`](crate::core::Lang::Driver) | the language's [`ParseDriver`](crate::core::ParseDriver) type | [`StdParseDriver`](crate::core::StdParseDriver) |
@@ -121,10 +120,12 @@ scoped, data preserved; **empty** = no rules data, nothing recognized;
 time via [`Lang::Features`](crate::core::Lang::Features) (see the `Lang`
 table). Different tokenization *behavior* (not
 just data) = implement the [`TokenReader`](crate::core::TokenReader) trait
-and return your reader from the driver's
-[`make_token_reader`](crate::core::ParseDriver::make_token_reader) (the one
-driver method without a default; the standard body is
-`Box::new(StdTokenReader::new(source))`). A reader that produces standard
+and declare it on the language: a zero-sized type implementing
+[`Tokenization`](crate::core::Tokenization), named as
+[`Lang::Tokenization`](crate::core::Lang::Tokenization). A driver whose reader
+needs data the driver instance holds overrides
+[`make_token_reader`](crate::core::ParseDriver::make_token_reader) instead
+(defaulted: it builds what the language's `Tokenization` names). A reader that produces standard
 tokens ([`StdToken`](crate::core::StdToken)) keeps an inner
 [`StdTokenReader`](crate::core::StdTokenReader) over the same content, builds
 its tokens with the `StdToken` constructors and delegates every question

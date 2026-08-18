@@ -23,6 +23,12 @@
 //!   [`Lang::scan_specials`](crate::state::Lang::scan_specials) *hook* (recognition =
 //!   resolution: the token carries the spec, and the matched text is the name), gated by
 //!   the state's cached [`TriggerChars`] filter.
+//! - **A language declares its tokenization as one type**: [`Tokenization`], named as
+//!   [`Lang::Tokenization`](crate::state::Lang::Tokenization) — the token type, the
+//!   stream-position type, and how the reader for one parse is built. The two types
+//!   are spelled [`Token<L>`](Token) and [`StreamPosition<L>`](StreamPosition)
+//!   everywhere else. [`StdTokenization`] is the standard bundle: [`StdToken`],
+//!   [`StdStreamPosition`], [`StdTokenReader`].
 //! - **What a token is, and where it is, are both the reader's answers**: a token
 //!   ([`Token`], and the standard [`StdToken`] this crate's languages use) is an
 //!   opaque value with no readable data. A construct parser asks the reader what the
@@ -52,6 +58,7 @@ mod prefix_table;
 mod reader;
 mod rules;
 mod specials;
+mod tokenization;
 // The submodule sharing the parent's name is deliberate: the token is this topic's
 // anchor type, and the submodule is private (everything is re-exported here).
 #[allow(clippy::module_inception)]
@@ -74,4 +81,5 @@ pub use rules::{
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
 pub use specials::{SpecialsMatch, SpecialsScanError, TriggerChars};
-pub use token::{StdToken, Token, TokenKind};
+pub use token::{StdToken, TokenKind};
+pub use tokenization::{StdTokenization, StreamPosition, Token, Tokenization};

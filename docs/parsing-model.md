@@ -35,8 +35,10 @@ objects and runs the parse to completion:
 
 - a **token reader** — the one the driver's
   [`make_token_reader`](crate::core::ParseDriver::make_token_reader) hook
-  returns, [`StdTokenReader`](crate::core::StdTokenReader) unless the
-  language supplies its own — over the source content, which produces
+  returns, which by default is the reader the language's
+  [`Tokenization`](crate::core::Lang::Tokenization) names
+  ([`StdTokenReader`](crate::core::StdTokenReader) unless the language
+  supplies its own) — over the source content, which produces
   [`Token`](crate::core::Token)s on demand under whatever token rules the
   current parsing state holds. A token is opaque: whoever holds one asks the
   reader what it is and where it is

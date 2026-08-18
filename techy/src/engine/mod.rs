@@ -1052,8 +1052,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = ObserverDriver;
@@ -1071,13 +1070,6 @@ mod tests {
     #[derive(Debug, Clone, Copy, Default)]
     struct ObserverDriver;
     impl ParseDriver<ObserverLang> for ObserverDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ObserverLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1275,8 +1267,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = DescentDriver;
@@ -1296,13 +1287,6 @@ mod tests {
     }
 
     impl ParseDriver<DescentLang> for DescentDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, DescentLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1399,8 +1383,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = QuietDriver;
@@ -1417,13 +1400,6 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct QuietDriver;
         impl ParseDriver<QuietLang> for QuietDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, QuietLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn recover(
                 &self,
                 _session: &mut ParserSession<QuietLang>,
@@ -1464,8 +1440,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = HelperDriver;
@@ -1483,14 +1458,7 @@ mod tests {
         struct HelperDriver {
             answer: u32,
         }
-        impl ParseDriver<HelperLang> for HelperDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, HelperLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-        }
+        impl ParseDriver<HelperLang> for HelperDriver {}
         impl HelperDriver {
             /// An inherent helper — not on the `ParseDriver` trait.
             fn preset_helper(&self) -> u32 {
@@ -1568,8 +1536,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = FailingDescentDriver;
@@ -1584,13 +1551,6 @@ mod tests {
     }
 
     impl ParseDriver<FailingDescentLang> for FailingDescentDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, FailingDescentLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1679,8 +1639,7 @@ mod tests {
         type Event = CtxEvent;
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = CtxDriver;
@@ -1726,13 +1685,6 @@ mod tests {
         fail_events: bool,
     }
     impl ParseDriver<CtxLang> for CtxDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CtxLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             Recovery::Tolerant
         }

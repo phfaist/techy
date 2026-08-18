@@ -8,7 +8,7 @@ use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, ContentNodes, NodeKind};
 use crate::source::SourceSpan;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::{GroupRule, TokenEdge, TokenKind};
+use crate::token::{GroupRule, StreamPosition, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -93,7 +93,7 @@ pub struct NameGroup<L: Lang> {
     /// [`content()`](SourceSpan::content).
     pub name: SourceSpan<L::SourceOrigin>,
     /// The stream position just past the group's close delimiter.
-    pub end: L::StreamPosition,
+    pub end: StreamPosition<L>,
     /// The group rule the name group's delimiters matched — the `Arc` cloned from
     /// the matched `GroupOpen` token, so its `open`/`close` strings are the exact
     /// delimiter bytes as written (a name group never exists in delimiter-diverged
@@ -357,7 +357,7 @@ pub struct EnvironmentBody<L: Lang> {
     /// mismatch, unexpected group close, end of input), the body's end. The driving
     /// invocation parser ends the callable's span here (`cx.source_span_within(&begin,
     /// &body.end)`).
-    pub end: L::StreamPosition,
+    pub end: StreamPosition<L>,
     /// The body slot's **content designation**, ready for the driving composition's
     /// [`ParsedSlot`](crate::node::ParsedSlot) record: which of the
     /// body's nodes are the slot's content. The standard parser designates all of the
@@ -535,7 +535,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
     fn finish_terminator(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (L::StreamPosition, Option<EnvironmentTerminatorSyntaxData<L>>)>
+    ) -> ConstructParserResult<L, (StreamPosition<L>, Option<EnvironmentTerminatorSyntaxData<L>>)>
     {
         // Re-read the stop token (its pre-space is already flushed as body content, so
         // it sits at its own span start). It was cleanly read under this same state
@@ -825,8 +825,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = EnvDriver;
@@ -867,13 +866,6 @@ mod tests {
     }
 
     impl ParseDriver<EnvLang> for EnvDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, EnvLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }

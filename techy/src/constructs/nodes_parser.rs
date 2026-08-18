@@ -89,7 +89,7 @@ use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::SourceSpan;
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{TokenEdge, TokenKind, TokenReader};
+use crate::token::{StreamPosition, Token, TokenEdge, TokenKind, TokenReader};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{comment_node_kind, ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
@@ -278,7 +278,7 @@ pub enum TokenStopKind<'p, L: Lang> {
     #[allow(clippy::type_complexity)]
     Predicate(
         &'p dyn Fn(
-            &L::Token,
+            &Token<L>,
             &dyn TokenReader<'_, L>,
         ) -> Result<bool, ParseError<L::SourceOrigin>>,
     ),
@@ -390,7 +390,7 @@ pub enum StopCause<L: Lang> {
         /// included) — where a caller that wants the token skipped repositions the
         /// reader ([`move_to_position`](crate::token::TokenReader::move_to_position)),
         /// whether or not the condition consumed it.
-        after: L::StreamPosition,
+        after: StreamPosition<L>,
     },
     /// The node stop condition fired on the last staged node (the reader stands where
     /// that node ended: a directly staged node is consumed, a flush leaves the triggering
@@ -411,7 +411,7 @@ pub enum StopCause<L: Lang> {
         span: SourceSpan<L::SourceOrigin>,
         /// The stream position just past the unconsumed close token — the skip
         /// target of a caller that recovers from it.
-        after: L::StreamPosition,
+        after: StreamPosition<L>,
     },
 }
 
@@ -557,7 +557,7 @@ pub struct NodesParser<'p, L: Lang> {
     /// The pending maximal chars run (invariant 1), as the pair of stream positions
     /// it spans: extended by `Char` tokens and every token's pre-space, flushed when
     /// a non-`Char` construct starts.
-    run: Option<(L::StreamPosition, L::StreamPosition)>,
+    run: Option<(StreamPosition<L>, StreamPosition<L>)>,
     /// The merged record of the sibling after-effect deltas applied so far
     /// ([`NodesOutcome::after_effects`]); drained at every return like `nodes`.
     after_effects: Option<Box<ParsingStateDelta<L>>>,
@@ -590,7 +590,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn take_pre_space(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
-        token: &L::Token,
+        token: &Token<L>,
     ) -> Result<(), String> {
         let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::Start);
@@ -608,7 +608,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn extend_run(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
-        token: &L::Token,
+        token: &Token<L>,
     ) -> Result<(), String> {
         let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::EndPastPostSpace);
@@ -621,8 +621,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// ([§dd-dr:panic-policy]).
     fn extend_run_to(
         &mut self,
-        start: L::StreamPosition,
-        end: L::StreamPosition,
+        start: StreamPosition<L>,
+        end: StreamPosition<L>,
         what: &str,
     ) -> Result<(), String> {
         match &mut self.run {
@@ -662,7 +662,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn flush_through(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-        token: &L::Token,
+        token: &Token<L>,
     ) -> ConstructParserResult<L, bool> {
         self.take_pre_space(cx, token).map_err(|detail| {
             let span = cx.tokens.source_span_between(
@@ -687,7 +687,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn flush_for_token_stop(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-        token: &L::Token,
+        token: &Token<L>,
     ) -> ConstructParserResult<L, ()> {
         self.take_pre_space(cx, token).map_err(|detail| {
             let span = cx.tokens.source_span_between(
@@ -762,7 +762,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn token_stop(
         &self,
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         token_kind: TokenKind<'_, L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<Option<bool>, ParseError<L::SourceOrigin>> {
@@ -804,7 +804,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn recover_as_chars<'s>(
         &mut self,
         cx: &mut ParseContext<'_, 's, L>,
-        token: &L::Token,
+        token: &Token<L>,
         recovered: bool,
         condition: impl DiagnosticInfo,
     ) -> ConstructParserResult<L, bool> {
@@ -1346,7 +1346,7 @@ mod tests {
         GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
         StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenError,
         TokenErrorKind, TokenKind, TokenListReader, TokenReader,
-        TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        TokenRecovery, TokenResult, TokenRules, Tokenization, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -1366,7 +1366,7 @@ mod tests {
     /// the latexlike preset share one query-and-dispatch implementation.
     fn resolve_macro_in_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
-        token: &L::Token,
+        token: &Token<L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         Ok(resolve_command_in_scopes(state, token, tokens, CT_MACRO))
@@ -1397,8 +1397,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = CmdDriver;
@@ -1424,13 +1423,6 @@ mod tests {
     }
 
     impl ParseDriver<CmdLang> for CmdDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CmdLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1458,8 +1450,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1573,7 +1564,7 @@ mod tests {
         pos: usize,
         /// The reader's exit position itself — what a test resumes a fresh reader
         /// over the same content from.
-        position: L::StreamPosition,
+        position: StreamPosition<L>,
     }
 
     /// A stop cause rendered for assertions: the variant, plus the matched span's
@@ -1676,13 +1667,11 @@ mod tests {
     }
 
     /// Scan `source` into the full token list (including the terminal `EndOfStream`).
-    fn scan<L>(source: &Arc<Source>, state: &Arc<ParsingState<L>>) -> Vec<L::Token>
+    fn scan<L>(source: &Arc<Source>, state: &Arc<ParsingState<L>>) -> Vec<Token<L>>
     where
-        L: Lang<
-            SourceOrigin = Option<String>,
-            Token = StdToken<L>,
-            StreamPosition = StdStreamPosition,
-        >,
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let mut reader = StdTokenReader::new(source);
         let mut tokens = Vec::new();
@@ -1710,11 +1699,9 @@ mod tests {
         stop_list: StopSpec<'p, L>,
     ) -> Parsed<L>
     where
-        L: Lang<
-            SourceOrigin = Option<String>,
-            Token = StdToken<L>,
-            StreamPosition = StdStreamPosition,
-        >,
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
@@ -1732,11 +1719,9 @@ mod tests {
         child_states: ChildStateSpec<'p, L>,
     ) -> Parsed<L>
     where
-        L: Lang<
-            SourceOrigin = Option<String>,
-            Token = StdToken<L>,
-            StreamPosition = StdStreamPosition,
-        >,
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
@@ -1873,8 +1858,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = MarkDriver;
@@ -1900,13 +1884,6 @@ mod tests {
         }
 
         impl ParseDriver<MarkLang> for MarkDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, MarkLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -2625,8 +2602,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -3006,8 +2982,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = HintDriver;
@@ -3033,13 +3008,6 @@ mod tests {
     }
 
     impl ParseDriver<HintLang> for HintDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, HintLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -3082,8 +3050,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = AbortDriver;
@@ -3103,13 +3070,6 @@ mod tests {
     }
 
     impl ParseDriver<AbortLang> for AbortDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, AbortLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -3185,8 +3145,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = RefineDriver;
@@ -3212,13 +3171,6 @@ mod tests {
     }
 
     impl ParseDriver<RefineLang> for RefineDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, RefineLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -3599,13 +3551,6 @@ mod tests {
         }
 
         impl ParseDriver<ExtLang> for ExtDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ExtLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -3629,8 +3574,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ExtBundle;
             type InvocationSyntax = ();
             type Driver = ExtDriver;
@@ -4205,8 +4149,7 @@ mod tests {
             type Event = ();
             type SessionExt = Counts;
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = CountDriver;
@@ -4235,13 +4178,6 @@ mod tests {
         struct CountDriver;
 
         impl ParseDriver<CountLang> for CountDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CountLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn observe_transition(
                 &self,
                 ext: &mut Counts,
@@ -4304,8 +4240,7 @@ mod tests {
             type Event = ();
             type SessionExt = Seen;
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = SinkDriver;
@@ -4327,13 +4262,6 @@ mod tests {
             }
         }
         impl ParseDriver<SinkLang> for SinkDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, SinkLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn observe_transition(
                 &self,
                 ext: &mut Seen,
@@ -4381,8 +4309,7 @@ mod tests {
             type Event = ();
             type SessionExt = Seen;
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = FailObserveDriver;
@@ -4404,13 +4331,6 @@ mod tests {
             }
         }
         impl ParseDriver<FailObserveLang> for FailObserveDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, FailObserveLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -4536,8 +4456,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = DriveDriver;
@@ -4559,13 +4478,6 @@ mod tests {
         }
 
         impl ParseDriver<DriveLang> for DriveDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, DriveLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
@@ -4754,8 +4666,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = BrokenDriver;
@@ -4777,13 +4688,6 @@ mod tests {
             }
         }
         impl ParseDriver<BrokenLang> for BrokenDriver {
-            fn make_token_reader<'s>(
-                &'s self,
-                source: &'s alloc::sync::Arc<crate::source::Source>,
-            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, BrokenLang> + 's> {
-                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-            }
-
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -4837,8 +4741,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = StdParseDriver;
@@ -4936,8 +4839,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = FailingMathDriver;
@@ -4963,13 +4865,6 @@ mod tests {
     }
 
     impl ParseDriver<FailingMathLang> for FailingMathDriver {
-        fn make_token_reader<'s>(
-            &'s self,
-            source: &'s alloc::sync::Arc<crate::source::Source>,
-        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, FailingMathLang> + 's> {
-            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
-        }
-
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -5036,8 +4931,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;

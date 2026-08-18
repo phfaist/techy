@@ -1,5 +1,6 @@
-//! The token types: the [`Token`] marker contract, the parser-facing [`TokenKind`]
-//! view, and the standard token value [`StdToken`].
+//! The token types: the parser-facing [`TokenKind`] view and the standard token value
+//! [`StdToken`]. The contract a token type satisfies is declared on
+//! [`Tokenization::Token`](super::Tokenization::Token).
 
 use alloc::sync::Arc;
 use core::fmt;
@@ -10,27 +11,6 @@ use crate::state::Lang;
 
 use super::reader::TokenEdge;
 use super::rules::GroupRule;
-
-/// The marker contract of a language's token type
-/// ([`Lang::Token`](crate::state::Lang::Token)).
-///
-/// A token is a **transient, opaque value**: a
-/// [`TokenReader`](super::TokenReader) produces it, construct parsers hold it and
-/// pass it around, and only a reader interprets it — what the token *is* comes from
-/// [`token_kind`](super::TokenReader::token_kind), where it is from the reader's
-/// position and span answers. Nothing else may read anything off a token, which is
-/// what lets a reader serve tokens from more than one source during one parse
-/// without its callers knowing.
-///
-/// The bounds are what the machinery needs of any token: `Clone` (parsers keep a
-/// token while they read on), `Debug` (diagnostics and test failures), `PartialEq`
-/// (equality compares what the reader recorded — test harnesses compare tokens
-/// produced by two readers over the same content), and `Send + Sync` (a token may
-/// travel with a parse that crosses threads).
-///
-/// The implementation this crate provides is [`StdToken`]; a language that tokenizes
-/// with [`StdTokenReader`](super::StdTokenReader) uses it as its `Lang::Token`.
-pub trait Token<L: Lang>: Clone + fmt::Debug + PartialEq + Send + Sync {}
 
 /// The parser-facing view of a token: **what a token is**, and nothing about where it
 /// is.
@@ -315,8 +295,8 @@ pub(crate) enum StdTokenKindData<L: Lang> {
 }
 
 /// The standard token value: what [`StdTokenReader`](super::StdTokenReader) produces,
-/// and the [`Lang::Token`](crate::state::Lang::Token) of every language this crate
-/// defines.
+/// and the [`Token<L>`](super::Token) of every language this crate defines (they all
+/// declare [`StdTokenization`](super::StdTokenization)).
 ///
 /// # Opaque by construction
 ///
@@ -603,8 +583,6 @@ impl<L: Lang> StdToken<L> {
     }
 }
 
-impl<L: Lang> Token<L> for StdToken<L> {}
-
 // Manual impls: derives would demand `L: Clone/Debug/PartialEq` bounds although no `L`
 // value is stored (only `L::CallableTypeId` and `Arc` handles).
 
@@ -747,11 +725,11 @@ fn truncate_for_display(content: &str) -> (&str, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{StdToken, StdTokenKindData, Token, TokenEdge, TokenKind, truncate_for_display};
+    use super::{StdToken, StdTokenKindData, TokenEdge, TokenKind, truncate_for_display};
     use crate::source::Span;
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{Lang, TrivialLang};
-    use crate::token::GroupRule;
+    use crate::token::{GroupRule, StdTokenization, Token};
     use alloc::format;
     use alloc::sync::Arc;
 
@@ -769,14 +747,12 @@ mod tests {
 
     #[test]
     fn a_trivial_lang_gets_the_standard_token_from_the_blanket_impl() {
-        // `Lang::Token` is the marker contract [`Token`], and the blanket
-        // `impl<T: TrivialLang> Lang for T` names `StdToken<Self>` — both checked by
-        // compilation here.
-        fn assert_token_contract<L: Lang, T: Token<L>>() {}
-        assert_token_contract::<PlainLang, <PlainLang as Lang>::Token>();
+        // The blanket `impl<T: TrivialLang> Lang for T` declares `StdTokenization`,
+        // whose `Token` is `StdToken<Self>` — both checked by compilation here.
+        fn assert_std_tokenization<L: Lang<Tokenization = StdTokenization>>() {}
+        assert_std_tokenization::<PlainLang>();
 
-        let token: <PlainLang as Lang>::Token =
-            StdToken::char('a', Span::new(0, 1), Span::empty(0));
+        let token: Token<PlainLang> = StdToken::char('a', Span::new(0, 1), Span::empty(0));
         assert_eq!(token, StdToken::char('a', Span::new(0, 1), Span::empty(0)));
     }
 

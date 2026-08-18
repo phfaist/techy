@@ -50,7 +50,7 @@ use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, GroupData, NodeKind};
 use crate::source::TextContent;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::{GroupRule, TokenEdge};
+use crate::token::{GroupRule, Token, TokenEdge};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -116,7 +116,7 @@ impl fmt::Display for UnclosedGroup {
 pub struct GroupParser<'p, L: Lang> {
     /// The consumed `GroupOpen` token: the group's open delimiter, as the reader
     /// records it (its span and its stream position come from the reader).
-    open: L::Token,
+    open: Token<L>,
     /// The opening token's resolved rule: the close spelling and group class of the
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
@@ -134,7 +134,7 @@ pub struct GroupParser<'p, L: Lang> {
 impl<'p, L: Lang> GroupParser<'p, L> {
     /// A parser for the group opened by the consumed `GroupOpen` token `open`, with
     /// resolved rule `rule`.
-    pub fn new(open: L::Token, rule: Arc<GroupRule<L>>) -> GroupParser<'p, L> {
+    pub fn new(open: Token<L>, rule: Arc<GroupRule<L>>) -> GroupParser<'p, L> {
         GroupParser { open, rule, child_states: ChildStateSpec::inherit() }
     }
 

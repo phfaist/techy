@@ -33,6 +33,7 @@ use super::error::{
 use super::rules::{CommandRule, TokenRules};
 use super::specials::SpecialsScanError;
 use super::token::{StdToken, StdTokenKindData, TokenKind};
+use super::tokenization::{StreamPosition, Token, Tokenization};
 
 /// One of the five boundaries of a token, in reading order.
 ///
@@ -115,7 +116,8 @@ impl StdStreamPosition {
 ///
 /// A reader is the only interpreter of its own stream. Two kinds of value serve that:
 ///
-/// - A **stream position** ([`Lang::StreamPosition`](crate::state::Lang::StreamPosition))
+/// - A **stream position** ([`StreamPosition<L>`](super::StreamPosition), the type the
+///   language's [`Tokenization`](super::Tokenization) declares)
 ///   names a place in the token stream. Only a reader produces one
 ///   ([`position_here`](TokenReader::position_here),
 ///   [`position_at`](TokenReader::position_at)), and a caller only gives it back
@@ -281,13 +283,13 @@ impl StdStreamPosition {
 /// ```
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
-    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token>;
+    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>>;
 
     /// Parse the token at the current position and move past it (including its
     /// post-space): [`peek`](TokenReader::peek) +
     /// [`move_to`](TokenReader::move_to) at
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
-    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
+    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>> {
         let token = self.peek(state)?;
         self.move_to(&token, TokenEdge::EndPastPostSpace);
         Ok(token)
@@ -305,7 +307,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// ([`ContentStart`](TokenEdge::ContentStart), [`End`](TokenEdge::End)) put the
     /// stream inside the token — past a leading marker, or before the syntactic
     /// post-space (the `\verb` idiom).
-    fn move_to(&mut self, tok: &L::Token, edge: TokenEdge);
+    fn move_to(&mut self, tok: &Token<L>, edge: TokenEdge);
 
     /// Reposition the stream at a position this reader handed out earlier.
     ///
@@ -313,7 +315,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// implementations assert nothing about the direction of the move. When adopting a
     /// [`TokenRecovery`](super::TokenRecovery), the *caller* enforces the
     /// [advancement contract](super::TokenRecovery#contract-resume-must-move-the-stream).
-    fn move_to_position(&mut self, at: &L::StreamPosition);
+    fn move_to_position(&mut self, at: &StreamPosition<L>);
 
     // --- what a token is --------------------------------------------------------------
 
@@ -330,7 +332,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// [`source_span_between`](TokenReader::source_span_between) and
     /// [`position_at`](TokenReader::position_at) — a comment's delimiter span, for
     /// instance, is `source_span_between(tok, Start, ContentStart)`.
-    fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L>
+    fn token_kind<'t>(&self, tok: &'t Token<L>) -> TokenKind<'t, L>
     where
         's: 't;
 
@@ -340,7 +342,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// contract clause 6).
     fn source_span_between(
         &self,
-        tok: &L::Token,
+        tok: &Token<L>,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin>;
@@ -348,21 +350,21 @@ pub trait TokenReader<'s, L: Lang> {
     /// The token's own span: from [`Start`](TokenEdge::Start) to
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — pre-space excluded,
     /// post-space included.
-    fn source_span_of(&self, tok: &L::Token) -> SourceSpan<L::SourceOrigin> {
+    fn source_span_of(&self, tok: &Token<L>) -> SourceSpan<L::SourceOrigin> {
         self.source_span_between(tok, TokenEdge::Start, TokenEdge::EndPastPostSpace)
     }
 
     // --- where the stream is ----------------------------------------------------------
 
     /// The stream position the reader stands at.
-    fn position_here(&self) -> L::StreamPosition;
+    fn position_here(&self) -> StreamPosition<L>;
 
     /// The stream position at `edge` of `tok`.
-    fn position_at(&self, tok: &L::Token, edge: TokenEdge) -> L::StreamPosition;
+    fn position_at(&self, tok: &Token<L>, edge: TokenEdge) -> StreamPosition<L>;
 
     /// Where a stream position lies in text. An empty-span diagnostic anchor at a
     /// position is [`SourceSpan::at`] of this.
-    fn source_position_at(&self, at: &L::StreamPosition) -> SourcePos<L::SourceOrigin>;
+    fn source_position_at(&self, at: &StreamPosition<L>) -> SourcePos<L::SourceOrigin>;
 
     /// The source span running from `begin` to `end`, when the two positions delimit one
     /// range of one source; `None` otherwise.
@@ -372,8 +374,8 @@ pub trait TokenReader<'s, L: Lang> {
     /// implementation error), not a source condition.
     fn source_span_within(
         &self,
-        begin: &L::StreamPosition,
-        end: &L::StreamPosition,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
     ) -> Option<SourceSpan<L::SourceOrigin>>;
 }
 
@@ -491,7 +493,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 
     fn peek_impl<L>(&self, state: &ParsingState<L>) -> TokenResult<L, StdToken<L>>
     where
-        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+        L: Lang<SourceOrigin = O>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let s = self.content;
         let rules = state.rules();
@@ -625,7 +629,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         pos: usize,
     ) -> TokenError<L>
     where
-        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+        L: Lang<SourceOrigin = O>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let span = error.span;
         let valid = span.end() <= self.content.len()
@@ -661,7 +667,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         rules: &TokenRules<L>,
     ) -> Option<StdToken<L>>
     where
-        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+        L: Lang<SourceOrigin = O>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         if !(<L::Features as LangFeatures>::Paragraphs::PRESENT
             && <L::Features as LangFeatures>::Whitespace::PRESENT
@@ -703,7 +711,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         state: &ParsingState<L>,
     ) -> Option<StdToken<L>>
     where
-        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+        L: Lang<SourceOrigin = O>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let rules = state.rules();
         let rest = &self.content[pos..];
@@ -739,7 +749,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         rule: &CommandRule,
     ) -> TokenResult<L, StdToken<L>>
     where
-        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+        L: Lang<SourceOrigin = O>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let s = self.content;
         let name_start = pos + rule.escape_char.len_utf8();
@@ -808,7 +820,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         rules: &TokenRules<L>,
     ) -> Option<StdToken<L>>
     where
-        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+        L: Lang<SourceOrigin = O>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         if !<L::Features as LangFeatures>::Comments::PRESENT || !rules.comments_enabled() {
             return None;
@@ -844,21 +858,22 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 impl<'s, O, L> TokenReader<'s, L> for StdTokenReader<'s, O>
 where
     O: SourceOrigin,
-    L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    L: Lang<SourceOrigin = O>,
+    L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
-    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
+    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>> {
         self.peek_impl(state)
     }
 
-    fn move_to(&mut self, tok: &L::Token, edge: TokenEdge) {
+    fn move_to(&mut self, tok: &Token<L>, edge: TokenEdge) {
         self.pos = tok.edge_offset(edge);
     }
 
-    fn move_to_position(&mut self, at: &L::StreamPosition) {
+    fn move_to_position(&mut self, at: &StreamPosition<L>) {
         self.pos = at.offset();
     }
 
-    fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L>
+    fn token_kind<'t>(&self, tok: &'t Token<L>) -> TokenKind<'t, L>
     where
         's: 't,
     {
@@ -899,7 +914,7 @@ where
 
     fn source_span_between(
         &self,
-        tok: &L::Token,
+        tok: &Token<L>,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin> {
@@ -909,22 +924,22 @@ where
         SourceSpan::new(self.source, a.min(b)..a.max(b))
     }
 
-    fn position_here(&self) -> L::StreamPosition {
+    fn position_here(&self) -> StreamPosition<L> {
         StdStreamPosition::at(self.pos)
     }
 
-    fn position_at(&self, tok: &L::Token, edge: TokenEdge) -> L::StreamPosition {
+    fn position_at(&self, tok: &Token<L>, edge: TokenEdge) -> StreamPosition<L> {
         StdStreamPosition::at(tok.edge_offset(edge))
     }
 
-    fn source_position_at(&self, at: &L::StreamPosition) -> SourcePos<L::SourceOrigin> {
+    fn source_position_at(&self, at: &StreamPosition<L>) -> SourcePos<L::SourceOrigin> {
         SourcePos::new(self.source, at.offset())
     }
 
     fn source_span_within(
         &self,
-        begin: &L::StreamPosition,
-        end: &L::StreamPosition,
+        begin: &StreamPosition<L>,
+        end: &StreamPosition<L>,
     ) -> Option<SourceSpan<L::SourceOrigin>> {
         // One source, so the only incoherent pair is an inverted one.
         (begin.offset() <= end.offset())
@@ -971,8 +986,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1081,11 +1095,9 @@ mod tests {
         tok: &'t StdToken<L>,
     ) -> TokenKind<'t, L>
     where
-        L: Lang<
-            SourceOrigin = Option<String>,
-            Token = StdToken<L>,
-            StreamPosition = StdStreamPosition,
-        >,
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let reader: &dyn TokenReader<'s, L> = tr;
         reader.token_kind(tok)
@@ -1100,11 +1112,9 @@ mod tests {
     /// module — the reader's own — is where positions may be built from offsets.
     fn seek<L>(tr: &mut StdTokenReader<'_>, offset: usize)
     where
-        L: Lang<
-            SourceOrigin = Option<String>,
-            Token = StdToken<L>,
-            StreamPosition = StdStreamPosition,
-        >,
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let reader: &mut dyn TokenReader<'_, L> = tr;
         reader.move_to_position(&StdStreamPosition::at(offset));
@@ -1113,11 +1123,9 @@ mod tests {
     /// Where the reader stands, as a byte offset.
     fn at<L>(tr: &StdTokenReader<'_>) -> usize
     where
-        L: Lang<
-            SourceOrigin = Option<String>,
-            Token = StdToken<L>,
-            StreamPosition = StdStreamPosition,
-        >,
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
     {
         let reader: &dyn TokenReader<'_, L> = tr;
         reader.source_position_at(&reader.position_here()).pos()
@@ -1739,8 +1747,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1842,8 +1849,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1890,8 +1896,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Token = crate::token::StdToken<Self>;
-        type StreamPosition = crate::token::StdStreamPosition;
+        type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -2062,8 +2067,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type Token = crate::token::StdToken<Self>;
-            type StreamPosition = crate::token::StdStreamPosition;
+            type Tokenization = crate::token::StdTokenization;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = crate::engine::StdParseDriver;
