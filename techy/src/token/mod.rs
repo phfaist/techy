@@ -56,6 +56,8 @@ mod error;
 mod list_reader;
 mod prefix_table;
 mod reader;
+#[cfg(test)]
+mod scripted_reader;
 mod rules;
 mod specials;
 mod tokenization;
@@ -76,6 +78,14 @@ pub use error::{
 pub(crate) use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
 pub use reader::{skip_whitespace, StdStreamPosition, StdTokenReader, TokenEdge, TokenReader};
+// Internal test infrastructure, not public API (like `TokenListReader` above): the
+// scripted multi-source reader, its tokenization types, and the test language that
+// declares them. It serves one parse from several sources, which is what a language
+// with `Lang::OBEYS_SPAN_TILING = false` allows and nothing else in the crate does.
+#[cfg(test)]
+pub(crate) use scripted_reader::{
+    RelaxedLang, ScriptedPosition, ScriptedReader, ScriptedToken, ScriptedTokenization,
+};
 pub use rules::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
