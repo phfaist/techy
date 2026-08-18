@@ -337,8 +337,10 @@ impl<L: Lang, A> NodeTree<L, A> {
     /// only, half-open containment): it walks to the deepest node whose span
     /// contains the whole query, then answers the minimal run of that node's
     /// children covering the query. When the children cannot cover it — query bytes
-    /// in the node's own delimiters or trigger spelling, or (on restaged trees)
-    /// children whose spans do not tile — the covering node itself is the answer,
+    /// in the node's own delimiters or trigger spelling, or children whose spans do
+    /// not tile the queried stretch (restaged trees, and parses of a language with
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`) — the
+    /// covering node itself is the answer,
     /// as a single-node run within its parent's child list. An **empty** query span
     /// resolves by point containment like `node_at`, to a single-node run of the
     /// deepest containing node. `None` when no node's span contains the query.
@@ -489,9 +491,9 @@ fn deepest_containing<'t, L: Lang, A>(
 /// The minimal run of `node`'s children covering the `query`, as a global node-index
 /// range — `None` when the children cannot cover the query's bytes (the caller then
 /// answers with `node` itself). Binary search over the children first (sibling spans
-/// of a parsed tree are sorted and tile); the candidate is verified locally, and any
-/// failure falls back to a linear scan whose result is verified the same way — no
-/// verified run, no answer.
+/// are sorted and tile whenever the tree comes from a parse of a language that obeys
+/// span tiling); the candidate is verified locally, and any failure falls back to a
+/// linear scan whose result is verified the same way — no verified run, no answer.
 fn covering_child_run<L: Lang, A>(
     node: NodeRef<'_, L, A>,
     query: &SourceSpan<L::SourceOrigin>,
@@ -522,7 +524,8 @@ fn covering_child_run<L: Lang, A>(
 }
 
 /// Binary-search candidate for the covering run, assuming span-sorted same-source
-/// siblings (true for parsed trees; the caller verifies before trusting it): the
+/// siblings (true for a tree parsed from a language that obeys span tiling; the
+/// caller verifies before trusting it): the
 /// first child whose span reaches past the query's start, through the last child
 /// starting before the query's end.
 fn binary_candidate_run<L: Lang, A>(
@@ -553,10 +556,11 @@ fn partition_point(len: usize, pred: impl Fn(usize) -> bool) -> usize {
     lo
 }
 
-/// Verify a candidate covering run against exact spans: same-source throughout,
-/// query bytes in both end nodes, the query's edges covered, gap-free tiling across
-/// the run, and minimality against both neighbors. Anything else is not trusted to
-/// cover the query (the caller degrades to the covering node itself).
+/// Verify a candidate covering run against the recorded spans: same-source
+/// throughout, query bytes in both end nodes, the query's edges covered, adjacent
+/// spans across the run, and minimality against both neighbors. Anything else is not
+/// trusted to cover the query (the caller degrades to the covering node itself) —
+/// which is what a tree whose siblings do not tile answers with.
 fn verify_covering_run<L: Lang, A>(
     tree: &NodeTree<L, A>,
     block: &Range<u32>,
@@ -581,8 +585,8 @@ fn verify_covering_run<L: Lang, A>(
     if span_at(run.start).start() > query.start() || span_at(run.end - 1).end() < query.end() {
         return false;
     }
-    // Gap-free across the run: exact sibling spans must tile, or the interior bytes
-    // are not covered by these children.
+    // Adjacent across the run: the sibling spans must meet exactly, or the interior
+    // bytes are not covered by these children.
     if !(run.start..run.end - 1).all(|i| span_at(i).end() == span_at(i + 1).start()) {
         return false;
     }

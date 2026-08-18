@@ -95,14 +95,33 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         &self.data().ext
     }
 
-    /// The node's provenance span (`Arc<Source>` + byte range).
+    /// The node's provenance span (`Arc<Source>` + byte range) — where the node came
+    /// from.
+    ///
+    /// On a tree parsed from a language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) the span
+    /// is exactly the stretch of source the node was parsed from. For a language with
+    /// `OBEYS_SPAN_TILING = false` it is the span the token reader described for that
+    /// stretch of the stream, and for a restaged or synthesized node it is whatever
+    /// the transform recorded. What the node *says* is read from its own data, never
+    /// from the span.
     pub fn span(&self) -> &'t SourceSpan<L::SourceOrigin> {
         &self.data().span
     }
 
-    /// The exact original text of this node — level-1 verbatim recomposition:
-    /// never needs an external lookup, works for detached and
+    /// The text this node's [`span`](NodeRef::span) points at — level-1 verbatim
+    /// recomposition: it never needs an external lookup and works for detached and
     /// mixed-origin trees.
+    ///
+    /// This answers the coordinates, not the node's data. The two agree on a tree
+    /// parsed from a language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)): the span
+    /// is exactly the node's original text. For a language with
+    /// `OBEYS_SPAN_TILING = false`, and on restaged or synthesized trees, they need
+    /// not agree — what the node says is its recorded data
+    /// ([`chars`](NodeRef::chars), [`group_delimiters`](NodeRef::group_delimiters),
+    /// [`comment`](NodeRef::comment), [`callable`](NodeRef::callable)), and
+    /// re-emitting a tree's spelling is [`recompose`](crate::recompose)'s job.
     pub fn span_content(&self) -> &'t str {
         self.data().span.content()
     }
