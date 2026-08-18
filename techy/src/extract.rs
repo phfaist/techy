@@ -19,17 +19,27 @@
 //! tree is frozen — so, exactly like pylatexenc (whose `split_at_chars` mints new
 //! `LatexCharsNode`s), the builder helpers assemble a **new tree**: unaffected nodes are
 //! copied wholesale (spans, states, and specs `Arc`-shared; new ids), and boundary
-//! partials become fresh `Chars` nodes whose content is span-backed into the *same*
-//! source (exact sub-spans, zero-copy text). Segments are then ordinary [`NodeSlice`]
-//! views into the result — one node-list currency everywhere, and every helper composes
-//! with every other. Two documented edge behaviors: a partial of an
-//! **owned-content** chars node (materialized trees) keeps the whole original node's
-//! span as its provenance (there is no byte mapping to subdivide), and partial nodes
-//! are *fresh* nodes — their ext is minted by `Lang::make_node_ext`, not copied from
-//! the node they were cut from. Result trees are derived views: their sibling
-//! spans do *not* tile their parents' interiors (separators are omitted) — they satisfy
-//! the all-trees law ([`validate_tree`](crate::core::node::validate_tree)) but not the
-//! parse-tree byte accounting.
+//! partials become fresh `Chars` nodes whose content is cut from the node's own
+//! content — span-backed into the *same* source (an exact sub-span, zero-copy text)
+//! when the node's content is span-backed, owned sub-text when it is owned. Segments
+//! are then ordinary [`NodeSlice`] views into the result — one node-list currency
+//! everywhere, and every helper composes with every other. Two documented edge
+//! behaviors: a partial of an **owned-content** chars node (a materialized tree, the
+//! output of a transform pass, or a parse of a language with
+//! [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`) keeps the
+//! whole original node's span as its provenance — there is no byte mapping to
+//! subdivide — and partial nodes are *fresh* nodes: their ext is minted by
+//! `Lang::make_node_ext`, not copied from the node they were cut from. Result trees
+//! are derived views: their sibling spans do *not* tile their parents' interiors
+//! (separators are omitted) — they satisfy the all-trees law
+//! ([`validate_tree`](crate::core::node::validate_tree)) but not the byte accounting
+//! of span tiling.
+//!
+//! Every helper reads **node data** — chars content resolved against the node's own
+//! source, group delimiters, callable names, argument regions — and never the text a
+//! node's span points at. The answers below therefore hold whatever a node's content
+//! is stored as, and the spans the helpers record on their output are provenance
+//! coordinates, nothing more.
 //!
 //! # Producers mint output annotations
 //!
@@ -200,8 +210,9 @@ fn piece_text<'t, L: Lang, A>(piece: &Piece<'t, L, A>) -> Option<&'t str> {
 }
 
 /// The piece's provenance span: the node's span, narrowed to the sub-range for a
-/// partial of span-backed content (exact); the whole node's span for a partial of
-/// owned content (best available provenance — module docs).
+/// partial of span-backed content (exact); the whole node's span, unnarrowed, for a
+/// partial of owned content — owned text has no byte mapping into the source to
+/// subdivide (module docs).
 fn piece_span<L: Lang, A>(piece: &Piece<'_, L, A>) -> SourceSpan<L::SourceOrigin> {
     if let Some(sub) = &piece.part {
         if let NodeKind::Chars { content: TextContent::Spanned(span), .. } = piece.node.kind() {
@@ -584,7 +595,8 @@ fn stage_segment_list<'t, L: Lang, A, B>(
 /// pylatexenc's default.
 ///
 /// The segments live in one new tree owned by the returned [`SplitAtChars`] (module
-/// docs: copies + fresh boundary partials with exact sub-spans); access them as
+/// docs: copies plus fresh boundary partials, span-backed with exact sub-spans where
+/// the node they were cut from is); access them as
 /// [`NodeSlice`]s via [`SplitAtChars::segment`]/[`SplitAtChars::segments`].
 ///
 /// `annotate` mints every output node's annotation from its
@@ -1168,6 +1180,11 @@ impl<L: Lang, B> fmt::Debug for KeyValEntry<'_, L, B> {
 }
 
 #[cfg(test)]
+// The owned-content fixture mints node extensions through `Lang::make_node_ext` and
+// hands the result to `NodeTreeBuilder::add`, the way the parser does. `Latexlike`'s
+// extension type happens to be `()` today, which makes that binding unit-valued;
+// keeping it spelled out is what keeps the fixture honest if the type changes.
+#[allow(clippy::let_unit_value)]
 mod tests {
     use super::*;
     use crate::engine::Language;
@@ -1195,6 +1212,61 @@ mod tests {
         slice.iter().map(|node| node.span_content().into()).collect()
     }
 
+    // --- owned-content input (the transform-created / non-tiled-parse shape) ----------
+    //
+    // Every helper must answer as documented when chars content is **owned** rather
+    // than span-backed: that is what a transform pass stages, and what a parse of a
+    // language with `Lang::OBEYS_SPAN_TILING = false` records for multi-token content.
+
+    /// One child of the [`owned_tree`] fixture.
+    enum Part<'t> {
+        /// A chars node carrying owned text — its span points at the fixture's stub
+        /// source, which spells something else.
+        Owned(&'t str),
+        /// A parsed subtree, copied in with its own spans and payloads.
+        Copied(NodeRef<'t, Latexlike>),
+    }
+
+    /// A hand-built tree in the shape a transform pass — or a parse of a language
+    /// with `Lang::OBEYS_SPAN_TILING = false` — produces: the chars nodes hold owned
+    /// text, and their spans are provenance coordinates that do **not** spell that
+    /// text out (the stub source reads `<generated>`), so a helper that reads content
+    /// through a span cannot pass here by accident.
+    fn owned_tree(parts: &[Part<'_>]) -> NodeTree<Latexlike> {
+        use crate::state::ParsingState;
+        let source: Arc<Source> = Arc::new(Source::new("<generated>"));
+        let span = SourceSpan::new(&source, 0..source.content().len());
+        let state = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
+
+        let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
+        let mut children = Vec::new();
+        for part in parts {
+            children.push(match part {
+                Part::Owned(text) => {
+                    let kind = NodeKind::chars(TextContent::Owned((*text).into()));
+                    let ext = <Latexlike as Lang>::make_node_ext(
+                        &kind,
+                        &span,
+                        &state,
+                        builder.staged_children(&[]),
+                    )
+                    .expect("mint node ext");
+                    builder
+                        .add(kind, span.clone(), state.clone(), Vec::new(), ext, ())
+                        .expect("stage an owned chars node")
+                }
+                Part::Copied(node) => copy_subtree_into(&mut builder, *node, &mut |_| ())
+                    .expect("copy a parsed subtree"),
+            });
+        }
+        let kind = NodeKind::list();
+        let ext =
+            <Latexlike as Lang>::make_node_ext(&kind, &span, &state, builder.staged_children(&children))
+                .expect("mint node ext");
+        let root = builder.add(kind, span, state, children, ext, ()).expect("stage the root");
+        builder.finish(root).expect("the fixture satisfies the all-trees law")
+    }
+
     // --- content_as_chars -------------------------------------------------------------
 
     #[test]
@@ -1219,6 +1291,27 @@ mod tests {
 
         let tree = parse("");
         assert_eq!(content_as_chars(tree.root().children()).unwrap(), "");
+    }
+
+    #[test]
+    fn content_as_chars_reads_owned_chars_content() {
+        // Content comes from the node's data; the span spells something else entirely.
+        let tree = owned_tree(&[Part::Owned("my-label")]);
+        let content = content_as_chars(tree.root().children()).unwrap();
+        assert_eq!(content, "my-label");
+        // Owned content is borrowed from the tree just like span-backed content: the
+        // documented zero-copy answer for a single contiguous piece holds.
+        assert!(matches!(content, Cow::Borrowed(_)));
+        assert_eq!(tree.root().child(0).unwrap().span_content(), "<generated>");
+
+        // Mixed input: owned chars around a copied group, whose interior flattens.
+        let parsed = parse("{x,y}");
+        let tree = owned_tree(&[
+            Part::Owned("a"),
+            Part::Copied(parsed.root().child(0).unwrap()),
+            Part::Owned("b"),
+        ]);
+        assert_eq!(content_as_chars(tree.root().children()).unwrap(), "ax,yb");
     }
 
     #[test]
@@ -1339,6 +1432,42 @@ mod tests {
         assert_eq!(seg0.span().unwrap().range(), 0..5); // whole "ab,cd" chars node span
     }
 
+    #[test]
+    fn split_at_chars_cuts_owned_content_and_keeps_node_provenance() {
+        // "k1,my" + {x,y} + "tail,k3", with the chars content owned.
+        let parsed = parse("{x,y}").materialize();
+        let group = parsed.root().child(0).unwrap();
+        let tree =
+            owned_tree(&[Part::Owned("k1,my"), Part::Copied(group), Part::Owned("tail,k3")]);
+        let split = split_at_chars(tree.root().children(), ",", |part| {
+            part.partial_text().map(String::from)
+        })
+        .unwrap();
+        assert_eq!(split.len(), 3);
+
+        // The cut text comes from the owned content, and reaches the callback.
+        assert_eq!(content_as_chars(split.segment(0).unwrap()).unwrap(), "k1");
+        assert_eq!(content_as_chars(split.segment(1).unwrap()).unwrap(), "myx,ytail");
+        assert_eq!(content_as_chars(split.segment(2).unwrap()).unwrap(), "k3");
+        assert_eq!(
+            *split.segment(0).unwrap().first().unwrap().annotation(),
+            Some("k1".to_string())
+        );
+
+        // Provenance of a partial of owned content: the whole original node's span,
+        // as documented — so the segment's coordinates cover the original node, and
+        // its `source_text` is what those coordinates spell, not the segment's text.
+        let seg0 = split.segment(0).unwrap();
+        assert_eq!(seg0.first().unwrap().chars(), Some("k1"));
+        assert_eq!(seg0.span().unwrap().range(), 0..11);
+        assert_eq!(seg0.source_text(), Some("<generated>"));
+
+        // A run mixing the stub source with the copied group's source has no
+        // single-source covering span — the documented `None`.
+        assert_eq!(split.segment(1).unwrap().span(), None);
+        assert_eq!(split.segment(1).unwrap().source_text(), None);
+    }
+
     // --- parse_keyval -----------------------------------------------------------------
 
     #[test]
@@ -1427,6 +1556,38 @@ mod tests {
         assert_eq!(texts(combined.root().children()), ["1", "2"]);
     }
 
+    #[test]
+    fn keyval_reads_owned_content() {
+        // "width=2cm,legend=" + {a,b} + ",draft", all chars content owned.
+        let parsed = parse("{a,b}").materialize();
+        let group = parsed.root().child(0).unwrap();
+        let tree = owned_tree(&[
+            Part::Owned("width=2cm, legend ="),
+            Part::Copied(group),
+            Part::Owned(",draft"),
+        ]);
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
+        let keys: Vec<_> = keyvals.iter().map(|entry| entry.key().to_string()).collect();
+        assert_eq!(keys, ["width", "legend", "draft"]);
+        // Keys flatten and trim out of owned text; values keep their raw shape.
+        assert_eq!(
+            content_as_chars(keyvals.get("width").unwrap().value().unwrap()).unwrap(),
+            "2cm"
+        );
+        // The lone-group value unwraps, and its (owned) interior flattens.
+        assert_eq!(
+            content_as_chars(keyvals.get("legend").unwrap().value_content().unwrap()).unwrap(),
+            "a,b"
+        );
+        assert!(keyvals.get("draft").unwrap().value().is_none());
+
+        // Combining occurrences copies owned values through unchanged.
+        let tree = owned_tree(&[Part::Owned("a=1,a=2")]);
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
+        let combined = keyvals.get_combined_with("a", ";").unwrap().unwrap();
+        assert_eq!(content_as_chars(combined.root().children()).unwrap(), "1;2");
+    }
+
     // --- split_embellishments / split_tack_on_fields ------------------------------------
     // (The positive paths run end-to-end in the parser test modules,
     // `constructs::embellishments_parser` / `constructs::tack_on_parser`.)
@@ -1451,6 +1612,35 @@ mod tests {
         let tree = parse(" %c\n ");
         assert!(split_embellishments_drop_annotations(tree.root().children()).unwrap().is_empty());
         assert!(split_tack_on_fields_drop_annotations(tree.root().children()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_readers_read_owned_content() {
+        // Embellishments: the owned whitespace node is noise, the copied group is the
+        // entry, and its owned content reads back through the value nodes.
+        let parsed = parse("{p}").materialize();
+        let group = parsed.root().child(0).unwrap();
+        let tree = owned_tree(&[Part::Owned("   "), Part::Copied(group)]);
+        let fields = split_embellishments_drop_annotations(tree.root().children()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields.keyval(0).unwrap().key(), "{");
+        assert_eq!(
+            content_as_chars(fields.keyval(0).unwrap().value().unwrap()).unwrap(),
+            "p"
+        );
+
+        // Tack-on fields: the key is the recorded command name, the value the
+        // argument's (owned) content.
+        let parsed = parse("\\emph{x}").materialize();
+        let emph = parsed.root().child(0).unwrap();
+        let tree = owned_tree(&[Part::Owned(" "), Part::Copied(emph)]);
+        let fields = split_tack_on_fields_drop_annotations(tree.root().children()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields.keyval(0).unwrap().key(), "emph");
+        assert_eq!(
+            content_as_chars(fields.keyval(0).unwrap().value().unwrap()).unwrap(),
+            "x"
+        );
     }
 
     // --- annotation minting (the producer triples) --------------------------------------
