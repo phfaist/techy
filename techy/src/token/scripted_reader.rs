@@ -46,6 +46,14 @@
 //! The place past the last entry is `(n, StartBeforePreSpace)`, where `n` is the number
 //! of entries.
 //!
+//! What a position *is* in text — [`source_position_at`](TokenReader::source_position_at)
+//! — is the coordinate of the entry the position stands before, in **that entry's own
+//! source**. At a seam that is the start of the incoming token in the source it comes
+//! from: the segments form a flat chain, so there is no outer source to report instead.
+//! In an `A, B, A` splice the seam *into* `B` therefore reports `B`'s own coordinate, and
+//! the seam *out of* `B` reports `A`'s resume coordinate — the start of the entry that
+//! reading continues with.
+//!
 //! # Fidelity gaps
 //!
 //! The script is fixed, which a scanning reader's stream is not. Two consequences, both
@@ -537,6 +545,17 @@ where
     /// source: the two in reading order, every entry between them from that source, and
     /// every entry boundary between them without a gap. `None` otherwise — across a
     /// seam, across a hole, or for an inverted pair.
+    ///
+    /// One case of that is worth spelling out: a stretch that **ends exactly at a seam**
+    /// has no exact span either, even though every token it covers came from one source.
+    /// The position past the last token of that source is the position before the
+    /// incoming token (that is what the canonical form makes it), and that place lies in
+    /// the incoming token's source — which is also what
+    /// [`source_position_at`](TokenReader::source_position_at) answers for it. Answering
+    /// a range of the outgoing source here would make the reader's two answers about one
+    /// position disagree. A stretch that stays strictly inside one segment still answers
+    /// its exact range, and the span for a stretch that reaches a seam is what
+    /// [`source_span_describing`](TokenReader::source_span_describing) gives.
     fn source_span_within(
         &self,
         begin: &StreamPosition<L>,

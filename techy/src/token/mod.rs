@@ -56,9 +56,9 @@ mod error;
 mod list_reader;
 mod prefix_table;
 mod reader;
+mod rules;
 #[cfg(test)]
 mod scripted_reader;
-mod rules;
 mod specials;
 mod tokenization;
 // The submodule sharing the parent's name is deliberate: the token is this topic's

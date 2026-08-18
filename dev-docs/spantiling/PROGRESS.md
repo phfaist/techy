@@ -6,7 +6,7 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 |---|---|---|---|---|
 | 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | reviewed |
 | 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | planned |
-| 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | implemented |
+| 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | reviewed |
 | 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | implemented |
 | 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | planned |
 | 5 record | `st-5-record` | `main` (after all) | `.claude/worktrees/st-5-record` | planned |
@@ -196,8 +196,8 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 
 ## Stage 3a — scripted reader
 
-Status: **implemented** (branch `st-3a-scripted`, worktree
-`.claude/worktrees/st-3a-scripted`; commits `75fa0ec`, `53a28f1`, plus this file).
+Status: **reviewed** (branch `st-3a-scripted`, worktree
+`.claude/worktrees/st-3a-scripted`; commits `cd4c638`, `4055974`, plus this file).
 
 ### Files changed
 
@@ -246,13 +246,13 @@ Status: **implemented** (branch `st-3a-scripted`, worktree
   recovery_for)` and the token interpretation moved from the trait method into the
   inherent `pub(crate) fn token_kind_of`, whose only bound is `L: Lang`.
 
-### Gate results (verbatim, run from the worktree)
+### Gate results (verbatim, run from the worktree, after the rebase onto `main`)
 
 ```
 ### cargo build
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.60s
 ### cargo test --workspace
-test result: ok. 1086 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+test result: ok. 1090 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -261,35 +261,35 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.40s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 15.51s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ### cargo test --workspace --all-features
-test result: ok. 1125 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.51s
+test result: ok. 1129 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.50s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.80s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.98s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ### clippy
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+    Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.69s
 ### clippy --all-features
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.61s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.25s
 ### docs
- Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.66s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.46s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/target/doc/techy/index.html and 1 other file
 ```
 
-Stage 1's baseline was 1067 / 1106 lib tests; Stage 3a adds the 19 unit tests of the new
-module (1086 / 1125) and changes no existing test. `cargo docs --all-features` emits no
-warnings. (Note: rustdoc does not build `cfg(test)` code, so the new module's intra-doc
+The baseline on `main` (Stages 1 and 4) is 1071 / 1110 lib tests; Stage 3a adds the 19
+unit tests of the new module (1090 / 1129) and changes no existing test.
+`cargo docs --all-features` emits no warnings. (Note: rustdoc does not build `cfg(test)` code, so the new module's intra-doc
 links are not covered by the docs gate.)
 
 ### The 19 unit tests
@@ -359,7 +359,7 @@ and the scripting errors: `peeking_inside_a_token_yields_the_following_entry`,
    hook; `peek` passes its own position and the standard recovery), the same bound dropped
    from the four scan helpers, and `token_kind`'s body moved into the inherent
    `token_kind_of` with `L: Lang` as its only bound (the trait method delegates). The
-   existing suites are unchanged and pass (commit `75fa0ec` alone: 1067 lib tests, as
+   existing suites are unchanged and pass (commit `cd4c638` alone: 1067 lib tests, as
    before).
 2. **`ScriptedToken` carries `peeked_at`** beyond §1.7's "entry index plus whatever the
    reader needs". It is what keeps clause 2 exact where a peek happens at a position that
@@ -373,17 +373,30 @@ and the scripting errors: `peeking_inside_a_token_yields_the_following_entry`,
    `clippy::type_complexity` rejects the bare tuple in a signature. Private to the module;
    tests write the tuples literally.
 
-### Open questions for the user
+### Open questions — answered at review
 
-1. **Does Stage 3b need the script reachable from `Language::parse`?** As it stands the
-   reader is built with a state in hand (S1), which fits `ParseContext`-level tests and a
-   driver-held reader, but not a bare `Language::parse` over a scripted language (the
-   language-side reader serves an empty stream). If a full-engine test on a script is
-   wanted, the driver override is the route — say so and Stage 3b can add a small test
-   driver holding the segments and the seed state.
-2. **`source_position_at` at a seam** (S2): confirm the entry's own coordinate is what is
-   wanted for this reader, given the contract recommends the outer/resume coordinate for
-   readers that nest an expansion inside an outer source.
+1. **Does Stage 3b need the script reachable from `Language::parse`?** — **No.** The
+   reviewer's finding: T1–T12 are all reachable the way the two-reader agreement suites
+   drive parsers, through `ParseContext`/`ParserSession` over a directly built
+   `ScriptedReader` (T11 needs a session so that its report can be rendered). Should a
+   full-engine route ever be wanted, it is a `ParseDriver::make_token_reader` override on
+   a driver holding the script and the seed state — but `Language<L>` holds `L::Driver`
+   and `RelaxedLang::Driver = StdParseDriver`, so that route needs either a driver change
+   on `RelaxedLang` or a second test language. Nothing here blocks Stage 3b.
+2. **`source_position_at` at a seam** — **confirmed as built** (S2): the incoming entry's
+   own coordinate, since the scripted reader's segments are a flat chain with no outer
+   source to resume into. Now stated in the module's *Positions* section as well as on the
+   method.
+
+### Review
+
+Stage 3a reviewed: **PASS**, no blocking fixes; the reviewer endorsed the seam semantics
+(S3 — `within` answers by the end position's source; keep it) and the `reader.rs`
+refactor. Suggestions applied: `mod scripted_reader;` moved into `token/mod.rs`'s
+alphabetical order; `source_span_within`'s doc now spells out the ends-at-a-seam case and
+why answering the outgoing source would contradict `source_position_at`; the module's
+*Positions* section now states what `source_position_at` answers at a seam; the two open
+questions above answered. Rebased onto `main` (`fae69fa`, Stages 1 and 4).
 
 ## Stage 4 — consumers
 
