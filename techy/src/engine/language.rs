@@ -472,7 +472,7 @@ mod tests {
 
         // Tolerant: diagnose, consume, and stage the delimiter as a chars node (the
         // markup-in-chars recovery artifact — revised in 7.9, superseding 7.4's
-        // byte-dropping quirk: the root partition invariant holds across the skip).
+        // byte-dropping quirk: the root's span tiling holds across the skip).
         let result = tolerant().parse("a}b").unwrap();
         check_tree_invariants(&result.tree);
         assert_eq!(shapes(&result), ["chars(a)", "chars(})", "chars(b)"]);

@@ -71,8 +71,9 @@ assert_eq!(group.span_content(), "{two}");           // the node's exact source 
 assert_eq!(group.group_delimiters(), Some(("{", "}")));
 assert_eq!(group.child(0).unwrap().chars(), Some("two"));
 
-// Sibling runs are `NodeSlice` views with *exact* covering spans (the tree's span
-// partition invariant makes this precise, not approximate).
+// Sibling runs are `NodeSlice` views with *exact* covering spans: the preset's
+// sibling spans are adjacent, so the covering span is the run's own text (span
+// tiling — `Lang::OBEYS_SPAN_TILING`).
 let children = result.tree.root().children();
 assert_eq!(children.span().unwrap().range(), 0..15);
 assert_eq!(children.source_text(), Some("one {two} three"));

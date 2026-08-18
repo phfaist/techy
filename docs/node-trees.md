@@ -20,10 +20,11 @@ in-place mutation. Changing a tree means producing a new one (see
 You read the tree through lightweight handles:
 [`NodeRef`](crate::core::node::NodeRef) is a reference to one node, and
 [`NodeSlice`](crate::core::node::NodeSlice) is a view of a run of sibling
-nodes. Every node records its exact byte range in the source (its
-[span](crate::guide::concepts_overview#sources-and-spans) — the original text
+nodes. Every node records the byte range it came from (its
+[span](crate::guide::concepts_overview#sources-and-spans) — the text under it
 is always reachable via
-[`span_content()`](crate::core::node::NodeRef::span_content)) and the
+[`span_content()`](crate::core::node::NodeRef::span_content), and for the preset
+that text is exactly the node's own original spelling) and the
 [parsing state](crate::guide::concepts_overview#parsing-state-and-deltas) it
 was parsed under (so you can ask, for example, whether a node sits in math
 mode).
@@ -106,7 +107,7 @@ assert!(comment.is_comment());
 let data = comment.comment().unwrap();
 assert_eq!(data.content.resolve(comment.span().source()), " three");
 
-// Every node knows exactly where it came from:
+// Every node knows where it came from:
 assert_eq!(emph.span_content(), r"\emph{two}");
 assert_eq!(emph.span().range(), 4..14);
 

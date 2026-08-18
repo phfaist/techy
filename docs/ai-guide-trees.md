@@ -10,8 +10,12 @@ documentation (the contract references). Terms: a parse produces a
 store) and frozen (read-only after the parse; changing a tree means
 producing a new one). [`NodeRef`](crate::core::node::NodeRef) is a
 borrowed reference to one node; [`NodeSlice`](crate::core::node::NodeSlice)
-a view of a run of sibling nodes. A **span** is a node's exact byte range
-into its source; a **callable** is anything invoked by name (macro,
+a view of a run of sibling nodes. A **span** is the byte range a node came
+from — for a language that obeys span tiling
+([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING), the preset
+included) exactly the node's own text, and provenance coordinates otherwise;
+content is always read from node data, never through a span. A **callable**
+is anything invoked by name (macro,
 environment, specials); an **annotation** is a consumer-chosen per-node
 value on trees produced by the consumer toolkit.
 
@@ -53,7 +57,7 @@ assert_eq!(emph.argument_content_nodes(0).unwrap().source_text(), Some("two"));
 let comment = root.child(3).unwrap(); // comment() = the CommentData payload
 assert_eq!(comment.comment().unwrap().content.resolve(comment.span().source()), " three");
 
-// Spans: every node records its exact byte range; source text needs no lookup.
+// Spans: every node records where it came from; source text needs no lookup.
 assert_eq!(emph.span_content(), r"\emph{two}");
 assert_eq!(emph.span().range(), 4..14);
 
@@ -231,7 +235,9 @@ Facts to know (all from the [`recompose`](crate::recompose) module docs):
 
 Source re-emission is one shipped recomposer — the preset's
 [`source_recomposer`](crate::latexlike::source_recomposer) — byte-exact for
-parsed trees; the core-complete building block is
+trees parsed from a language that obeys span tiling (a tree of a language with
+`OBEYS_SPAN_TILING = false` is reemitted as stored, with no byte-equality
+claimed); the core-complete building block is
 [`core_source_instruction`](crate::recompose::core_source_instruction).
 
 ## The edit pipeline: restage → recompose

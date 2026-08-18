@@ -781,7 +781,7 @@ mod tests {
         // The second argument is unaffected by the first one's noise:
         assert_eq!(frac.argument_content_nodes(1).unwrap().iter().next().unwrap().chars(), Some("b"));
         // The regions tile the child list: recomposing the children in order
-        // reproduces the arguments' text byte-for-byte (partition invariant).
+        // reproduces the arguments' text byte-for-byte (span tiling).
         let all: String = frac.children().iter().map(|c| c.span_content()).collect();
         assert_eq!(all, " %h\n {a}{b}");
     }
