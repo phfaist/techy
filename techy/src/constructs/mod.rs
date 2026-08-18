@@ -144,6 +144,50 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
     }
 }
 
+/// Append the text of `token`'s pre-space to a run of owned content, as the reader
+/// answers it for that token. Does nothing when `text` is `None` — the spelling of "no
+/// owned text is being accumulated", which is the case for a language that obeys span
+/// tiling ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)).
+pub(crate) fn push_pre_space_text<L: Lang>(
+    text: &mut Option<String>,
+    cx: &ParseContext<'_, '_, L>,
+    token: &Token<L>,
+) {
+    let Some(text) = text else { return };
+    text.push_str(
+        cx.tokens
+            .source_span_between(token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+            .content(),
+    );
+}
+
+/// Append everything `token` contributes to a run of owned content: its pre-space, the
+/// `spelling` the reader classified it as (the character of a
+/// [`Char`](crate::token::TokenKind::Char) token, the delimiter of a group close read
+/// as content), and its syntactic post-space — three answers about this one token,
+/// asked of the reader that produced it.
+///
+/// This is the recipe multi-token content follows for a language with
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, where the
+/// tokens of one node may come from several sources and no single span describes their
+/// text. Does nothing when `text` is `None` (see
+/// [`push_pre_space_text`]).
+pub(crate) fn push_token_text<L: Lang>(
+    text: &mut Option<String>,
+    cx: &ParseContext<'_, '_, L>,
+    token: &Token<L>,
+    spelling: &str,
+) {
+    push_pre_space_text(text, cx, token);
+    let Some(text) = text else { return };
+    text.push_str(spelling);
+    text.push_str(
+        cx.tokens
+            .source_span_between(token, TokenEdge::End, TokenEdge::EndPastPostSpace)
+            .content(),
+    );
+}
+
 /// The `Comment` node kind for a comment token, plus the node's span: the delimiter,
 /// the text, and the syntactic post-space, each recorded as node data.
 ///

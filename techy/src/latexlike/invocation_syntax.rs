@@ -112,7 +112,11 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 /// The standard-site constructor ([`FromInvocation`]): a
 /// [`Command`](TokenKind::Command) trigger records its
 /// [`Macro`](InvocationSyntaxData::Macro) spelling from the reader's answers — what the
-/// trigger is, and where its syntactic post-space lies; every
+/// trigger is, and its syntactic post-space: as a span of the node's source for a
+/// language that obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), as the text
+/// itself for a language with `OBEYS_SPAN_TILING = false`, where the node's span is
+/// not known to contain the trigger's own source at all. Every
 /// other trigger (a specials token, a paragraph-break token at the preset's
 /// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
 /// [`Environment`](InvocationSyntaxData::Environment) arm is never minted here —
@@ -126,9 +130,13 @@ impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
     ) -> Self {
         match tokens.token_kind(invocation.token) {
             TokenKind::Command { escape_char, .. } => {
-                // The post-space is a reader answer. Recording it as a bare span is
-                // sound because the node this payload rides on starts at this very
-                // token, so the two are in one source (§1.12's node-data rule).
+                // The post-space is a reader answer, recorded before the node's span
+                // is known — so the node-data rule cannot be applied to it here. For a
+                // language that obeys span tiling a bare span is sound anyway: the
+                // node this payload rides on starts at this very token, so the two lie
+                // in one source. A language with `OBEYS_SPAN_TILING = false` promises
+                // no such thing (the node's span is whatever its reader describes for
+                // the whole invocation), and the text is recorded instead.
                 let post_space = tokens.source_span_between(
                     invocation.token,
                     TokenEdge::End,
@@ -136,7 +144,10 @@ impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
                 );
                 InvocationSyntaxData::Macro {
                     escape_char,
-                    post_space: TextContent::Spanned(post_space.span()),
+                    post_space: match L::OBEYS_SPAN_TILING {
+                        true => TextContent::Spanned(post_space.span()),
+                        false => TextContent::Owned(post_space.content().into()),
+                    },
                 }
             }
             _ => InvocationSyntaxData::Specials,

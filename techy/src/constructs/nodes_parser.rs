@@ -103,7 +103,10 @@ use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingSta
 use crate::token::{StreamPosition, Token, TokenEdge, TokenKind, TokenReader};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
-use super::{comment_node_kind, ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
+use super::{
+    comment_node_kind, push_pre_space_text, push_token_text, ConstructParser,
+    ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext,
+};
 
 /// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
@@ -602,33 +605,6 @@ impl<L: Lang> fmt::Debug for PendingRun<L> {
     }
 }
 
-/// Append the text of `token`'s pre-space, as the reader answers it for that token.
-fn push_pre_space_text<L: Lang>(
-    text: &mut String,
-    cx: &ParseContext<'_, '_, L>,
-    token: &Token<L>,
-) {
-    text.push_str(
-        cx.tokens
-            .source_span_between(token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
-            .content(),
-    );
-}
-
-/// Append the text of `token`'s syntactic post-space, as the reader answers it for
-/// that token (normally empty for a `Char` token).
-fn push_post_space_text<L: Lang>(
-    text: &mut String,
-    cx: &ParseContext<'_, '_, L>,
-    token: &Token<L>,
-) {
-    text.push_str(
-        cx.tokens
-            .source_span_between(token, TokenEdge::End, TokenEdge::EndPastPostSpace)
-            .content(),
-    );
-}
-
 /// The `Chars` node a pending run becomes: the span running from the run's start to
 /// its end ([`ParseContext::source_span_within`], which follows the language's
 /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) declaration), and the
@@ -685,11 +661,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         if start == end {
             return Ok(());
         }
-        let text = (!L::OBEYS_SPAN_TILING).then(|| {
-            let mut text = String::new();
-            push_pre_space_text(&mut text, cx, token);
-            text
-        });
+        let mut text = (!L::OBEYS_SPAN_TILING).then(String::new);
+        push_pre_space_text(&mut text, cx, token);
         self.extend_run_to(start, end, text)
     }
 
@@ -712,13 +685,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     ) -> Result<(), String> {
         let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::EndPastPostSpace);
-        let text = (!L::OBEYS_SPAN_TILING).then(|| {
-            let mut text = String::new();
-            push_pre_space_text(&mut text, cx, token);
-            text.push(c);
-            push_post_space_text(&mut text, cx, token);
-            text
-        });
+        let mut text = (!L::OBEYS_SPAN_TILING).then(String::new);
+        push_token_text(&mut text, cx, token, c.encode_utf8(&mut [0u8; 4]));
         self.extend_run_to(start, end, text)
     }
 

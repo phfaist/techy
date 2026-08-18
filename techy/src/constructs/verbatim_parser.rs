@@ -33,11 +33,15 @@
 //! argument's content designation is the group's children. The environment form
 //! stages the standard body `List` holding the raw-content `Chars` node; a gobbled
 //! newline is **kept as a leading whitespace `Chars` node but designated out of the
-//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte (the
-//! partition invariants).
+//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte.
 //!
 //! The raw-content `Chars` nodes record the **verbatim state** they were read
-//! under; the group/list wrappers record the surrounding state.
+//! under; the group/list wrappers record the surrounding state. Their content is the
+//! exact span slice for a language that obeys span tiling
+//! ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) and the text
+//! the reader answered, token by token, for a language with
+//! `OBEYS_SPAN_TILING = false` — where the raw content may be read across a seam
+//! between two sources.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -63,7 +67,7 @@ use super::environment_parser::{
     EnvironmentBody, EnvironmentTerminatorSyntaxData, MissingEnvironmentTerminator,
     MissingTerminatorFound, NameGroup,
 };
-use super::{node_text_content, ConstructParser, ConstructParserResult, ParseContext};
+use super::{node_text_content, push_pre_space_text, push_token_text, ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: the input (or a tolerated unreadable token) ended inside a delimited
 /// verbatim region before its closing delimiter appeared. Tolerant recovery keeps the
@@ -142,6 +146,13 @@ pub fn verbatim_state_delta<L: LangHasGroups>(
 struct RawContentEnd<L: Lang> {
     /// End of the raw content (= the terminator's start when one was found).
     content_end: StreamPosition<L>,
+    /// The raw content's text as the reader answered it, token by token: `Some`
+    /// exactly when the language does not obey span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`),
+    /// where the content may have been read across a seam between two sources and a
+    /// span of one source could not describe it. Covers exactly the stretch from where
+    /// the loop started to [`content_end`](RawContentEnd::content_end).
+    content_text: Option<String>,
     /// The consumed terminator's span, or `None` when the region ended without one
     /// (end of input, or a tolerated unreadable token).
     terminator: Option<SourceSpan<L::SourceOrigin>>,
@@ -150,18 +161,43 @@ struct RawContentEnd<L: Lang> {
     end: StreamPosition<L>,
 }
 
+/// The raw content as node data on a `Chars` node spanning `content_span`: the text
+/// the loop accumulated where it accumulated one (a language with
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`), the exact
+/// span slice otherwise.
+fn raw_content_text<L: Lang, O>(
+    raw_end: &RawContentEnd<L>,
+    content_span: &SourceSpan<O>,
+) -> TextContent
+where
+    O: crate::source::SourceOrigin,
+{
+    match &raw_end.content_text {
+        Some(text) => TextContent::Owned(text.as_str().into()),
+        None => TextContent::Spanned(content_span.span()),
+    }
+}
+
 /// Read raw content under `state` (a [`verbatim_state_delta`]-derived state) until the
 /// expected-close terminator, end of input, or a tolerated unreadable token, calling
 /// `on_char` for every consumed content char (the delimited form's depth counter; it
 /// returns `true` to treat a would-be terminator [`GroupClose`] as ordinary content —
 /// see [`VerbatimArgumentParser`]'s pairing rule). The terminator, when found, is
 /// consumed. Diagnosing the terminator-less endings is the caller's business.
+///
+/// For a language with
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the loop also
+/// accumulates the content's text from what the reader says about each token it
+/// consumes — the pre-space, the spelling (a character, or a delimiter read as
+/// content), and the syntactic post-space — plus the pre-space of the token that ends
+/// the content, which lies before `content_end` and is content too.
 fn read_raw_content<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     state: &Arc<ParsingState<L>>,
     mut consume_close_as_content: impl FnMut(TokenKind<'_, L>) -> bool,
     mut on_char: impl FnMut(char),
 ) -> ConstructParserResult<L, RawContentEnd<L>> {
+    let mut text: Option<String> = (!L::OBEYS_SPAN_TILING).then(String::new);
     loop {
         let Some(token) = cx.probe_token(state)? else {
             // A tolerated unreadable token: the standard reader has nothing left to
@@ -173,6 +209,7 @@ fn read_raw_content<L: Lang>(
             let here = cx.tokens.position_here();
             return Ok(RawContentEnd {
                 content_end: here.clone(),
+                content_text: text,
                 terminator: None,
                 end: here,
             });
@@ -181,23 +218,35 @@ fn read_raw_content<L: Lang>(
         match kind {
             TokenKind::Char(c) => {
                 on_char(c);
+                push_token_text(&mut text, cx, &token, c.encode_utf8(&mut [0u8; 4]));
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
-            TokenKind::GroupClose { .. } => {
+            TokenKind::GroupClose { delim } => {
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                 if consume_close_as_content(kind) {
+                    // A nested close read as ordinary content (the pairing rule):
+                    // its bytes are part of the raw content.
+                    push_token_text(&mut text, cx, &token, delim);
                     continue;
                 }
+                // The content ends at the terminator's `Start` edge, so whatever the
+                // reader reports as the terminator's pre-space is content.
+                push_pre_space_text(&mut text, cx, &token);
                 return Ok(RawContentEnd {
                     content_end: cx.tokens.position_at(&token, TokenEdge::Start),
+                    content_text: text,
                     terminator: Some(cx.tokens.source_span_of(&token)),
                     end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                 });
             }
             TokenKind::EndOfStream => {
+                // Same rule as for the terminator: the end-of-stream token's
+                // pre-space (the input's trailing whitespace) is content.
+                push_pre_space_text(&mut text, cx, &token);
                 let end = cx.tokens.position_at(&token, TokenEdge::Start);
                 return Ok(RawContentEnd {
                     content_end: end.clone(),
+                    content_text: text,
                     terminator: None,
                     end,
                 });
@@ -409,7 +458,7 @@ where
         if !content_span.is_empty() {
             let id = cx
                 .stage_node(
-                    NodeKind::chars(content_span.span()),
+                    NodeKind::chars(raw_content_text(&raw_end, &content_span)),
                     content_span.clone(),
                     Arc::clone(&content_state),
                     vec![],
@@ -761,7 +810,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         if !content_span.is_empty() {
             let id = cx
                 .stage_node(
-                    NodeKind::chars(content_span.span()),
+                    NodeKind::chars(raw_content_text(&raw_end, &content_span)),
                     content_span.clone(),
                     Arc::clone(&verbatim_state),
                     vec![],
