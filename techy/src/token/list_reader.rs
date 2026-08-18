@@ -615,6 +615,35 @@ mod tests {
             std_reader.source_position_at(&begin),
             list_reader.source_position_at(&begin)
         );
+        assert_eq!(
+            std_reader.source_span_describing(&begin, &end),
+            list_reader.source_span_describing(&begin, &end)
+        );
+    }
+
+    #[test]
+    fn a_described_span_is_the_exact_range_and_never_absent() {
+        let content = "a \\vec  b";
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut lr = TokenListReader::new(&source, scan(&source));
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut lr;
+
+        let begin = reader.position_here();
+        let token = reader.next(&st).unwrap();
+        let end = reader.position_at(&token, TokenEdge::EndPastPostSpace);
+
+        // One source, so the ordered pair describes its own range …
+        assert_eq!(
+            reader.source_span_describing(&begin, &end),
+            reader.source_span_within(&begin, &end).expect("an ordered pair")
+        );
+        // … equal positions the empty span there …
+        assert_eq!(reader.source_span_describing(&end, &end).range(), 1..1);
+        // … and the inverted pair — a caller bug, `None` from `source_span_within` —
+        // still gets an answer: the empty span at `begin`.
+        assert_eq!(reader.source_span_within(&end, &begin), None);
+        assert_eq!(reader.source_span_describing(&end, &begin).range(), 1..1);
     }
 
     #[test]

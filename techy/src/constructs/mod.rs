@@ -1369,7 +1369,7 @@ mod tests {
     // `Features = AllLangFeatures` (via `TrivialLang`): the plain block literals
     // below only typecheck once the per-feature stores normalize to the blocks
     // themselves.
-    fn min_rules() -> TokenRules<PlainLang> {
+    fn min_rules<L: Lang<Features = crate::state::AllLangFeatures>>() -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
             paragraphs: ParagraphRules { enabled: true },
@@ -1386,7 +1386,11 @@ mod tests {
         }
     }
 
-    fn state() -> Arc<ParsingState<PlainLang>> {
+    fn state<L>() -> Arc<ParsingState<L>>
+    where
+        L: Lang<Features = crate::state::AllLangFeatures, StateExt = ()>,
+        L::ModeId: Default,
+    {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
             scopes: ScopeStack::new(),
@@ -1503,6 +1507,114 @@ mod tests {
                 condition.detail
             );
         });
+    }
+
+    // --- the span-tiling declaration (Lang::OBEYS_SPAN_TILING) ----------------------
+
+    /// A language that says nothing declares span tiling: the default is `true`, and
+    /// this is checked at compile time so no parse can disagree.
+    const _: () = assert!(PlainLang::OBEYS_SPAN_TILING);
+    const _: () = assert!(<crate::latexlike::Latexlike as Lang>::OBEYS_SPAN_TILING);
+
+    /// A language declaring that its parse trees are **not** span-tiled, tokenized by
+    /// the standard reader. What it exercises here is the declaration itself and the
+    /// [`ParseContext::source_span_within`] dispatch; how the parsers record content
+    /// under the declaration is a separate concern, so the parse test below asserts
+    /// structure only.
+    #[derive(Debug, Clone, Copy)]
+    struct RelaxedStdLang;
+
+    impl Lang for RelaxedStdLang {
+        const OBEYS_SPAN_TILING: bool = false;
+
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = StdParseDriver;
+
+        fn make_node_ext(
+            _kind: &NodeKind<Self>,
+            _span: &SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    const _: () = assert!(!RelaxedStdLang::OBEYS_SPAN_TILING);
+
+    #[test]
+    fn a_language_that_does_not_obey_span_tiling_parses_over_the_standard_reader() {
+        // The declaration is a fact the parsers consult, never a bound: the standard
+        // reader and the standard parsers serve such a language unchanged, and the
+        // tree comes out with the structure the input has.
+        let mut rules = min_rules::<RelaxedStdLang>();
+        rules.groups.rules = vec![Arc::new(crate::token::GroupRule {
+            group_type: 0,
+            open: "{".into(),
+            close: "}".into(),
+        })];
+        let seed = Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }));
+        let language = crate::engine::Language::new(
+            StdParseDriver::new(Recovery::Strict, ()),
+            seed,
+        );
+        let parsed = language.parse("a{b}c").expect("the parse runs");
+
+        let root = parsed.tree.root();
+        let kinds: Vec<_> = root
+            .children()
+            .iter()
+            .map(|child| match child.kind() {
+                NodeKind::Chars { .. } => "chars",
+                NodeKind::Group(_) => "group",
+                other => panic!("unexpected node kind: {other:?}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["chars", "group", "chars"]);
+        // The all-trees law holds for such a tree, exactly as for a tiled one.
+        crate::node::validate_tree(&parsed.tree).expect("the all-trees law holds");
+    }
+
+    #[test]
+    fn source_span_within_describes_the_stretch_when_the_language_does_not_obey_tiling() {
+        let source: Arc<Source> = Arc::new(Source::new("abc"));
+        let mut reader = crate::token::StdTokenReader::new(&source);
+        let mut session = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Strict, ());
+        let cx = ParseContext::new(
+            &mut reader,
+            state::<RelaxedStdLang>(),
+            &mut session,
+            &driver);
+
+        let begin = cx.tokens.position_here();
+        let token = cx.tokens.peek(&cx.state).unwrap();
+        let end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
+
+        // An ordered pair still spans exactly what it delimits …
+        assert_eq!(cx.source_span_within(&begin, &end).unwrap().range(), 0..1);
+        // … and the reversed pair is no longer an error: the reader's described span
+        // is recorded, with no assumption made about it (here, the empty span at
+        // `begin`, which is what `StdTokenReader` describes for an inverted pair).
+        let described = cx
+            .source_span_within(&end, &begin)
+            .expect("no error under OBEYS_SPAN_TILING = false");
+        assert_eq!(described.range(), 1..1);
     }
 
     // --- stage_invocation's three end cases -----------------------------------------

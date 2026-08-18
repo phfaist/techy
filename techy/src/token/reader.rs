@@ -2544,6 +2544,37 @@ mod tests {
     }
 
     #[test]
+    fn a_described_span_is_the_exact_range_and_never_absent() {
+        let source = Arc::new(Source::new("ab cd"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let begin = reader.position_here();
+        let _ = reader.next(&st).unwrap();
+        let _ = reader.next(&st).unwrap();
+        let end = reader.position_here();
+
+        // This reader serves one source, so an ordered pair describes its own range —
+        // the same answer `source_span_within` gives.
+        assert_eq!(
+            reader.source_span_describing(&begin, &end),
+            SourceSpan::new(&source, sp(0, 2))
+        );
+        // Equal positions: the empty span there.
+        assert_eq!(
+            reader.source_span_describing(&end, &end),
+            SourceSpan::new(&source, sp(2, 2))
+        );
+        // An inverted pair is a caller bug, and this method still answers: the empty
+        // span at `begin`.
+        assert_eq!(
+            reader.source_span_describing(&end, &begin),
+            SourceSpan::new(&source, sp(2, 2))
+        );
+    }
+
+    #[test]
     fn a_position_returns_the_stream_to_where_it_was_taken() {
         let source = Arc::new(Source::new("a{b}c"));
         let mut tr = StdTokenReader::new(&source);
@@ -2745,13 +2776,48 @@ mod tests {
             (TokenEdge::Start, 2),            // at the token, to read it again
             (TokenEdge::StartBeforePreSpace, 0), // giving back the pre-space too
         ] {
+            // Contract clause 7, first half: moving to an edge sets the position to
+            // that edge's.
             reader.move_to(&token, edge);
             assert_eq!(at(reader), SourcePos::new(&source, offset), "{edge:?}");
             assert_eq!(reader.position_here(), reader.position_at(&token, edge));
+
+            // Clause 7, second half: moving to a position sets the position to it —
+            // from wherever the stream happens to stand.
+            let mark = reader.position_at(&token, edge);
+            reader.move_to(&token, TokenEdge::EndPastPostSpace);
+            reader.move_to_position(&mark);
+            assert_eq!(reader.position_here(), mark, "{edge:?}");
+            assert_eq!(at(reader), SourcePos::new(&source, offset), "{edge:?}");
         }
 
         // Reading again after the rewind yields the same token.
         assert_eq!(reader.peek(&st).unwrap(), token);
+    }
+
+    #[test]
+    fn consecutive_tokens_meet_at_one_position() {
+        // Contract clause 7's corollary with clause 2: a token peeked right after the
+        // stream moved past its predecessor starts where the predecessor ended.
+        let source = Arc::new(Source::new("a \\vec  b% c\nd"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let mut prev = reader.next(&st).unwrap();
+        loop {
+            let next = reader.peek(&st).unwrap();
+            assert_eq!(
+                reader.position_at(&next, TokenEdge::StartBeforePreSpace),
+                reader.position_at(&prev, TokenEdge::EndPastPostSpace),
+                "tokens {prev:?} and {next:?} do not meet at one position"
+            );
+            if matches!(reader.token_kind(&next), TokenKind::EndOfStream) {
+                break;
+            }
+            reader.move_to(&next, TokenEdge::EndPastPostSpace);
+            prev = next;
+        }
     }
 
     // --- an end-to-end walk (adapted from pylatexenc's multiple-tokens test) ---------------
