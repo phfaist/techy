@@ -1427,14 +1427,19 @@ impl<L: Lang> fmt::Debug for NodesParser<'_, L> {
 mod tests {
     use super::*;
     use crate::source::Span;
-    use crate::engine::{resolve_command_in_scopes, ParseResult, ParserSession, StdParseDriver};
+    use crate::constructs::tests::{relaxed_driver, RelaxedStdLang, RELAXED_MACRO};
+    use crate::engine::{
+        resolve_command_in_scopes, ParseResult, ParserSession, ScopesCommandResolver,
+        StdParseDriver,
+    };
     use crate::error::Recovery;
     use crate::scopes::{
         CallableQuery, CallableSyntax, Package, ProviderError, ScopeStack, SpecsProvider,
     };
     use crate::node::GroupData;
     use crate::source::{Source, SourcePos, TextContent};
-    use crate::spec::{CallableSpec, StdCallableSpec};
+    use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
+    use super::super::argument_parsers::GroupArgumentParser;
     use super::super::{InvocationChildState, StdInvocationParser};
     use crate::state::{
         CommentOverrides, NodeExtTypes, TrivialLang, StateData, TokenRulesOverrides,
@@ -5418,5 +5423,302 @@ mod tests {
         assert!(Arc::ptr_eq(&short.callable().unwrap().spec, &inner_short));
         assert!(parsed.result.diagnostics.is_empty());
         assert_partition(&parsed.result, 0..8);
+    }
+    // --- languages that do not obey span tiling (PLAN §1.5 R1–R7) -----------------------
+
+    /// The shared relaxed test language ([`RelaxedStdLang`]) drives through the
+    /// standard driver over a scope-stack command resolver, so the test harness can
+    /// build it from a recovery setting like every other test driver.
+    impl TestDriver for StdParseDriver<ScopesCommandResolver<RelaxedStdLang>> {
+        fn with_recovery(recovery: Recovery) -> Self {
+            relaxed_driver(recovery)
+        }
+    }
+
+    // The relaxed language resolves commands under the same callable type id the test
+    // languages here use, so one package definition serves both runs.
+    const _: () = assert!(CT_MACRO == RELAXED_MACRO);
+
+    /// A package defining `\foo` as a zero-argument macro and `\arg` as a macro with
+    /// one mandatory `{…}` argument — the same definitions for a tiled and a relaxed
+    /// language.
+    fn span_tiling_macros<L>() -> Arc<Package<L>>
+    where
+        L: crate::state::LangHasGroups<CallableTypeId = u32, GroupTypeId = u32> + 'static,
+        crate::node::ArgumentExt<L>: Default,
+        L::InvocationSyntax: FromInvocation<L>,
+    {
+        let mut lib = Package::new("span-tiling-macros");
+        lib.insert(CT_MACRO, "foo", Arc::new(StdCallableSpec::default()));
+        lib.insert(
+            CT_MACRO,
+            "arg",
+            Arc::new(StdCallableSpec::new([ArgumentSpec::new_unnamed(Arc::new(
+                GroupArgumentParser::new(GT_BRACE),
+            ))])),
+        );
+        Arc::new(lib)
+    }
+
+    /// A state over [`span_tiling_macros`], for whichever language the caller names.
+    fn span_tiling_state<L>() -> Arc<ParsingState<L>>
+    where
+        L: crate::state::LangHasGroups<
+                CallableTypeId = u32,
+                GroupTypeId = u32,
+                Features = crate::state::AllLangFeatures,
+                ModeId = (),
+                StateExt = (),
+            > + 'static,
+        crate::node::ArgumentExt<L>: Default,
+        L::InvocationSyntax: FromInvocation<L>,
+    {
+        let mut scopes = ScopeStack::new();
+        scopes.push(span_tiling_macros::<L>());
+        Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }))
+    }
+
+    /// How each `Chars` node of a parse records its content, in storage order.
+    fn chars_representations<L: Lang>(result: &ParseResult<L>) -> Vec<&'static str> {
+        result
+            .tree
+            .iter_storage_order()
+            .filter_map(|node| match node.kind() {
+                NodeKind::Chars { content: TextContent::Spanned(_), .. } => Some("spanned"),
+                NodeKind::Chars { content: TextContent::Owned(_), .. } => Some("owned"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// One representative input — chars runs, a group, a comment, a paragraph break, a
+    /// zero-argument macro with syntactic post-space, and a macro with a `{…}`
+    /// argument — parsed by a tiled language and by one declaring
+    /// `OBEYS_SPAN_TILING = false`.
+    const SPAN_TILING_INPUT: &str = "a b{c d}%note\n\ne \\foo f \\arg{g} h";
+
+    #[test]
+    fn a_language_that_does_not_obey_span_tiling_parses_the_same_tree() {
+        let tiled = run_both::<CmdLang>(
+            SPAN_TILING_INPUT,
+            &span_tiling_state(),
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        let relaxed = run_both::<RelaxedStdLang>(
+            SPAN_TILING_INPUT,
+            &span_tiling_state(),
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+
+        // Same kinds, same child counts, same spans, same text — `shapes` renders all
+        // four, and the chars lines resolve the content whichever way it is recorded.
+        assert_eq!(shapes(&tiled.result), shapes(&relaxed.result));
+        assert_eq!(
+            shapes(&relaxed.result),
+            [
+                "chars 0..3 \"a b\"",
+                "group 3..8",
+                "comment 8..13 start=\"%\" content=\"note\" post=\"\"",
+                // The paragraph break, staged by the loop over the hook's kind.
+                "chars 13..15 \"\\n\\n\"",
+                "chars 15..17 \"e \"",
+                "callable 17..22",
+                "chars 22..24 \"f \"",
+                "callable 24..31",
+                "chars 31..33 \" h\"",
+            ]
+        );
+        assert_eq!(
+            tiled.result.tree.node_count(),
+            relaxed.result.tree.node_count(),
+            "the two trees differ in node count"
+        );
+
+        // The content representation is what differs: a tiled language records the
+        // exact span slice, a relaxed one the text its reader answered for each token
+        // of the run. The exception is the paragraph-break node, whose kind the driver
+        // hook builds over the break token's own span — a node whose span *is* the
+        // fact's span keeps the bare span in both cases (the node-data rule).
+        assert!(chars_representations(&tiled.result).iter().all(|it| *it == "spanned"));
+        assert_eq!(
+            chars_representations(&relaxed.result),
+            ["owned", "spanned", "owned", "owned", "owned", "owned", "owned"]
+        );
+
+        // The all-trees law holds for both (`try_run` already ran the oracle, which
+        // stops at this law for the relaxed language).
+        crate::node::validate_tree(&tiled.result.tree).expect("the all-trees law holds");
+        crate::node::validate_tree(&relaxed.result.tree).expect("the all-trees law holds");
+    }
+
+    #[test]
+    fn a_relaxed_chars_run_owns_the_text_the_reader_answered() {
+        let parsed = run_both::<RelaxedStdLang>(
+            "  hi there ",
+            &span_tiling_state(),
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        let node = parsed.result.tree.root().child(0).unwrap();
+        // One maximal run over the whole input, its text owned — pre-space, characters
+        // and the end-of-stream token's trailing whitespace alike.
+        assert_eq!(node.chars(), Some("  hi there "));
+        assert!(matches!(
+            node.kind(),
+            NodeKind::Chars { content: TextContent::Owned(_), .. }
+        ));
+        assert_eq!(node.span().range(), 0..11);
+    }
+
+    /// A reader that answers a *wrong* [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace)
+    /// edge — one byte past where the peek happened — breaking the [`TokenReader`]
+    /// contract's clause 7 corollary. Everything else delegates to an inner
+    /// [`StdTokenReader`].
+    struct SlippingReader<'s, L: Lang> {
+        inner: StdTokenReader<'s>,
+        lang: core::marker::PhantomData<L>,
+    }
+
+    impl<'s, L> SlippingReader<'s, L>
+    where
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
+        fn new(source: &'s Arc<Source>) -> SlippingReader<'s, L> {
+            SlippingReader {
+                inner: StdTokenReader::new(source),
+                lang: core::marker::PhantomData,
+            }
+        }
+
+        fn inner(&self) -> &dyn TokenReader<'s, L> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, L> {
+            &mut self.inner
+        }
+    }
+
+    impl<'s, L> TokenReader<'s, L> for SlippingReader<'s, L>
+    where
+        L: Lang<SourceOrigin = Option<String>>,
+        L::Tokenization:
+            Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
+        fn peek(
+            &mut self,
+            state: &Arc<ParsingState<L>>,
+        ) -> TokenResult<L, StdToken<L>> {
+            TokenReader::peek(&mut self.inner, state)
+        }
+
+        fn move_to(&mut self, tok: &StdToken<L>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn token_kind<'t>(&self, tok: &'t StdToken<L>) -> TokenKind<'t, L>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &StdToken<L>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &StdToken<L>, edge: TokenEdge) -> StdStreamPosition {
+            let at = self.inner().position_at(tok, edge);
+            match edge {
+                // The contract violation: the token does not start where the peek
+                // happened.
+                TokenEdge::StartBeforePreSpace => StdStreamPosition::at(at.offset() + 1),
+                _ => at,
+            }
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
+        }
+
+        fn source_span_describing(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> SourceSpan {
+            self.inner().source_span_describing(begin, end)
+        }
+    }
+
+    /// The content loop checks the clause 7 corollary whatever the language declares
+    /// about span tiling: the check is about the reader's own answers, not about where
+    /// the tokens come from.
+    #[test]
+    fn a_token_not_starting_where_it_was_peeked_is_an_implementation_error() {
+        fn detail_of(error: &ParseError) -> String {
+            error
+                .data()
+                .downcast_ref::<crate::constructs::ImplementationError>()
+                .expect("an ImplementationError condition")
+                .detail
+                .to_string()
+        }
+
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+
+        let mut tiled = SlippingReader::<CmdLang>::new(&source);
+        let error = try_run(
+            &source,
+            &mut tiled,
+            &span_tiling_state::<CmdLang>(),
+            Recovery::Strict,
+            StopSpec::none(),
+        )
+        .expect_err("the reader breaks clause 7");
+        let detail = detail_of(&error);
+        assert!(
+            detail.contains("is not the position the stream stood at when the token was peeked")
+                && detail.contains("violates the `TokenReader` contract"),
+            "unexpected detail: {detail}"
+        );
+
+        let mut relaxed = SlippingReader::<RelaxedStdLang>::new(&source);
+        let error = try_run(
+            &source,
+            &mut relaxed,
+            &span_tiling_state::<RelaxedStdLang>(),
+            Recovery::Strict,
+            StopSpec::none(),
+        )
+        .expect_err("the reader breaks clause 7 whatever the language declares");
+        assert_eq!(detail_of(&error), detail);
     }
 }

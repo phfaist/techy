@@ -1246,6 +1246,33 @@ mod tests {
         check_tree_invariants(&builder.finish(root).unwrap());
     }
 
+    /// The byte accounting is the span-tiling law, so a language that declares
+    /// `OBEYS_SPAN_TILING = false` is held to the all-trees law alone: the very tree
+    /// `rejects_a_gap_between_siblings` panics on passes there.
+    #[test]
+    fn a_language_that_does_not_obey_span_tiling_is_held_to_the_all_trees_law_only() {
+        use crate::constructs::tests::RelaxedStdLang;
+
+        let source: Arc<Source<Option<alloc::string::String>>> = Arc::new(Source::new("ab"));
+        let st = crate::constructs::tests::state::<RelaxedStdLang>();
+        let mut builder: NodeTreeBuilder<RelaxedStdLang> = NodeTreeBuilder::new();
+        let b = builder.add(
+            NodeKind::chars(Span::new(1, 2)),
+            SourceSpan::new(&source, 1..2),
+            Arc::clone(&st),
+            alloc::vec![], (), (),
+        ).unwrap();
+        let root = builder.add(
+            NodeKind::list(),
+            SourceSpan::entire(&source),
+            Arc::clone(&st),
+            alloc::vec![b], (), (),
+        ).unwrap();
+        let tree = builder.finish(root).unwrap();
+        validate_tree(&tree).expect("the all-trees law holds");
+        check_tree_invariants(&tree);
+    }
+
     #[test]
     #[should_panic(expected = "spanned chars content")]
     fn rejects_spanned_content_that_is_not_the_nodes_span() {

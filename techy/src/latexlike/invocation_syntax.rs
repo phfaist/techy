@@ -1079,4 +1079,69 @@ mod tests {
             token: &crate::token::StdToken::end_of_stream(Span::empty(0)),
         });
     }
+    // --- the macro arm under a language that does not obey span tiling (PLAN §1.5 R3) ---
+
+    /// The `post_space` [`InvocationSyntaxData::Macro`] records for the `\foo` of
+    /// `"\foo  x"`, under the language named by `L`.
+    fn macro_post_space<L>() -> TextContent
+    where
+        L: crate::state::Lang<
+            CallableTypeId = u32,
+            SourceOrigin = Option<String>,
+            Features = crate::state::AllLangFeatures,
+            StateExt = (),
+            ModeId = (),
+        >,
+        L::Tokenization: crate::token::Tokenization<
+            L,
+            Token = crate::token::StdToken<L>,
+            StreamPosition = crate::token::StdStreamPosition,
+        >,
+    {
+        let source: Arc<crate::source::Source> = Arc::new(Source::new("\\foo  x"));
+        let mut rules = crate::constructs::tests::min_rules::<L>();
+        rules.commands.rules = vec![Arc::new(CommandRule {
+            escape_char: '\\',
+            name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
+        })];
+        let state = Arc::new(ParsingState::new(crate::state::StateData {
+            rules,
+            scopes: crate::scopes::ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }));
+        let mut reader = crate::token::StdTokenReader::new(&source);
+        let token = crate::token::TokenReader::<L>::peek(&mut reader, &state)
+            .expect("a command token");
+        let spec: Arc<dyn CallableSpec<L>> = Arc::new(crate::spec::StdCallableSpec::default());
+        let invocation = crate::constructs::Invocation {
+            callable_type: 0u32,
+            name: "foo",
+            spec: &spec,
+            token: &token,
+        };
+        let reader_ref: &dyn crate::token::TokenReader<'_, L> = &reader;
+        match InvocationSyntaxData::<()>::from_invocation(&invocation, reader_ref) {
+            InvocationSyntaxData::Macro { post_space, .. } => post_space,
+            other => panic!("expected the macro arm, got {other:?}"),
+        }
+    }
+
+    /// The payload is minted before the node's span exists, so the node-data rule
+    /// cannot decide its representation: a tiled language may record the bare span
+    /// (the node starts at this very token), a language with
+    /// `OBEYS_SPAN_TILING = false` records the text.
+    #[test]
+    fn the_macro_post_space_is_owned_where_the_language_does_not_obey_span_tiling() {
+        let tiled = macro_post_space::<crate::constructs::tests::PlainLang>();
+        assert!(
+            matches!(tiled, TextContent::Spanned(span) if span == Span::new(4, 6)),
+            "a tiled parse records the post-space as a span, got {tiled:?}"
+        );
+        let relaxed = macro_post_space::<crate::constructs::tests::RelaxedStdLang>();
+        assert!(
+            matches!(&relaxed, TextContent::Owned(text) if &**text == "  "),
+            "a relaxed parse records the post-space text, got {relaxed:?}"
+        );
+    }
 }

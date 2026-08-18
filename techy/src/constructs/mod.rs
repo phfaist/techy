@@ -1423,8 +1423,10 @@ impl<L: Lang> FromInvocation<L> for () {
     fn from_invocation(_invocation: &Invocation<'_, L>, _tokens: &dyn TokenReader<'_, L>) {}
 }
 
+// `pub(crate)`: the span-tiling test language below is shared with the parser test
+// modules that exercise it (only in test builds — the module is `cfg(test)`).
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::source::{Source, Span};
     use crate::engine::StdParseDriver;
@@ -1437,14 +1439,16 @@ mod tests {
     };
     use alloc::vec;
 
+    /// The tiled counterpart of [`RelaxedStdLang`]: same associated types, the
+    /// default `OBEYS_SPAN_TILING` (`true`).
     #[derive(Debug, Clone, Copy)]
-    struct PlainLang;
+    pub(crate) struct PlainLang;
     impl TrivialLang for PlainLang {}
 
     // `Features = AllLangFeatures` (via `TrivialLang`): the plain block literals
     // below only typecheck once the per-feature stores normalize to the blocks
     // themselves.
-    fn min_rules<L: Lang<Features = crate::state::AllLangFeatures>>() -> TokenRules<L> {
+    pub(crate) fn min_rules<L: Lang<Features = crate::state::AllLangFeatures>>() -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
             paragraphs: ParagraphRules { enabled: true },
@@ -1461,7 +1465,7 @@ mod tests {
         }
     }
 
-    fn state<L>() -> Arc<ParsingState<L>>
+    pub(crate) fn state<L>() -> Arc<ParsingState<L>>
     where
         L: Lang<Features = crate::state::AllLangFeatures, StateExt = ()>,
         L::ModeId: Default,
@@ -1597,7 +1601,7 @@ mod tests {
     /// under the declaration is a separate concern, so the parse test below asserts
     /// structure only.
     #[derive(Debug, Clone, Copy)]
-    struct RelaxedStdLang;
+    pub(crate) struct RelaxedStdLang;
 
     impl Lang for RelaxedStdLang {
         const OBEYS_SPAN_TILING: bool = false;
@@ -1613,7 +1617,7 @@ mod tests {
         type Tokenization = crate::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
-        type Driver = StdParseDriver;
+        type Driver = StdParseDriver<crate::engine::ScopesCommandResolver<RelaxedStdLang>>;
 
         fn make_node_ext(
             _kind: &NodeKind<Self>,
@@ -1626,6 +1630,22 @@ mod tests {
     }
 
     const _: () = assert!(!RelaxedStdLang::OBEYS_SPAN_TILING);
+
+    /// The callable type id [`RelaxedStdLang`]'s driver resolves command tokens
+    /// under — an arbitrary value every test defining macros for it shares.
+    pub(crate) const RELAXED_MACRO: u32 = 10;
+
+    /// [`RelaxedStdLang`]'s driver: command tokens resolve through the state's scope
+    /// stack under [`RELAXED_MACRO`], so a test can define macros for the language the
+    /// way it does for a tiled one.
+    pub(crate) fn relaxed_driver(
+        recovery: Recovery,
+    ) -> StdParseDriver<crate::engine::ScopesCommandResolver<RelaxedStdLang>> {
+        StdParseDriver::new(
+            recovery,
+            crate::engine::ScopesCommandResolver { command_type: RELAXED_MACRO },
+        )
+    }
 
     #[test]
     fn a_language_that_does_not_obey_span_tiling_parses_over_the_standard_reader() {
@@ -1644,10 +1664,7 @@ mod tests {
             mode: (),
             ext: (),
         }));
-        let language = crate::engine::Language::new(
-            StdParseDriver::new(Recovery::Strict, ()),
-            seed,
-        );
+        let language = crate::engine::Language::new(relaxed_driver(Recovery::Strict), seed);
         let parsed = language.parse("a{b}c").expect("the parse runs");
 
         let root = parsed.tree.root();
@@ -1670,7 +1687,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("abc"));
         let mut reader = crate::token::StdTokenReader::new(&source);
         let mut session = ParserSession::new();
-        let driver = StdParseDriver::new(Recovery::Strict, ());
+        let driver = relaxed_driver(Recovery::Strict);
         let cx = ParseContext::new(
             &mut reader,
             state::<RelaxedStdLang>(),

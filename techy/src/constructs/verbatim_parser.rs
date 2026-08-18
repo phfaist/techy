@@ -874,6 +874,7 @@ mod tests {
     use crate::error::{ParseError, Recovery};
     use crate::node::{check_tree_invariants, BuildId, NodeRef};
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
+    use crate::constructs::tests::{relaxed_driver, RelaxedStdLang, RELAXED_MACRO};
     use crate::source::Source;
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::StateData;
@@ -949,7 +950,8 @@ mod tests {
         }
     }
 
-    fn rules() -> TokenRules<VerbLang> {
+    fn rules<L: Lang<GroupTypeId = u32, Features = crate::state::AllLangFeatures>>(
+    ) -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
             paragraphs: ParagraphRules { enabled: true },
@@ -1156,7 +1158,7 @@ mod tests {
             package.insert(CT_MACRO, "verb", spec);
             let mut scopes = ScopeStack::new();
             scopes.push(Arc::new(package));
-            let mut rules = rules();
+            let mut rules = rules::<VerbLang>();
             rules.forbidden_chars.chars = "$".into();
             Arc::new(ParsingState::new(StateData { rules, scopes, mode: (), ext: () }))
         };
@@ -1587,5 +1589,66 @@ mod tests {
             derived.rules().expecting_group_close().map(|r| r.close.as_str()),
             Some("@@end")
         );
+    }
+    // --- a language that does not obey span tiling (PLAN §1.5 R4) ---------------------
+
+    // The shared relaxed language resolves commands under the same callable type id
+    // this suite uses, so its macros can be defined the usual way.
+    const _: () = assert!(CT_MACRO == RELAXED_MACRO);
+
+    /// Raw verbatim content is multi-token content: for a language with
+    /// `OBEYS_SPAN_TILING = false` it is recorded as the text the reader answered,
+    /// token by token, and reads back exactly as the tiled parse's span slice does.
+    #[test]
+    fn verbatim_content_is_owned_where_the_language_does_not_obey_span_tiling() {
+        // The tiled parse of the same input, for comparison.
+        let tiled = parse(
+            "\\verb|a b|",
+            &state_with(&[("verb", vec![verb_arg()])]),
+            Recovery::Strict,
+        );
+        let tiled_content = verb_content(root_child(&tiled, 0));
+        assert_eq!(tiled_content.chars(), Some("a b"));
+        assert!(matches!(
+            tiled_content.kind(),
+            NodeKind::Chars { content: TextContent::Spanned(_), .. }
+        ));
+
+        let spec: Arc<dyn CallableSpec<RelaxedStdLang>> =
+            Arc::new(StdCallableSpec::new([ArgumentSpec::new_unnamed(Arc::new(
+                VerbatimArgumentParser::new(GT_VERB),
+            ))]));
+        let mut package = Package::new("test-macros");
+        package.insert(CT_MACRO, "verb", spec);
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(package));
+        let seed = Arc::new(ParsingState::new(StateData {
+            rules: rules::<RelaxedStdLang>(),
+            scopes,
+            mode: (),
+            ext: (),
+        }));
+        let language = crate::engine::Language::new(relaxed_driver(Recovery::Strict), seed);
+        let relaxed = language.parse("\\verb|a b|").expect("the parse runs");
+
+        let content = verb_content(relaxed.tree.root().child(0).expect("the callable"));
+        assert_eq!(content.chars(), Some("a b"));
+        assert!(
+            matches!(content.kind(), NodeKind::Chars { content: TextContent::Owned(_), .. }),
+            "the content of a relaxed verbatim parse is owned text"
+        );
+        // The group's delimiters are single-token facts: the node-data rule keeps them
+        // as spans of the node's own source here (one source, so they lie in it).
+        let group = content.parent().expect("the verbatim group");
+        let data = group.group().expect("a group node");
+        assert_eq!(data.open.resolve(group.source()), "|");
+        crate::node::validate_tree(&relaxed.tree).expect("the all-trees law holds");
+    }
+
+    /// The raw-content `Chars` child of a `\verb`-style callable's verbatim group.
+    fn verb_content<L: Lang>(node: NodeRef<'_, L>) -> NodeRef<'_, L> {
+        let region: Vec<_> = node.argument_nodes(0).expect("provided argument").iter().collect();
+        let group = *region.last().expect("the group node ends the region");
+        group.child(0).expect("the raw content")
     }
 }
