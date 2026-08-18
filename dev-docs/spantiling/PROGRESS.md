@@ -5,7 +5,7 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 | Stage | Branch | Base | Worktree | Status |
 |---|---|---|---|---|
 | 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | reviewed |
-| 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | planned |
+| 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | implemented |
 | 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | reviewed |
 | 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | implemented |
 | 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | planned |
@@ -193,6 +193,266 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
    is wanted.
 
 ## Stage 2 — parsers
+
+Status: **implemented** (branch `st-2-parsers`, worktree
+`.claude/worktrees/st-2-parsers`; commits `df520fe`, `e40424d`, `8e3ffa3`, `048c6b9`,
+`0df3bc9`, plus this file).
+
+### Files changed
+
+- `techy/src/constructs/nodes_parser.rs` (**R1**) — the pending chars run becomes a
+  named `PendingRun<L> { start, end, text: Option<String> }` (`text` is `Some` exactly
+  when `!L::OBEYS_SPAN_TILING`), with a hand-written `Debug`. `take_pre_space` and
+  `extend_run` (which now receives the classified character) accumulate the extension's
+  text from the reader's answers about *that* token; `chars_run_node` turns a run into
+  the `Chars` kind + span — `TextContent::Owned(text)` where a text was accumulated,
+  `TextContent::Spanned(span.span())` (the exact run slice, as before) otherwise. The
+  position check in `extend_run_to` stays **unconditional** and its message names the
+  actual violation ("the token's StartBeforePreSpace edge … is not the position the
+  stream stood at when the token was peeked … — the token reader violates the
+  `TokenReader` contract (a peeked token starts where the peek happened; moving to an
+  edge sets the position)"); the `what` parameter is gone with the old wording (both
+  call sites extend from the token's `StartBeforePreSpace` edge, which the message
+  names). Docs: invariant 1 states both content representations; the closing sentence
+  is "For a language that obeys span tiling these give span tiling: …"; the three other
+  occurrences of "partition invariant" as a name (module docs, `flush_for_token_stop`,
+  two test-side comments) are rewritten.
+- `techy/src/constructs/mod.rs` (**R2**, **carry-over A**, **carry-over B**) —
+  `comment_node_kind` records the three sub-spans through `node_text_content` (the
+  argument that they tile the token fails at a seam); `node_text_content`'s doc names
+  `OBEYS_SPAN_TILING = false` and the seam case, and states that the rule assumes
+  nothing about tokens; `stage_invocation`'s no-explicit-end arm gets a
+  `None if !L::OBEYS_SPAN_TILING` arm that routes through `invocation_span_within` from
+  the trigger's start position to `position_here()` — the tiled arm is untouched — with
+  the doc's three end cases extended by the `false` case and the `Err` paragraph scoped
+  to a tiled language. New `pub(crate)` helpers `push_pre_space_text` and
+  `push_token_text` (the per-token owned-text recipe, D4), shared by R1 and R4.
+- `techy/src/constructs/verbatim_parser.rs` (**R4**) — `read_raw_content` accumulates
+  the content's text under `!L::OBEYS_SPAN_TILING`: per consumed token the R1 recipe
+  (pre-space + spelling + post-space), including a nested close read as content by the
+  pairing rule, plus the pre-space of the terminator / end-of-stream token (which lies
+  before `content_end` and is content). `RawContentEnd` carries it as `content_text`,
+  and `raw_content_text` records `Owned`/`Spanned` at both content sites (the delimited
+  argument and the environment body). Module docs state the two representations; the
+  "partition invariants" phrase is gone.
+- `techy/src/constructs/environment_parser.rs` — wording only ("the gap-free tiling
+  contract" → "span tiling, where the language obeys it").
+- `techy/src/latexlike/invocation_syntax.rs` (**R3**) — `from_invocation`'s macro arm
+  records `post_space` as `Spanned` under `true` and `Owned` under `false`, with the
+  comment rewritten (the "sound because the node starts at this very token" argument
+  holds under tiling only) and the impl doc stating both.
+- `techy/src/node/invariants.rs` (**R6**) — `check_tree_invariants` returns after
+  `validate_tree` when `!L::OBEYS_SPAN_TILING`; docs rename "parse-tree law" to
+  "span-tiling law" throughout and state the gate; the two byte-accounting assertion
+  messages say "span tiling" instead of "partition invariant" (the `should_panic`
+  expectation follows).
+- `techy/src/latexlike/invariants.rs` (**R6**) — `check_latexlike_tree_invariants`
+  gates its payload pins the same way (they are byte accounting too), with the docs
+  renamed and the gate explained.
+
+### R2 — "node span == fact span, bare `Spanned` kept" (checked list)
+
+Complete against `grep -n "NodeKind::chars(\|TextContent::Spanned("` over
+`techy/src/constructs/` and `techy/src/latexlike/`, test modules excluded:
+
+| Site | What | Verdict |
+|---|---|---|
+| `constructs/attached_source.rs:192` | the attached-source placeholder chars node | node span == fact span → `Spanned` kept |
+| `constructs/argument_parsers.rs:207` | `stage_pre_space`: a pre-space-only chars node | node span == fact span → `Spanned` kept |
+| `constructs/argument_parsers.rs:263` | expression-position chars over one token | node span == fact span → `Spanned` kept |
+| `constructs/argument_parsers.rs:307`, `:318` | unresolvable / failed command fallback over one token | node span == fact span → `Spanned` kept |
+| `constructs/argument_parsers.rs:999` | `MarkerArgumentParser`'s chars node (**several tokens**) | `Spanned` kept per R2/R5 — flagged, open question 1 |
+| `constructs/nodes_parser.rs:908` | `recover_as_chars` over one token's span | node span == fact span → `Spanned` kept |
+| `constructs/verbatim_parser.rs:785` | the gobbled leading newline (one token) | node span == fact span → `Spanned` kept |
+| `latexlike/driver.rs:267` | the paragraph-break `Chars` shape over the break span | node span == fact span → `Spanned` kept |
+| `latexlike/environments.rs:862` | malformed-`\begin` chars fallback over the trigger | node span == fact span → `Spanned` kept |
+| `latexlike/environments.rs:1066` | orphan-`\end` recovery chars (**several tokens**) | `Spanned` kept — flagged, open question 1 |
+| `constructs/environment_parser.rs:992`, `:1194` | inside `mod tests` (a test language's raw-body parser) | test code; goes through the dispatch already |
+| `constructs/mod.rs:142` | `node_text_content` itself | the rule |
+| `constructs/nodes_parser.rs:620`, `verbatim_parser.rs:177`, `latexlike/invocation_syntax.rs:148` | the three sites this stage changed (R1, R4, R3) | dispatch on the const |
+
+The single-token facts already going through `node_text_content` before this stage —
+group delimiters (`group_parser.rs`), verbatim delimiters (`verbatim_parser.rs`),
+embellishment markers (`embellishments_parser.rs`), the environment sides
+(`latexlike/invocation_syntax.rs` `from_parsed`) — are unchanged (D1).
+
+### R3 grep — other pre-staging payload builders
+
+`grep -rn "impl.*FromInvocation" techy/src techy/tests` → two impls: `()` (records
+nothing) and `InvocationSyntaxData` (the R3 site). `grep -rn
+"macro_form\|specials_form\|environment_form\|from_parsed("` → `macro_form` has no
+in-crate call site (the standard path is `from_invocation`); `specials_form`
+(`latexlike/driver.rs:286`) records nothing; `environment_form`
+(`latexlike/environments.rs:1007`) wraps `from_parsed`, which already receives the
+node span and goes through `node_text_content`. No further change needed.
+
+### R5 grep — the §1.4 gate
+
+`grep -rn "tokens\.source_span_within\|tokens\.source_span_describing" techy/src
+techy/tests` outside `techy/src/token/` returns exactly the four lines inside the two
+`ParseContext` helpers (`constructs/mod.rs:267`, `:269`, `:449`, `:451`) plus the
+delegating lines of the five test readers. Every node/body/name span goes through
+`cx.source_span_within` / `invocation_span_within`; after carry-over A there is no
+longer a site building a node span with `SourceSpan::new` from a child's coordinates
+either.
+
+### R7 grep — concrete `Latexlike` impls
+
+`grep -rn "for Latexlike\b" techy/src/latexlike/*.rs` → three blocks: `impl Lang for
+Latexlike` (associated types + the seed state), `impl LatexlikeLang for Latexlike`
+(`check_parse_start`), `impl SerializableLang for Latexlike` (marker). None builds node
+data or spans; every preset parser is generic over `LLL: LatexlikeLang` and reaches the
+declaration through the shared helpers. Nothing to make generic.
+
+### Tests added
+
+- `constructs/nodes_parser.rs`:
+  `a_language_that_does_not_obey_span_tiling_parses_the_same_tree` — the input
+  `"a b{c d}%note\n\ne \foo f \arg{g} h"` (chars runs, group, comment, paragraph break,
+  a zero-argument macro with post-space, a macro with a `{…}` argument) parsed under
+  `CmdLang` (tiled) and `RelaxedStdLang` (`false`) through `run_both` (so both readers
+  agree in both runs): identical `shapes` (kinds, spans, resolved text), identical node
+  counts, all chars content `Spanned` under `true` and `Owned` under `false` except the
+  paragraph-break node (whose span is the fact's own span), `validate_tree` on both.
+  `a_relaxed_chars_run_owns_the_text_the_reader_answered` pins the owned run text
+  (leading and trailing whitespace included).
+  `a_token_not_starting_where_it_was_peeked_is_an_implementation_error` — the new
+  `SlippingReader` answers a `StartBeforePreSpace` edge one byte off; the same
+  implementation error, with the same detail, under a tiled and a relaxed language.
+- `constructs/verbatim_parser.rs`:
+  `verbatim_content_is_owned_where_the_language_does_not_obey_span_tiling` — `\verb|a b|`
+  under both declarations; owned content that reads back as the tiled span slice, the
+  delimiters still spans, `validate_tree` OK.
+- `latexlike/invocation_syntax.rs`:
+  `the_macro_post_space_is_owned_where_the_language_does_not_obey_span_tiling` — the
+  payload built directly from an `Invocation` over `"\foo  x"`: `Spanned(4..6)` under
+  the tiled language, `Owned("  ")` under the relaxed one.
+- `node/invariants.rs`:
+  `a_language_that_does_not_obey_span_tiling_is_held_to_the_all_trees_law_only` — the
+  sibling-gap tree that `rejects_a_gap_between_siblings` panics on passes the oracle
+  under `RelaxedStdLang`.
+
+Test-language plumbing (reuse, no duplicate): `constructs::tests` is now
+`pub(crate) mod tests` (test builds only) and exports `RelaxedStdLang`, its tiled twin
+`PlainLang`, `RELAXED_MACRO`, `relaxed_driver`, `min_rules` and `state`.
+`RelaxedStdLang`'s driver became
+`StdParseDriver<ScopesCommandResolver<RelaxedStdLang>>` so tests can define macros for
+it the way they do for a tiled language (the two Stage 1 tests were updated to build it
+through `relaxed_driver`). `verbatim_parser::tests::rules` became generic over the
+language for the same reason.
+
+### Gate results (verbatim, run from the worktree)
+
+```
+### cargo build
+   Compiling techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.53s
+
+### cargo test --workspace
+test result: ok. 1073 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 12.82s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+### cargo test --workspace --all-features
+test result: ok. 1112 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.73s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 15.97s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+### cargo clippy --workspace --all-targets -- -D warnings
+    Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.86s
+
+### cargo clippy --workspace --all-targets --all-features -- -D warnings
+    Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.18s
+
+### rm -rf target/doc && cargo docs --all-features
+ Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy-derive)
+ Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.18s
+   Generated /Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/target/doc/techy/index.html and 1 other file
+```
+
+Baseline: Stage 1 ran 1067 / 1106 lib tests; Stage 2 adds 6 (the five new tests plus
+the `constructs::tests` split is unchanged) — 1073 / 1112. No existing test changed its
+expectations except `node::invariants::rejects_a_gap_between_siblings`, whose
+`should_panic` string follows the renamed assertion message. `cargo docs --all-features`
+emits no warnings.
+
+### §1.9 decisions
+
+- **D1 as confirmed by the user (2026-08-19)**: single-token facts keep the node-data
+  rule in both cases; multi-token content (R1, R4) and the pre-staging payload (R3) are
+  owned under `false`.
+- **D4 as written**: the owned text comes from the reader's own answers about each
+  token — `source_span_between(tok, StartBeforePreSpace, Start).content()`, the
+  `TokenKind::Char(c)` spelling (or a group close's `delim` where the verbatim pairing
+  rule reads one as content), and
+  `source_span_between(tok, End, EndPastPostSpace).content()`. The recipe lives once, in
+  `constructs::push_token_text`.
+- The position check of `extend_run_to` stays unconditional (user ruling, 2026-08-19);
+  only its message and the surrounding docs changed.
+
+### Deviations from §1
+
+1. **`extend_run_to` lost its `what` parameter.** §1.5 R1 prescribes a message that
+   names the token's `StartBeforePreSpace` edge; both call sites extend from exactly
+   that edge, so the "which extension" string the old message carried had nothing left
+   to add. The prescribed wording is used verbatim.
+2. **R4's `environment_parser.rs ~1189–1193` is test code.** The line the plan points
+   at is inside `environment_parser.rs`'s `mod tests` (a test language's raw-body
+   parser, which already computes its spans through `cx.source_span_within`). The
+   production environment verbatim body is `VerbatimBodyParser` in
+   `verbatim_parser.rs ~760` — changed. Likewise `verbatim_parser.rs ~736` (listed
+   under R4) is the gobbled leading newline: one token, node span == fact span, so it
+   keeps the bare span under R2.
+3. **No environment test through the preset.** §3 step 8 makes it optional ("if
+   cheap"); a `LatexlikeLang` declaring `false` is Stage 3b's subject, and the preset's
+   environment path is exercised generically by the R3 unit test and the
+   `stage_invocation` coverage in the nodes-parser comparison. The relaxed *verbatim*
+   body path is covered through `VerbatimArgumentParser`.
+4. **Test-language sharing changed `constructs::tests` to `pub(crate) mod tests`** and
+   gave `RelaxedStdLang` a scope-stack command resolver (see "Tests added"). The
+   alternative — a second relaxed language per test module — was rejected as the
+   duplication the stage brief forbids.
+
+### Open questions for the user
+
+1. **Two multi-token chars nodes keep `Spanned` under `false`** (both listed as
+   "checked" per R2, both flagged here): the marker argument's node
+   (`MarkerArgumentParser`, `constructs/argument_parsers.rs:999` — a multi-character
+   marker is read one `Char` token at a time) and
+   the orphan-`\end` recovery node (`latexlike/environments.rs:1066`). Their span is
+   their own fact, so the all-trees law holds (residency), and §1.5 R2/R5 leaves them
+   alone; but under `OBEYS_SPAN_TILING = false` the content then reads back as the
+   *described* span's text rather than as what was consumed, which is exactly the
+   inaccuracy R1/R4 exist to avoid. Cheap fixes exist (the marker's text is
+   `self.marker` by construction; the recovery node would need the R1 accumulation).
+   Should they follow R1/R4, or is "as described" acceptable for a recovery/noise node?
+2. **`recover_as_chars` and the other one-token fallbacks record `Spanned`** even though
+   the node's span is a reader answer about a token that may have edges in two sources
+   at a seam. `SourceSpan::span()` names one range of one source, so residency holds by
+   construction; flagging it only because the seam case makes "the token's span" less
+   obviously the token's text than it reads.
+3. **`docs/panics.md` untouched** (as in Stage 1): no new panicking public item; the
+   owned-text accumulation only calls `SourceSpan::content()`, whose bounds come from
+   the reader's own answer.
 
 ## Stage 3a — scripted reader
 
