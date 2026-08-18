@@ -6,7 +6,7 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 |---|---|---|---|---|
 | 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | reviewed |
 | 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | planned |
-| 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | planned |
+| 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | implemented |
 | 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | implemented |
 | 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | planned |
 | 5 record | `st-5-record` | `main` (after all) | `.claude/worktrees/st-5-record` | planned |
@@ -195,6 +195,195 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 ## Stage 2 — parsers
 
 ## Stage 3a — scripted reader
+
+Status: **implemented** (branch `st-3a-scripted`, worktree
+`.claude/worktrees/st-3a-scripted`; commits `75fa0ec`, `53a28f1`, plus this file).
+
+### Files changed
+
+- **`techy/src/token/scripted_reader.rs` (new, `cfg(test)`, `pub(crate)`)** — §1.7 in
+  full:
+  - `ScriptedTokenization` (ZST) with `Token = ScriptedToken<L>` and
+    `StreamPosition = ScriptedPosition` — the crate's first tokenization whose types are
+    not the standard ones. `make_token_reader` has no script to read (a script is runtime
+    data), so it answers a reader over an *empty* stream on the given source: one
+    `EndOfStream` token, no content. Documented on the type.
+  - `ScriptedPosition` = `(entry index, TokenEdge)` in canonical form. Canonicalization
+    folds the place past an entry onto the place before the next one (`(i,
+    EndPastPostSpace)` → `(i + 1, StartBeforePreSpace)`, repeated while the entry is
+    zero-width) and, within one entry, maps edges that fall on one offset to the earliest
+    of them. `(n, StartBeforePreSpace)`, `n` = the number of entries, names the place past
+    the last entry. So `==` answers "same place", and clauses 2 and 7 hold at seams by
+    construction.
+  - `ScriptedToken<L>` carries the entry index, the source index, the standard token the
+    scan produced, and `peeked_at` — the position the peek happened at, which the token's
+    `StartBeforePreSpace` edge reports (clause 2 then holds for *every* position `peek`
+    serves, the fixed-script gaps included).
+  - `ScriptedReader<'s, L>` built from segments `&[(&'s Arc<Source<…>>, Range<usize>)]`,
+    tokenized at construction with `StdTokenReader::scan_token_at` under the given state;
+    one inner `StdTokenReader` per source is kept (deduplicated by `Arc::ptr_eq`) for
+    `token_kind` and for the source a span is qualified with. Middle segments' end-of-stream
+    tokens are dropped; the last segment's is the final entry (synthesized where the
+    segment ends before its source does). Answers per §1.7: `peek` (fixed script),
+    `move_to`/`move_to_position` in any direction, canonical `position_at`/`position_here`,
+    `source_span_between` (entry's source + edge offsets, either order),
+    `source_position_at`, `source_span_within` (`Some` iff ordered, one source throughout,
+    boundaries gap-free), `source_span_describing` (the recommended shape).
+  - `ScriptedReader::broken_at_seams` — the deliberately broken variant (a flag set by a
+    second constructor): `position_at(tok, EndPastPostSpace)` where a seam follows `tok`
+    answers the *non-canonical* `(i, EndPastPostSpace)`, so the two sides of the seam are
+    two values and the clause-7 corollary fails. The stream it serves is unchanged
+    (reading canonicalizes), so Stage 3b can run the same script through both readers.
+  - `RelaxedLang` — the §1.7 test language (`Tokenization = ScriptedTokenization`,
+    `OBEYS_SPAN_TILING = false`), `pub(crate)` for Stage 3b.
+  - 19 unit tests (below).
+- **`techy/src/token/mod.rs`** — `#[cfg(test)] mod scripted_reader;` and the `cfg(test)`
+  `pub(crate)` re-export of `RelaxedLang`, `ScriptedPosition`, `ScriptedReader`,
+  `ScriptedToken`, `ScriptedTokenization` (next to `TokenListReader`'s, with the same
+  "internal test infrastructure" note).
+- **`techy/src/token/reader.rs`** — the enabling change, behavior-preserving (see
+  *Deviations* 1): `peek_impl` became `pub(crate) fn scan_token_at(start, state,
+  recovery_for)` and the token interpretation moved from the trait method into the
+  inherent `pub(crate) fn token_kind_of`, whose only bound is `L: Lang`.
+
+### Gate results (verbatim, run from the worktree)
+
+```
+### cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+### cargo test --workspace
+test result: ok. 1086 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.40s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+### cargo test --workspace --all-features
+test result: ok. 1125 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.51s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.80s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+### clippy
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+### clippy --all-features
+    Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.61s
+### docs
+ Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy-derive)
+ Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.66s
+   Generated /Users/philippe/projects/techy/.claude/worktrees/st-3a-scripted/target/doc/techy/index.html and 1 other file
+```
+
+Stage 1's baseline was 1067 / 1106 lib tests; Stage 3a adds the 19 unit tests of the new
+module (1086 / 1125) and changes no existing test. `cargo docs --all-features` emits no
+warnings. (Note: rustdoc does not build `cfg(test)` code, so the new module's intra-doc
+links are not covered by the docs gate.)
+
+### The 19 unit tests
+
+Canonical form and the contract: `consecutive_tokens_meet_at_one_position_across_a_seam`
+(clause 7's corollary on a real walk of a splice script — every consecutive pair, seams
+included — plus "where the stream stood is where the next peek happened"),
+`edges_that_fall_on_one_offset_are_one_position`, `moving_to_a_position_sets_the_position`
+(clause 7 at all five edges, both halves), `peeking_twice_at_one_position_reads_one_token`
+(clause 1), `un_consuming_a_token_at_a_seam_returns_to_the_trigger`,
+`rewinding_into_an_exhausted_segment_reads_it_again` (clause 3),
+`end_of_stream_is_terminal_and_idempotent`, `a_chain_of_two_sources_reads_as_one_stream`,
+`the_view_of_a_token_comes_from_the_source_it_was_scanned_from` (`token_kind` and spans
+across segments), `a_position_reports_the_coordinate_of_the_entry_it_stands_before`.
+Spans: `a_span_within_stops_at_a_seam_while_a_described_span_covers_the_chain`,
+`a_described_span_of_a_splice_covers_what_the_stream_read_in_that_source`,
+`a_hole_in_one_source_has_no_span_within_but_a_described_span`. Gaps, the broken variant
+and the scripting errors: `peeking_inside_a_token_yields_the_following_entry`,
+`the_broken_variant_reports_the_two_sides_of_a_seam_as_two_positions`,
+`the_language_side_reader_serves_an_empty_stream`,
+`a_middle_segment_ending_in_whitespace_is_rejected`,
+`a_segment_ending_inside_a_token_is_rejected`, `a_position_from_another_script_is_rejected`.
+
+### Decisions taken
+
+- **S1 — the reader is built directly, not through `make_token_reader`** (§1.7 leaves the
+  choice open). `Tokenization::make_token_reader` receives only a source and no state, so
+  it cannot tokenize a script; it answers a reader over an empty stream, documented on
+  `ScriptedTokenization`. Stage 3b builds `ScriptedReader::new(segments, &state)` and
+  drives parsers with it through `ParseContext`/`ParserSession`, or hands it out from a
+  `ParseDriver::make_token_reader` override whose driver instance holds the pre-built
+  reader (the driver has the state at that point, the language does not).
+- **S2 — `source_position_at` reports the entry's own coordinate.** §1.7's parenthetical
+  ("the coordinate of entry `i` at `StartBeforePreSpace`") is what is implemented: a
+  canonical position reports the offset of the entry it stands before, in *that entry's*
+  source. At a seam that is the start of the incoming token in the source it comes from.
+  The contract's "recommended: the outer/resume coordinate" does not apply literally here:
+  the reader's segments are a flat chain, with no outer source to resume into. Documented
+  on the method.
+- **S3 — a run that ends exactly at a seam has no `source_span_within`.** This follows
+  from the canonical form (the place past the last token of one source *is* the place
+  before the first token of the next, and that place's coordinate lies in the next
+  source), and it is what makes the tiled-language counter-test of Stage 3b T1 fire. Two
+  unit tests pin it. A `within` that stays strictly inside one segment still answers its
+  exact range.
+- **S4 — `RelaxedLang` lives in `scripted_reader.rs`** (`pub(crate)`), the one place a
+  language declaring `Tokenization = ScriptedTokenization` can sit next to what it names.
+  §1.7 lists it as a Stage 3a/3b language; `RelaxedStdLang` (Stage 1) stays where it is.
+- **S5 — panics are the report for a broken script** (§1.7 allows the assert): no
+  segments, a range that is not a valid range of its source, content that does not
+  tokenize, a segment ending inside a token, a middle segment ending in whitespace, a
+  token or position with an out-of-range index. Each is a mistake in the test's own code.
+  The module's `# Panics` section says so; no library code is affected.
+
+### Deviations from §1
+
+1. **`techy/src/token/reader.rs` was changed** (§4 lists only `scripted_reader.rs` and
+   `token/mod.rs`). It had to be: `StdTokenReader`'s scan and its token interpretation
+   were reachable only through bounds that a language with its own tokenization cannot
+   satisfy (`L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition =
+   StdStreamPosition>` — the very thing §1.7 asks the scripted reader *not* to be), so
+   §1.7's "tokenized with `StdTokenReader`" and §9's "delegate `token_kind` to the
+   per-source inner reader" were not compilable as they stood. The change is
+   behavior-preserving and small: `peek_impl` → `pub(crate) scan_token_at(start, state,
+   recovery_for)` (the scan offset is a parameter, and the one step needing the language's
+   own token/position types — building the `TokenRecovery` of a recoverable failure — is a
+   hook; `peek` passes its own position and the standard recovery), the same bound dropped
+   from the four scan helpers, and `token_kind`'s body moved into the inherent
+   `token_kind_of` with `L: Lang` as its only bound (the trait method delegates). The
+   existing suites are unchanged and pass (commit `75fa0ec` alone: 1067 lib tests, as
+   before).
+2. **`ScriptedToken` carries `peeked_at`** beyond §1.7's "entry index plus whatever the
+   reader needs". It is what keeps clause 2 exact where a peek happens at a position that
+   is not an entry's start: at `Start` (the pre-space already passed — a very common
+   parser move) the entry is served with its pre-space clipped, and at a position inside a
+   token proper (`ContentStart`/`End`, the `\verb` idiom) the *following* entry is served,
+   as `TokenListReader` does. In both cases the token reports the peek position as its
+   `StartBeforePreSpace` edge, so the fixed-script fidelity gap never becomes a contract
+   violation.
+3. **A `ScriptSegment<'s, L>` type alias** for the segment tuple, because
+   `clippy::type_complexity` rejects the bare tuple in a signature. Private to the module;
+   tests write the tuples literally.
+
+### Open questions for the user
+
+1. **Does Stage 3b need the script reachable from `Language::parse`?** As it stands the
+   reader is built with a state in hand (S1), which fits `ParseContext`-level tests and a
+   driver-held reader, but not a bare `Language::parse` over a scripted language (the
+   language-side reader serves an empty stream). If a full-engine test on a script is
+   wanted, the driver override is the route — say so and Stage 3b can add a small test
+   driver holding the segments and the seed state.
+2. **`source_position_at` at a seam** (S2): confirm the entry's own coordinate is what is
+   wanted for this reader, given the contract recommends the outer/resume coordinate for
+   readers that nest an expansion inside an outer source.
 
 ## Stage 4 — consumers
 
@@ -448,3 +637,4 @@ cross-references.
 ## Orchestrator log
 
 - 2026-08-19: plan written and committed to `main`.
+- 2026-08-19: Stage 3a implemented on `st-3a-scripted` (see its section).
