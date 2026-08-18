@@ -213,8 +213,10 @@ pub struct CallableData<L: Lang> {
     /// vs. loose reemission is decided here. `()` records nothing. The latexlike
     /// preset records e.g. the trigger token's own syntactic post-space — the
     /// name-terminating whitespace of a multi-character command (pylatexenc's
-    /// `macro_post_space`), a sub-range of the node's span lying *outside* the
-    /// argument/slot region tiling — in its
+    /// `macro_post_space`), which under span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) is a
+    /// sub-range of the node's span lying *outside* the argument/slot region
+    /// tiling — in its
     /// [`Macro`](crate::latexlike::InvocationSyntaxData::Macro) arm, and the
     /// begin/end syntax facts of environment-shaped callables in its
     /// [`Environment`](crate::latexlike::InvocationSyntaxData::Environment) arm.
