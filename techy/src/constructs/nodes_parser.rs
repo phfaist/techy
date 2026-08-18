@@ -32,9 +32,9 @@
 //!    ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)); for a
 //!    language with `OBEYS_SPAN_TILING = false` it is
 //!    [`TextContent::Owned`](crate::source::TextContent::Owned), accumulated token by
-//!    token from what the reader answers about each of them, since such a run may
-//!    extend across a seam between two sources and a span would then name bytes of the
-//!    wrong one.
+//!    token from what the reader answers about each of them — there the run's tokens
+//!    need not form one contiguous stretch of one source (they may cross a seam
+//!    between two sources), and a span would then name the wrong bytes.
 //! 2. Paragraph breaks are their own nodes (the `Lang` hook's kind, staged by the loop
 //!    over the full token span); runs flush at breaks and never merge across them.
 //! 3. Comment nodes come straight from whole-comment tokens (start delimiter, content,
@@ -588,8 +588,8 @@ struct PendingRun<L: Lang> {
     /// The run's text as the reader answered it, token by token: `Some` exactly when
     /// the language does not obey span tiling
     /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`),
-    /// where the run may extend across a seam and a span of one source could not
-    /// describe it.
+    /// where the run's tokens need not form one contiguous stretch of one source and a
+    /// span could not describe their text.
     text: Option<String>,
 }
 

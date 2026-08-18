@@ -40,8 +40,8 @@
 //! exact span slice for a language that obeys span tiling
 //! ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) and the text
 //! the reader answered, token by token, for a language with
-//! `OBEYS_SPAN_TILING = false` — where the raw content may be read across a seam
-//! between two sources.
+//! `OBEYS_SPAN_TILING = false` — where the tokens the raw content is read from need
+//! not form one contiguous stretch of one source.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -149,9 +149,9 @@ struct RawContentEnd<L: Lang> {
     /// The raw content's text as the reader answered it, token by token: `Some`
     /// exactly when the language does not obey span tiling
     /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`),
-    /// where the content may have been read across a seam between two sources and a
-    /// span of one source could not describe it. Covers exactly the stretch from where
-    /// the loop started to [`content_end`](RawContentEnd::content_end).
+    /// where the tokens it was read from need not form one contiguous stretch of one
+    /// source and a span could not describe their text. Covers exactly the stretch from
+    /// where the loop started to [`content_end`](RawContentEnd::content_end).
     content_text: Option<String>,
     /// The consumed terminator's span, or `None` when the region ended without one
     /// (end of input, or a tolerated unreadable token).

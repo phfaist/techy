@@ -169,8 +169,8 @@ pub(crate) fn push_pre_space_text<L: Lang>(
 ///
 /// This is the recipe multi-token content follows for a language with
 /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, where the
-/// tokens of one node may come from several sources and no single span describes their
-/// text. Does nothing when `text` is `None` (see
+/// tokens of one node need not form one contiguous stretch of one source, so no single
+/// span describes their text. Does nothing when `text` is `None` (see
 /// [`push_pre_space_text`]).
 pub(crate) fn push_token_text<L: Lang>(
     text: &mut Option<String>,
