@@ -26,8 +26,15 @@
 //!
 //! 1. `Char` tokens accumulate into **maximal** `Chars` nodes; every token's `pre_space`
 //!    (content whitespace) joins the pending run, and pending whitespace with no
-//!    adjacent chars becomes a whitespace-only `Chars` node. Parsed content is always
-//!    `TextContent::Spanned` (the exact span slice).
+//!    adjacent chars becomes a whitespace-only `Chars` node. The content is recorded as
+//!    [`TextContent::Spanned`](crate::source::TextContent::Spanned) — the exact span
+//!    slice — for a language that obeys span tiling
+//!    ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)); for a
+//!    language with `OBEYS_SPAN_TILING = false` it is
+//!    [`TextContent::Owned`](crate::source::TextContent::Owned), accumulated token by
+//!    token from what the reader answers about each of them, since such a run may
+//!    extend across a seam between two sources and a span would then name bytes of the
+//!    wrong one.
 //! 2. Paragraph breaks are their own nodes (the `Lang` hook's kind, staged by the loop
 //!    over the full token span); runs flush at breaks and never merge across them.
 //! 3. Comment nodes come straight from whole-comment tokens (start delimiter, content,
@@ -35,8 +42,10 @@
 //! 4. At end of stream, the terminal token's `pre_space` materializes as a final
 //!    whitespace-only `Chars` node (or joins a pending run).
 //!
-//! Together these give the **partition invariant**: the staged sibling spans tile the
-//! parsed extent exactly, with no gaps and no double counting.
+//! For a language that obeys span tiling these give span tiling: the staged sibling
+//! spans tile the parsed extent exactly, with no gaps and no double counting. For a
+//! language with `OBEYS_SPAN_TILING = false` no such accounting is claimed — the nodes
+//! carry the spans the reader described and the content it answered.
 //!
 //! # Stop conditions and the position seam
 //!
@@ -51,8 +60,8 @@
 //! unconsumed.
 //!
 //! On *any* return the stop token's pre-space is first flushed into the sibling nodes
-//! (the partition invariant requires it — the whitespace before a `}` or `\end` is
-//! interior content). A **left** stop token then sits at its own `span.start`, so
+//! (the whitespace before a `}` or `\end` is interior content and belongs to a sibling
+//! node — that is what keeps a tiled language's siblings tiling the parsed extent). A **left** stop token then sits at its own `span.start`, so
 //! re-peeking yields it with an **empty** `pre_space` and no byte is represented twice; a
 //! **consumed** stop token is taken whole, including any syntactic post-space (a command
 //! name's terminating whitespace), so the reader stands just past it. The matched span is
@@ -88,7 +97,7 @@ use core::mem;
 
 use crate::error::{DiagnosticInfo, ParseError, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
-use crate::source::SourceSpan;
+use crate::source::{SourceSpan, TextContent};
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
 use crate::token::{StreamPosition, Token, TokenEdge, TokenKind, TokenReader};
@@ -556,13 +565,85 @@ pub struct NodesParser<'p, L: Lang> {
     /// inherit-everywhere.
     child_states: ChildStateSpec<'p, L>,
     nodes: Vec<BuildId>,
-    /// The pending maximal chars run (invariant 1), as the pair of stream positions
-    /// it spans: extended by `Char` tokens and every token's pre-space, flushed when
-    /// a non-`Char` construct starts.
-    run: Option<(StreamPosition<L>, StreamPosition<L>)>,
+    /// The pending maximal chars run (invariant 1): extended by `Char` tokens and
+    /// every token's pre-space, flushed when a non-`Char` construct starts.
+    run: Option<PendingRun<L>>,
     /// The merged record of the sibling after-effect deltas applied so far
     /// ([`NodesOutcome::after_effects`]); drained at every return like `nodes`.
     after_effects: Option<Box<ParsingStateDelta<L>>>,
+}
+
+/// The pending maximal chars run of a [`NodesParser`] (invariant 1): the two stream
+/// positions it spans and, for a language that does not obey span tiling, the text
+/// accumulated along the way.
+struct PendingRun<L: Lang> {
+    /// Where the run starts.
+    start: StreamPosition<L>,
+    /// Where the run currently ends — the position the next extension must start at
+    /// (the [`TokenReader`] contract's clause 7 corollary).
+    end: StreamPosition<L>,
+    /// The run's text as the reader answered it, token by token: `Some` exactly when
+    /// the language does not obey span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`),
+    /// where the run may extend across a seam and a span of one source could not
+    /// describe it.
+    text: Option<String>,
+}
+
+// Hand-written: a derive would demand `L: Debug` although only the language's stream
+// position type (already `Debug`) is stored.
+impl<L: Lang> fmt::Debug for PendingRun<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingRun")
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("text", &self.text)
+            .finish()
+    }
+}
+
+/// Append the text of `token`'s pre-space, as the reader answers it for that token.
+fn push_pre_space_text<L: Lang>(
+    text: &mut String,
+    cx: &ParseContext<'_, '_, L>,
+    token: &Token<L>,
+) {
+    text.push_str(
+        cx.tokens
+            .source_span_between(token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+            .content(),
+    );
+}
+
+/// Append the text of `token`'s syntactic post-space, as the reader answers it for
+/// that token (normally empty for a `Char` token).
+fn push_post_space_text<L: Lang>(
+    text: &mut String,
+    cx: &ParseContext<'_, '_, L>,
+    token: &Token<L>,
+) {
+    text.push_str(
+        cx.tokens
+            .source_span_between(token, TokenEdge::End, TokenEdge::EndPastPostSpace)
+            .content(),
+    );
+}
+
+/// The `Chars` node a pending run becomes: the span running from the run's start to
+/// its end ([`ParseContext::source_span_within`], which follows the language's
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) declaration), and the
+/// content — the exact span slice where the language obeys span tiling, the text
+/// accumulated from the reader's answers where it does not.
+fn chars_run_node<L: Lang>(
+    cx: &ParseContext<'_, '_, L>,
+    run: PendingRun<L>,
+) -> ConstructParserResult<L, (NodeKind<L>, SourceSpan<L::SourceOrigin>)> {
+    let span = cx.source_span_within(&run.start, &run.end)?;
+    let content = match run.text {
+        Some(text) => TextContent::Owned(text.into()),
+        None => TextContent::Spanned(span.span()),
+    };
+    Ok((NodeKind::chars(content), span))
 }
 
 impl<'p, L: Lang> NodesParser<'p, L> {
@@ -586,9 +667,14 @@ impl<'p, L: Lang> NodesParser<'p, L> {
 
     /// Extend the pending run with a token's pre-space (content whitespace joins the
     /// run — invariant 1; pending whitespace with no adjacent chars becomes a
-    /// whitespace-only run). A non-contiguous extension can only come from a token
-    /// reader breaking the in-order, gap-free token contract — outer-layer input,
-    /// reported as the `Err` detail rather than asserted ([§dd-dr:panic-policy]).
+    /// whitespace-only run). The token's `StartBeforePreSpace` edge must be the
+    /// position the pending run ends at — the [`TokenReader`] contract's clause 7
+    /// corollary, checked in [`extend_run_to`](Self::extend_run_to) and reported as an
+    /// `Err` detail rather than asserted ([§dd-dr:panic-policy]).
+    ///
+    /// For a language with
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
+    /// pre-space text the reader answers for *this* token joins the run's owned text.
     fn take_pre_space(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
@@ -599,59 +685,89 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         if start == end {
             return Ok(());
         }
-        self.extend_run_to(start, end, "the token's pre-space")
+        let text = (!L::OBEYS_SPAN_TILING).then(|| {
+            let mut text = String::new();
+            push_pre_space_text(&mut text, cx, token);
+            text
+        });
+        self.extend_run_to(start, end, text)
     }
 
     /// The `Char` arm: pre-space and the character extend the pending run — one
     /// extension over the token's whole extent, from where its pre-space begins to
     /// where it ends (the two coincide when the token has no pre-space). Same
-    /// contiguity contract (and `Err` reporting) as
+    /// position check (and `Err` reporting) as
     /// [`take_pre_space`](Self::take_pre_space).
+    ///
+    /// For a language with
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
+    /// run's owned text grows by what the reader says this token is: its pre-space
+    /// text, the character it was classified as (`c`), and its syntactic post-space
+    /// text — three answers about this one token.
     fn extend_run(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
         token: &Token<L>,
+        c: char,
     ) -> Result<(), String> {
         let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::EndPastPostSpace);
-        self.extend_run_to(start, end, "the char token with its pre-space")
+        let text = (!L::OBEYS_SPAN_TILING).then(|| {
+            let mut text = String::new();
+            push_pre_space_text(&mut text, cx, token);
+            text.push(c);
+            push_post_space_text(&mut text, cx, token);
+            text
+        });
+        self.extend_run_to(start, end, text)
     }
 
-    /// The shared run extension: `start..end` must begin exactly where the pending
-    /// run ends, or the token reader broke the in-order, gap-free token contract —
-    /// outer-layer input, reported as the `Err` detail rather than asserted
-    /// ([§dd-dr:panic-policy]).
+    /// The shared run extension: `start` must be the position the pending run ends
+    /// at. That is the [`TokenReader`] contract's clause 7 corollary — a peeked token's
+    /// `StartBeforePreSpace` edge is where the peek happened, and moving to an edge
+    /// sets the position — so it holds for every reader, whatever the language's
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) says, and the check
+    /// runs in both cases. A violation is outer-layer input, reported as an `Err`
+    /// detail rather than asserted ([§dd-dr:panic-policy]).
+    ///
+    /// `text` is the extension's text for a run that accumulates owned text — `Some`
+    /// exactly when the language does not obey span tiling.
     fn extend_run_to(
         &mut self,
         start: StreamPosition<L>,
         end: StreamPosition<L>,
-        what: &str,
+        text: Option<String>,
     ) -> Result<(), String> {
         match &mut self.run {
-            Some((_, run_end)) => {
-                if *run_end != start {
+            Some(run) => {
+                if run.end != start {
                     return Err(alloc::format!(
-                        "{what} starts at {:?}, which is not where the pending chars \
-                         run ends ({:?}) (the token reader broke the in-order, \
-                         gap-free token contract)",
+                        "the token's StartBeforePreSpace edge {:?} is not the position \
+                         the stream stood at when the token was peeked ({:?}) — the \
+                         token reader violates the `TokenReader` contract (a peeked \
+                         token starts where the peek happened; moving to an edge sets \
+                         the position)",
                         start,
-                        run_end
+                        run.end
                     ));
                 }
-                *run_end = end;
+                run.end = end;
+                if let (Some(accumulated), Some(text)) = (&mut run.text, text) {
+                    accumulated.push_str(&text);
+                }
             }
-            None => self.run = Some((start, end)),
+            None => self.run = Some(PendingRun { start, end, text }),
         }
         Ok(())
     }
 
-    /// Flush the pending run as a `Chars` node (span-backed over the exact run slice).
-    /// Returns whether the node stop condition fired on it.
+    /// Flush the pending run as a `Chars` node ([`chars_run_node`]). Returns whether
+    /// the node stop condition fired on it.
     fn flush(&mut self, cx: &mut ParseContext<'_, '_, L>) -> ConstructParserResult<L, bool> {
         match self.run.take() {
-            Some((start, end)) => {
-                let span = cx.source_span_within(&start, &end)?;
-                self.stage_node(cx, NodeKind::chars(span.span()), span)
+            Some(run) => {
+                let (kind, span) = chars_run_node(cx, run)?;
+                self.stage_node(cx, kind, span)
             }
             None => Ok(false),
         }
@@ -679,7 +795,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
 
     /// [`flush_through`](Self::flush_through) minus the node-condition test: the flush
     /// performed when the token stop condition has matched. The stop token's pre-space
-    /// is interior content and must land in a sibling node (partition invariant), but
+    /// is interior content and must land in a sibling node, but
     /// the token condition has already ended the parse and wins outright: a
     /// node-condition match here could not change the outcome, and honoring it instead
     /// would leave a `consume = true` stop token unconsumed, forfeiting the consume
@@ -699,9 +815,9 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             );
             cx.implementation_error(detail, span)
         })?;
-        if let Some((start, end)) = self.run.take() {
-            let span = cx.source_span_within(&start, &end)?;
-            self.stage(cx, NodeKind::chars(span.span()), span)?;
+        if let Some(run) = self.run.take() {
+            let (kind, span) = chars_run_node(cx, run)?;
+            self.stage(cx, kind, span)?;
         }
         Ok(())
     }
@@ -983,8 +1099,8 @@ where
             }
 
             match kind {
-                TokenKind::Char(_) => {
-                    self.extend_run(cx, &token).map_err(|detail| {
+                TokenKind::Char(c) => {
+                    self.extend_run(cx, &token, c).map_err(|detail| {
                         let span = cx.tokens.source_span_of(&token);
                         cx.implementation_error(detail, span)
                     })?;
@@ -1650,7 +1766,7 @@ mod tests {
         let position = cx.tokens.position_here();
         let pos = cx.here().start();
         // The root `List` spans exactly the parsed extent (its content interior — the
-        // partition invariant the checker verifies); a consumed stop token lies outside.
+        // tiling the checker verifies); a consumed stop token lies outside.
         let root_span = {
             let staged = session.builder.staged_nodes();
             match (outcome.nodes.first(), outcome.nodes.last()) {
@@ -1791,9 +1907,9 @@ mod tests {
             .collect()
     }
 
-    /// The partition invariant (invariant 5 of
-    /// [`check_tree_invariants`](crate::node::check_tree_invariants)): the root's children tile `interior`
-    /// exactly — no gaps, no double counting.
+    /// Span tiling at the root (the byte accounting of
+    /// [`check_tree_invariants`](crate::node::check_tree_invariants)): the root's
+    /// children tile `interior` exactly — no gaps, no double counting.
     fn assert_partition<L: Lang>(result: &ParseResult<L>, interior: core::ops::Range<usize>) {
         let mut pos = interior.start;
         for child in result.tree.root().children() {
