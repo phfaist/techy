@@ -1937,7 +1937,7 @@ the user's explicit approval of the drafted text.
 
 - **Branch**: `bt-5-docs` (off `main` at `a729f7f`, which contains every code stage).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-5-docs`.
-- **Status**: review round 1 applied — awaiting re-review. Date: 2026-08-18.
+- **Status**: reviewed and merged (`main` 26191cb, 2026-08-18) after the user's OK on the entries. Date: 2026-08-18.
 - **Commits** (`git log --oneline main..bt-5-docs`, newest first; the PROGRESS update
   itself follows them):
 

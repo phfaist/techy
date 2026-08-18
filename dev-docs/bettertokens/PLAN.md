@@ -1,6 +1,6 @@
 # Better tokens — implementation plan
 
-Status: **design approved 2026-08-16 (Philippe); the code stages are done — Stages 0–3b merged to `main` (7825789, d5f37e0, 0af4276, a8f36a1, 8b25806) and Stage 4 (§6, the final sweep) complete on `bt-4-final`; Stage 5 (§7, the architecture and rationale entries) is pending.**
+Status: **complete — design approved 2026-08-16 (Philippe); every stage merged to `main`: Stage 0 docs 7825789, Stage 1 d5f37e0, Stage 2a 0af4276, Stage 2b a8f36a1, Stages 3a+3b 8b25806, Stage 4 a729f7f, Stage 5 26191cb (2026-08-18, after the user's OK on the design-document entries). Deferred follow-ups: §10 and `TODO_Big.md`.**
 Companion files (created during execution, same directory): `PROGRESS.md` (stage
 log, resumable state), `PROBE_REPORT.md` (Stage 0 findings).
 
