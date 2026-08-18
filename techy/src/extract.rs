@@ -89,6 +89,9 @@
 //! let split =
 //!     extract::split_at_chars_drop_annotations(result.tree.root().children(), ",").unwrap();
 //! assert_eq!(split.len(), 3);
+//! // `source_text()` answers the segment's recorded coordinates — its content here,
+//! // because this parse is span-tiled; `content_as_chars` reads the content itself
+//! // and is the reader to use when a segment may be cut from owned content.
 //! assert_eq!(split.segment(0).unwrap().source_text(), Some("alpha"));
 //! // Grouped content protects its interior — and segments are ordinary node lists,
 //! // so every helper composes:

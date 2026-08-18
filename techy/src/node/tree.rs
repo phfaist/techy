@@ -320,8 +320,12 @@ impl<L: Lang, A> NodeTree<L, A> {
     /// the query's source, never from a node that already matched. A query in the
     /// including source therefore stops at the `\input`-like node itself (its
     /// resolved content lives in its own source), while a query in an attached
-    /// source finds the attached content. On restaged trees with rearranged spans
-    /// this degrades to the shallowest node whose exact span answers.
+    /// source finds the attached content. Where a child's recorded span does not
+    /// nest in its parent's — restaged trees with rearranged spans, and parses of a
+    /// language with
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, whose
+    /// node spans are the ones the token reader described — this degrades to the
+    /// shallowest node whose recorded span answers.
     pub fn node_at(&self, pos: &SourcePos<L::SourceOrigin>) -> Option<NodeRef<'_, L, A>> {
         deepest_containing(self.root(), pos.source(), &|span: &SourceSpan<
             L::SourceOrigin,
@@ -458,9 +462,10 @@ impl<L: Lang, A> NodeTree<L, A> {
 /// `contains` — the shared per-source descent of
 /// [`NodeTree::node_at`]/[`NodeTree::covering_slice`]. A node in the query's source
 /// either satisfies the predicate (a match — refined only through *same-source*
-/// children) or prunes its whole subtree (exact spans trusted); a node in a
-/// different source never matches, but its children are searched (the route towards
-/// attached-source content).
+/// children) or prunes its whole subtree (the recorded spans are trusted to nest,
+/// which holds by construction under span tiling and is what a tree without it
+/// degrades on); a node in a different source never matches, but its children are
+/// searched (the route towards attached-source content).
 fn deepest_containing<'t, L: Lang, A>(
     node: NodeRef<'t, L, A>,
     source: &Arc<Source<L::SourceOrigin>>,

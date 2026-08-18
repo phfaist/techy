@@ -152,6 +152,8 @@ let arg = result.tree.root().child(0).unwrap().argument_content_nodes(0).unwrap(
 assert_eq!(extract::content_as_chars(arg).unwrap(), "arrows,shapes.geometric");
 // Split at a separator, grouped content protected:
 let split = extract::split_at_chars_drop_annotations(arg, ",").unwrap();
+// `source_text()` answers recorded coordinates (its content here — span-tiled parse);
+// `extract::content_as_chars(segment)` is the content-safe reader.
 let items: Vec<&str> = split.segments().map(|s| s.source_text().unwrap()).collect();
 assert_eq!(items, ["arrows", "shapes.geometric"]);
 ```

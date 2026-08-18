@@ -49,10 +49,10 @@ use super::Latexlike;
 /// language that obeys span tiling
 /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)) — the
 /// preset's own [`Latexlike`] included. A family member declaring
-/// `OBEYS_SPAN_TILING = false` parses content the reader may serve from several
-/// sources, and its trees are reemitted **as stored**: the owned text the parser
-/// recorded, in tree order. No byte-equality with any one source is claimed for
-/// such a tree.
+/// `OBEYS_SPAN_TILING = false` — whose parsers assume nothing about where the
+/// tokens come from — has its trees reemitted **as stored**: the owned text the
+/// parser recorded, in tree order. No byte-equality with any one source is claimed
+/// for such a tree.
 ///
 /// A [`Recomposer`] with `State = ()`, `Piece = String`, instruction-only —
 /// it never descends explicitly, so it composes correctly under a wrapping

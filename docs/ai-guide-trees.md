@@ -129,6 +129,8 @@ let result = language.parse(r"\usetikzlibrary{arrows,shapes.geometric,calc}").un
 let list = result.tree.root().child(0).unwrap().argument_content_nodes(0).unwrap();
 assert_eq!(extract::content_as_chars(list).unwrap(), "arrows,shapes.geometric,calc");
 let split = extract::split_at_chars_drop_annotations(list, ",").unwrap();
+// `source_text()` answers recorded coordinates (its content here — span-tiled parse);
+// `extract::content_as_chars(segment)` is the content-safe reader.
 let libraries: Vec<&str> =
     split.segments().map(|segment| segment.source_text().unwrap()).collect();
 assert_eq!(libraries, ["arrows", "shapes.geometric", "calc"]);
@@ -256,7 +258,8 @@ let language: Language<Latexlike> = Language::new(
 );
 let input = language.parse("one % secret\ntwo {three}").unwrap().tree;
 
-// Re-emission reads recorded facts only — byte-exact for parsed trees:
+// Re-emission reads recorded facts only — byte-exact for trees parsed from a
+// language that obeys span tiling:
 let full =
     TreeRecomposer::new(&mut source_recomposer()).recompose(&input, ()).unwrap();
 assert_eq!(full, "one % secret\ntwo {three}");

@@ -632,6 +632,9 @@ let list = node.argument_content_nodes(0).unwrap();
 assert_eq!(extract::content_as_chars(list).unwrap(), "arrows,shapes.geometric,calc");
 
 let split = extract::split_at_chars_drop_annotations(list, ",").unwrap();
+// `source_text()` answers a segment's recorded coordinates — its content here, since
+// the preset is span-tiled; `extract::content_as_chars(segment)` reads the content
+// itself, whatever the segment was cut from.
 let libraries: Vec<&str> =
     split.segments().map(|segment| segment.source_text().unwrap()).collect();
 assert_eq!(libraries, ["arrows", "shapes.geometric", "calc"]);
@@ -694,7 +697,8 @@ let language: Language<Latexlike> = Language::new(
 );
 let input = language.parse("one % secret\ntwo {three}").unwrap().tree;
 
-// Reemission reads recorded facts only — byte-exact for parsed trees:
+// Reemission reads recorded facts only — byte-exact for trees parsed from a
+// language that obeys span tiling, the preset included:
 let full =
     TreeRecomposer::new(&mut source_recomposer()).recompose(&input, ()).unwrap();
 assert_eq!(full, "one % secret\ntwo {three}");

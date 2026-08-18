@@ -374,7 +374,11 @@ generic tooling. The attachment points:
   post-space, an environment's begin/end syntax) in the language's own form. As its
   documentation puts it, this channel is what makes *recomposition
   accuracy the language's choice* — byte-exact re-emission is possible
-  exactly to the extent the language records spelling facts here. `()`
+  exactly to the extent the language records spelling facts here and obeys
+  span tiling
+  ([`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)); with
+  `OBEYS_SPAN_TILING = false` the recomposer re-emits the tree as stored,
+  claiming no byte-equality with any one source. `()`
   records nothing; construction from a resolved invocation is the opt-in
   [`FromInvocation`](crate::core::constructs::FromInvocation) contract that
   the standard staging sites use.
