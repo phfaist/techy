@@ -85,18 +85,21 @@ A language whose tokenization *behavior* — not just data — differs
 implements the [`TokenReader`](crate::core::TokenReader) trait instead. It
 declares that reader in one place: a zero-sized type implementing
 [`Tokenization`](crate::core::Tokenization), named as
-[`Lang::Tokenization`](crate::core::Lang::Tokenization). The bundle states
-the token type the reader produces
+[`Lang::Tokenization`](crate::core::Lang::Tokenization). That type states the
+token type the reader produces
 ([`Tokenization::Token`](crate::core::Tokenization::Token), spelled
 [`Token<L>`](crate::core::Token) elsewhere), the type naming a place in the
 stream
 ([`Tokenization::StreamPosition`](crate::core::Tokenization::StreamPosition),
 spelled [`StreamPosition<L>`](crate::core::StreamPosition)), and how the
 reader for one parse is built; construct parsers read neither type directly,
-they ask the reader. A driver may still swap the reader per instance, through
-[`make_token_reader`](crate::core::ParseDriver::make_token_reader) (see
-[The driver](#the-driver)). Keeping the standard
-token type ([`StdToken`](crate::core::StdToken)) is the least work: hold an
+they ask the reader. How to write one, and why the implementation needs the
+bound `L: Lang<Tokenization = MyTokenization>`, is
+[Implementing this trait](crate::core::Tokenization#implementing-this-trait),
+with a compiling example. A driver may still swap the reader per instance,
+through [`make_token_reader`](crate::core::ParseDriver::make_token_reader)
+(see [The driver](#the-driver)). Keeping the standard token type
+([`StdToken`](crate::core::StdToken)) is the least work: hold an
 inner [`StdTokenReader`](crate::core::StdTokenReader) over the same content,
 build tokens with the `StdToken` constructors, and delegate every question
 about a token to the inner reader — the `TokenReader` page shows that shape

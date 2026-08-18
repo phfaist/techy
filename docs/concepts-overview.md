@@ -47,9 +47,8 @@ byte range in it — for the whole token or for the stretch between two of its
 [edges](crate::core::TokenEdge), the five boundaries running from where its
 leading whitespace begins to where its trailing whitespace ends). A place in
 the token *stream*, as opposed to a place in the text, is a
-[`StreamPosition`](crate::core::StreamPosition) — the bundle's second type:
-opaque as well,
-handed out by the reader alone
+[`StreamPosition`](crate::core::StreamPosition), the second type that
+declaration states: opaque as well, handed out by the reader alone
 ([`position_here`](crate::core::TokenReader::position_here),
 [`position_at`](crate::core::TokenReader::position_at)), and the value a
 parser uses to send the stream back to a place it has been

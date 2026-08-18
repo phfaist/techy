@@ -5,7 +5,7 @@ implementer + reviewer agents. Supersedes bettertokens ruling **O-4** and the
 "`Lang::TokenReader` associated type" / "factory on `Lang`" rejections recorded in
 [§dd-dr:token-opacity] and [§dd-dr:token-reader-hook] (user decision, 2026-08-18).
 Shipped as [§dd-dr:tokenization]. Final `git diff --stat 25de12c`:
-42 files changed, 723 insertions(+), 657 deletions(-).
+42 files changed, 959 insertions(+), 670 deletions(-).
 
 ## 1. Goal
 

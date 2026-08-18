@@ -3,7 +3,7 @@
 //! **Internal test infrastructure** — compiled under `cfg(test)` only, deliberately not
 //! public API. Its purpose is testing construct
 //! parsers in isolation: a hand-written or pre-scanned `Vec<Token>` drives a parser
-//! without a live tokenizer, so a test can exercise exactly the token sequence it means
+//! without a live scanning reader, so a test can exercise exactly the token sequence it means
 //! to — most importantly as the lockstep reader-agreement harness of the construct-parser
 //! suites, the enforcement mechanism for "construct parsers never reach around the reader
 //! into raw content". The fidelity gap below (a fixed list cannot re-tokenize under the

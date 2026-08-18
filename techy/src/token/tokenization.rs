@@ -27,6 +27,86 @@ use super::token::StdToken;
 /// what a token is (the [`Token`](Tokenization::Token) type), how a place in the stream
 /// is named (the [`StreamPosition`](Tokenization::StreamPosition) type), and which
 /// reader produces both ([`make_token_reader`](Tokenization::make_token_reader)).
+///
+/// # Implementing this trait
+///
+/// Declare a type with no fields, implement this trait for it, and name it as the
+/// language's [`Lang::Tokenization`](crate::state::Lang::Tokenization). An
+/// implementation that is generic over the language needs the bound
+/// `L: Lang<Tokenization = MyTokenization>`:
+///
+/// ```
+/// use std::sync::Arc;
+/// use techy::core::{
+///     Lang, StdStreamPosition, StdToken, StdTokenReader, TokenReader, Tokenization,
+/// };
+/// use techy::source::Source;
+///
+/// #[derive(Debug, Clone, Copy)]
+/// struct MyTokenization;
+///
+/// impl<L: Lang<Tokenization = MyTokenization>> Tokenization<L> for MyTokenization {
+///     type Token = StdToken<L>;
+///     type StreamPosition = StdStreamPosition;
+///
+///     fn make_token_reader<'s>(
+///         source: &'s Arc<Source<L::SourceOrigin>>,
+///     ) -> Box<dyn TokenReader<'s, L> + 's> {
+///         // Any `TokenReader<'s, L>` goes here. This one reuses the standard reader,
+///         // which is why the two types above are the standard ones.
+///         Box::new(StdTokenReader::new(source))
+///     }
+/// }
+///
+/// #[derive(Debug, Clone, Copy)]
+/// struct MyLang;
+///
+/// impl Lang for MyLang {
+///     type Tokenization = MyTokenization;
+///     // ... the remaining associated types as usual ...
+/// #   type Features = techy::core::AllLangFeatures;
+/// #   type GroupTypeId = u32;
+/// #   type CallableTypeId = u32;
+/// #   type ModeId = ();
+/// #   type StateExt = ();
+/// #   type Event = ();
+/// #   type SessionExt = ();
+/// #   type SourceOrigin = Option<String>;
+/// #   type NodeExts = ();
+/// #   type InvocationSyntax = ();
+/// #   type Driver = techy::core::StdParseDriver;
+/// #   fn make_node_ext(
+/// #       _kind: &techy::core::node::NodeKind<Self>,
+/// #       _span: &techy::source::SourceSpan<Self::SourceOrigin>,
+/// #       _state: &Arc<techy::core::ParsingState<Self>>,
+/// #       _children: techy::core::node::StagedChildren<'_, Self>,
+/// #   ) -> Result<(), techy::core::node::NodeBuildError> {
+/// #       Ok(())
+/// #   }
+/// }
+/// ```
+///
+/// **Why the bound is needed.** [`Token<L>`](Token) and
+/// [`StreamPosition<L>`](StreamPosition) are read off `L::Tokenization`. Until the
+/// compiler knows that `L::Tokenization` is this very type, it cannot tell that the two
+/// types declared here are the ones `L` works in, and a reader producing them — such as
+/// [`StdTokenReader`](super::StdTokenReader), which produces
+/// [`StdToken<L>`](super::StdToken) — is not accepted as a `TokenReader<'s, L>` (two
+/// mismatched-type errors, one per member). Writing the bound the other way round,
+/// `L::Tokenization: Tokenization<L, Token = …>`, does **not** work here: it names the
+/// projection this impl is defining, so the impl compiles but the language that names
+/// the type as its `Lang::Tokenization` then fails with an overflow error. Spelling the
+/// self type `Self` in the bound says the same thing as the form above:
+/// `impl<L: Lang<Tokenization = Self>> Tokenization<L> for MyTokenization`.
+///
+/// A tokenization written for one specific language does not need the bound, since
+/// nothing is generic: `impl Tokenization<MyLang> for MyTokenization { … }`.
+///
+/// The `L::Tokenization: Tokenization<L, Token = …, StreamPosition = …>` form is the
+/// right one *outside* an implementation of this trait — in a reader, a parser or a
+/// helper that requires standard tokens but must still accept a language whose
+/// tokenization type is its own. That is how [`StdTokenReader`](super::StdTokenReader)
+/// states its own requirement.
 pub trait Tokenization<L: Lang> {
     /// The token type this language's readers produce.
     ///
@@ -103,7 +183,7 @@ pub type StreamPosition<L> = <<L as Lang>::Tokenization as Tokenization<L>>::Str
 ///
 /// This is what [`TrivialLang`](crate::state::TrivialLang) and every language of this
 /// crate declare as their [`Lang::Tokenization`](crate::state::Lang::Tokenization).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct StdTokenization;
 
 // The bound is `Tokenization = StdTokenization`, not the equality on `Token` /
@@ -127,9 +207,12 @@ mod tests {
     use super::*;
     use crate::engine::{Language, ParseDriver, StdParseDriver};
     use crate::node::{NodeBuildError, NodeKind, StagedChildren};
-    use crate::source::SourceSpan;
+    use crate::source::{SourcePos, SourceSpan};
     use crate::state::{AllLangFeatures, ParsingState};
     use alloc::string::String;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::super::{TokenEdge, TokenKind, TokenResult};
 
     /// A tokenization type of a language's own, working in the standard token and
     /// stream-position types — the "reader over standard tokens" pattern. It is what
@@ -204,5 +287,139 @@ mod tests {
         // tokenization type is its own.
         fn assert_drives<D: ParseDriver<OwnLang>>() {}
         assert_drives::<StdParseDriver<(), Option<String>>>();
+    }
+
+    // --- the driver's per-instance override --------------------------------------
+    //
+    // `CountingLang` declares `StdTokenization`, so its language-side reader is a plain
+    // `StdTokenReader`. `CountingDriver` overrides `make_token_reader` and hands out a
+    // reader built from a counter the *driver instance* holds; the counter is what
+    // shows which of the two readers served the parse.
+
+    /// A reader that answers every question through an inner `StdTokenReader` and
+    /// counts the tokens it was asked for.
+    struct CountingReader<'s> {
+        inner: StdTokenReader<'s>,
+        peeks: &'s AtomicUsize,
+    }
+
+    impl<'s> CountingReader<'s> {
+        fn inner(&self) -> &dyn TokenReader<'s, CountingLang> {
+            &self.inner
+        }
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, CountingLang> {
+            &mut self.inner
+        }
+    }
+
+    impl<'s> TokenReader<'s, CountingLang> for CountingReader<'s> {
+        fn peek(
+            &mut self,
+            state: &Arc<ParsingState<CountingLang>>,
+        ) -> TokenResult<CountingLang, StdToken<CountingLang>> {
+            self.peeks.fetch_add(1, Ordering::Relaxed);
+            self.inner_mut().peek(state)
+        }
+        fn move_to(&mut self, tok: &StdToken<CountingLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
+        }
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+        fn token_kind<'t>(
+            &self,
+            tok: &'t StdToken<CountingLang>,
+        ) -> TokenKind<'t, CountingLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
+        }
+        fn source_span_between(
+            &self,
+            tok: &StdToken<CountingLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+        fn position_at(
+            &self,
+            tok: &StdToken<CountingLang>,
+            edge: TokenEdge,
+        ) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
+        }
+    }
+
+    /// Per-parse counting is not what a real driver holds (drivers carry configuration,
+    /// not parse state); here it is the probe that says whose reader ran.
+    #[derive(Debug, Default)]
+    struct CountingDriver {
+        peeks: Arc<AtomicUsize>,
+    }
+
+    impl ParseDriver<CountingLang> for CountingDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s Arc<Source<Option<String>>>,
+        ) -> Box<dyn TokenReader<'s, CountingLang> + 's> {
+            Box::new(CountingReader { inner: StdTokenReader::new(source), peeks: &self.peeks })
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct CountingLang;
+
+    impl Lang for CountingLang {
+        type Features = AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = StdTokenization;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = CountingDriver;
+
+        fn make_node_ext(
+            _kind: &NodeKind<Self>,
+            _span: &SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: StagedChildren<'_, Self>,
+        ) -> Result<(), NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_driver_override_installs_its_own_reader_over_the_language_declaration() {
+        let peeks = Arc::new(AtomicUsize::new(0));
+        let language: Language<CountingLang> = Language::new(
+            CountingDriver { peeks: Arc::clone(&peeks) },
+            ParsingState::lang_initial().expect("seed state"),
+        );
+        let result = language.parse("hi").expect("parse");
+
+        // The parse ran, and every token it read came through the driver's reader —
+        // the language's own `StdTokenization` reader never served it.
+        assert_eq!(result.tree.root().span_content(), "hi");
+        assert!(peeks.load(Ordering::Relaxed) > 0, "the driver's reader never ran");
     }
 }

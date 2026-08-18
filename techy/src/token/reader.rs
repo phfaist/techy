@@ -435,7 +435,7 @@ fn paragraph_continues(content: &str, after_nl: usize, ws_chars: &str) -> bool {
     false
 }
 
-/// Standard tokenizer over in-memory content, driven by the parsing state: the
+/// Standard reader over in-memory content, driven by the parsing state: the
 /// [`TokenRules`] data (plus derived caches) and the `Lang::scan_specials` hook.
 ///
 /// The reader holds only the content borrow and a position; all tokenization behavior

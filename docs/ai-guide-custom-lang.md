@@ -118,20 +118,24 @@ spellings of "off", documented on the type: **disabled** = flag off,
 scoped, data preserved; **empty** = no rules data, nothing recognized;
 **absent** = the language has no such feature at all, declared at compile
 time via [`Lang::Features`](crate::core::Lang::Features) (see the `Lang`
-table). Different tokenization *behavior* (not
-just data) = implement the [`TokenReader`](crate::core::TokenReader) trait
-and declare it on the language: a zero-sized type implementing
+table). Different tokenization *behavior* (not just data) = implement the
+[`TokenReader`](crate::core::TokenReader) trait and declare it on the
+language: a zero-sized type implementing
 [`Tokenization`](crate::core::Tokenization), named as
-[`Lang::Tokenization`](crate::core::Lang::Tokenization). A driver whose reader
-needs data the driver instance holds overrides
+[`Lang::Tokenization`](crate::core::Lang::Tokenization). How to write one —
+including the `L: Lang<Tokenization = MyTokenization>` bound the
+implementation needs — is
+[Implementing this trait](crate::core::Tokenization#implementing-this-trait),
+with a compiling example. A driver whose reader needs data the driver
+instance holds overrides
 [`make_token_reader`](crate::core::ParseDriver::make_token_reader) instead
-(defaulted: it builds what the language's `Tokenization` names). A reader that produces standard
-tokens ([`StdToken`](crate::core::StdToken)) keeps an inner
-[`StdTokenReader`](crate::core::StdTokenReader) over the same content, builds
-its tokens with the `StdToken` constructors and delegates every question
-about a token to that inner reader — the pattern, with a compiling example,
-is on the [`TokenReader`](crate::core::TokenReader) page. Worked example of
-rules as data:
+(defaulted: it builds what the language's `Tokenization` names). A reader
+that produces standard tokens ([`StdToken`](crate::core::StdToken)) keeps an
+inner [`StdTokenReader`](crate::core::StdTokenReader) over the same content,
+builds its tokens with the `StdToken` constructors and delegates every
+question about a token to that inner reader — the pattern, with a compiling
+example, is on the [`TokenReader`](crate::core::TokenReader) page. Worked
+example of rules as data:
 [`default_token_rules`](crate::latexlike::default_token_rules).
 
 **Specials trap (silent)**: specials recognition uses two `Lang` hooks that
