@@ -1,0 +1,134 @@
+# Continuous integration — what has to hold at every push.
+#
+# Deliberately absent:
+#   * `cargo fmt --check`: the sources are hand-formatted and do not round-trip
+#     through rustfmt, so a formatting gate would fail on the current tree.
+#   * a release build: the release profile (lto, codegen-units = 1) is slow and is
+#     a packaging concern, not a per-push one.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# One run per branch: a new push supersedes the run still going for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # The golden files under techy/tests/golden/ are compared against freshly
+      # rendered strings, so git must not rewrite their newlines on checkout.
+      - name: Keep newlines verbatim
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `cargo test` runs the unit tests, the integration tests under
+      # techy/tests/, and the doctests of both crates. Both feature settings run:
+      # `serde` gates the rendering layer of techy::serialize and whole test files.
+      - name: Test (default features)
+        run: cargo test --workspace
+      - name: Test (all features)
+        run: cargo test --workspace --all-features
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (default features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `cargo docs` is the workspace alias (.cargo/config.toml): `doc --workspace
+      # --no-deps` with docs/rustdoc-header.html injected. RUSTDOCFLAGS is left
+      # unset on purpose — an env value replaces the config's rustdocflags and
+      # would drop that injection. Broken intra-doc links and undocumented public
+      # items already fail the build through the workspace lint policy in
+      # Cargo.toml (`rustdoc::broken_intra_doc_links` and `missing_docs` are deny).
+      - name: Build the documentation
+        run: cargo docs --all-features
+
+  msrv:
+    name: MSRV (1.86)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - uses: Swatinem/rust-cache@v2
+      # Library code only, no `--all-targets`: the rust-version in Cargo.toml is a
+      # promise about what consumers compile, not about the test harness and its
+      # dev-dependencies.
+      - name: Check on the declared minimum toolchain
+        run: cargo check --workspace --all-features
+
+  no-std:
+    name: no_std (wasm32-unknown-unknown)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # techy is `#![no_std]` outside of `cfg(test)` and documents support for
+      # wasm32-unknown-unknown, where the host supplies all input; building for
+      # that target keeps both claims honest.
+      - name: Check for wasm32 (default features)
+        run: cargo check -p techy --target wasm32-unknown-unknown
+      - name: Check for wasm32 (all features)
+        run: cargo check -p techy --target wasm32-unknown-unknown --all-features
+
+  semver:
+    name: API stability (advisory)
+    runs-on: ubuntu-latest
+    # Advisory: under the 0.x soft freeze a breaking change is a deliberate act
+    # that moves the `api-baseline` branch at the next version bump, so the report
+    # feeds the release notes instead of blocking the push.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the baseline branch must be in the clone
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      # scripts/check_semver.sh holds the canonical invocation; only the revision
+      # differs here, the remote-tracking branch instead of a local one.
+      - name: Compare the public API against api-baseline
+        run: |
+          if ! git rev-parse --verify --quiet origin/api-baseline >/dev/null; then
+            echo "::notice::no 'api-baseline' branch on the remote — skipping the API comparison"
+            exit 0
+          fi
+          BASELINE_REV=origin/api-baseline sh scripts/check_semver.sh
