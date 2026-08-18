@@ -697,7 +697,8 @@ where
         // The body's content interior ends where the reader stands: the content loop
         // leaves every stop token unconsumed at its own start, with its pre-space
         // already flushed as body content, so this is exactly the end of the last
-        // staged node (the gap-free tiling contract) and — unlike a node's span end —
+        // staged node (span tiling, where the language obeys it) and — unlike a node's
+        // span end —
         // it is a stream position, which is what the environment's extent is measured
         // in.
         let body_end = cx.tokens.position_here();

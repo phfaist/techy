@@ -1,14 +1,17 @@
 //! Tree validation: [`validate_tree`] checks the **all-trees law** — what every
 //! finished tree must satisfy regardless of origin — as a `Result`; the crate-internal
 //! `check_tree_invariants` (test builds only) is the panicking test-suite oracle for
-//! the stricter **parse-tree law** (byte accounting), layered on top of it.
+//! the stricter **span-tiling law** (byte accounting), layered on top of it.
 //!
 //! The split is deliberate: legitimate transform output (spliced, reordered,
-//! synthesized nodes) breaks the parse-tree law's byte accounting *by design*, so the
+//! synthesized nodes) breaks the span-tiling law's byte accounting *by design*, so the
 //! byte checks are **a test utility, not builder law** — a future construct that
 //! legitimately breaks byte accounting (e.g. a tolerant root recovery that *skips* a
 //! stray close, leaving an unrepresented byte) amends a test, not the architecture.
-//! The all-trees law is a subset of the parse-tree law.
+//! The all-trees law is a subset of the span-tiling law. The span-tiling law applies
+//! to the parse trees of a language that obeys span tiling
+//! ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)); the trees of a
+//! language that does not satisfy the all-trees law only.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -38,7 +41,7 @@ use super::tree::{NodeData, NodeId, NodeTree};
 ///    char-boundary range of the node's own source — residency only, no positional
 ///    pinning.
 ///
-/// Deliberately **not** checked — the parse-tree law's byte accounting, which
+/// Deliberately **not** checked — the span-tiling law's byte accounting, which
 /// legitimate transform output breaks by design: no byte partition of content
 /// interiors, no children-share-parent's-source, no sibling source order, no
 /// positional payload pins (chars content = the node's span, delimiter
@@ -554,10 +557,17 @@ impl fmt::Display for TreeViolationKind {
 
 impl core::error::Error for TreeViolation {}
 
-/// Check a finished tree against the **parse-tree law** — the all-trees law
-/// ([`validate_tree`]) plus the byte accounting that holds for parser output —
-/// panicking with a description of the first violation. The in-crate test oracle
-/// (assert every tree a parser produces); run it liberally, it is O(n).
+/// Check a finished tree against the **span-tiling law** — the all-trees law
+/// ([`validate_tree`]) plus the byte accounting that holds for the parse trees of a
+/// language that obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) — panicking
+/// with a description of the first violation. The in-crate test oracle (assert every
+/// tree a parser produces); run it liberally, it is O(n).
+///
+/// For a language with `OBEYS_SPAN_TILING = false` the byte accounting does not
+/// apply — its parsers make no assumption about where tokens come from, so nothing
+/// pins a node's payload to a position or a sibling to its neighbor — and only the
+/// all-trees law is checked.
 ///
 /// On top of the all-trees law, this checks:
 ///
@@ -580,13 +590,18 @@ pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
     if let Err(violation) = validate_tree(tree) {
         panic!("tree invariant violated: {}", violation);
     }
+    if !L::OBEYS_SPAN_TILING {
+        // The byte accounting below *is* span tiling; a language that does not declare
+        // it owes only the all-trees law.
+        return;
+    }
     for (i, data) in tree.nodes().iter().enumerate() {
         check_parse_law_node(tree, i, data);
     }
 }
 
-/// The parse-law byte accounting for one node (see [`check_tree_invariants`];
-/// the all-trees law has already passed).
+/// The span-tiling byte accounting for one node (see [`check_tree_invariants`];
+/// the all-trees law has already passed, and the language obeys span tiling).
 ///
 /// Byte accounting is scoped **per source** via the slot roles
 /// ([`SlotRole`](super::SlotRole)): children in an `Attached` slot's region live
@@ -818,7 +833,7 @@ fn check_interior_partition<L: Lang, A>(
         let child_span = child.span().range();
         assert!(
             child_span.start == pos,
-            "node {}: gap {}..{} before child {} (partition invariant)",
+            "node {}: gap {}..{} before child {} (span tiling)",
             i,
             pos,
             child_span.start,
@@ -829,7 +844,7 @@ fn check_interior_partition<L: Lang, A>(
     assert!(
         pos == interior.end,
         "node {}: children end at {} but the content interior ends at {} \
-         (partition invariant)",
+         (span tiling)",
         i,
         pos,
         interior.end
@@ -1210,7 +1225,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition invariant")]
+    #[should_panic(expected = "span tiling")]
     fn rejects_a_gap_between_siblings() {
         let source: Arc<Source> = Arc::new(Source::new("ab"));
         let st = state();

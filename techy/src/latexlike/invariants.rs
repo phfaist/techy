@@ -1,4 +1,4 @@
-//! The latexlike parse-law checker (test builds only): the core parse-tree law
+//! The latexlike span-tiling checker (test builds only): the core span-tiling law
 //! plus the preset's **invocation-syntax payload pins** — the byte checks that
 //! pin the recorded trigger spellings ([`InvocationSyntaxData`]) against the
 //! node's own bytes.
@@ -28,15 +28,26 @@ use super::invocation_syntax::{
 };
 use super::lang::LatexlikeLang;
 
-/// Check a finished latexlike-family tree against the **parse-tree law plus the
+/// Check a finished latexlike-family tree against the **span-tiling law plus the
 /// payload pins**: the core [`check_tree_invariants`] (all-trees law + byte
 /// accounting), then the invocation-syntax payload pins below. Panics with a
 /// description of the first violation — the in-crate test oracle for every tree a
 /// latexlike-family parse produces.
+///
+/// The payload pins are byte accounting like the core law's, so they are checked for
+/// the trees of a language that obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) only; for a
+/// language with `OBEYS_SPAN_TILING = false` this is exactly
+/// [`check_tree_invariants`], which there checks the all-trees law alone (a recorded
+/// spelling may be owned text, and the node's span need not contain the trigger's
+/// bytes at all).
 pub(crate) fn check_latexlike_tree_invariants<LLL: LatexlikeLang, A>(
     tree: &NodeTree<LLL, A>,
 ) {
     check_tree_invariants(tree);
+    if !LLL::OBEYS_SPAN_TILING {
+        return;
+    }
     for (i, data) in tree.nodes().iter().enumerate() {
         if let NodeKind::Callable(callable) = &data.kind {
             check_invocation_syntax_payload(tree, i, data, callable);
