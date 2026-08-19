@@ -286,6 +286,13 @@ examples the `TokenReader` and `Tokenization` pages already carry.
 - Deviation 1 above (the up-front `check_pos`) is an implementation choice inside §1.4's
   rule, not a design question, but it does make the family's panic behavior uniform in a
   way the plan text left open — worth a glance.
+- `skip_whitespace` states its panic in its opening prose rather than under a `# Panics`
+  heading, which is where the six new helpers state theirs. §1.4 requires its docs to
+  move unchanged, so it was left alone; giving it the heading too would make the family
+  read alike on the rendered pages, and is a one-line change if wanted.
+- `CLAUDE.md`'s `techy::core::token` bullet lists `skip_whitespace` by name and does not
+  yet mention the rest of the helper family. §1.6 assigns that file to Stage 0, so it was
+  not touched here; Stage 2 could add three words.
 - No semver measurement was re-run for this stage: it adds public items and widens two
   methods' visibility (both minor), and breaks no path. Stage 0's note stands.
 
