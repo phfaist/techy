@@ -10,7 +10,7 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 | 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | merged |
 | 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | merged |
 | 5 record | `st-5-record` | `main` (after all) | `.claude/worktrees/st-5-record` | reviewed |
-| 6 invalid reference argument | `st-6-input-ref` | `main` (after 5) | `.claude/worktrees/st-6-input-ref` | implemented |
+| 6 invalid reference argument | `st-6-input-ref` | `main` (after 5) | `.claude/worktrees/st-6-input-ref` | reviewed |
 
 ## Stage 1 — contract surface
 
@@ -1557,9 +1557,11 @@ Precision:
 
 ## Stage 6 — invalid reference argument
 
-Status: **implemented** (branch `st-6-input-ref`, worktree
+Status: **reviewed** — review PASS, no blocking fixes; the seven requested changes
+applied (see "Review fixes"). Branch `st-6-input-ref`, worktree
 `.claude/worktrees/st-6-input-ref`, base `main` = `dd02ef3`; commits `f92a590`
-(code and tests), `6e85c13` (docs and record), `5d05bcf` (wording), plus this file). Stage 3b's open question 2 answered by the user; the stage
+(code and tests), `6e85c13` (docs and record), `5d05bcf` (wording), `f407c34` (review
+fixes), plus this file. Stage 3b's open question 2 answered by the user; the stage
 implements the answer.
 
 ### The ruling (user)
@@ -1581,43 +1583,50 @@ two siblings, exported through `constructs` and `techy::core::constructs`.
 - Identifier `core.sources.invalid-reference-argument` (added to the
   [§dd-dr:errors] frozen slate).
 - `#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]`, `#[non_exhaustive]`, one
-  field `reason: &'static str` with the associated const
-  `InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS = "its content is not plain
-  characters"` — the only reason raised today. Rendered message: `invalid source
-  reference argument: its content is not plain characters` (derived `message`, no
-  hand-written `Display`).
+  field `reason: InvalidReferenceReason` — the closed, `#[non_exhaustive]`,
+  `ToDiagnosticValue`-deriving enum beside it, one variant `NotPlainCharacters` (the
+  `UnclosedGroup`/`UnclosedGroupFound` pattern; exported alongside the condition).
+- Hand-written `Display` (the reason decides the wording): `invalid source reference
+  argument: its content is not plain characters`. The wire projection is the variant's
+  own value, `{"reason": "not-plain-characters"}` — never English prose
+  ([§dd-dr:wire-identifier-stability]).
 - No span field: the anchor is the argument's span, passed to `cx.recover` at the
   diagnose site.
-
-Why a `&'static str` rather than a closed enum (the `UnclosedGroupFound` pattern): one
-reason exists, and the field carries it into the report without minting a second public
-type. The docs say to match the condition type or its `IDENTIFIER`, never the text; a
-second reason should turn the field into an enum.
 
 ### Files changed
 
 - **`techy/src/constructs/attached_source.rs`** — the condition and its docs; the module
-  doc gains the reference contract in one paragraph ("the caller reads the reference; the
+  doc gains the reference rule in one paragraph ("the caller reads the reference; the
   argument carries plain text"); two unit tests (the identifier assertion beside its
   siblings, and one pinning the rendered message and the `serializable_data` projection
   `{"reason": "…"}`).
-- **`techy/src/constructs/mod.rs`, `techy/src/core/constructs.rs`** — the export, beside
-  `UnresolvableSourceReference`.
+- **`techy/src/constructs/mod.rs`, `techy/src/core/constructs.rs`** — the exports
+  (condition and reason enum), beside `UnresolvableSourceReference`; the
+  `core::constructs` module doc's "each parser's conditions are defined next to the
+  parser that raises them" gains this one's qualifier — defined in core beside its
+  siblings, raised by the include-like specs that read a source reference out of an
+  argument.
 - **`techy/src/latexlike/input.rs`** — the reference is read off node data under both
   declarations (`argument_text`, unchanged in body); `argument_text_span` and the
   `LLL::OBEYS_SPAN_TILING` match are deleted. The new `argument_span` answers the
   diagnostic's anchor (a delimited argument's own node, delimiters included; the extent
   of a bare argument's nodes when they share a source; `None` otherwise — the call site
-  then anchors at the invocation). An *absent* argument stays silent: the argument parser
-  diagnosed it already, and the reference read has nothing to add. Docs: a new "The
+  then anchors at the invocation). An *absent* argument stays silent (`is_provided()` at
+  the call site): the argument parser diagnosed it already, and the reference read has
+  nothing to add. `argument_text` answers `Result<String, ArgumentTextError>`, splitting
+  the document's mistake (`NotPlainCharacters` → the condition) from a staged record that
+  does not resolve (`Malformed(&'static str)` → `cx.implementation_error`, which aborts
+  under any recovery policy): a document is never blamed for a machinery bug. Docs: a new "The
   reference argument carries plain text" section on `InputMacroSpec` (including that
   whitespace inside the delimiters is part of the reference — characters as read, no
   trimming) and the failure-conditions section extended; the step-2 and step-3 comments
   rewritten.
-- **`techy/src/latexlike/span_tiling_tests.rs`** — T4e
-  (`an_input_reference_that_is_not_plain_characters_is_not_read`, name kept) now asserts
-  the condition under `false`: identifier, downcast, `reason`, the argument's span
-  (`6..18`, in the includer's source), and that nothing is attached.
+- **`techy/src/latexlike/span_tiling_tests.rs`** — T4e now asserts the condition under
+  `false`: identifier, downcast, `reason`, the argument's span (`6..18`, in the
+  includer's source), and that nothing is attached. Renamed to describe that assertion:
+  the Stage 3b inventory's
+  `an_input_reference_that_is_not_plain_characters_is_not_read` is now
+  `an_input_reference_that_is_not_plain_characters_is_an_invalid_reference_argument`.
 - **`techy/src/latexlike/input.rs` tests** — the tiled twins:
   `a_reference_argument_that_is_not_plain_characters_is_diagnosed` (`\input{{chap.tex}}`
   → the new condition, not `UnresolvableSourceReference`; message text, span `6..18`,
@@ -1626,7 +1635,14 @@ second reason should turn the field into an enum.
   `a_strict_parse_aborts_on_a_reference_argument_that_is_not_plain_characters` (the
   `Err` propagates), and
   `the_reference_is_the_arguments_characters_whitespace_included` (the equality with what
-  the span route used to read, pinned in both directions).
+  the span route used to read, pinned in both directions), and
+  `an_unresolvable_command_in_the_argument_is_recovered_as_reference_characters`
+  (`\input{\undefined.tex}` → the unresolvable-command condition, then the *recovered
+  characters* as the reference the resolver is asked for, so an
+  `UnresolvableSourceReference` and not the new condition — what counts is the staged
+  node kind). The `InputMacroSpec` docs state that and its converse: a paragraph break
+  under `ParagraphBreakStyle::Specials` stages a callable node, so a blank line inside
+  the argument does raise the condition.
 - **Docs** — `docs/construct-parsers.md` (the attached-sources paragraph names the third
   condition), `docs/ai-guide-definitions.md` (the `\input` wiring half). `docs/panics.md`
   unaffected (nothing new panics). No condition catalog table exists to update: the
@@ -1656,26 +1672,26 @@ delimiters included) is pinned by a new test.
 
 ### cargo build
 
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.56s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s
 
 ### cargo test --workspace
 
-    test result: ok. 1127 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
-    test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+    test result: ok. 1128 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+    test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
     test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
     test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-    test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+    test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
     test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
     test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
     test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
     test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-    test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 12.72s
+    test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.40s
     test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo test --workspace --all-features
 
-    test result: ok. 1166 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.52s
-    test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+    test result: ok. 1167 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.50s
+    test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
     test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
     test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
     test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
@@ -1683,54 +1699,90 @@ delimiters included) is pinned by a new test.
     test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
     test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
     test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-    test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.57s
+    test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.33s
     test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo clippy --workspace --all-targets -- -D warnings
 
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.72s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.82s
 
 ### cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.18s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.04s
 
 ### rm -rf target/doc && cargo docs --all-features
 
     Generated /Users/philippe/…/target/doc/techy/index.html and 1 other file
 
 (no rustdoc warnings; re-run after `touch techy/src/lib.rs` to defeat caching, output
-grepped for "warning"/"error" — empty.)
+grepped for "warning"/"error" — empty. Also run, the CI no_std gate:
+`cargo check -p techy --target wasm32-unknown-unknown` — clean.)
 
 Label discipline: no new `[§dd-dr:…]` label; the every-DR-label-referenced-from-
 ARCHITECTURE check re-run and clean.
 
 ### Decisions taken (none of them design questions beyond the ruling)
 
-1. **The payload is `reason: &'static str`** with a documented associated const, not a
-   one-variant enum (above).
+1. **The payload is the closed `InvalidReferenceReason`** (review fix 1), the
+   `UnclosedGroupFound` precedent: the wire value is the variant's name, so the
+   serialized projection carries no English prose.
 2. **The anchor is the argument's span**, with the invocation span as the fallback for an
    argument that has no single span of its own (possible only under
    `OBEYS_SPAN_TILING = false`, where a bare argument's nodes may lie in several
    sources). The two sibling conditions keep anchoring at the invocation span.
 3. **An absent argument stays silent** — the mandatory-argument condition already fires,
    and double-diagnosing one mistake was not the ruling.
-4. **T4e keeps its name** so the Stage 3b record's test inventory stays traceable; its
-   body now asserts the diagnosis.
-5. **The stale deferred paragraph text was removed** rather than left standing beside the
+4. **A staged record that does not resolve is an implementation error**, not this
+   condition (review fix 2): `argument_text` reports the two cases apart, so the document
+   is never blamed for a builder invariant.
+5. **`\input{}` is unchanged**: the empty interior is plain text (the empty string), the
+   resolver is asked for it and rejects it, and `UnresolvableSourceReference` is the
+   answer. An empty reference argument is *not* the new condition.
+6. **The stale deferred paragraph text was removed** rather than left standing beside the
    amendment: it described behavior that no longer exists, and the DR forbids history.
+7. **T4e renamed** to describe its assertion (review fix 7); the old name is mapped in
+   "Files changed" so Stage 3b's inventory stays traceable.
+
+### Review fixes (all applied)
+
+1. **Payload shape → the crate's precedent**: `reason: &'static str` +
+   `NOT_PLAIN_CHARACTERS` replaced by the closed `#[non_exhaustive]`
+   `InvalidReferenceReason { NotPlainCharacters }` deriving `ToDiagnosticValue`, with a
+   hand-written `Display` on the condition; the rendered message is unchanged and the
+   projection is now `{"reason": "not-plain-characters"}` (test updated).
+2. **Structural failures are no longer the document's fault**: `argument_text` returns
+   `Result<String, ArgumentTextError>` — `NotPlainCharacters` → the condition,
+   `Malformed(&'static str)` → `cx.implementation_error` (six named cases: the missing
+   region, an already-resolved region, offsets outside the staged children, a content
+   range outside its region or its content parent, an unstaged node).
+3. **`argument.region.is_some()` → `argument.is_provided()`** at the call site.
+4. **Banned words in added text** (`TODO_Big.md`'s list): the rustdoc "door" and
+   "contract" of the new module-doc paragraph reworded ("beside the two that
+   `ParseContext::attach_source_reference` raises"; "the rule on it is one line"), the
+   same in `docs/construct-parsers.md` and a test comment, and "minting" out of this
+   file. Two `+` lines still show a banned word and are **not** this stage's text: the
+   re-flowed pre-existing ARCHITECTURE sentence "The door returns an
+   `AttachedSourceOutcome`", and the label `[§dd-dr:resolver-contract]` in a re-flowed DR
+   bullet — both left for the planned sweep.
+5. **`core::constructs` module doc** qualified: conditions sit next to the parser that
+   raises them, except this one.
+6. **Two doc lines and a test**: an unresolvable command inside the delimiters is
+   recovered as characters, so the reference becomes that text and reaches the resolver
+   (pinned by `an_unresolvable_command_in_the_argument_is_recovered_as_reference_characters`);
+   a paragraph break under `ParagraphBreakStyle::Specials` stages a callable node and so
+   raises the condition (doc line only).
+7. **T4e renamed** (above).
+
+Not done, by review direction: a shared read-helper for include-like specs (revisit when a
+second such spec exists).
 
 ### Open questions for the user
 
-1. **A second reason would change the payload shape.** If any other "not usable as a
-   reference" case is ever diagnosed (an empty reference, say — today `\input{}` resolves
-   the empty string and the resolver reports it), `reason` should become a closed enum
-   with `ToDiagnosticValue`, which is a breaking change to the field type.
-2. **`\input{}` is unchanged and still resolver-visible**: the empty reference reaches
-   the resolver and comes back as `UnresolvableSourceReference`. Whether an empty
-   reference argument should be the new condition instead was not part of the ruling.
+None outstanding. A second reason for the condition would extend
+`InvalidReferenceReason` — an addition to a `#[non_exhaustive]` enum, not a break.
 
 ## Orchestrator log
 
 - 2026-08-19: plan written and committed to `main`.
 - 2026-08-19: Stage 3a implemented on `st-3a-scripted` (see its section).
-- 2026-08-19: Stage 6 implemented on `st-6-input-ref` (see its section).
+- 2026-08-19: Stage 6 implemented and reviewed on `st-6-input-ref` (see its section).
