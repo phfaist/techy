@@ -7077,9 +7077,10 @@ Why now, when [§dd-dr:public-namespace-topology] deliberately left the token su
 the hub: the token topic has since grown — the tokenization bundle
 ([§dd-dr:tokenization]), the per-feature rules blocks with their overrides, and now nine
 public scanning items ([§dd-dr:scan-helpers]) — to a third of the hub's items and
-counting, which is that decision's own revisit condition. The extracted shape also
-already exists next door: `core::constructs` holds a trait, its shipped implementations,
-its helpers and its conditions together, and the token topic has the same four parts.
+counting, which is that decision's own revisit condition. The extracted shape is also
+not a new one: the sibling satellite `core::constructs` holds a trait, its shipped
+implementations, its helpers and its conditions together, and the token topic has the
+same four parts.
 
 The rule cuts the "token data vs runtime" straddle that had kept the subset in the hub,
 by asking who *reads* an item rather than who carries it. Four families were the
