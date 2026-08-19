@@ -8,6 +8,9 @@ A fast, extensible parser for a LaTeX-like markup language.
 
 This is loosely a Rust port of the Python [pylatexenc](https://github.com/phfaist/pylatexenc) library, focusing on the `latexnodes`, `macrospec`, and `latexwalker` modules.
 
+**For AI agents:** → Read `docs/ai-guide.md`, a guide optimized for AI agents.
+(Humans with a penchant for densely packed, condensed details may read this, too.)
+
 ## Features
 
 - **Fast**: Zero-copy parsing where possible, efficient memory usage
