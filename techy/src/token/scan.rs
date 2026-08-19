@@ -563,11 +563,15 @@ fn checked_scan_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::TrivialLang;
+    use crate::error::DiagnosticInfo;
+    use crate::scopes::ScopeStack;
+    use crate::spec::CallableSpec;
+    use crate::state::{StateData, TrivialLang};
     use crate::token::{
-        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
-        GroupRules, ParagraphRules, SpecialsRules, WhitespaceRules,
+        CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
+        ParagraphRules, SpecialsRules, TriggerChars, WhitespaceRules,
     };
+    use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -665,5 +669,667 @@ mod tests {
     fn skip_whitespace_panics_on_a_mid_char_pos() {
         let rules: TokenRules<TestLang> = latex_rules();
         let _ = skip_whitespace("é!", 1, &rules);
+    }
+
+    // --- fixtures for the state-taking helpers -----------------------------------------
+
+    fn sp(start: usize, end: usize) -> Span {
+        Span::new(start, end)
+    }
+
+    fn state(rules: TokenRules<TestLang>) -> Arc<ParsingState<TestLang>> {
+        Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }))
+    }
+
+    /// The `latex_rules` group rule of the given class (unique per rule in these tests).
+    fn rule_of(group_type: u32) -> Arc<GroupRule<TestLang>> {
+        latex_rules::<TestLang>()
+            .groups
+            .rules
+            .into_iter()
+            .find(|g| g.group_type == group_type)
+            .expect("class present in latex_rules")
+    }
+
+    /// A state expecting the given rule's close delimiter, as the group parser sets up
+    /// when it enters an ambiguously-delimited group.
+    fn expecting_close(group_type: u32) -> Arc<ParsingState<TestLang>> {
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        rules.groups.expecting_close = Some(rule_of(group_type));
+        state(rules)
+    }
+
+    /// The single command rule of `latex_rules`: escape character `\`, ASCII letters as
+    /// name characters.
+    fn backslash() -> Arc<CommandRule> {
+        latex_rules::<TestLang>().commands.rules[0].clone()
+    }
+
+    // --- scan_paragraph_break ----------------------------------------------------------
+
+    #[test]
+    fn paragraph_break_runs_through_the_last_newline() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // Two newlines with whitespace between them: the break ends at the last one, and
+        // the indentation after it is left for the next token's pre-space.
+        assert_eq!(scan_paragraph_break("a\n \n  b", 1, &rules), Some(sp(1, 4)));
+        // Three newlines: still through the last one.
+        assert_eq!(scan_paragraph_break("\n\n\n x", 0, &rules), Some(sp(0, 3)));
+    }
+
+    #[test]
+    fn paragraph_break_needs_a_run_of_two_newlines_at_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // A lone newline is consumable whitespace, not a break.
+        assert_eq!(scan_paragraph_break("a\n b", 1, &rules), None);
+        // The run must begin at `pos` with a newline — which is what the offset
+        // `skip_whitespace` answers guarantees; here it does not.
+        assert_eq!(scan_paragraph_break(" \n\n", 0, &rules), None);
+        // No whitespace at all, and the end of the content.
+        assert_eq!(scan_paragraph_break("ab", 1, &rules), None);
+        assert_eq!(scan_paragraph_break("ab", 2, &rules), None);
+    }
+
+    #[test]
+    fn paragraph_break_off_when_the_rules_say_so() {
+        // The paragraphs gate off.
+        let mut no_par: TokenRules<TestLang> = latex_rules();
+        no_par.paragraphs.enabled = false;
+        assert_eq!(scan_paragraph_break("\n\nx", 0, &no_par), None);
+        // Whitespace handling off is the other half of the condition.
+        let mut no_ws: TokenRules<TestLang> = latex_rules();
+        no_ws.whitespace.enabled = false;
+        assert_eq!(scan_paragraph_break("\n\nx", 0, &no_ws), None);
+        // `'\n'` not being one of the whitespace characters has the same effect.
+        let mut no_nl: TokenRules<TestLang> = latex_rules();
+        no_nl.whitespace.chars = " \t".into();
+        assert_eq!(scan_paragraph_break("\n\nx", 0, &no_nl), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_paragraph_break_panics_on_an_out_of_bounds_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_paragraph_break("ab", 5, &rules);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_paragraph_break_panics_on_a_mid_char_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_paragraph_break("é!", 1, &rules);
+    }
+
+    // --- scan_group_delimiter ----------------------------------------------------------
+
+    #[test]
+    fn group_delimiter_reads_both_directions_and_the_longest_match() {
+        let st = state(latex_rules());
+        let braces = rule_of(BRACES);
+        assert_eq!(
+            scan_group_delimiter("{a}", 0, &st),
+            Some(GroupDelimiterMatch::Open { span: sp(0, 1), rule: &braces }),
+        );
+        // `}` is a close delimiter only, and the match carries its rule all the same.
+        assert_eq!(
+            scan_group_delimiter("{a}", 2, &st),
+            Some(GroupDelimiterMatch::Close { span: sp(2, 3), rule: &braces }),
+        );
+        // Longest first: `$$` beats `$`.
+        let display = rule_of(MATH_DISPLAY);
+        assert_eq!(
+            scan_group_delimiter("$$x", 0, &st),
+            Some(GroupDelimiterMatch::Open { span: sp(0, 2), rule: &display }),
+        );
+        // Nothing there.
+        assert_eq!(scan_group_delimiter("ax", 0, &st), None);
+        assert_eq!(scan_group_delimiter("ax", 2, &st), None);
+    }
+
+    #[test]
+    fn group_delimiter_reads_an_ambiguous_string_as_an_opener() {
+        let st = state(latex_rules());
+        // `$` opens and closes the same rule; with no expected close, it opens.
+        let inline = rule_of(MATH_INLINE);
+        assert_eq!(
+            scan_group_delimiter("$x$", 0, &st),
+            Some(GroupDelimiterMatch::Open { span: sp(0, 1), rule: &inline }),
+        );
+    }
+
+    #[test]
+    fn group_delimiter_gives_the_expected_close_precedence() {
+        let st = expecting_close(MATH_INLINE);
+        let inline = rule_of(MATH_INLINE);
+        // The parser inside the group waits for `$`, so `$` closes rather than opens ...
+        assert_eq!(
+            scan_group_delimiter("$x", 0, &st),
+            Some(GroupDelimiterMatch::Close { span: sp(0, 1), rule: &inline }),
+        );
+        // ... and it wins even over the longer table entry `$$`.
+        assert_eq!(
+            scan_group_delimiter("$$x", 0, &st),
+            Some(GroupDelimiterMatch::Close { span: sp(0, 1), rule: &inline }),
+        );
+    }
+
+    #[test]
+    fn group_delimiter_with_groups_disabled_still_answers_the_expected_close() {
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        rules.groups.enabled = false;
+        rules.groups.expecting_close = Some(rule_of(BRACES));
+        let st = state(rules);
+        // The gate empties the table, so no rule's delimiter matches ...
+        assert_eq!(scan_group_delimiter("{a}", 0, &st), None);
+        // ... but the close the parser inside the group waits for is not gated.
+        let braces = rule_of(BRACES);
+        assert_eq!(
+            scan_group_delimiter("}a", 0, &st),
+            Some(GroupDelimiterMatch::Close { span: sp(0, 1), rule: &braces }),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_group_delimiter_panics_on_an_out_of_bounds_pos() {
+        let st = state(latex_rules());
+        let _ = scan_group_delimiter("ab", 5, &st);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_group_delimiter_panics_on_a_mid_char_pos() {
+        let st = state(latex_rules());
+        let _ = scan_group_delimiter("é!", 1, &st);
+    }
+
+    // --- command_rule_at ---------------------------------------------------------------
+
+    #[test]
+    fn command_rule_at_answers_the_rule_whose_escape_char_stands_there() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(command_rule_at(r"a\foo", 1, &rules), Some(&backslash()));
+        // Not an escape character, and the end of the content.
+        assert_eq!(command_rule_at(r"a\foo", 0, &rules), None);
+        assert_eq!(command_rule_at("a", 1, &rules), None);
+    }
+
+    #[test]
+    fn command_rule_at_answers_the_first_rule_in_list_order() {
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        rules.commands.rules = vec![
+            Arc::new(CommandRule { escape_char: '@', name_chars: "a".into() }),
+            Arc::new(CommandRule { escape_char: '@', name_chars: "b".into() }),
+        ];
+        let found = command_rule_at("@a", 0, &rules).expect("the escape char stands there");
+        assert_eq!(&*found.name_chars, "a");
+    }
+
+    #[test]
+    fn command_rule_at_off_when_the_rules_say_so() {
+        let mut off: TokenRules<TestLang> = latex_rules();
+        off.commands.enabled = false;
+        assert_eq!(command_rule_at(r"\foo", 0, &off), None);
+        // Empty data is the other spelling of "off".
+        let mut empty: TokenRules<TestLang> = latex_rules();
+        empty.commands.rules = Vec::new();
+        assert_eq!(command_rule_at(r"\foo", 0, &empty), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn command_rule_at_panics_on_an_out_of_bounds_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = command_rule_at("ab", 5, &rules);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn command_rule_at_panics_on_a_mid_char_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = command_rule_at("é!", 1, &rules);
+    }
+
+    // --- scan_command ------------------------------------------------------------------
+
+    #[test]
+    fn command_with_a_name_takes_its_post_space() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(
+            scan_command(r"\foo  bar", 0, &rules, &backslash()),
+            Ok(CommandMatch {
+                escape_char: '\\',
+                span: sp(0, 6),
+                name: sp(1, 4),
+                post_space: sp(4, 6),
+            }),
+        );
+    }
+
+    #[test]
+    fn command_of_a_single_character_takes_no_post_space() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // `&` is not a name character, so the name is that one character and the
+        // whitespace after it stays content (pylatexenc behavior).
+        assert_eq!(
+            scan_command(r"\& x", 0, &rules, &backslash()),
+            Ok(CommandMatch {
+                escape_char: '\\',
+                span: sp(0, 2),
+                name: sp(1, 2),
+                post_space: Span::empty(2),
+            }),
+        );
+    }
+
+    #[test]
+    fn command_post_space_stops_before_a_paragraph_break() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // `skip_whitespace`'s multi-newline rule: the post-space ends before the first
+        // newline of the break, which then surfaces on its own.
+        let m = scan_command("\\foo \n\nbar", 0, &rules, &backslash()).expect("a command");
+        assert_eq!(m.post_space, sp(4, 5));
+        assert_eq!(m.span, sp(0, 5));
+        assert_eq!(scan_paragraph_break("\\foo \n\nbar", 5, &rules), Some(sp(5, 7)));
+    }
+
+    #[test]
+    fn command_at_a_dangling_escape_character_is_an_end_of_stream_condition() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(
+            scan_command(r"a\", 1, &rules, &backslash()),
+            Err(EndOfStreamAfterEscape::new('\\')),
+        );
+    }
+
+    #[test]
+    fn command_with_a_multi_byte_escape_character() {
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        let rule = Arc::new(CommandRule { escape_char: '§', name_chars: "abc".into() });
+        rules.commands.rules = vec![rule.clone()];
+        // '§' occupies two bytes, so the name starts at 2 and every span accounts for it.
+        assert_eq!(
+            scan_command("§ab d", 0, &rules, &rule),
+            Ok(CommandMatch {
+                escape_char: '§',
+                span: sp(0, 5),
+                name: sp(2, 4),
+                post_space: sp(4, 5),
+            }),
+        );
+        // A dangling multi-byte escape character is the same condition as a dangling
+        // one-byte one.
+        assert_eq!(scan_command("§", 0, &rules, &rule), Err(EndOfStreamAfterEscape::new('§')));
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_command_panics_on_an_out_of_bounds_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_command(r"\a", 5, &rules, &backslash());
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_command_panics_on_a_mid_char_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_command("é!", 1, &rules, &backslash());
+    }
+
+    /// Reading a name under a rule that did not match is the other half of this
+    /// function's precondition: it would slice the content at an offset that is not a
+    /// character boundary, and panic there instead, less clearly.
+    #[test]
+    #[should_panic(expected = "does not stand at pos")]
+    fn scan_command_panics_when_the_rules_escape_char_is_not_at_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_command("abc", 0, &rules, &backslash());
+    }
+
+    // --- scan_comment ------------------------------------------------------------------
+
+    #[test]
+    fn comment_takes_the_longest_start_delimiter() {
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        rules.comments.rules = vec![
+            Arc::new(CommentRule { start: "%".into() }),
+            Arc::new(CommentRule { start: "%%".into() }),
+            // An empty delimiter is ignored, rather than matching everywhere.
+            Arc::new(CommentRule { start: "".into() }),
+        ];
+        assert_eq!(
+            scan_comment("%%x\ny", 0, &rules),
+            Some(CommentMatch {
+                span: sp(0, 4),
+                start: sp(0, 2),
+                content: sp(2, 3),
+                post_space: sp(3, 4),
+            }),
+        );
+    }
+
+    #[test]
+    fn comment_post_space_is_the_newline_and_the_next_lines_indentation() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(
+            scan_comment("a% note\n   b", 1, &rules),
+            Some(CommentMatch {
+                span: sp(1, 11),
+                start: sp(1, 2),
+                content: sp(2, 7),
+                post_space: sp(7, 11),
+            }),
+        );
+    }
+
+    #[test]
+    fn comment_without_a_terminating_newline_runs_to_the_end() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(
+            scan_comment("%tail", 0, &rules),
+            Some(CommentMatch {
+                span: sp(0, 5),
+                start: sp(0, 1),
+                content: sp(1, 5),
+                post_space: Span::empty(5),
+            }),
+        );
+    }
+
+    #[test]
+    fn comment_keeps_a_carriage_return_in_its_content() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // '\n' is the sole line terminator; '\r' is ordinary content, even though these
+        // rules do count it as a whitespace character.
+        let m = scan_comment("%a\r\nb", 0, &rules).expect("a comment");
+        assert_eq!(m.content, sp(1, 3));
+        assert_eq!(m.post_space, sp(3, 4));
+    }
+
+    #[test]
+    fn comment_takes_no_post_space_before_a_paragraph_break() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // The terminating newline opens a `\n\s*\n` sequence, so it stays behind for the
+        // break to surface on its own ...
+        let m = scan_comment("%a\n\nb", 0, &rules).expect("a comment");
+        assert_eq!(m.content, sp(1, 2));
+        assert_eq!(m.post_space, Span::empty(2));
+        assert_eq!(m.span, sp(0, 2));
+        // ... which is exactly what the next scan at the comment's end answers.
+        assert_eq!(scan_paragraph_break("%a\n\nb", 2, &rules), Some(sp(2, 4)));
+    }
+
+    #[test]
+    fn comment_none_without_a_delimiter_and_when_the_rules_say_so() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(scan_comment("a%x", 0, &rules), None);
+        assert_eq!(scan_comment("a%x", 3, &rules), None);
+        let mut off: TokenRules<TestLang> = latex_rules();
+        off.comments.enabled = false;
+        assert_eq!(scan_comment("%x", 0, &off), None);
+        // Empty data is the other spelling of "off".
+        let mut empty: TokenRules<TestLang> = latex_rules();
+        empty.comments.rules = Vec::new();
+        assert_eq!(scan_comment("%x", 0, &empty), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_comment_panics_on_an_out_of_bounds_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_comment("ab", 5, &rules);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_comment_panics_on_a_mid_char_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = scan_comment("é!", 1, &rules);
+    }
+
+    // --- scan_specials_trigger ---------------------------------------------------------
+
+    #[derive(Debug)]
+    struct StubSpec;
+    impl crate::serialize::SerializableObject<HookLang> for StubSpec {}
+    impl CallableSpec<HookLang> for StubSpec {}
+
+    /// A language whose specials hook produces, in one place, every answer this helper
+    /// must handle — selected by the character at the scanned position, so that one
+    /// language serves all the cases: `~`, `~~`, `---` and `&` match; `-` alone is a
+    /// filter character the hook then declines; `!` answers a zero-width match, which
+    /// the [`SpecialsMatch::end`](crate::token::SpecialsMatch::end) documentation rules
+    /// out; `?` reports a condition at a span inside the content; `;` and `:` report one
+    /// at a span the content does not have.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct HookLang;
+    impl Lang for HookLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = crate::engine::StdParseDriver;
+
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("~&-!?;:".into())
+        }
+
+        fn scan_specials(
+            _state: &ParsingState<Self>,
+            content: &str,
+            pos: usize,
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
+            let rest = &content[pos..];
+            // Longest-first over a hardcoded trigger list — a stand-in for a preset
+            // dispatching to its libraries.
+            for trigger in ["---", "~~", "~", "&"] {
+                if rest.starts_with(trigger) {
+                    return Ok(Some(SpecialsMatch {
+                        end: pos + trigger.len(),
+                        callable_type: 7,
+                        spec: Arc::new(StubSpec),
+                    }));
+                }
+            }
+            if rest.starts_with('!') {
+                // Zero-width: a token built from this would never advance the parse.
+                return Ok(Some(SpecialsMatch {
+                    end: pos,
+                    callable_type: 7,
+                    spec: Arc::new(StubSpec),
+                }));
+            }
+            let bad_span = match rest.chars().next() {
+                Some('?') => Some(Span::new(pos, pos + 1)), // a span the content has
+                Some(';') => Some(Span::new(content.len() + 1, content.len() + 2)),
+                Some(':') => Some(Span::new(1, 2)), // cuts a leading two-byte character
+                _ => None,
+            };
+            match bad_span {
+                Some(span) => Err(SpecialsScanError {
+                    kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(
+                        String::from("the scan declined loudly"),
+                    ))),
+                    span,
+                }),
+                None => Ok(None),
+            }
+        }
+
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    fn hook_state(rules: TokenRules<HookLang>) -> Arc<ParsingState<HookLang>> {
+        Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }))
+    }
+
+    /// A language whose hook must never run: the filter admits `~` only, so a scan that
+    /// reached the hook at any other character fails the test loudly.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct UnconsultedHookLang;
+    impl Lang for UnconsultedHookLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = crate::engine::StdParseDriver;
+
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("~".into())
+        }
+
+        fn scan_specials(
+            _state: &ParsingState<Self>,
+            _content: &str,
+            _pos: usize,
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
+            panic!("scan_specials consulted where the filter admits no trigger")
+        }
+
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    fn unconsulted_state(
+        rules: TokenRules<UnconsultedHookLang>,
+    ) -> Arc<ParsingState<UnconsultedHookLang>> {
+        Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }))
+    }
+
+    #[test]
+    fn specials_trigger_answers_the_hooks_match() {
+        let st = hook_state(latex_rules());
+        let m = scan_specials_trigger("a---b", 1, &st).expect("no failure").expect("a match");
+        // The match is the hook's own, unchanged: its end is where the trigger ends.
+        assert_eq!(m.end, 4);
+        assert_eq!(m.callable_type, 7);
+    }
+
+    #[test]
+    fn specials_trigger_answers_none_when_no_trigger_is_there() {
+        let st = hook_state(latex_rules());
+        // A filter character the hook then declines to match on (`-` without `--`).
+        assert!(scan_specials_trigger("-x", 0, &st).expect("no failure").is_none());
+        // A character the filter excludes.
+        assert!(scan_specials_trigger("x~", 0, &st).expect("no failure").is_none());
+        // The end of the content: no character to offer the hook.
+        assert!(scan_specials_trigger("x", 1, &st).expect("no failure").is_none());
+    }
+
+    #[test]
+    fn specials_trigger_does_not_consult_the_hook_off_the_filter() {
+        let st = unconsulted_state(latex_rules());
+        // The hook panics if consulted, so reaching the assertions is the assertion.
+        assert!(scan_specials_trigger("x~", 0, &st).expect("no failure").is_none());
+        assert!(scan_specials_trigger("x~", 2, &st).expect("no failure").is_none());
+    }
+
+    #[test]
+    fn specials_trigger_is_off_when_the_specials_gate_is_off() {
+        // The gate is applied where the filter is derived, so a disabled specials block
+        // leaves the empty filter and the hook is out of reach even at `~`.
+        let mut rules: TokenRules<UnconsultedHookLang> = latex_rules();
+        rules.specials.enabled = false;
+        let st = unconsulted_state(rules);
+        assert!(scan_specials_trigger("~x", 0, &st).expect("no failure").is_none());
+    }
+
+    #[test]
+    fn specials_trigger_rejects_a_match_end_the_documentation_rules_out() {
+        let st = hook_state(latex_rules());
+        let err = scan_specials_trigger("a!b", 1, &st).expect_err("a rejected match");
+        // Anchored where the scan was asked for, and named as an implementation error.
+        assert_eq!(err.span, Span::empty(1));
+        match &err.kind {
+            TokenErrorKind::Custom(data) => {
+                assert_eq!(data.identifier(), ImplementationError::IDENTIFIER);
+                assert!(data.to_string().contains("invalid match end"), "{}", data);
+            }
+            other => panic!("expected a Custom implementation error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn specials_trigger_passes_a_hook_error_with_a_valid_span_through() {
+        let st = hook_state(latex_rules());
+        let err = scan_specials_trigger("a?b", 1, &st).expect_err("the hook's failure");
+        // The hook's own span, untouched: it lies within the content on char boundaries.
+        assert_eq!(err.span, sp(1, 2));
+        assert!(err.to_string().contains("declined loudly"), "{err}");
+    }
+
+    #[test]
+    fn specials_trigger_anchors_a_hook_error_reported_at_an_invalid_span() {
+        let st = hook_state(latex_rules());
+        //                      'é' occupies bytes 0..2, so the span 1..2 cuts it in half
+        for (content, pos, half) in [(";x", 0, "out of bounds"), ("é:", 2, "mid-character")] {
+            let err = scan_specials_trigger(content, pos, &st).expect_err("a rejected span");
+            // The hook is outer-layer code: a span the content does not have is itself a
+            // violation, reported at the scanned position instead of the hook's wording.
+            assert_eq!(err.span, Span::empty(pos), "{half}");
+            match &err.kind {
+                TokenErrorKind::Custom(data) => {
+                    assert_eq!(data.identifier(), ImplementationError::IDENTIFIER, "{half}");
+                    assert!(data.to_string().contains("invalid span"), "{half}: {}", data);
+                }
+                other => panic!("{half}: expected a Custom error, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_specials_trigger_panics_on_an_out_of_bounds_pos() {
+        let st = hook_state(latex_rules());
+        let _ = scan_specials_trigger("ab", 5, &st);
+    }
+
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn scan_specials_trigger_panics_on_a_mid_char_pos() {
+        let st = hook_state(latex_rules());
+        let _ = scan_specials_trigger("é!", 1, &st);
     }
 }
