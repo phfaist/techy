@@ -34,26 +34,23 @@ use super::specials::{SpecialsMatch, SpecialsScanError};
 /// whitespace handling is disabled, or if the language declares it absent —
 /// [`LangFeatures::Whitespace`], whose absent store holds no whitespace data at all).
 ///
-/// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
-/// caller-contract violation and panics, in all builds — one of the crate's few
-/// deliberate panics (see the [Panics list](techy::guide::panics)).
-///
 /// **The multi-newline rule** (`TokenRules::paragraphs_enabled`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
 /// skipping stops right *before* the first newline of a paragraph break. This one
 /// primitive serves pre-space, command post-space, and comment post-space, which is what
 /// makes "post-space never crosses a paragraph break" hold everywhere by construction.
+///
+/// # Panics
+///
+/// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
+/// caller-contract violation and panics, in all builds — one of the crate's few
+/// deliberate panics (see the [Panics list](techy::guide::panics)).
 pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>) -> usize {
+    check_pos(content, pos);
     if !<L::Features as LangFeatures>::Whitespace::PRESENT || !rules.whitespace_enabled() {
         return pos;
     }
-    let Some(rest) = content.get(pos..) else {
-        panic!(
-            "pos {} is out of bounds or not a char boundary (content len {})",
-            pos,
-            content.len()
-        );
-    };
+    let rest = &content[pos..];
     let ws_chars = rules.whitespace_chars();
     let mut end = pos;
     for c in rest.chars() {
@@ -669,6 +666,16 @@ mod tests {
     fn skip_whitespace_panics_on_a_mid_char_pos() {
         let rules: TokenRules<TestLang> = latex_rules();
         let _ = skip_whitespace("é!", 1, &rules);
+    }
+
+    /// The check runs before the whitespace gate, so the whole family enforces the
+    /// requirement identically whatever the rules say.
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn skip_whitespace_panics_on_an_invalid_pos_with_whitespace_disabled() {
+        let mut rules: TokenRules<TestLang> = latex_rules();
+        rules.whitespace.enabled = false;
+        let _ = skip_whitespace("ab", 5, &rules);
     }
 
     // --- fixtures for the state-taking helpers -----------------------------------------

@@ -10,10 +10,10 @@ document content can trigger them.
 [`core::token`](crate::core::token), and the seven span-taking
 [`StdToken`](crate::core::token::StdToken) constructors document a precondition on their
 arguments and panic, in all builds, when calling code violates it. These functions are
-either deliberately infallible (there is no error channel to prefer) or answer about the
-content they were handed rather than about a mistake in calling code; the checks are
-cheap, and the immediate panic keeps invalid values unrepresentable instead of
-letting them cause misbehavior far from the mistake:
+either deliberately infallible (there is no error channel to prefer), or they report
+about the scanned content through their own error channel, which a mistake in calling
+code does not belong in; the checks are cheap, and the immediate panic keeps invalid
+values unrepresentable instead of letting them cause misbehavior far from the mistake:
 
 - [`Span::new`](crate::source::Span::new) — requires `start <= end`;
 - [`Span::extend_to`](crate::source::Span::extend_to) — requires the new end not to

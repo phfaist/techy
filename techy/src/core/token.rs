@@ -22,12 +22,12 @@
 //! `Lang` trait (its associated types and hooks), the parsing state and its deltas, and
 //! the engine.
 //!
-//! A **scan helper**, one of the things that rule places here, is a free function that
-//! recognizes one construct at a byte offset in the text being scanned and answers what it
-//! found — byte ranges into that text ([`Span`](crate::source::Span)s), plus the rule or
-//! the specification that matched — or nothing. A helper advances no position, builds no
-//! token, and never sees the [`Source`](crate::source::Source) the text came from.
-//! *Writing a token reader* below lists the seven of them.
+//! A **scan helper**, one of the item groups that rule places here, is a free function
+//! that recognizes one construct at a byte offset in the text being scanned and answers
+//! what it found — byte ranges into that text ([`Span`](crate::source::Span)s), plus the
+//! rule or the specification that matched — or nothing. A helper advances no position,
+//! builds no token, and never sees the [`Source`](crate::source::Source) the text came
+//! from. *Writing a token reader* below lists the seven of them.
 //!
 //! # The items, by group
 //!
