@@ -3672,8 +3672,8 @@ its own wrapper's overrides never reached those children.
   state, recomposer)`** — the op-family mirror of `restage_children`, with the
   same no-kind-restriction behavior (any node; no children in scope composes the
   empty piece, no new error variant). The two flags carry the `ConcatPieces`
-  scope semantics verbatim, keeping one child-scope vocabulary across the
-  instruction and the ops ([§dd-dr:slot-roles]).
+  scope semantics verbatim, so the instruction and the ops name the child scope
+  the same way ([§dd-dr:slot-roles]).
 - **`ConcatPieces::map(f)`** — instruction-level post-processing: the driver
   assembles `head + child₁ + sep + … + childₙ + tail` and applies `f` to that
   whole piece before handing it to the parent fold. This is the
@@ -3715,11 +3715,17 @@ post-processor records its failure in the recomposer and answers
 precedent); `ConcatPieces` loses its derived `Debug` (a manual impl renders the
 function as `map: Some(..)`/`None`) and can no longer be `Clone`, which drops the
 derived `Clone` on `Recompose` with it (nothing used it — the driver consumes an
-instruction exactly once).
+instruction exactly once). The boxed function is also not `Send`, so
+`ConcatPieces` and `Recompose` are `!Send`/`!Sync` for every piece and state
+type — including for consumers that never call `map`. Ruled acceptable rather
+than adding `+ Send`: an instruction is built and consumed inside one driver
+call and never crosses a thread (the fold runs synchronously on the calling
+thread, [§dd-dr:recompose-machinery]), so the bound would only constrain
+consumers' closures for a transfer that cannot happen. Both types document the
+loss.
 
 Revisit if: a consumer needs a fallible or borrowing post-processor, or a second
 site wants the assembled-piece hook for something other than a `Concat`.
-
 
 #### `techy::visit`: one shared traversal engine for walk and recompose [§dd-dr:visit-engine]
 
