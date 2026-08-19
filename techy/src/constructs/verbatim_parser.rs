@@ -1362,6 +1362,12 @@ mod tests {
         content: ContentNodes,
         body_id: BuildId,
         terminator: Option<EnvironmentTerminatorSyntaxData<VerbLang>>,
+        /// The state the body was read under, for the after-effects assertions below.
+        entry_state: Arc<ParsingState<VerbLang>>,
+        /// What the body reported as its interior's exit state.
+        exit_state: Arc<ParsingState<VerbLang>>,
+        /// What the body reported as its interior's merged after-effect record.
+        after_effects: Option<Box<ParsingStateDelta<VerbLang>>>,
     }
 
     /// `\end{verbatim}` spelled out as one literal string.
@@ -1441,6 +1447,9 @@ mod tests {
             content: body.content,
             body_id: body.body,
             terminator: body.terminator,
+            entry_state: state,
+            exit_state: body.exit_state,
+            after_effects: body.after_effects,
         })
     }
 
@@ -1511,6 +1520,24 @@ mod tests {
         assert_eq!(run.end_offset, text.len());
         // Nothing was consumed, so no terminator facts are reported.
         assert!(run.terminator.is_none());
+    }
+
+    #[test]
+    fn a_raw_body_reports_no_after_effects_and_its_entry_state() {
+        // The escape channel's honest emptiness answer
+        // ([§dd-dr:environment-after-effects]): a raw body runs no content loop, so no
+        // sibling construct evolved the state it was read under and nothing can escape
+        // it — the reported facts are the entry state (`Arc` identity) and an empty
+        // record, whatever the routing hook above would be willing to let through.
+        let run = run_body("\nabc\n\\end{verbatim}", Recovery::Strict, true).unwrap();
+        assert!(run.result.diagnostics.is_empty());
+        assert!(run.after_effects.is_none());
+        assert!(Arc::ptr_eq(&run.exit_state, &run.entry_state));
+
+        // The same on the recovery path, where no terminator was ever found.
+        let run = run_body("\nno end in sight", Recovery::Tolerant, true).unwrap();
+        assert!(run.after_effects.is_none());
+        assert!(Arc::ptr_eq(&run.exit_state, &run.entry_state));
     }
 
     // --- the terminator's two shapes: same bytes read, different facts reported -----

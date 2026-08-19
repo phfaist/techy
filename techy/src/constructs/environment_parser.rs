@@ -926,21 +926,23 @@ mod tests {
     use super::super::invocation_parser::parse_declared_arguments;
     use super::super::{
         GroupArgumentParser, Invocation, MarkerArgumentParser, NodesParser,
-        OptionalGroupArgumentParser, StopSpec,
+        OptionalGroupArgumentParser, StdInvocationParser, StopSpec,
     };
     use super::*;
     use crate::engine::{
         CommandResolution, ParseDriver, ParseResult, ParserSession, ResolvedCallable,
     };
     use crate::error::{DiagnosticInfo, ParseError, Recovery};
-    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
+    use crate::scopes::{CallableQuery, CallableSyntax, Package, Scope, ScopeOp, ScopeStack};
     use crate::node::{
         CallableData, ChildRegion, ContentNodes, NodeRef, ParsedArguments, ParsedSlot,
         ParsedSlots, SlotRole,
     };
     use crate::source::{Source, SourcePos};
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
-    use crate::state::{ParsingState, StateData, TokenRulesOverrides};
+    use crate::state::{
+        FeaturePresence, LangFeatures, ParsingState, StateData, TokenRulesOverrides,
+    };
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
         ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdStreamPosition,
@@ -2152,6 +2154,154 @@ mod tests {
         assert_eq!(result.tree.root().span().range(), 0..1);
         assert_eq!(result.tree.root().child(0).unwrap().chars(), Some("x"));
         assert!(result.diagnostics.is_empty());
+    }
+
+    // --- what the body reports about its interior's after-effects ------------------------
+    // ([§dd-dr:environment-after-effects], the environment companion of
+    // [§dd-dr:group-after-effects]): the body parser stays a blind helper — it *reports*
+    // the interior content run's exit state and merged record on the produced
+    // `EnvironmentBody` and returns no pass-through delta of its own, leaving what (if
+    // anything) escapes the environment to the driving composition.
+
+    /// The scope this section's `\gdef` defines into (pre-seeded, so the definition
+    /// lands where the escape channel would carry it).
+    const GLOBAL: &str = "global";
+
+    /// A definition macro: the standard node, plus a scope-op delta as its
+    /// after-effect (the `\newcommand` shape) — the delta-returning spec the suite's
+    /// declarative language otherwise has none of.
+    #[derive(Debug)]
+    struct DefiningSpec {
+        delta: ParsingStateDelta<EnvLang>,
+    }
+
+    impl crate::serialize::SerializableObject<EnvLang> for DefiningSpec {}
+
+    impl CallableSpec<EnvLang> for DefiningSpec {
+        fn make_invocation_parser<'a>(
+            &'a self,
+            invocation: Invocation<'a, EnvLang>,
+        ) -> Result<Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>, ParseError>
+        {
+            Ok(Box::new(DefiningParser {
+                inner: StdInvocationParser::new(invocation),
+                delta: &self.delta,
+            }))
+        }
+    }
+
+    struct DefiningParser<'a> {
+        inner: StdInvocationParser<'a, EnvLang>,
+        delta: &'a ParsingStateDelta<EnvLang>,
+    }
+
+    impl ConstructParser<EnvLang> for DefiningParser<'_> {
+        type Output = BuildId;
+
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, EnvLang>,
+        ) -> ConstructParserResult<EnvLang, (BuildId, Option<Box<ParsingStateDelta<EnvLang>>>)>
+        {
+            let (id, _) = self.inner.parse(cx)?;
+            Ok((id, Some(Box::new(self.delta.clone()))))
+        }
+    }
+
+    /// `GLOBAL`-targeted definition of the zero-argument macro `name`.
+    fn defining(name: &str) -> ParsingStateDelta<EnvLang> {
+        ParsingStateDelta::new().scope_op(ScopeOp::Define {
+            scope: GLOBAL.into(),
+            callable_type: CT_MACRO,
+            name: name.into(),
+            spec: Arc::new(StdCallableSpec::default()),
+        })
+    }
+
+    /// Is `name` resolvable as a macro under `state`?
+    fn defined(state: &ParsingState<EnvLang>, name: &str) -> bool {
+        let query =
+            CallableQuery::new(CT_MACRO, name, CallableSyntax::Command { escape_char: '\\' });
+        state.scopes().retrieve_spec(&query, state).unwrap().is_some()
+    }
+
+    /// A state defining `\gdef` — whose after-effect defines `\g` in the `GLOBAL`
+    /// scope — over this suite's token rules, with that scope seeded.
+    fn defining_state() -> Arc<ParsingState<EnvLang>> {
+        let mut lib = Package::new("after-effect-definitions");
+        lib.insert(CT_MACRO, "gdef", Arc::new(DefiningSpec { delta: defining("g") }));
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
+        scopes.push(Arc::new(Scope::<EnvLang>::new(GLOBAL)));
+        Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }))
+    }
+
+    /// Drive an `EnvironmentBodyParser` for the environment `A` directly over
+    /// `content`, and hand the produced body (and the entry state) back.
+    fn run_body(
+        content: &str,
+        state: &Arc<ParsingState<EnvLang>>,
+    ) -> (EnvironmentBody<EnvLang>, ParseResult<EnvLang>) {
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        let mut session = ParserSession::new();
+        let driver = EnvDriver { recovery: Recovery::Strict };
+        let mut cx =
+            ParseContext::new(&mut reader, Arc::clone(state), &mut session, &driver);
+        let mut parser =
+            EnvironmentBodyParser::new(SourceSpan::new(&source, 0..0), "A", "end", GT_BRACE);
+        let (body, delta) = parser.parse(&mut cx).expect("parse");
+        // The pass-through delta stays `None`: an interior escape is *reported*, never
+        // *returned* — routing it outward is the driving composition's decision.
+        assert!(delta.is_none());
+        let result = session.finish(body.body).unwrap();
+        crate::node::check_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty());
+        (body, result)
+    }
+
+    #[test]
+    fn a_body_reports_the_interior_runs_merged_record_and_exit_state() {
+        let st = defining_state();
+        // `\gdef` inside the body leaves its definition to the body's own following
+        // siblings — the interior content run applies it and records it.
+        let (body, result) = run_body("\\gdef x\\end{A}", &st);
+        assert_eq!(result.tree.root().child(0).unwrap().name(), Some("gdef"));
+
+        // The reported record is the interior run's merged one, raw and unfiltered:
+        // the single scope op `\gdef` generated, tagged with its target scope (the
+        // structural `\gdef`-vs-`\def` split a routing hook keys on).
+        let record = body.after_effects.expect("the interior applied one after-effect");
+        let ops = <<EnvLang as Lang>::Features as LangFeatures>::Scopes::store_get(
+            &record.scope_ops,
+        )
+        .expect("the lang declares the scopes feature present");
+        assert!(
+            matches!(
+                &ops[..],
+                [ScopeOp::Define { scope, callable_type, name, .. }]
+                    if &**scope == GLOBAL && *callable_type == CT_MACRO && &**name == "g"
+            ),
+            "unexpected record ops: {ops:?}"
+        );
+
+        // The exit state is where the record's definitions are inspectable — the record
+        // itself carries operations, not a symbol table. It is a *different* state from
+        // the one the body was entered under, which the definition never reached.
+        assert!(!Arc::ptr_eq(&body.exit_state, &st));
+        assert!(defined(&body.exit_state, "g"));
+        assert!(!defined(&st, "g"));
+    }
+
+    #[test]
+    fn a_body_whose_interior_generates_nothing_reports_no_after_effects() {
+        let st = defining_state();
+        // No delta-returning construct inside: the run applied nothing, so there is
+        // nothing to report and the state it reached is the very state it started from
+        // (`Arc` identity — pass-through preserves it).
+        let (body, _) = run_body("x\\end{A}", &st);
+        assert!(body.after_effects.is_none());
+        assert!(Arc::ptr_eq(&body.exit_state, &st));
     }
 
     // --- misbehaving custom readers are implementation errors ([§dd-dr:panic-policy]) -------

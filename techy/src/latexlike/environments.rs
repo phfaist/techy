@@ -1141,18 +1141,23 @@ mod tests {
     use super::super::{CallableType, GroupType, LatexlikeDriver, MacroSpec, Mode};
     use super::*;
     use crate::constructs::{
-        ExpressionParser, GroupArgumentParser, OptionalGroupArgumentParser,
+        ChildStateSpec, ExpressionParser, GroupAfterEffectsFn, GroupArgumentParser, GroupParser,
+        OptionalGroupArgumentParser,
     };
-    use crate::engine::{Language, ParseResult};
-    use crate::error::Recovery;
+    use crate::engine::{CommandResolution, Language, ParseDriver, ParseResult};
+    use crate::error::{HookFailed, Recovery};
     use crate::latexlike::{check_latexlike_tree_invariants, source_recomposer};
     use crate::node::NodeRef;
     use crate::recompose::TreeRecomposer;
-    use crate::scopes::{Package, ScopeOp};
+    use crate::scopes::{Package, Scope, ScopeOp, SpecsProvider};
     use super::super::test_support::RelaxedLatexlike;
-    use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
-    use crate::token::GroupRule;
+    use crate::state::{
+        CommentOverrides, FeaturePresence, Lang, LangFeatures, ParsingState,
+        ParsingStateStack, TokenRulesOverrides,
+    };
+    use crate::token::{GroupRule, Token, TokenReader};
     use alloc::string::ToString;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     // --- the suite's definitions: the §G environment matrix over the real preset ------
 
@@ -2126,5 +2131,507 @@ mod tests {
             );
             crate::node::validate_tree(&result.tree).expect("the all-trees law holds");
         }
+    }
+
+    // --- the environment after-effect leak channel (the `\gdef` shape) ------------------
+    //
+    // [§dd-dr:environment-after-effects], the environment companion of
+    // [§dd-dr:group-after-effects]: the `\begin` composition routes the body's reported
+    // interior record through `LatexlikeParseDriver::environment_after_effects` and
+    // returns the survivor as the invocation's own after-effect, which the enclosing
+    // content loop applies and records. An environment therefore leaks exactly what its
+    // driver's hook keeps — and, level by level, composes the escape outward.
+
+    /// The scope `\gdef` defines into — the tag that survives the construct.
+    const GLOBAL: &str = "global";
+    /// The scope `\def` defines into — dropped at the construct's boundary.
+    const LOCAL: &str = "local";
+
+    /// A member of the latexlike family whose driver installs the after-effect leak
+    /// hooks: the preset's vocabularies, seed, specs and parsers are unchanged — only
+    /// the driver differs, which is what makes the hooks the site under test (the
+    /// `Driver: LatexlikeParseDriver<Self>` bound is what a custom driver opts into).
+    #[derive(Debug, Clone, Copy)]
+    struct GdefLatexlike;
+
+    impl Lang for GdefLatexlike {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = GroupType;
+        type CallableTypeId = CallableType;
+        type ModeId = Mode;
+        type StateExt = ();
+        type Event = crate::latexlike::Event;
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = crate::latexlike::LatexlikeNodeExts;
+        type InvocationSyntax =
+            crate::latexlike::InvocationSyntaxData<crate::latexlike::StdEnvironmentSyntax<Self>>;
+        type Driver = GdefDriver;
+
+        /// The preset's own seed, for this language's vocabularies.
+        fn initial_state_data(
+        ) -> Result<crate::state::StateData<Self>, crate::state::FinalizeError> {
+            let mut scopes = crate::scopes::ScopeStack::new();
+            scopes.push(crate::latexlike::builtin_package());
+            Ok(crate::state::StateData {
+                rules: crate::latexlike::default_token_rules(),
+                scopes,
+                mode: Mode::Text,
+                ext: (),
+            })
+        }
+
+        fn scan_specials(
+            state: &ParsingState<Self>,
+            content: &str,
+            pos: usize,
+        ) -> Result<Option<crate::token::SpecialsMatch<Self>>, crate::token::SpecialsScanError>
+        {
+            state.scopes().scan_specials(state, content, pos)
+        }
+
+        fn specials_trigger_chars(
+            data: &crate::state::StateData<Self>,
+        ) -> crate::token::TriggerChars {
+            data.scopes.specials_trigger_chars()
+        }
+
+        fn make_node_ext(
+            _kind: &NodeKind<Self>,
+            _span: &SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    impl LatexlikeLang for GdefLatexlike {}
+
+    /// The leak filter, shared verbatim by the group-level and the environment-level
+    /// hook: keep the ops the language tagged as global, drop the rest. A merged record
+    /// carries no provenance, so a `\gdef`-vs-`\def` split *is* this structural filter
+    /// over the scope each op targets (both hook types' documentation).
+    fn keep_global_defines(
+        record: Option<Box<ParsingStateDelta<GdefLatexlike>>>,
+    ) -> Option<Box<ParsingStateDelta<GdefLatexlike>>> {
+        let record = record?;
+        let ops = <<GdefLatexlike as Lang>::Features as LangFeatures>::Scopes::store_get(
+            &record.scope_ops,
+        )
+        .expect("the lang declares the scopes feature present");
+        let kept: Vec<ScopeOp<GdefLatexlike>> = ops
+            .iter()
+            .filter(|op| matches!(op, ScopeOp::Define { scope, .. } if &**scope == GLOBAL))
+            .cloned()
+            .collect();
+        if kept.is_empty() {
+            return None;
+        }
+        let mut escaping = ParsingStateDelta::new();
+        for op in kept {
+            escaping = escaping.scope_op(op);
+        }
+        Some(Box::new(escaping))
+    }
+
+    /// The group-level hook as the driver stores it: a closure (it captures the call
+    /// counter), handed to [`GroupParser::new_with_after_effects`] as a borrowed
+    /// `dyn Fn`.
+    #[allow(clippy::type_complexity)]
+    type GroupHook = Box<
+        dyn Fn(
+                &Arc<GroupRule<GdefLatexlike>>,
+                &Arc<ParsingState<GdefLatexlike>>,
+                &Arc<ParsingState<GdefLatexlike>>,
+                Option<Box<ParsingStateDelta<GdefLatexlike>>>,
+            ) -> Result<Option<Box<ParsingStateDelta<GdefLatexlike>>>, ParseError>
+            + Send
+            + Sync,
+    >;
+
+    /// What [`GdefDriver`]'s environment hook answers.
+    #[derive(Debug, Clone, Copy)]
+    enum EnvironmentPolicy {
+        /// Keep the globally-targeted defines — the `\gdef` policy.
+        Leak,
+        /// Fail: the hook-fallibility contract's abort channel.
+        Fail,
+    }
+
+    /// [`GdefLatexlike`]'s driver: the preset's behavior throughout — every
+    /// [`ParseDriver`] hook is the wrapped [`LatexlikeDriver`]'s own answer — plus the
+    /// two after-effect leak hooks, the group-level one installed on every group descent
+    /// and the environment-level one from [`LatexlikeParseDriver`]. Both run the same
+    /// filter, which is what makes the two constructs' escapes comparable.
+    struct GdefDriver {
+        inner: LatexlikeDriver<GdefLatexlike>,
+        /// `None` = the stock behavior (nothing escapes a group).
+        group_hook: Option<GroupHook>,
+        /// What the environment hook does.
+        environment_policy: EnvironmentPolicy,
+        /// Environment hook calls, so the tests can pin one call per level.
+        environment_calls: AtomicUsize,
+        /// Of those, the ones handed an empty record.
+        empty_records: AtomicUsize,
+        /// Group hook calls (shared with the closure that counts them).
+        group_calls: Arc<AtomicUsize>,
+    }
+
+    impl fmt::Debug for GdefDriver {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("GdefDriver").finish_non_exhaustive()
+        }
+    }
+
+    impl GdefDriver {
+        fn new(group_hook: bool, environment_policy: EnvironmentPolicy) -> GdefDriver {
+            let group_calls = Arc::new(AtomicUsize::new(0));
+            // The closure captures the counter — the reason the hook is a boxed
+            // `dyn Fn` and not a bare `fn` pointer.
+            let counter = Arc::clone(&group_calls);
+            let hook: GroupHook = Box::new(move |_rule, initial, exit, record| {
+                counter.fetch_add(1, Ordering::Relaxed);
+                if record.is_none() {
+                    assert!(Arc::ptr_eq(initial, exit));
+                }
+                Ok(keep_global_defines(record))
+            });
+            GdefDriver {
+                inner: LatexlikeDriver::new(Recovery::Tolerant),
+                group_hook: group_hook.then_some(hook),
+                environment_policy,
+                environment_calls: AtomicUsize::new(0),
+                empty_records: AtomicUsize::new(0),
+                group_calls,
+            }
+        }
+
+        /// Both hooks installed, both keeping the globally-targeted defines.
+        fn leaking() -> GdefDriver {
+            GdefDriver::new(true, EnvironmentPolicy::Leak)
+        }
+
+        /// The environment hook fails; no group hook (the failure is the subject).
+        fn failing() -> GdefDriver {
+            GdefDriver::new(false, EnvironmentPolicy::Fail)
+        }
+
+        fn environment_calls(&self) -> usize {
+            self.environment_calls.load(Ordering::Relaxed)
+        }
+
+        fn empty_records(&self) -> usize {
+            self.empty_records.load(Ordering::Relaxed)
+        }
+
+        fn group_calls(&self) -> usize {
+            self.group_calls.load(Ordering::Relaxed)
+        }
+    }
+
+    impl ParseDriver<GdefLatexlike> for GdefDriver {
+        fn recovery(&self) -> Recovery {
+            self.inner.recovery()
+        }
+
+        fn source_resolver(&self) -> Option<&dyn crate::source::SourceResolver<Option<String>>> {
+            self.inner.source_resolver()
+        }
+
+        fn observe_parse_start(
+            &self,
+            source: &Arc<crate::source::Source<Option<String>>>,
+            seed: &Arc<ParsingState<GdefLatexlike>>,
+            diagnostics: &mut crate::error::Diagnostics<Option<String>>,
+        ) {
+            self.inner.observe_parse_start(source, seed, diagnostics);
+        }
+
+        fn resolve_command(
+            &self,
+            state: &ParsingState<GdefLatexlike>,
+            token: &Token<GdefLatexlike>,
+            tokens: &dyn TokenReader<'_, GdefLatexlike>,
+        ) -> Result<CommandResolution<GdefLatexlike>, ParseError> {
+            self.inner.resolve_command(state, token, tokens)
+        }
+
+        fn make_paragraph_break_node(
+            &self,
+            state: &ParsingState<GdefLatexlike>,
+            break_span: &SourceSpan<Option<String>>,
+        ) -> NodeKind<GdefLatexlike> {
+            self.inner.make_paragraph_break_node(state, break_span)
+        }
+
+        fn group_interior_delta(
+            &self,
+            base: &ParsingState<GdefLatexlike>,
+            rule: &Arc<GroupRule<GdefLatexlike>>,
+        ) -> Option<ParsingStateDelta<GdefLatexlike>> {
+            self.inner.group_interior_delta(base, rule)
+        }
+
+        fn resolve_state_event(
+            &self,
+            event: &crate::latexlike::Event,
+            stack: &ParsingStateStack<GdefLatexlike>,
+        ) -> Result<Option<ParsingStateDelta<GdefLatexlike>>, ParseError> {
+            self.inner.resolve_state_event(event, stack)
+        }
+
+        /// The group-level plug-in point: every group descent of this language carries
+        /// the hook, which is what makes a group's escape compose outward.
+        fn make_group_parser<'p>(
+            &'p self,
+            open: &Token<GdefLatexlike>,
+            rule: Arc<GroupRule<GdefLatexlike>>,
+            child_states: ChildStateSpec<'p, GdefLatexlike>,
+        ) -> Result<
+            Box<dyn ConstructParser<GdefLatexlike, Output = BuildId> + 'p>,
+            ParseError,
+        > {
+            Ok(match &self.group_hook {
+                None => Box::new(
+                    GroupParser::new(open.clone(), rule).with_child_states(child_states),
+                ),
+                Some(hook) => {
+                    let hook: GroupAfterEffectsFn<'p, GdefLatexlike> = &**hook;
+                    Box::new(
+                        GroupParser::new_with_after_effects(open.clone(), rule, hook)
+                            .with_child_states(child_states),
+                    )
+                }
+            })
+        }
+    }
+
+    /// The one-line opt-in the trait's defaults are designed for — here with the one
+    /// hook overridden.
+    impl LatexlikeParseDriver<GdefLatexlike> for GdefDriver {
+        fn environment_after_effects(
+            &self,
+            invocation: &EnvironmentInvocation<'_, GdefLatexlike>,
+            spec: &Arc<dyn CallableSpec<GdefLatexlike>>,
+            initial: &Arc<ParsingState<GdefLatexlike>>,
+            exit: &Arc<ParsingState<GdefLatexlike>>,
+            record: Option<Box<ParsingStateDelta<GdefLatexlike>>>,
+        ) -> Result<Option<Box<ParsingStateDelta<GdefLatexlike>>>, ParseError> {
+            self.environment_calls.fetch_add(1, Ordering::Relaxed);
+            // Arguments 1 and 2: the invocation facts and the resolved spec — jointly
+            // what a policy keys on, in place of the group hook's matched `GroupRule`.
+            assert!(matches!(invocation.name, "center" | "outer"), "{}", invocation.name);
+            assert_eq!(invocation.end_command_name, "end");
+            assert!(spec.arguments().is_empty());
+            // Arguments 3 and 4: the body's two states. An interior that generated
+            // nothing never left the state it started in; one that did is inspectable
+            // only here (the record carries operations, not a symbol table).
+            match &record {
+                None => {
+                    self.empty_records.fetch_add(1, Ordering::Relaxed);
+                    assert!(Arc::ptr_eq(initial, exit));
+                }
+                Some(_) => assert!(!Arc::ptr_eq(initial, exit)),
+            }
+            match self.environment_policy {
+                EnvironmentPolicy::Leak => Ok(keep_global_defines(record)),
+                EnvironmentPolicy::Fail => Err(ParseError::new(
+                    HookFailed::new("the leak policy table is unavailable", None),
+                    invocation.name_span.clone(),
+                )),
+            }
+        }
+    }
+
+    /// `scope`-targeted definition of the zero-argument macro `name` — the language
+    /// tagging its own op, which is all a hook has to discriminate on.
+    fn defining<LLL: LatexlikeLang>(scope: &str, name: &str) -> ParsingStateDelta<LLL> {
+        ParsingStateDelta::new().scope_op(ScopeOp::Define {
+            scope: scope.into(),
+            callable_type: LLL::CallableTypeId::macro_callable(),
+            name: name.into(),
+            spec: Arc::new(MacroSpec::<LLL>::default()),
+        })
+    }
+
+    /// The suite's definitions, for any family member: `\gdef` and `\def` — zero-argument
+    /// macros whose after-effects define `\g` and `\d` in the globally-named and in a
+    /// local scope respectively — and the plain environments `center` and `outer`.
+    fn gdef_package<LLL: LatexlikeLang>() -> Package<LLL> {
+        let mut package = Package::new("gdef-definitions");
+        let macro_type = LLL::CallableTypeId::macro_callable();
+        let environment_type = LLL::CallableTypeId::environment_callable();
+        package.insert(
+            macro_type,
+            "gdef",
+            MacroSpec::<LLL>::new(vec![]).with_after_effect(defining(GLOBAL, "g")),
+        );
+        package.insert(
+            macro_type,
+            "def",
+            MacroSpec::<LLL>::new(vec![]).with_after_effect(defining(LOCAL, "d")),
+        );
+        package.insert(environment_type, "center", Arc::new(EnvironmentSpec::<LLL>::new(vec![])));
+        package.insert(environment_type, "outer", Arc::new(EnvironmentSpec::<LLL>::new(vec![])));
+        package
+    }
+
+    /// The suite's seed: the family member's own seed plus the definitions above and the
+    /// document-level scope `\gdef` defines into.
+    fn gdef_seed<LLL: LatexlikeLang>() -> ParsingState<LLL> {
+        let definitions: Arc<dyn SpecsProvider<LLL>> = Arc::new(gdef_package::<LLL>());
+        let global: Arc<dyn SpecsProvider<LLL>> = Arc::new(Scope::<LLL>::new(GLOBAL));
+        ParsingState::lang_initial_with_packages([definitions, global]).expect("seed state")
+    }
+
+    /// A [`GdefLatexlike`] language under `driver`.
+    fn gdef_language(driver: GdefDriver) -> Language<GdefLatexlike> {
+        Language::new(driver, gdef_seed::<GdefLatexlike>())
+    }
+
+    /// Parse `input`, check the tree, and report `(root child summaries, diagnostics)`.
+    fn gdef_parse(
+        language: &Language<GdefLatexlike>,
+        input: &str,
+    ) -> (Vec<String>, Vec<String>) {
+        let result = language.parse(input).expect("the parse runs");
+        check_latexlike_tree_invariants(&result.tree);
+        let shapes = result.tree.root().children().iter().map(|n| n.summary()).collect();
+        let messages = result.diagnostics.iter().map(|d| d.message().to_string()).collect();
+        (shapes, messages)
+    }
+
+    #[test]
+    fn an_environment_leaks_the_after_effects_its_hook_keeps_exactly_as_a_group_does() {
+        // The acceptance pair: the same `\gdef` inside a group and inside an
+        // environment, under a driver whose two hooks run the same filter. Both leak,
+        // so the following `\g` resolves in both — an environment's escape channel is
+        // the group's, one construct level up.
+        for input in ["{\\gdef}\\g", "\\begin{center}\\gdef\\end{center}\\g"] {
+            let language = gdef_language(GdefDriver::leaking());
+            let (shapes, messages) = gdef_parse(&language, input);
+            assert!(messages.is_empty(), "{input:?}: {messages:?}");
+            // The construct, then `\g` as a resolved callable (an unresolved command
+            // would be a `chars` recovery node plus a diagnostic).
+            assert_eq!(shapes.len(), 2, "{input:?}: {shapes:?}");
+            assert_eq!(shapes[1], "Macro(g)", "{input:?}: {shapes:?}");
+            // One hook call at the one construct level, whichever construct it was.
+            assert_eq!(
+                language.driver().group_calls() + language.driver().environment_calls(),
+                1,
+                "{input:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_locally_targeted_definition_escapes_neither_a_group_nor_an_environment() {
+        // The other half of the structural split: `\def` tags its op with a local
+        // scope, the filter drops it, and the construct's boundary is where the
+        // definition dies — in a group and in an environment alike.
+        for input in ["{\\def}\\d", "\\begin{center}\\def\\end{center}\\d"] {
+            let language = gdef_language(GdefDriver::leaking());
+            let (shapes, messages) = gdef_parse(&language, input);
+            assert_eq!(messages.len(), 1, "{input:?}: {messages:?}");
+            assert!(messages[0].contains("cannot resolve command ‘\\d’"), "{messages:?}");
+            assert_eq!(shapes[1], "chars(\\d)", "{input:?}: {shapes:?}");
+        }
+    }
+
+    #[test]
+    fn the_stock_driver_lets_nothing_escape_an_environment() {
+        // The `Ok(None)` trait default, on the canned assembly whose
+        // `LatexlikeParseDriver` impl is the empty one: `\gdef` inside an environment
+        // is scoped to it exactly as it is inside a group, and `\g` after either
+        // construct is unresolvable.
+        let language = Language::new(
+            LatexlikeDriver::<Latexlike>::new(Recovery::Tolerant),
+            gdef_seed::<Latexlike>(),
+        );
+        for input in ["\\begin{center}\\gdef\\end{center}\\g", "{\\gdef}\\g"] {
+            let result = language.parse(input).expect("the parse runs");
+            check_latexlike_tree_invariants(&result.tree);
+            assert_eq!(messages(&result).len(), 1, "{input:?}: {:?}", messages(&result));
+            assert_eq!(root_shapes(&result)[1], "chars(\\g)", "{input:?}");
+        }
+    }
+
+    #[test]
+    fn an_escape_composes_outward_through_nested_environments_and_groups() {
+        // One hook per level, so the survivor of the inner filter is the raw record the
+        // next level out is offered: the enclosing content loop applies the returned
+        // delta *and* merges it into its own record, which is what the enclosing
+        // construct's hook then sees.
+        let language = gdef_language(GdefDriver::leaking());
+        let (shapes, messages) = gdef_parse(
+            &language,
+            "\\begin{outer}\\begin{center}\\gdef\\end{center}\\end{outer}\\g",
+        );
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(shapes[1], "Macro(g)", "{shapes:?}");
+        assert_eq!(language.driver().environment_calls(), 2);
+
+        // The two constructs interleave just as freely: a group inside an environment.
+        let language = gdef_language(GdefDriver::leaking());
+        let (shapes, messages) =
+            gdef_parse(&language, "\\begin{center}{\\gdef}\\end{center}\\g");
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(shapes[1], "Macro(g)", "{shapes:?}");
+        assert_eq!(language.driver().group_calls(), 1);
+        assert_eq!(language.driver().environment_calls(), 1);
+
+        // …and an environment inside a group.
+        let language = gdef_language(GdefDriver::leaking());
+        let (shapes, messages) =
+            gdef_parse(&language, "{\\begin{center}\\gdef\\end{center}}\\g");
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(shapes[1], "Macro(g)", "{shapes:?}");
+        assert_eq!(language.driver().group_calls(), 1);
+        assert_eq!(language.driver().environment_calls(), 1);
+    }
+
+    #[test]
+    fn the_environment_hook_is_called_unconditionally() {
+        // Like the group hook: an empty record is a fact worth being told, and a policy
+        // keying on the invocation alone must still run. An empty-bodied environment
+        // reaches the hook with `record = None`.
+        let language = gdef_language(GdefDriver::leaking());
+        let (shapes, messages) = gdef_parse(&language, "\\begin{center}\\end{center}\\g");
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(shapes[1], "chars(\\g)", "{shapes:?}");
+        assert_eq!(language.driver().environment_calls(), 1);
+        assert_eq!(language.driver().empty_records(), 1);
+
+        // A body that parses nodes but generates no after-effect reaches it the same
+        // way, still with an empty record.
+        let language = gdef_language(GdefDriver::leaking());
+        let (_, messages) = gdef_parse(&language, "\\begin{center}x\\end{center}");
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(language.driver().environment_calls(), 1);
+        assert_eq!(language.driver().empty_records(), 1);
+    }
+
+    #[test]
+    fn a_failing_environment_after_effects_hook_aborts_under_any_policy() {
+        // The hook-fallibility contract, on the environment's escape channel: an Err
+        // ends the parse even under tolerant recovery — it is an error, not a
+        // diagnostic — and the composition attaches the live traceback (a driver hook
+        // has no session access), so the `\begin` dispatch names the context.
+        let language = gdef_language(GdefDriver::failing());
+        let error = language.parse("\\begin{center}x\\end{center}").unwrap_err();
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: the leak policy table is unavailable"
+        );
+        // The error is anchored where the hook put it — the environment's name.
+        assert_eq!(error.span().range(), 7..13);
+        // The `\begin` dispatch frame is live at the routing site — the only frame, as
+        // `center` declares no arguments and the body parser's own frame is long popped.
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "macro ‘\\begin’");
+        assert_eq!(language.driver().environment_calls(), 1);
     }
 }
