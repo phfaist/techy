@@ -143,8 +143,16 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 the public API is exposed through re-export facades with one canonical path per
 item — `techy::{source, error, extract, transform, visit, recompose, serialize}`
 top-level, `techy::core` as a flat machinery hub with extracted satellites
-`core::{constructs, specs, node}`, `techy::latexlike` — and internal
+`core::{token, constructs, specs, node}`, `techy::latexlike` — and internal
 src modules are private (internal reorganization is never public-breaking).
+The token satellite is bounded by its own placement rule: `core::token` holds
+what a token reader produces, consumes and answers with — the token and
+stream-position types, the `TokenReader` trait and the standard reader, the scan
+helpers, the token rules the reader reads together with the overrides that change
+them mid-parse and the caches derived from them, the types the specials-scan hooks
+answer with, and the token conditions and errors. The hub keeps the `Lang` trait
+(its associated types and hooks), the parsing state and its deltas, and the engine
+([§dd-dr:core-token-facade]).
 The topic modules sketched above describe the *internal* organization only. Full
 decision incl. the specs-vs-hub author-side/run-side rule and rejected shapes:
 [§dd-dr:public-namespace-topology]; the top-level standing of `techy::recompose`
@@ -165,7 +173,9 @@ API; parsing states stay crate-frozen even for embedders
 
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
 [§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +
-extracted subsets), [§dd-dr:stability-rubric] (one stability class, soft freeze),
+extracted subsets), [§dd-dr:core-token-facade] (the token subset as the fourth
+satellite, and its placement rule),
+[§dd-dr:stability-rubric] (one stability class, soft freeze),
 [§dd-dr:public-visibility-sweep] (the completed per-item pub-vs-pub(crate) sweep),
 [§dd-dr:embedding-feedback-policy] (graduation over convenience surface; the
 declined accessor batch), [§dd-dr:workspace-layout] (virtual workspace, crates in
@@ -261,7 +271,9 @@ stores byte ranges and `Arc`s only — no strings, no lifetime — behind eight 
 constructors, one per kind, and its ranges are readable only by this crate's readers.
 `StdStreamPosition` is the matching stream position, a byte offset with no public
 constructor and no arithmetic. The concrete shapes live in `src/token` (public path:
-`techy::core`); the token taxonomy with every argument is [§dd-dr:token-model].
+`techy::core::token`, the facade of the whole token topic —
+[§dd-dr:core-token-facade]); the token taxonomy with every argument is
+[§dd-dr:token-model].
 
 - **No invocation forms at the token level**: no macro/environment taxonomy and no
   `CallableTypeId` on `Command` tokens — `\begin` is a `Command` exactly like
@@ -317,7 +329,14 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   the inner reader. Such a language declares a `Tokenization` of its own while keeping
   `Token = StdToken<L>` and `StreamPosition = StdStreamPosition`, which is why in-crate
   code requiring standard tokens bounds on that equality and never on
-  `Lang<Tokenization = StdTokenization>` ([§dd-dr:tokenization]).
+  `Lang<Tokenization = StdTokenization>` ([§dd-dr:tokenization]). A reader whose
+  token type is its *own* but stores standard tokens read from one or several
+  sources (a macro expander) keeps one inner `StdTokenReader` per source and reuses
+  that reader's two public scanning methods directly — `scan_std_token_at` and
+  `token_kind_of_std_token` — since the trait implementation for `StdTokenReader`
+  serves only languages tokenized in `StdToken`/`StdStreamPosition`, and reading
+  from several sources in one parse means declaring `OBEYS_SPAN_TILING = false`
+  ([§dd-dr:scan-helpers], [§dd-arch:span-tiling]).
   `TokenListReader` — internal test infrastructure only — is the second in-crate
   reader: the two-reader agreement harness runs every construct-parser parse
   against both and, since the list reader rejects tokens and positions it never issued,
@@ -326,6 +345,19 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   command escapes → comment starts → specials scan → forbidden check → `Char`. The
   ambiguous-delimiter case (`$…$`) is resolved by data
   ([§dd-dr:expecting-group-close]), not by privileged mode state.
+- **The scanning primitives are public**: the *scan helpers* `skip_whitespace`,
+  `scan_paragraph_break`, `scan_group_delimiter`, `command_rule_at`, `scan_command`,
+  `scan_comment` and `scan_specials_trigger` are free functions of `core::token`,
+  each recognizing one construct at a byte offset in the text handed to it and
+  answering a source-free *match value* — plain `Span`s plus the rule or spec that
+  matched (`GroupDelimiterMatch`, `CommandMatch`, `CommentMatch`, `SpecialsMatch`) —
+  never a token, and never a `Source`. `StdTokenReader::scan_std_token_at` is their
+  composition in the priority order above, so each construct is recognized in exactly
+  one place; it and `token_kind_of_std_token` are what a reader over standard tokens
+  from several sources reuses, while a reader with token kinds of its own composes
+  the helpers and builds its own tokens. Every helper requires its `pos` to lie
+  within the content on a `char` boundary and panics otherwise — the family's
+  approved panic exception ([§dd-dr:scan-helpers], [§dd-dr:panic-policy] rule 3).
 
 Decisions behind this section (full topic: [§dd-dr:tokens]): [§dd-dr:minimal-tokens], [§dd-dr:token-model],
 [§dd-dr:tokenization] (the `Lang::Tokenization` bundle, the `Token<L>`/`StreamPosition<L>`
@@ -339,7 +371,10 @@ aliases, `StdTokenization`, and the two bound rules),
 [§dd-dr:group-classes], [§dd-dr:command-escape-char],
 [§dd-dr:token-contract-hardening] (the third-party-implementor contract batch),
 [§dd-dr:token-list-reader-demoted], [§dd-dr:multi-newline-paragraphs],
-[§dd-dr:enable-flags] (per-feature `enabled` gates), [§dd-dr:token-diagnostics].
+[§dd-dr:enable-flags] (per-feature `enabled` gates), [§dd-dr:token-diagnostics],
+[§dd-dr:scan-helpers] (the public recognition primitives, the two promoted
+`StdTokenReader` methods, and the family's `pos` requirement),
+[§dd-dr:core-token-facade] (the `core::token` facade and its placement rule).
 A possible future merged first-character table is [§dd-dr:open-questions] item 1b.
 
 ## Parsing state [§dd-arch:state]
