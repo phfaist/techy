@@ -56,6 +56,11 @@ libraries at the top level, the machinery in `techy::core`, the preset in
   resolution, lazy line/column
 - **`techy::error`**: span-based structured diagnostics, tolerant parsing policy
 - **`techy::extract`**: content-extraction helpers over parsed node trees
+- **`techy::visit`**, **`techy::transform`**, **`techy::recompose`**: read-only
+  traversal, tree-to-tree transformation, and tree-to-value recomposition of
+  parsed node trees
+- **`techy::serialize`**: parsed trees, parsing states, definitions and whole
+  parse results to and from a format-independent value model
 - **`techy::core`**: the flat machinery hub — the `Lang` trait and immutable
   parsing state, and the parse engine (`Language` + `parse()`, drivers, sessions,
   results) — with four satellites:
