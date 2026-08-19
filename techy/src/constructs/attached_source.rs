@@ -18,8 +18,8 @@
 //! an `\input`-style construct's reference argument carries **plain text**. A caller
 //! that finds anything else in the argument (a nested group, a callable, a comment)
 //! raises [`InvalidSourceReferenceArgument`] and resolves nothing — the condition is
-//! defined here, beside the two the door itself raises, so every `\input`-variant spec
-//! reports the three failures with one wording.
+//! defined here, beside the two the door itself raises, so the three ways an inclusion
+//! fails read the same across every `\input`-variant spec and framework.
 //!
 //! Recursion control is deliberately **not** here: the core never interprets
 //! reference strings, and legitimate self-inclusion exists (`.dtx`-style
