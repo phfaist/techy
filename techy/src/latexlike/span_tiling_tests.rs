@@ -43,7 +43,9 @@ fn source(content: &str) -> Arc<Source> {
 type Segment<'s> = (&'s Arc<Source>, Range<usize>);
 
 /// The seed state of [`RelaxedScriptedLatexlike`] with `package` pushed innermost.
-fn seed(package: Package<RelaxedScriptedLatexlike>) -> Arc<ParsingState<RelaxedScriptedLatexlike>> {
+fn seed(
+    package: Package<RelaxedScriptedLatexlike>,
+) -> Arc<ParsingState<RelaxedScriptedLatexlike>> {
     Arc::new(ParsingState::lang_initial_with_packages([Arc::new(package)]).expect("seed state"))
 }
 

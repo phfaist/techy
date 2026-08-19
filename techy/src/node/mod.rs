@@ -61,14 +61,14 @@ pub use tree::{NodeId, NodeTree, TreeTag};
 // `NodeData` is deliberately NOT re-exported publicly ([§dd-dr:public-visibility-sweep]
 // Theme C): it is crate-internal — zero public signatures use it; `NodeRef` is the
 // read API. The crate-internal alias below serves in-crate consumers of the flat
-// storage: the latexlike parse-law checker's payload pins (test), and the tree
+// storage: the latexlike span-tiling law checker's payload pins (test), and the tree
 // serialization driver, which walks the storage-order node slice.
 pub(crate) use tree::NodeData;
 // Crate-internal subtree copying, shared with `crate::extract`'s builder helpers,
 // and the content-parent mapping parameter of the transform driver's record
 // translation (`restage_node_with_content_mapping`).
 pub(crate) use copy::{copy_subtree_into, ContentParentMapping};
-// The parse-law test oracle: pub(crate) per [§dd-dr:tree-validation]'s amendment —
+// The span-tiling law's test oracle: pub(crate) per [§dd-dr:tree-validation]'s amendment —
 // `validate_tree` is the one public checker; the panicking byte-accounting extras
 // are an in-crate test utility (all callers are test code, hence `cfg(test)`).
 #[cfg(test)]
@@ -2166,7 +2166,7 @@ mod tests {
     fn validate_tree_accepts_multi_source_trees() {
         // The all-trees law is source-blind: the `\input`-like shape — attached-source
         // children under a same-source sibling run — passes `validate_tree`, even
-        // though the parse-law byte accounting (children share the parent's source,
+        // though the span-tiling law's byte accounting (children share the parent's source,
         // interior partition) does not hold for it.
         let (tree, _main, _inc) = input_like_tree();
         validate_tree(&tree).unwrap();

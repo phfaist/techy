@@ -34,7 +34,9 @@ use core::ops::Range;
 use crate::engine::{ParseResult, ParserSession, StdParseDriver};
 use crate::error::{ParseError, Recovery};
 use crate::node::{BuildId, NodeBuildError, NodeKind, NodeRef, StagedChildren};
-use crate::recompose::{core_source_instruction, Recompose, RecomposeContext, Recomposer, TreeRecomposer};
+use crate::recompose::{
+    core_source_instruction, Recompose, RecomposeContext, Recomposer, TreeRecomposer,
+};
 use crate::scopes::ScopeStack;
 use crate::source::{Source, SourceSpan, TextContent};
 use crate::spec::ArgumentSpec;

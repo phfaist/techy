@@ -340,7 +340,7 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
 ///   the invocation itself (the paradigm: `\input`'s resolved content — the
 ///   invocation text *is* the recomposition). Attached slots are **excluded from the
 ///   parent's byte-tiling**: their children live in their own source, and the
-///   declaration replaces source-change inference in the parse-law checker.
+///   declaration replaces source-change inference in the span-tiling law's checker.
 /// - [`Hidden`](SlotRole::Hidden) — framework/callable-defined attachments techy core
 ///   ignores: **no recomposition, no byte accounting** — and nothing else. `Hidden`
 ///   is *not* read-invisibility: readers, extract helpers, and structural walks stay

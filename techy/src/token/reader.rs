@@ -2661,7 +2661,7 @@ mod tests {
         assert_eq!(err.span(), &SourceSpan::new(&source, sp(2, 3)));
 
         // Recovery: a Char placeholder covering the dangling escape byte itself, so the
-        // byte stays in the tree (the tolerant parse keeps the partition invariant).
+        // byte stays in the tree (the tolerant parse keeps span tiling).
         let recovery = err.into_recovery().unwrap();
         assert_eq!(
             recovery.token,
