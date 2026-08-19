@@ -279,6 +279,14 @@ impl StdStreamPosition {
 /// interpretive method to the inner reader. Nothing is read off a token — there is
 /// nothing readable on one.
 ///
+/// A reader that keeps one inner `StdTokenReader` per source, wrapping their tokens in a
+/// token type of its own (see *Seams* above), instead calls the two inner-reader methods
+/// that need no tokenization declaration of their own:
+/// [`scan_std_token_at`](StdTokenReader::scan_std_token_at) to read a standard token and
+/// [`token_kind_of_std_token`](StdTokenReader::token_kind_of_std_token) to interpret one
+/// — the [`core::token`](crate::core::token) module documentation describes that case in
+/// full.
+///
 /// Because the inner reader is generic over the language, delegation goes through a
 /// `&dyn TokenReader<'s, L>` / `&mut dyn TokenReader<'s, L>` view of it (plain method
 /// syntax on the concrete inner reader cannot infer the language):
@@ -603,13 +611,22 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// The parser-facing view of `tok` — the interpretation behind
     /// [`TokenReader::token_kind`], with `L: Lang` as its only requirement.
     ///
-    /// A reader of a language whose [`Lang::Tokenization`] declares its own token type
-    /// keeps an inner `StdTokenReader` per source and interprets the standard tokens it
-    /// stores through this method (in-crate: the scripted test reader); it cannot go
-    /// through the trait method, whose implementation here is available only to
-    /// languages tokenized in `StdToken`/`StdStreamPosition`. The view borrows the
-    /// token and this reader's content, never the reader.
-    pub(crate) fn token_kind_of<'t, L: Lang>(&self, tok: &'t StdToken<L>) -> TokenKind<'t, L>
+    /// A reader of a language whose [`Lang::Tokenization`] declares a token type of its
+    /// own, and stores standard tokens read by inner `StdTokenReader`s inside it — one
+    /// inner reader per source — interprets those stored tokens through this method. It
+    /// cannot go through [`TokenReader::token_kind`]: the implementation of that trait
+    /// here is available only to languages tokenized in
+    /// [`StdToken`]/[`StdStreamPosition`], which such a language is not.
+    ///
+    /// Interpreting a token with a reader that did not issue it is ruled out by clause 4
+    /// of the [`TokenReader`] documentation, and this reader cannot detect it: offsets
+    /// that fall outside this reader's content read as empty text, never as a panic. The
+    /// view borrows the token and this reader's content, never the reader, so a caller
+    /// may hold it while it goes on reading and moving the stream.
+    pub fn token_kind_of_std_token<'t, L: Lang>(
+        &self,
+        tok: &'t StdToken<L>,
+    ) -> TokenKind<'t, L>
     where
         's: 't,
     {
@@ -657,15 +674,66 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// token or stream-position types reuses: such a language is not the
     /// `Token = StdToken<L>, StreamPosition = StdStreamPosition` one this reader's
     /// [`TokenReader`] implementation requires, so it cannot call `peek` here, yet the
-    /// tokens it wants are exactly the ones this scan produces (in-crate: the scripted
-    /// test reader). Everything the scan needs of `L` is `L: Lang<SourceOrigin = O>`
-    /// — except the one step below.
+    /// tokens it wants are exactly the ones this scan produces. Everything the scan
+    /// needs of `L` is `L: Lang<SourceOrigin = O>` — except the one step below. Where
+    /// the reader itself stands is not consulted and not changed: `start` says where to
+    /// read.
+    ///
+    /// # Priority order
+    ///
+    /// Whitespace from `start` is skipped first ([`skip_whitespace`]) and becomes the
+    /// token's pre-space; none of the steps below sees it. Then the first of these that
+    /// matches produces the token — a construct whose feature the language declares
+    /// absent, or whose rules block `state` has disabled, never matches:
+    ///
+    /// 1. a paragraph break ([`scan_paragraph_break`]), which wins over everything, the
+    ///    end of the content included;
+    /// 2. the close delimiter the state expects
+    ///    ([`TokenRules::expecting_group_close`]);
+    /// 3. the longest group delimiter of the state's
+    ///    [`PrefixTable`](super::PrefixTable) — steps 2 and 3 are
+    ///    [`scan_group_delimiter`], and both come before commands, so that a delimiter
+    ///    led by an escape character (`\(`) wins over reading a command;
+    /// 4. a command ([`command_rule_at`], then [`scan_command`]);
+    /// 5. a comment ([`scan_comment`]);
+    /// 6. a specials trigger ([`scan_specials_trigger`]);
+    /// 7. a forbidden character ([`TokenRules::forbidden_chars`]), reported as the
+    ///    failure below;
+    /// 8. otherwise a single content character — a
+    ///    [`Char`](TokenKind::Char) token.
+    ///
+    /// Where the content ends and step 1 did not match, the terminal
+    /// [`EndOfStream`](TokenKind::EndOfStream) token is produced instead, carrying the
+    /// skipped whitespace as its pre-space.
+    ///
+    /// # Where `start` may point
+    ///
+    /// `start` is validated here — this is the one boundary where an offset reaches the
+    /// scan from outside, since [`move_to`](TokenReader::move_to) and
+    /// [`move_to_position`](TokenReader::move_to_position) accept caller-held tokens and
+    /// positions. A `start` that is out of bounds for the content or not on a `char`
+    /// boundary aborts the read with an unrecoverable implementation error, anchored at
+    /// the nearest valid offset at or before it (an invalid offset is not itself an
+    /// anchor); it is never a panic. The scan helpers the steps above call receive
+    /// offsets derived from a validated `start`, which is what lets their own
+    /// out-of-bounds precondition be a panic.
+    ///
+    /// # Failures
     ///
     /// `recovery_for` builds the [`TokenRecovery`] offered with a recoverable failure,
     /// from the placeholder token and the offset to resume at. That is the single step
     /// that needs the *language's* token and stream-position types, which the scan
     /// cannot name; a caller that cannot describe a recovery answers `None`.
-    pub(crate) fn scan_token_at<L>(
+    ///
+    /// Two conditions are reported with such a recovery, when `recovery_for` offers one:
+    /// [`EndOfStreamAfterEscape`] (an escape character stands as the last character of
+    /// the content) and [`ForbiddenChar`] (step 7). Both placeholders cover the
+    /// offending character as a [`Char`](TokenKind::Char) token and resume past it. The
+    /// other failures never carry a recovery: a [`Lang::scan_specials`] failure
+    /// ([`SpecialsScanError`] — the hook cannot say how to carry on) and an
+    /// implementation error (an invalid `start`, or a match end or error span from that
+    /// hook that the [`SpecialsMatch`](super::SpecialsMatch) documentation rules out).
+    pub fn scan_std_token_at<L>(
         &self,
         start: usize,
         state: &ParsingState<L>,
@@ -1023,7 +1091,7 @@ where
     L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>> {
-        self.scan_token_at(self.pos, state, |token, resume| {
+        self.scan_std_token_at(self.pos, state, |token, resume| {
             Some(TokenRecovery { token, resume: StdStreamPosition::at(resume) })
         })
     }
@@ -1040,7 +1108,7 @@ where
     where
         's: 't,
     {
-        self.token_kind_of(tok)
+        self.token_kind_of_std_token(tok)
     }
 
     fn source_span_between(

@@ -291,12 +291,13 @@ impl<'s, L: Lang> ScriptedReader<'s, L> {
                 }
                 // No recovery is offered: a script that does not tokenize cleanly is a
                 // mistake in the test, reported below rather than parsed around.
-                let token = match sources[source_index].scan_token_at(pos, state, |_, _| None) {
-                    Ok(token) => token,
-                    Err(error) => panic!("segment {nth} does not tokenize: {error}"),
-                };
+                let token =
+                    match sources[source_index].scan_std_token_at(pos, state, |_, _| None) {
+                        Ok(token) => token,
+                        Err(error) => panic!("segment {nth} does not tokenize: {error}"),
+                    };
                 if matches!(
-                    sources[source_index].token_kind_of(&token),
+                    sources[source_index].token_kind_of_std_token(&token),
                     TokenKind::EndOfStream
                 ) {
                     // The segment reached the end of its source's content. Its
@@ -493,7 +494,7 @@ where
         self.check_issued(tok, "token_kind");
         // The reader of the source the token was scanned from interprets it: the view
         // borrows the token and that source's content, never a reader.
-        self.sources[tok.source].token_kind_of(&tok.token)
+        self.sources[tok.source].token_kind_of_std_token(&tok.token)
     }
 
     fn source_span_between(
