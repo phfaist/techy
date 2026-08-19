@@ -2491,7 +2491,7 @@ Status: DECIDED (user).
 4. *End of stream:* the whitespace before the end-of-stream token — the reader's
    `source_span_between(&tok, StartBeforePreSpace, Start)` answer — materializes as a final
    whitespace-only `Chars` node.
-5. *Partition invariant:* sibling spans partition the parent's *content interior* exactly —
+5. *Span tiling:* sibling spans tile the parent's *content interior* exactly —
    `List` bodies, `Group` interiors, the root. For callables: argument/slot regions tile
    the child list (builder-enforced), the children block is span-contiguous, and unrecorded
    rigid scaffolding is the reconstructible complement (previous entry). Checked
@@ -2514,18 +2514,17 @@ does not apply at all — the test oracle then checks the all-trees law alone.
 
 Status: DECIDED (user, span-tiling design session).
 
-Whether a language's parse trees are **span-tiled** is a static declaration on the
-language: the associated const `Lang::OBEYS_SPAN_TILING: bool`, defaulted `true`. The
-canonical definition of the property is that const's own documentation and is restated
-nowhere else; its three components are that the children of every `List` and `Group` node
-tile the parent's interior (one source, reading order, no gaps, no overlaps), that a
-`Callable`'s children block is span-contiguous within the node's span (with the
-`Attached`/`Hidden` exclusions of [§dd-dr:slot-roles]), and that every positional payload
-sits at its pinned position — a `Chars` node's content is its whole span, a comment's
-start delimiter, content and post-space partition the comment node's span, a group's
-delimiters are the prefix and the suffix of its span. That every node carries exactly one
-span is *not* part of the definition: that rule is unconditional
-([§dd-dr:mandatory-node-spans]).
+Whether a language's parse trees are **span-tiled** is a static declaration on the language:
+the associated const `Lang::OBEYS_SPAN_TILING: bool`, defaulted `true`. The canonical
+definition of the property is that const's own documentation and is restated nowhere else;
+its three components are that the children of every `List` and `Group` node tile the
+parent's interior (one source, reading order, no gaps, no overlaps), that a `Callable`'s
+children block is span-contiguous within the node's span (with the `Attached`/`Hidden`
+exclusions of [§dd-dr:slot-roles]), and that every positional payload sits at its pinned
+position — a `Chars` node's content is its whole span, a comment's start delimiter, content
+and post-space partition the comment node's span, a group's delimiters are the prefix and
+the suffix of its span. That every node carries exactly one span is *not* part of the
+definition: that rule is unconditional ([§dd-dr:mandatory-node-spans]).
 
 The problem the declaration solves: the token layer was designed for a reader that serves
 one parse from several sources — one that substitutes a macro's definition into the stream
@@ -2544,105 +2543,112 @@ type (breaking, and nothing needs the property at the type level).
 The two regimes:
 
 - `true` — every language of this crate, the preset included: behavior unchanged, byte for
-  byte. The machinery enforces the property (a token stream that breaks it is reported as
-  an implementation error) and every span-based accessor answers exactly.
-- `false` — the parsers make **no** assumption about where tokens come from: not the
-  source, not the reading order, not the absence of gaps.
+  byte. The machinery enforces the property (a token stream that breaks it is reported as an
+  implementation error) and every span-based accessor answers exactly.
+- `false` — the parsers make **no** assumption about where tokens come from: not the source,
+  not the reading order, not the absence of gaps.
 
-**The reader describes what it will not delimit.** `TokenReader::source_span_describing(begin,
-end) -> SourceSpan` is a required method with no default body: a reader whose stream cannot
-be delimited must say what a stretch of it *is*, and a default would let a reader ship a
-misleading span it never chose — a missing implementation is a compile error instead. The
-answer is the reader's to choose: any span it considers a useful description of that stretch.
-The machinery derives nothing from it — no content, no structure, no ordering; the span
-becomes the node's span and shows in diagnostics. Recommended: `begin`'s source, running from
-`begin` to where the stream last stood in that source before reaching `end`; where the two
-positions do delimit one range of one source, that range. The method always answers (the
-empty span at `begin` is always available). `ParseContext::source_span_within` is the single
-dispatch point — the reader's `None` is an implementation error for a language that obeys
-span tiling, and the described span otherwise — so construct parsers written outside the
-crate follow the rule without knowing it exists.
+**The reader describes what it will not delimit.**
+`TokenReader::source_span_describing(begin, end) -> SourceSpan` is a required method with no
+default body: a reader whose stream cannot be delimited must say what a stretch of it *is*,
+and a default would let a reader ship a misleading span it never chose — a missing
+implementation is a compile error instead. The answer is the reader's to choose: any span it
+considers a useful description of that stretch. The machinery derives nothing from it — no
+content, no structure, no ordering; the span becomes the node's span and shows in
+diagnostics. Recommended: `begin`'s source, running from `begin` to where the stream last
+stood in that source before reaching `end`; where the two positions do delimit one range of
+one source, that range. The method always answers (the empty span at `begin` is always
+available). `ParseContext::source_span_within` is the single dispatch point — the reader's
+`None` is an implementation error for a language that obeys span tiling, and the described
+span otherwise — so construct parsers written outside the crate follow the rule without
+knowing it exists.
 
-**Seams, and what the chars-run check really checks.** The abort the expanding reader hit was
-misnamed: the check in the chars-run loop verifies contract clause 2 (a peeked token's
-`StartBeforePreSpace` edge is the position the peek happened at) together with the meaning of
-`move_to`, not tiling — and that is what the reader had violated. It therefore stays in force
-under both declarations, with a message naming the actual violation. What made this legible is
-the contract clause the work wrote down, clause 7 (*moving sets the position*): with clause 2 it
-fixes where two consecutive tokens meet — `position_at(next, StartBeforePreSpace) ==
+**Seams, and what the chars-run check really checks.** The check whose abort that reader hit
+is misnamed if it is read as a tiling check: the chars-run loop verifies contract clause 2
+(a peeked token's `StartBeforePreSpace` edge is the position the peek happened at) together
+with the meaning of `move_to`, and clause 2 is what the reader had violated. The check
+therefore stays in force under both declarations, with a message that names the actual
+violation. Contract clause 7 (*moving sets the position*) states the other half: with clause
+2 it fixes where two consecutive tokens meet — `position_at(next, StartBeforePreSpace) ==
 position_at(prev, EndPastPostSpace)` — in every reader, including where `next` is the first
-token of another source. A **seam** is such a place, where the next token comes from a different
-source than the previous one. The two sides of a seam are therefore *one* position value; the
-reader chooses that value and what coordinate it reports for it (the outer trigger or resume
-coordinate is the recommended answer, being the one a reader of a diagnostic can act on). A run
-of content characters may consequently extend across a seam by contract, which is exactly why
-such a run's content cannot be a span and is recorded as owned text.
+token of another source. A **seam** is such a place, where the next token comes from a
+different source than the previous one. The two sides of a seam are therefore *one* position
+value; the reader chooses that value and what coordinate it reports for it (the outer
+trigger or resume coordinate is the recommended answer, being the one a reader of a
+diagnostic can act on). A run of content characters may consequently extend across a seam by
+contract, which is exactly why such a run's content cannot be a span and is recorded as
+owned text.
 
-**The node-data rule decides content storage, and involves no assumption.** A spelling fact the
-reader answered as a span is recorded as `TextContent::Spanned` when it lies in the node's own
-source and as `TextContent::Owned` otherwise (`node_text_content`). Both arms read the very same
-reader answer; what differs is residency — the property the all-trees law checks. Single-token
-facts keep this rule under both declarations, so zero-copy survives wherever it is sound and no
-special case appears. What changes under `false` is everything one reader answer cannot cover:
-chars runs and verbatim content accumulate owned text token by token (each token's pre-space, its
-spelling as the reader classified it, its syntactic post-space — three answers about that one
-token), and payloads built before the node's span is known (the preset's recorded macro
-post-space) are owned outright. Text that *drives* a decision is never read off a described span:
-an environment name is accumulated as it is read and answered by `NameGroup::name_text()`, whose
-coordinates-and-text pairing is not forgeable (the text field is private; construction goes
-through `NameGroup::new`/`with_name_as_read`), and an `\input` reference comes from the staged
+**The node-data rule decides content storage, and involves no assumption.** A spelling fact
+the reader answered as a span is recorded as `TextContent::Spanned` when it lies in the
+node's own source and as `TextContent::Owned` otherwise (`node_text_content`). Both arms
+read the very same reader answer; what differs is residency — the property the all-trees law
+checks. Single-token facts keep this rule under both declarations, so zero-copy survives
+wherever it is sound and no special case appears. What changes under `false` is everything
+one reader answer cannot cover: chars runs and verbatim content accumulate owned text token
+by token (each token's pre-space, its spelling as the reader classified it, its syntactic
+post-space — three answers about that one token), and payloads built before the node's span
+is known (the preset's recorded macro post-space) are owned outright. Text that *drives* a
+decision is never read off a described span: an environment name is accumulated as it is
+read and answered by `NameGroup::name_text()`, whose coordinates-and-text pairing is not
+forgeable (the text field is private; construction goes through
+`NameGroup::new`/`with_name_as_read`), and an `\input` reference comes from the staged
 argument's node data.
 
 **The consumers rule** (load-bearing, and the reason the two regimes need no consumer-side
-switch): techy's consumers obtain content from node *data* — `TextContent` resolved against the
-node's own source, names, delimiters, payloads — never from node spans; node spans are provenance
-coordinates. The coordinate accessors (`NodeSlice::span`/`source_text`, `NodeRef::span_content`,
-`SourceSpan::content`) answer exactly what the coordinates say, and say so. Consequences: every
-documented answer of `extract` holds unchanged for owned content (audited item by item, with
-tests over hand-built owned trees); a source reemitter re-emits a non-tiled tree *as stored* and
-claims no byte-equality with any one source; `validate_tree` — the all-trees law
-([§dd-dr:tree-validation]) — is untouched, and non-tiled parse trees satisfy it; the byte
-accounting lives only in the test-only oracle, *the span-tiling law*, which runs the all-trees
-law alone for a language that declares `false`.
+switch): techy's consumers obtain content from node *data* — `TextContent` resolved against
+the node's own source, names, delimiters, payloads — never from node spans; node spans are
+provenance coordinates. The coordinate accessors (`NodeSlice::span`/`source_text`,
+`NodeRef::span_content`, `SourceSpan::content`) answer exactly what the coordinates say, and
+say so. Consequences: every documented answer of `extract` holds unchanged for owned content
+(audited item by item, with tests over hand-built owned trees); a source reemitter re-emits
+a non-tiled tree *as stored* and claims no byte-equality with any one source;
+`validate_tree` — the all-trees law ([§dd-dr:tree-validation]) — is untouched, and non-tiled
+parse trees satisfy it; the byte accounting lives only in the test-only oracle, *the
+span-tiling law*, which runs the all-trees law alone for a language that declares `false`.
 
-**Enforcement is testable without an expander.** The in-crate scripted multi-source test reader
-(test builds only) serves one parse from a script of segments over several sources — chains,
-splices, holes — and is the first in-crate reader with token and position types of its own. Its
-positions are kept in a canonical form in which the place past one entry *is* the place before the
-next, so contract clauses 2 and 7 hold at seams by construction; a deliberately broken variant
-reports the two sides of a seam as two values, which is how the clause-7 check itself is tested.
-Its `source_span_within` answers by the end position's source, so a run ending exactly at a seam
-has none — which is what makes the counter-test fire: the same script under a language that
-declares `true` is rejected as an implementation error.
+**Enforcement is testable without an expander.** The in-crate scripted multi-source test
+reader (test builds only) serves one parse from a script of segments over several sources —
+chains, splices, holes — and is the first in-crate reader with token and position types of
+its own. Its positions are kept in a canonical form in which the place past one entry *is*
+the place before the next, so contract clauses 2 and 7 hold at seams by construction; a
+deliberately broken variant reports the two sides of a seam as two values, which is how the
+clause-7 check itself is tested. Its `source_span_within` answers by the end position's
+source, so a run ending exactly at a seam has none — which is what makes the counter-test
+fire: the same script under a language that declares `true` is rejected as an implementation
+error.
 
-Costs accepted: under `false` a parse owns its multi-token content (chars runs, verbatim bodies,
-recorded post-space, environment names) — one allocation per such node and no zero-copy for
-content the tree can no longer point at; and two public-API breaks under the soft freeze
-([§dd-dr:stability-rubric]) — `source_span_describing` is a required trait method (deliberately,
-above), and `NameGroup` gains a private field, so it is no longer constructible by struct literal.
+Costs accepted: under `false` a parse owns its multi-token content (chars runs, verbatim
+bodies, recorded post-space, environment names) — one allocation per such node and no
+zero-copy for content the tree can no longer point at; and two public-API breaks under the
+soft freeze ([§dd-dr:stability-rubric]) — `source_span_describing` is a required trait
+method (deliberately, above), and `NameGroup` gains a private field, so it is no longer
+constructible by struct literal.
 
-Rejected alternatives: a per-*reader* capability flag ("this reader may break the contract") — the
-property belongs to the language, the parsers need it at compile time, and a reader-level flag
-would let one parse mix the two regimes; flushing chars runs whenever the source changes — it
-fixes one of the ten position-pair sites and leaves the remaining tree-law violations silent;
-relaxing contract clause 2 at seams — the un-consume and stop-token behavior every construct
-parser relies on rests on it; declaring the property in `LangFeatures`; a marker type instead of a
-const; a default body for `source_span_describing`; recording *every* fact as owned text under
-`false` — the node-data rule already answers correctly for a single-token fact, so unconditional
-owning would drop zero-copy for nothing.
+Rejected alternatives: a per-*reader* capability flag ("this reader may break the contract")
+— the property belongs to the language, the parsers need it at compile time, and a
+reader-level flag would let one parse mix the two regimes; flushing chars runs whenever the
+source changes — it fixes one of the ten position-pair sites and leaves the remaining
+tree-law violations silent; relaxing contract clause 2 at seams — the un-consume and
+stop-token behavior every construct parser relies on rests on it; declaring the property in
+`LangFeatures`; a marker type instead of a const; a default body for
+`source_span_describing`; recording *every* fact as owned text under `false` — the node-data
+rule already answers correctly for a single-token fact, so unconditional owning would drop
+zero-copy for nothing.
 
-Deferred: a per-driver-instance declaration (the const is per language; a driver that installs a
-reader inconsistent with it is still caught by the enforcement); zero-copy multi-token content
-under `false` (verify-then-intern); the expanding reader itself, which lives outside this crate.
-Also recorded and deliberately not fixed: a traceback frame's title renders a span as text, and the
-environment sites hand it a multi-token span, so under `false` a frame can quote text that was
-never read (`FrameTitle::Quoted`, and `FrameTitle::Callable` where a declared argument's frame is
-built). It is diagnostic decoration — no lookup and no node data depend on it — and repairing it
-changes the public `FrameTitle` (a text field beside the anchor span, or a `TextContent`).
+Deferred: a per-driver-instance declaration (the const is per language; a driver that
+installs a reader inconsistent with it is still caught by the enforcement); zero-copy
+multi-token content under `false` (verify-then-intern); the expanding reader itself, which
+lives outside this crate. Also recorded and deliberately not fixed: a traceback frame's
+title renders a span as text, and the environment sites hand it a multi-token span, so under
+`false` a frame can quote text that was never read (`FrameTitle::Quoted`, and
+`FrameTitle::Callable` where a declared argument's frame is built). It is diagnostic
+decoration — no lookup and no node data depend on it — and repairing it changes the public
+`FrameTitle` (a text field beside the anchor span, or a `TextContent`).
 
-Revisit if: a reader must declare the property per driver instance rather than per language; or
-zero-copy content under `false` is demonstrated to matter (verify-then-intern is the shape); or a
-construct is found whose legitimate *tiled* behavior the enforcement rejects.
+Revisit if: a reader must declare the property per driver instance rather than per language;
+or zero-copy content under `false` is demonstrated to matter (verify-then-intern is the
+shape); or a construct is found whose legitimate *tiled* behavior the enforcement rejects.
 
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
