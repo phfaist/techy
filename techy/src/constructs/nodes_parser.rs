@@ -1360,8 +1360,8 @@ where
 
 /// The group class a close delimiter belongs to under `state`'s rules: the expected
 /// close takes precedence (mirroring the tokenizer's priority in
-/// `detect_group_delimiter`), then the delimiter table. `None` when the delimiter
-/// belongs to no close rule in scope.
+/// [`scan_group_delimiter`](crate::core::token::scan_group_delimiter)), then the
+/// delimiter table. `None` when the delimiter belongs to no close rule in scope.
 fn group_close_type<L: Lang>(state: &ParsingState<L>, delim: &str) -> Option<L::GroupTypeId> {
     if let Some(rule) = state.rules().expecting_group_close() {
         if rule.close == delim {
