@@ -26,7 +26,7 @@ typically small enums:
 - [`GroupTypeId`](crate::core::Lang::GroupTypeId) classifies groups (the
   preset: content vs. math vs. verbatim), fully detached from delimiter
   spellings. Which delimiter *pairs* exist, and which class each maps to,
-  is runtime data — [`GroupRule`](crate::core::GroupRule) values in the
+  is runtime data — [`GroupRule`](crate::core::token::GroupRule) values in the
   state's token rules, extensible mid-parse; only the class vocabulary is
   fixed.
 - [`CallableTypeId`](crate::core::Lang::CallableTypeId) names the
@@ -66,7 +66,7 @@ enclosing context.
 
 ## Token rules and specials recognition
 
-Tokenization is data, not code: [`TokenRules`](crate::core::TokenRules) —
+Tokenization is data, not code: [`TokenRules`](crate::core::token::TokenRules) —
 stored in the parsing state, so all of it can change mid-parse — declares
 the whitespace set, group delimiter pairs, command escape rules, comment
 markers, and forbidden characters, one block per feature, each block
@@ -82,25 +82,25 @@ canonical rules
 worked example of rules as data.
 
 A language whose tokenization *behavior* — not just data — differs
-implements the [`TokenReader`](crate::core::TokenReader) trait instead. It
+implements the [`TokenReader`](crate::core::token::TokenReader) trait instead. It
 declares that reader in one place: a zero-sized type implementing
-[`Tokenization`](crate::core::Tokenization), named as
+[`Tokenization`](crate::core::token::Tokenization), named as
 [`Lang::Tokenization`](crate::core::Lang::Tokenization). That type states the
 token type the reader produces
-([`Tokenization::Token`](crate::core::Tokenization::Token), spelled
-[`Token<L>`](crate::core::Token) elsewhere), the type naming a place in the
+([`Tokenization::Token`](crate::core::token::Tokenization::Token), spelled
+[`Token<L>`](crate::core::token::Token) elsewhere), the type naming a place in the
 stream
-([`Tokenization::StreamPosition`](crate::core::Tokenization::StreamPosition),
-spelled [`StreamPosition<L>`](crate::core::StreamPosition)), and how the
+([`Tokenization::StreamPosition`](crate::core::token::Tokenization::StreamPosition),
+spelled [`StreamPosition<L>`](crate::core::token::StreamPosition)), and how the
 reader for one parse is built; construct parsers read neither type directly,
 they ask the reader. How to write one, and why the implementation needs the
 bound `L: Lang<Tokenization = MyTokenization>`, is
-[Implementing this trait](crate::core::Tokenization#implementing-this-trait),
+[Implementing this trait](crate::core::token::Tokenization#implementing-this-trait),
 with a compiling example. A driver may still swap the reader per instance,
 through [`make_token_reader`](crate::core::ParseDriver::make_token_reader)
 (see [The driver](#the-driver)). Keeping the standard token type
-([`StdToken`](crate::core::StdToken)) is the least work: hold an
-inner [`StdTokenReader`](crate::core::StdTokenReader) over the same content,
+([`StdToken`](crate::core::token::StdToken)) is the least work: hold an
+inner [`StdTokenReader`](crate::core::token::StdTokenReader) over the same content,
 build tokens with the `StdToken` constructors, and delegate every question
 about a token to the inner reader — the `TokenReader` page shows that shape
 as a compiling example.
@@ -131,7 +131,7 @@ all**. [`Lang::Features`](crate::core::Lang::Features) names one
 presence answer per feature — whitespace handling, paragraph breaks, group
 delimiters, command syntax, comment syntax, the specials scan, and
 forbidden characters (one member per
-[`TokenRules`](crate::core::TokenRules) feature block), plus the definition
+[`TokenRules`](crate::core::token::TokenRules) feature block), plus the definition
 [scope stack](crate::guide::concepts_overview#scopes-and-packages). Each
 member is one of exactly two marker types,
 [`FeaturePresent`](crate::core::FeaturePresent) or
@@ -162,8 +162,8 @@ At parse time, absence means the feature's syntax is simply not recognized:
 its characters read as plain content (to a language without the commands
 feature, `\emph` is five ordinary characters). Absence also goes all the
 way to storage. An absent feature's field — in
-[`TokenRules`](crate::core::TokenRules), and equally in the override type
-[`TokenRulesOverrides`](crate::core::TokenRulesOverrides) — holds a
+[`TokenRules`](crate::core::token::TokenRules), and equally in the override type
+[`TokenRulesOverrides`](crate::core::token::TokenRulesOverrides) — holds a
 zero-sized placeholder instead of the feature's rules block: a value that
 carries no data and takes no space, so a language declaring every feature
 absent stores literally nothing for its rules. And because the field's type
@@ -181,7 +181,7 @@ this section.
 
 A partial language builds its seed rules by writing the present features'
 blocks as plain literals and taking every other field from
-[`TokenRules::empty()`](crate::core::TokenRules::empty) with struct-update
+[`TokenRules::empty()`](crate::core::token::TokenRules::empty) with struct-update
 syntax. `empty()` answers for every language — a present feature's field
 gets its block's all-empty value, an absent feature's field the zero-sized
 placeholder — so the spread fills exactly the fields a literal could not
@@ -193,10 +193,10 @@ name. A complete braces-only language:
 # use techy::core::specs::ScopeStack;
 # use techy::error::Recovery;
 # use techy::source::SourceSpan;
+use techy::core::token::{GroupRule, GroupRules, StdTokenization, TokenRules};
 use techy::core::{
-    FeatureAbsent, FeaturePresent, FinalizeError, GroupRule, GroupRules, Lang,
-    LangFeatures, Language, ParsingState, StateData, StdParseDriver, StdTokenization,
-    TokenRules,
+    FeatureAbsent, FeaturePresent, FinalizeError, Lang, LangFeatures, Language,
+    ParsingState, StateData, StdParseDriver,
 };
 
 // The declaration: group delimiters present, the seven other features absent.
@@ -323,15 +323,15 @@ its driver (its [`CommandResolver`](crate::core::CommandResolver)) and can
 declare the scope stack absent.
 
 The declarations also shape the two whole-value override constructors.
-[`TokenRulesOverrides::disable_all()`](crate::core::TokenRulesOverrides::disable_all)
+[`TokenRulesOverrides::disable_all()`](crate::core::token::TokenRulesOverrides::disable_all)
 disables every feature the language *has*: it consults the presence
 declarations and flips the `enabled` flag of exactly the present features
 (forbidden characters, which have no flag, are never touched) — absent
 features are simply not mentioned by the value it returns — so it
 can never fail, whatever the language declares. Its counterpart
-[`TokenRulesOverrides::override_all()`](crate::core::TokenRulesOverrides::override_all)
+[`TokenRulesOverrides::override_all()`](crate::core::token::TokenRulesOverrides::override_all)
 reads the same declarations the other way round: it copies the given
-[`TokenRules`](crate::core::TokenRules) into overrides for exactly the
+[`TokenRules`](crate::core::token::TokenRules) into overrides for exactly the
 present features, so applying it installs those rules wholesale (the two
 transient group fields excepted — see its documentation). Finally, one short note
 that matters mainly to custom tooling: the frozen state's two derived

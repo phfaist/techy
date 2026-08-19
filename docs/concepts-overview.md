@@ -32,41 +32,41 @@ policy tools.
 
 ## Tokens and token rules
 
-[`Token`](crate::core::Token)s are minimal, structural, opaque values produced
-by a [`TokenReader`](crate::core::TokenReader). A language declares which
+[`Token`](crate::core::token::Token)s are minimal, structural, opaque values produced
+by a [`TokenReader`](crate::core::token::TokenReader). A language declares which
 reader tokenizes it, and which types that reader works in, as one bundle:
 [`Lang::Tokenization`](crate::core::Lang::Tokenization). The standard bundle
-([`StdTokenization`](crate::core::StdTokenization)) names the standard reader
-([`StdTokenReader`](crate::core::StdTokenReader)), which produces
-[`StdToken`](crate::core::StdToken)s. Nothing is read off a token directly: a
+([`StdTokenization`](crate::core::token::StdTokenization)) names the standard reader
+([`StdTokenReader`](crate::core::token::StdTokenReader)), which produces
+[`StdToken`](crate::core::token::StdToken)s. Nothing is read off a token directly: a
 parser asks the reader what a token *is*
-([`token_kind`](crate::core::TokenReader::token_kind)) and where it is
-([`source_span_of`](crate::core::TokenReader::source_span_of) and its
+([`token_kind`](crate::core::token::TokenReader::token_kind)) and where it is
+([`source_span_of`](crate::core::token::TokenReader::source_span_of) and its
 companions, which answer with a [span](#sources-and-spans) — a source and a
 byte range in it — for the whole token or for the stretch between two of its
-[edges](crate::core::TokenEdge), the five boundaries running from where its
+[edges](crate::core::token::TokenEdge), the five boundaries running from where its
 leading whitespace begins to where its trailing whitespace ends). A place in
 the token *stream*, as opposed to a place in the text, is a
-[`StreamPosition`](crate::core::StreamPosition), the second type that
+[`StreamPosition`](crate::core::token::StreamPosition), the second type that
 declaration states: opaque as well, handed out by the reader alone
-([`position_here`](crate::core::TokenReader::position_here),
-[`position_at`](crate::core::TokenReader::position_at)), and the value a
+([`position_here`](crate::core::token::TokenReader::position_here),
+[`position_at`](crate::core::token::TokenReader::position_at)), and the value a
 parser uses to send the stream back to a place it has been
-([`move_to_position`](crate::core::TokenReader::move_to_position)) or to ask
+([`move_to_position`](crate::core::token::TokenReader::move_to_position)) or to ask
 for the span between two such places. A token is an atomic unit identifying
 *what to parse next*:
-[`TokenKind`](crate::core::TokenKind) — the reader's answer — is a small closed
-set, a
-[`Char`](crate::core::TokenKind::Char) token covers exactly one character
+[`TokenKind`](crate::core::token::TokenKind) — the reader's answer — is a small
+closed set, a
+[`Char`](crate::core::token::TokenKind::Char) token covers exactly one character
 (character runs accumulate into nodes at the node level, not in the reader),
-and a terminal [`EndOfStream`](crate::core::TokenKind::EndOfStream) token ends
+and a terminal [`EndOfStream`](crate::core::token::TokenKind::EndOfStream) token ends
 every stream. Tokens carry no macro/environment taxonomy: `\begin` is a
-[`Command`](crate::core::TokenKind::Command) token like any other, and what its
+[`Command`](crate::core::token::TokenKind::Command) token like any other, and what its
 name means is decided at parse time — the one exception is
-[`Specials`](crate::core::TokenKind::Specials), where recognition *is*
+[`Specials`](crate::core::token::TokenKind::Specials), where recognition *is*
 resolution, so the reader's answer for the token already names its
 [spec](#callable-specs-and-arguments). Tokenization behavior is plain data
-— [`TokenRules`](crate::core::TokenRules) stored in the parsing state — so it
+— [`TokenRules`](crate::core::token::TokenRules) stored in the parsing state — so it
 can change mid-parse through state transitions.
 
 ## Parsing state and deltas

@@ -108,7 +108,7 @@ beyond that — changed token rules, a different starting mode — is expressed
 by deriving a customized seed before constructing the `Language`:
 [`ParsingState::derived`](crate::core::ParsingState::derived) applies a
 [`ParsingStateDelta`](crate::core::ParsingStateDelta) (with, for example,
-[`TokenRulesOverrides`](crate::core::TokenRulesOverrides)) to the seed state.
+[`TokenRulesOverrides`](crate::core::token::TokenRulesOverrides)) to the seed state.
 There is deliberately no parallel settings object: everything the parse can
 vary mid-run lives in the [parsing
 state](crate::guide::concepts_overview#parsing-state-and-deltas), and the

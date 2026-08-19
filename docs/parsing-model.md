@@ -37,9 +37,9 @@ objects and runs the parse to completion:
   [`make_token_reader`](crate::core::ParseDriver::make_token_reader) hook
   returns, which by default is the reader the language's
   [`Tokenization`](crate::core::Lang::Tokenization) names
-  ([`StdTokenReader`](crate::core::StdTokenReader) unless the language
+  ([`StdTokenReader`](crate::core::token::StdTokenReader) unless the language
   supplies its own) — over the source content, which produces
-  [`Token`](crate::core::Token)s on demand under whatever token rules the
+  [`Token`](crate::core::token::Token)s on demand under whatever token rules the
   current parsing state holds. A token is opaque: whoever holds one asks the
   reader what it is and where it is
   ([the concept](crate::guide::concepts_overview#tokens-and-token-rules));
@@ -105,7 +105,7 @@ syntax:
 - **A specials token** (`~`, `--`) skips resolution entirely: for specials,
   recognition *is* resolution — the reader's answer for the token already
   names the spec the specials scan resolved (see
-  [`TokenKind::Specials`](crate::core::TokenKind); the asymmetry is
+  [`TokenKind::Specials`](crate::core::token::TokenKind); the asymmetry is
   documented on [`resolve_command`](crate::core::ParseDriver::resolve_command)).
   The loop dispatches the invocation the same way from there.
 

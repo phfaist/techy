@@ -7,7 +7,7 @@ families below; those panics guard against programming errors in calling code �
 document content can trigger them.
 
 **Precondition asserts.** Five value functions and the seven span-taking
-[`StdToken`](crate::core::StdToken) constructors document a precondition on their
+[`StdToken`](crate::core::token::StdToken) constructors document a precondition on their
 arguments and panic, in all builds, when calling code violates it. These functions
 are deliberately infallible (there is no error channel to prefer), the checks are
 cheap, and the immediate panic keeps invalid values unrepresentable instead of
@@ -20,21 +20,21 @@ letting them cause misbehavior far from the mistake:
   the source content, on `char` boundaries;
 - [`SourcePos::new`](crate::source::SourcePos::new) — requires the offset to lie within
   the source content, on a `char` boundary;
-- the token constructors [`StdToken::char`](crate::core::StdToken::char),
-  [`group_open`](crate::core::StdToken::group_open),
-  [`group_close`](crate::core::StdToken::group_close),
-  [`command`](crate::core::StdToken::command),
-  [`specials`](crate::core::StdToken::specials),
-  [`comment`](crate::core::StdToken::comment) and
-  [`paragraph_break`](crate::core::StdToken::paragraph_break) — each requires the
-  documented coherence of the spans it is given: the pre-space ends exactly where the
+- the token constructors [`StdToken::char`](crate::core::token::StdToken::char),
+  [`group_open`](crate::core::token::StdToken::group_open),
+  [`group_close`](crate::core::token::StdToken::group_close),
+  [`command`](crate::core::token::StdToken::command),
+  [`specials`](crate::core::token::StdToken::specials),
+  [`comment`](crate::core::token::StdToken::comment) and
+  [`paragraph_break`](crate::core::token::StdToken::paragraph_break) — each requires
+  the documented coherence of the spans it is given: the pre-space ends exactly where the
   token's span starts; a post-space (`command`, `comment`) is a trailing sub-range of
   that span; a comment's start delimiter is a leading sub-range of it, ending no later
   than the post-space begins. The eighth constructor,
-  [`end_of_stream`](crate::core::StdToken::end_of_stream), takes no span of its own and
-  never panics;
-- [`skip_whitespace`](crate::core::skip_whitespace) — requires `pos` to lie within the
-  content, on a `char` boundary.
+  [`end_of_stream`](crate::core::token::StdToken::end_of_stream), takes no span of its
+  own and never panics;
+- [`skip_whitespace`](crate::core::token::skip_whitespace) — requires `pos` to lie
+  within the content, on a `char` boundary.
 
 **Indexing-style accessors.** Accessors that follow the standard library's
 slice-indexing convention: the panicking form is for ids, spans, and regions

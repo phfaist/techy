@@ -75,7 +75,7 @@ at that position (see
 
 All of these delimiter pairs are configuration, not built-ins: each is a group
 rule in the language's token rules, carrying a group class that determines how
-the interior is parsed ([`TokenRules`](crate::core::TokenRules),
+the interior is parsed ([`TokenRules`](crate::core::token::TokenRules),
 [`GroupType`](crate::latexlike::GroupType)).
 
 ## Comments
@@ -84,7 +84,7 @@ A comment runs from a start delimiter — `%` in the default rules — to the en
 of the line. The comment's text is preserved in the parse output as a comment
 node, not discarded. Several comment syntaxes may coexist, and comment
 recognition can be disabled entirely
-([`CommentRule`](crate::core::CommentRule)).
+([`CommentRule`](crate::core::token::CommentRule)).
 
 ```text
 visible text  % this note runs to the end of the line
@@ -96,7 +96,7 @@ A **command token** is an escape character followed by a name: `\emph`,
 `\begin`, `\&`. With the default rules the escape character is `\` and names
 are made of letters; a single non-letter character after the escape forms a
 single-character command like `\&`
-([`CommandRule`](crate::core::CommandRule)).
+([`CommandRule`](crate::core::token::CommandRule)).
 
 What a command *means* is not decided by the tokenizer. At parse time the name
 is looked up among the definitions currently in scope; a resolved command
@@ -116,7 +116,7 @@ macros, are the subject of
 A command with a multi-character name also absorbs the whitespace immediately
 following it (the *post-space*: `\emph x` invokes `\emph`, with the blank
 recorded on the invocation, not lost) — as in TeX
-([`CommandRule`](crate::core::CommandRule)).
+([`CommandRule`](crate::core::token::CommandRule)).
 
 A command whose name resolves to no definition is an error — reported with a
 source span and, in tolerant parsing, recovered so the parse continues (see

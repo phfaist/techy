@@ -55,7 +55,7 @@ parse inputs — the token reader, the input parsing state, the session, and
 the driver. Its methods are the parser's entire toolkit:
 
 **Token reading.** `cx.tokens` is the
-[`TokenReader`](crate::core::TokenReader): peek or consume tokens under an
+[`TokenReader`](crate::core::token::TokenReader): peek or consume tokens under an
 explicitly passed state. Prefer
 [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token)
 over a raw peek: it maps tokenizer errors per the recovery policy (strict:
@@ -68,25 +68,25 @@ reader that produced it answers every question about it, and there are
 three questions to ask:
 
 - *What is this token?*
-  [`cx.tokens.token_kind(&token)`](crate::core::TokenReader::token_kind)
-  answers with a [`TokenKind`](crate::core::TokenKind) — the character, the
+  [`cx.tokens.token_kind(&token)`](crate::core::token::TokenReader::token_kind)
+  answers with a [`TokenKind`](crate::core::token::TokenKind) — the character, the
   command name and its escape character, the group delimiter and its rule,
   and so on. The answer borrows from the token, and stays usable as long as
   you hold it.
 - *Where is it in the text?*
-  [`cx.tokens.source_span_of(&token)`](crate::core::TokenReader::source_span_of)
+  [`cx.tokens.source_span_of(&token)`](crate::core::token::TokenReader::source_span_of)
   answers with the token's own [`SourceSpan`](crate::source::SourceSpan) — a
   source together with a byte range in it — and
-  [`source_span_between(&token, a, b)`](crate::core::TokenReader::source_span_between)
+  [`source_span_between(&token, a, b)`](crate::core::token::TokenReader::source_span_between)
   with the span between two of the token's *edges*.
-  [`TokenEdge`](crate::core::TokenEdge) names the five boundaries of a token
+  [`TokenEdge`](crate::core::token::TokenEdge) names the five boundaries of a token
   in reading order, from where its leading whitespace begins to where its
   trailing whitespace ends.
 - *Where does the stream stand?* A **stream position** names a place in the
   token stream. It is opaque as well, and only a reader hands one out:
-  [`position_here()`](crate::core::TokenReader::position_here) for the
+  [`position_here()`](crate::core::token::TokenReader::position_here) for the
   place the stream stands at, and
-  [`position_at(&token, edge)`](crate::core::TokenReader::position_at) for an
+  [`position_at(&token, edge)`](crate::core::token::TokenReader::position_at) for an
   edge of a token. Two positions become a span through
   [`cx.source_span_within(&begin, &end)`](crate::core::constructs::ParseContext::source_span_within),
   which is how a construct reading several tokens computes the span it
@@ -96,9 +96,9 @@ three questions to ask:
   parser stands.
 
 Repositioning takes a token or a position:
-[`cx.tokens.move_to(&token, edge)`](crate::core::TokenReader::move_to) puts
+[`cx.tokens.move_to(&token, edge)`](crate::core::token::TokenReader::move_to) puts
 the stream at an edge of a token the reader read, and
-[`move_to_position(&position)`](crate::core::TokenReader::move_to_position)
+[`move_to_position(&position)`](crate::core::token::TokenReader::move_to_position)
 at a position it handed out earlier.
 
 **Node staging.**
@@ -387,9 +387,8 @@ use techy::core::node::{
     ParsedSlot, ParsedSlots, SlotRole,
 };
 use techy::core::specs::{CallableSpec, Package};
-use techy::core::{
-    GroupRule, Language, ParsingState, ParsingStateDelta, TokenEdge, TokenKind,
-};
+use techy::core::token::{GroupRule, TokenEdge, TokenKind};
+use techy::core::{Language, ParsingState, ParsingStateDelta};
 use techy::error::{DiagnosticInfo, ParseError, Recovery};
 use techy::latexlike::{BodyMarker, CallableType, GroupType, Latexlike, LatexlikeDriver};
 use techy::serialize::SerializableObject;
