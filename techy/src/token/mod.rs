@@ -57,6 +57,7 @@ mod list_reader;
 mod prefix_table;
 mod reader;
 mod rules;
+mod scan;
 #[cfg(test)]
 mod scripted_reader;
 mod specials;
@@ -77,7 +78,7 @@ pub use error::{
 #[cfg(test)]
 pub(crate) use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
-pub use reader::{skip_whitespace, StdStreamPosition, StdTokenReader, TokenEdge, TokenReader};
+pub use reader::{StdStreamPosition, StdTokenReader, TokenEdge, TokenReader};
 // Internal test infrastructure, not public API (like `TokenListReader` above): the
 // scripted multi-source reader, its tokenization types, and the test language that
 // declares them. It serves one parse from several sources, which is what a language
@@ -90,6 +91,7 @@ pub use rules::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
+pub use scan::skip_whitespace;
 pub use specials::{SpecialsMatch, SpecialsScanError, TriggerChars};
 pub use token::{StdToken, TokenKind};
 pub use tokenization::{StdTokenization, StreamPosition, Token, Tokenization};

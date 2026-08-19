@@ -31,6 +31,7 @@ use super::error::{
     TokenResult,
 };
 use super::rules::{CommandRule, TokenRules};
+use super::scan::skip_whitespace;
 use super::specials::SpecialsScanError;
 use super::token::{StdToken, StdTokenKindData, TokenKind};
 use super::tokenization::{StreamPosition, Token, Tokenization};
@@ -496,62 +497,6 @@ pub trait TokenReader<'s, L: Lang> {
         begin: &StreamPosition<L>,
         end: &StreamPosition<L>,
     ) -> SourceSpan<L::SourceOrigin>;
-}
-
-/// End position of the whitespace run starting at `pos` (= `pos` if none, if
-/// whitespace handling is disabled, or if the language declares it absent —
-/// [`LangFeatures::Whitespace`], whose absent store holds no whitespace data at all).
-///
-/// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
-/// caller-contract violation and panics, in all builds — one of the crate's few
-/// deliberate panics (see the [Panics list](techy::guide::panics)).
-///
-/// **The multi-newline rule** (`TokenRules::paragraphs_enabled`): skipped
-/// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
-/// skipping stops right *before* the first newline of a paragraph break. This one
-/// primitive serves pre-space, command post-space, and comment post-space, which is what
-/// makes "post-space never crosses a paragraph break" hold everywhere by construction.
-pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>) -> usize {
-    if !<L::Features as LangFeatures>::Whitespace::PRESENT || !rules.whitespace_enabled() {
-        return pos;
-    }
-    let Some(rest) = content.get(pos..) else {
-        panic!(
-            "pos {} is out of bounds or not a char boundary (content len {})",
-            pos,
-            content.len()
-        );
-    };
-    let ws_chars = rules.whitespace_chars();
-    let mut end = pos;
-    for c in rest.chars() {
-        if !ws_chars.contains(c) {
-            break;
-        }
-        if c == '\n'
-            && <L::Features as LangFeatures>::Paragraphs::PRESENT
-            && rules.paragraphs_enabled()
-            && paragraph_continues(content, end + 1, ws_chars)
-        {
-            break;
-        }
-        end += c.len_utf8();
-    }
-    end
-}
-
-/// Whether another newline follows within the whitespace run starting at `after_nl`
-/// (i.e. the newline just before `after_nl` opens a `\n\s*\n` paragraph sequence).
-fn paragraph_continues(content: &str, after_nl: usize, ws_chars: &str) -> bool {
-    for c in content[after_nl..].chars() {
-        if c == '\n' {
-            return true;
-        }
-        if !ws_chars.contains(c) {
-            return false;
-        }
-    }
-    false
 }
 
 /// Standard reader over in-memory content, driven by the parsing state: the
@@ -3011,42 +2956,5 @@ mod tests {
             next(&mut tr, &st),
             StdToken::end_of_stream(sp(text.len() - 1, text.len())),
         );
-    }
-
-    // --- the whitespace primitive directly -------------------------------------------------
-
-    #[test]
-    fn skip_whitespace_never_consumes_paragraph_newlines() {
-        let rules: TokenRules<TestLang> = latex_rules();
-        // Plain run (lone newline included): consumed fully.
-        assert_eq!(skip_whitespace("  \n x", 0, &rules), 4);
-        // Run holding a \n\s*\n sequence: stops before its first newline.
-        assert_eq!(skip_whitespace("   \n  \n x", 0, &rules), 3);
-        assert_eq!(skip_whitespace("\n\nx", 0, &rules), 0);
-        // Flag off: everything is consumable.
-        let mut no_par: TokenRules<TestLang> = latex_rules();
-        no_par.paragraphs.enabled = false;
-        assert_eq!(skip_whitespace("   \n  \n x", 0, &no_par), 8);
-        // Whitespace handling disabled: nothing is skipped.
-        let mut no_ws: TokenRules<TestLang> = latex_rules();
-        no_ws.whitespace.enabled = false;
-        assert_eq!(skip_whitespace("  x", 0, &no_ws), 0);
-    }
-
-    /// An invalid `pos` is a caller-contract violation and panics in all builds
-    /// (the approved panic-policy exception).
-    #[test]
-    #[should_panic(expected = "char boundary")]
-    fn skip_whitespace_panics_on_an_out_of_bounds_pos() {
-        let rules: TokenRules<TestLang> = latex_rules();
-        let _ = skip_whitespace("ab", 5, &rules);
-    }
-
-    /// A mid-character `pos` is the same contract violation (the boundary half).
-    #[test]
-    #[should_panic(expected = "char boundary")]
-    fn skip_whitespace_panics_on_a_mid_char_pos() {
-        let rules: TokenRules<TestLang> = latex_rules();
-        let _ = skip_whitespace("é!", 1, &rules);
     }
 }
