@@ -8,7 +8,7 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 | 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | implemented |
 | 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | reviewed |
 | 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | implemented |
-| 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | planned |
+| 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | implemented |
 | 5 record | `st-5-record` | `main` (after all) | `.claude/worktrees/st-5-record` | planned |
 
 ## Stage 1 — contract surface
@@ -1082,6 +1082,204 @@ cross-references.
    orchestrator's call.
 
 ## Stage 3b — tests
+
+Status: **implemented** (branch `st-3b-tests`, worktree `.claude/worktrees/st-3b-tests`,
+base `main` = `4f45340`; commits `c512e65`, `7686985`, `e476621`, `287dfa4`, `d6a3f6c`,
+plus this file's).
+
+Tests only, plus one docs/comments sweep (below). **No production code changed**: nothing
+in the stage exposed a defect, and the preset instantiated over a non-standard
+tokenization with no adjustment at all — which is R7's proof.
+
+### Files changed
+
+- **`techy/src/constructs/span_tiling_tests.rs` (new, `#[cfg(test)]`)** — the core
+  tests. Holds `TiledScriptedLang`, the **tiled twin** of `RelaxedLang` (same
+  `ScriptedTokenization`, same associated types, `OBEYS_SPAN_TILING` left at its
+  default), which is what makes the enforcement counter-tests possible: one script, two
+  declarations. Also the shared script rules/seed (whitespace, paragraphs, `{…}` and
+  `[…]` groups, `\`-led commands, `%` comments) and the harness `run_nodes` /
+  `with_scripted_parse`, which build a `ScriptedReader` from segments, drive the parser
+  through `ParseContext`/`ParserSession` (Stage 3a's answer 1 — no full-engine route
+  needed), stage a root `List` spanning what the reader describes for the parse, freeze,
+  and run **both** oracles on every tree (`validate_tree`, then `check_tree_invariants`
+  — test T10).
+- **`techy/src/latexlike/span_tiling_tests.rs` (new, `#[cfg(test)]`)** — the preset
+  tests, driving the preset's content loop over a `ScriptedReader` through a
+  `ParseContext` with a `LatexlikeDriver`.
+- **`techy/src/latexlike/test_support.rs`** — `RelaxedScriptedLatexlike`, next to its
+  sibling `RelaxedLatexlike`: the same latexlike family member, differing in the
+  tokenization alone (`ScriptedTokenization` instead of `StdTokenization`).
+- **`techy/src/constructs/mod.rs`, `techy/src/latexlike/mod.rs`** — the two
+  `#[cfg(test)] mod` declarations.
+- The wording sweep (separate commit `d6a3f6c`, comments and docs only):
+  `techy/src/node/mod.rs` (64, 71, 2169), `techy/src/node/arguments.rs` (343),
+  `techy/src/node/builder.rs` (655), `techy/src/token/reader.rs` (2664) — the last
+  "parse-law"/"parse law" and "partition invariant" occurrences in source, each rewritten
+  to name the law the sentence is about (`§1.8`'s superseded-phrases row). A crate-wide
+  `grep -rn -e "parse-law" -e "parse law" -e "parse-tree law" -e "partition invariant"
+  techy/src techy/tests docs` is now empty.
+
+### Test inventory (T1–T13)
+
+| # | Test | Where |
+|---|---|---|
+| T1 | `a_chars_run_across_a_seam_is_one_node_owning_the_text_it_read` — `A[0..1]="a"`, `B[0..3]="xyz"`, `A[5..7]=" b"` → one `Chars`, `Owned("axyz b")`, span `A[0..7]` (the recommended describing shape, the hole included), and the span's own content is *not* the node's text | `constructs/span_tiling_tests.rs:332` |
+| T1 (counter) | `a_tiled_language_rejects_a_chars_run_across_a_seam` — the same script under `TiledScriptedLang` → implementation error "do not delimit one range of one source" | `constructs/span_tiling_tests.rs:356` |
+| T1b | `a_run_ending_at_a_seam_is_owned_and_a_tiled_language_rejects_it` — `A="a"`, `B="{b}"`: the run merely *ends* at the seam. Relaxed: `Owned("a")` + a group. Tiled: the same implementation error — Stage 3a's **S3 pinned deliberately** | `constructs/span_tiling_tests.rs:387` |
+| T2 | `a_group_spanning_a_seam_records_the_delimiter_it_cannot_span` — `A="{a"`, `B="b}"` → `Group` @ `A[0..2]`, `open` `Spanned(0..1)`, `close` `Owned("}")`, child `Chars` `Owned("ab")`, re-emits `{ab}` | `constructs/span_tiling_tests.rs:421` |
+| T3 | `a_chars_run_across_a_hole_in_one_source_is_one_owned_node` — `A[0..1]="a"`, `A[5..6]="b"` → one `Chars` `Owned("ab")`, describing span `A[0..6]`; the tiled twin rejects the gap too | `constructs/span_tiling_tests.rs:460` |
+| T4 | `an_environment_spanning_seams_is_built_and_reemitted_as_stored` — `\begin{itemize}` in A, `body` in B, `\end{itemize}` in A → environment node @ `A[0..28]`, body content `Owned("body")` @ `B[0..4]`, both scaffolding sides `Spanned` (they lie in the node's own source — the node-data rule), re-emits `\begin{itemize}body\end{itemize}` | `latexlike/span_tiling_tests.rs:135` |
+| T4 (other arm) | `an_environment_terminator_from_another_source_is_recorded_as_text` — `\end{itemize}` in B while the node's span is described in A → the terminator's `command_word` recorded as `Owned("end")`; re-emission unaffected | `latexlike/span_tiling_tests.rs:186` |
+| T4 (name) | `an_environment_name_read_across_a_seam_resolves_the_environment` — `\begin{` in A, `itemize` in B, `}x\end{itemize}` in A → the lookup resolves (no diagnostics), `name() == "itemize"`, body `x`, re-emits `\begin{itemize}x\end{itemize}` | `latexlike/span_tiling_tests.rs:212` |
+| T4 (`\input`) | `an_input_reference_read_across_seams_resolves` — `\input{` in A, `chap.tex` in B, `}` in A → the argument's content is `Owned("chap.tex")` and the resolver finds it (a source is attached), which is only possible because `\input` reads the reference off node data | `latexlike/span_tiling_tests.rs:306` |
+| T4 (`\input`) | `an_input_reference_that_is_not_plain_characters_is_not_read` — `\input{{chap.tex}}` → the documented `None` answer: the content is a group, nothing is resolved, nothing is attached, and nothing is diagnosed | `latexlike/span_tiling_tests.rs:354` |
+| T5 | `an_unconsumed_stop_token_at_a_seam_is_peeked_again_where_it_stands` — `A="ab"`, `B="cd"`, stop on `B`'s first token with `consume = false` → the run flushes `Owned("ab")`, the stop span is `B[0..1]`, and re-peeking yields that very token, with empty pre-space, at the position the stream stands at (clauses 2/7 through the seam) | `constructs/span_tiling_tests.rs:492` |
+| T6 | `an_optional_argument_probe_matches_across_a_seam` — `\cmd` in A, `[x]z` in B → the option group parses, content `Owned("x")` | `constructs/span_tiling_tests.rs:555` |
+| T6 | `an_optional_argument_probe_that_fails_rewinds_across_a_seam` — `\cmd%c` in A, `y` in B: the probe reads A's comment as noise, sees B's `y`, and rewinds **back across the seam into A** (clause 3); the comment is peekable again exactly where it was | `constructs/span_tiling_tests.rs:599` |
+| T7 | `a_comment_and_a_paragraph_break_in_another_source_become_nodes` — `A="a"`, `B="%note\n\nb"` → four nodes: `Owned("a")`, a comment whose three sub-spans stay `Spanned` (the token lies wholly in the node's own source), the paragraph-break node `Spanned("\n\n")` (its span *is* the fact's span), `Owned("b")`; re-emits the input | `constructs/span_tiling_tests.rs:635` |
+| T8 | `a_macro_post_space_is_recorded_as_text_where_the_language_does_not_obey_tiling` — `y` in B, `\foo z` in A → `Macro { escape_char: '\\', post_space: Owned(" ") }`, node span `A[0..5]`, re-emits `y\foo z` | `latexlike/span_tiling_tests.rs:250` |
+| T9 | `a_token_not_starting_where_the_stream_stood_is_an_implementation_error` — `ScriptedReader::broken_at_seams` under **both** `RelaxedLang` and `TiledScriptedLang` → the clause-7 message ("is not the position the stream stood at when the token was peeked … violates the `TokenReader` contract") | `constructs/span_tiling_tests.rs:704` |
+| T10 | folded into both harnesses — every tree here goes through `validate_tree` and then `check_tree_invariants`, which for these languages runs the all-trees law and stops. T7 carries the explicit note that its root children do not even share a source, which the span-tiling law's byte accounting forbids: if the gate were removed, T7 would panic | `constructs/span_tiling_tests.rs:254` and `:819`, `latexlike/span_tiling_tests.rs:99` |
+| T11 | `a_diagnostic_in_a_synthesized_source_renders_the_provenance_chain` — `A="x"` then a `Source::synthesized("{y", "macro expansion", A[1..10])`; the group opened in the expansion is never closed, and the tolerant parse's rendered report carries `synthesized from @ (line 1, col 2) (macro expansion)` | `constructs/span_tiling_tests.rs:726` |
+| T12 | `recomposing_a_run_across_a_seam_emits_the_text_as_stored` — T1's tree re-emits `"axyz b"` | `constructs/span_tiling_tests.rs:374` |
+| T13 | `verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read` — `A[0..1]="{"`, `B[0..2]="ab"`, `A[4..7]="  }"`: the raw content begins exactly at the seam, and the whitespace before the terminator arrives as its **pre-space** — content by the raw-content loop's rule. Staged `Owned("ab  ")` while the described span is `B[0..2]` = `"ab"`: text and span genuinely disagree, which is what `raw_content_text` exists for | `constructs/span_tiling_tests.rs:786` |
+
+### Decisions taken
+
+- **B1 — the tiled twin over the scripted reader.** §5's T1 asks for "the same script
+  under a *tiled* language over the same reader", which needs a second language:
+  `TiledScriptedLang` (`constructs/span_tiling_tests.rs:61`) is `RelaxedLang` with the
+  const left at its default. It is used by T1, T1b, T3 and T9.
+- **B2 — no `Language::parse` route.** Confirmed as Stage 3a's answer 1 predicted: all of
+  T1–T13 are reachable through `ParseContext`/`ParserSession` over a directly built
+  reader, including T11 (which needs a session so the recorded diagnostics can be
+  rendered). No test driver override, no second driver, nothing added to `RelaxedLang`.
+- **B3 — the seed state is shared with the parsers that mint rules.** `Arc` identity is
+  what `probe_minted_group` matches on (`Arc::ptr_eq`), and a fixed script cannot be
+  re-tokenized under a parser's momentary state, so T6 passes the optional-argument
+  parser **the very `[…]` rule the seed carries** (`bracket_rule`, reading it back out of
+  the state). The harness therefore takes the seed state as a parameter rather than
+  minting a fresh one per call.
+- **B4 — the verbatim script is tokenized under a verbatim-shaped seed.** T13's script
+  state has every delimiter recognizer off and `}` installed as
+  `expecting_group_close` — the shape `verbatim_state_delta` derives — so the fixed
+  script serves `VerbatimArgumentParser` faithfully. Whitespace is left **on**, which the
+  verbatim state itself turns off: that is exactly what lets the terminator arrive with
+  pre-space and so exercises the `push_pre_space_text` arm of `read_raw_content`, which a
+  scanning reader can never reach (see the open questions).
+- **B5 — `RelaxedScriptedLatexlike` lives in `latexlike/test_support.rs`**, next to
+  `RelaxedLatexlike` (Stage 2's shared place for relaxed preset languages), not in the
+  test module: the two differ in the tokenization alone and read best side by side.
+
+### R7's proof
+
+`RelaxedScriptedLatexlike` (`latexlike/test_support.rs:171`) is a `LatexlikeLang` with
+`Tokenization = ScriptedTokenization` and `OBEYS_SPAN_TILING = false`. It compiled and
+parsed **with no change to the preset**: `LatexlikeDriver<LLL>` carries no tokenization
+bound, `EnvironmentSpec`/`MacroSpec`/`InputMacroSpec`, `StdEnvironmentSyntax`,
+`InvocationSyntaxData`, `check_latexlike_tree_invariants` and `SourceRecomposer` are all
+generic over the family and reach the declaration through the shared helpers. The plan's
+risk row "`LatexlikeLang` requires more than expected to instantiate over a custom
+tokenization" did not materialize.
+
+### Gate results (verbatim, run from the worktree)
+
+```
+### cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+### cargo test --workspace
+test result: ok. 1121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.20s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+### cargo test --workspace --all-features
+test result: ok. 1160 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.52s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.59s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+### cargo clippy --workspace --all-targets -- -D warnings
+    Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.17s
+### cargo clippy --workspace --all-targets --all-features -- -D warnings
+    Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.20s
+### rm -rf target/doc && cargo docs --all-features
+ Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.51s
+   Generated /Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/target/doc/techy/index.html and 1 other file
+```
+
+The baseline on `main` is 1093 / 1132 lib tests; Stage 3b adds 28 (22 core + 6 preset) and
+changes no existing test. The last gate run above is from before the wording sweep
+(`d6a3f6c`), which is comments and docs only; `cargo test --workspace` and
+`cargo clippy --workspace --all-targets --all-features -- -D warnings` were re-run after it
+with the same results.
+
+### Deviations from §5
+
+1. **T4 grew a second and third case.** §5's script (`\begin` in A, body in B, `\end` in
+   A) puts both scaffolding sides in the environment node's own source, so the node-data
+   rule keeps them `Spanned` — the rule's *other* arm needed a script where the
+   terminator lies elsewhere, which is the second test. The third (the name read across
+   a seam) is the Stage 2 reviewer's explicit ask, recorded there as "a reader whose
+   description disagrees is Stage 3b's scripted reader".
+2. **T7's comment sub-spans are all `Spanned`.** The plan's R2 switched
+   `comment_node_kind` to the node-data rule because "at a seam a single token can have
+   edges in two sources". A `ScriptedReader` token is scanned inside one segment, so it
+   never has edges in two sources: the `Owned` arm of `comment_node_kind` is **not
+   reachable with this reader**, and the test asserts the `Spanned` arm and says so. An
+   expanding reader that splices mid-token would reach it; nothing here can.
+3. **T13 cannot make the described span empty while the text is not.** §5's parenthetical
+   ("so the describing span *may* be empty") describes what a reader is permitted to
+   answer, not what this one does: the recommended describing shape always covers at
+   least the first entry of the stretch, so under `ScriptedReader` an empty span implies
+   an empty text. What the test pins instead is the substantive half — span and text
+   genuinely disagreeing (`B[0..2]` = `"ab"` against `Owned("ab  ")`) — plus the
+   terminator-pre-space arm, which is what `raw_content_text`'s emptiness rule guards
+   against in general.
+4. **`\input` (T4's optional extra) attaches an empty parse.** The attached sub-parse
+   builds its reader through the driver's `make_token_reader`, i.e. the language's own
+   tokenization — and `ScriptedTokenization` has no script to give it (documented on the
+   type), so it serves an empty stream. The test therefore asserts that a source *was*
+   attached (which is the proof that the reference the parser read is the one the
+   resolver knows), not what the attached content is.
+
+### Open questions for the user
+
+1. **The verbatim recipe's terminator pre-space is unreachable through a scanning
+   reader.** `read_raw_content` treats the terminator's pre-space as content
+   (`push_pre_space_text`, `verbatim_parser.rs:240`), but `verbatim_state_delta` disables
+   whitespace, so `StdTokenReader` never gives a terminator any pre-space: under a
+   scanning reader the arm is dead code. It is live for a reader that does not re-tokenize
+   under the recipe state — the scripted one (T13), and a token-list or expanding reader
+   in general — which is why it is right to keep. Flagged so the Stage 5 record can say so
+   rather than leaving it looking accidental. No change proposed.
+2. **`\input` with a non-chars reference is silent under `OBEYS_SPAN_TILING = false`.**
+   `argument_text` answers `None` for content that is not plain characters, and the call
+   site's comment reads "Absent argument: the argument parser already diagnosed it"
+   (`latexlike/input.rs:355`) — which is accurate for an absent argument and inaccurate
+   for a *provided* one whose content is a group (`\input{{chap.tex}}`): nothing
+   diagnosed it, and nothing is attached. Under a tiled language the same input takes the
+   span route and diagnoses an unresolvable reference. Pinned as the documented answer by
+   `an_input_reference_that_is_not_plain_characters_is_not_read`; whether the `None`
+   branch should diagnose something is a design decision, not a Stage 3b fix.
+3. **No production defect was found.** Nothing in T1–T13 needed a production change, and
+   no test is `#[ignore]`d.
 
 ## Stage 5 — record
 
