@@ -23,7 +23,8 @@ modules are `pub(crate)` and invisible to public paths:
 - **techy::visit**: Read-only structural traversal (TreeWalker, NodeVisitor, VisitFlow, VisitContext, WalkError; the walk is role-blind and depth-guarded)
 - **techy::recompose**: Tree→value recomposition — the meaning-free piece fold (TreeRecomposer, Recomposer, Recompose::{Emit, Concat(ConcatPieces)}, ComposePiece, RecomposeContext + region ops, RecomposeError, core_source_instruction)
 - **techy::serialize**: Serialization to and from a format-independent value model (SerialValue, SerialIndex + `serial_index!`; SerdeSession, Segment, ObjectSerdeDriver, TableHandle; the SerializableObject/DeserializableObject traits with the SerializableLang opt-in; KnownProviders; the `serde` feature gates rendering only — `to_value`/`from_value`); the preset's opt-in is `latexlike::serialize`
-- **techy::core**: The flat machinery hub — Lang/state (Lang, ParsingState, ParsingStateDelta, TrivialLang), tokens (Tokenization/StdTokenization — the per-language bundle behind the `Token<L>`/`StreamPosition<L>` aliases, TokenKind, TokenRules, TokenReader, StdTokenReader), engine (Language + `parse()`, ParseDriver, ParserSession, ParseResult, Frame/FrameTitle/FrameRole)
+- **techy::core**: The flat machinery hub — Lang/state (Lang, ParsingState, ParsingStateDelta, TrivialLang), engine (Language + `parse()`, ParseDriver, ParserSession, ParseResult, Frame/FrameTitle/FrameRole)
+- **techy::core::token**: The tokenization library (Tokenization/StdTokenization — the per-language bundle behind the `Token<L>`/`StreamPosition<L>` aliases, StdToken, TokenKind, TokenEdge; TokenReader, StdTokenReader, skip_whitespace; TokenRules and its per-feature blocks with the matching *Overrides and the PrefixTable/TriggerChars caches; SpecialsMatch/SpecialsScanError; the TokenError family)
 - **techy::core::specs**: Defining callables (CallableSpec, StdCallableSpec, ArgumentSpec; SpecsProvider, Package, Scope, ScopeStack; the command-resolution family)
 - **techy::core::constructs**: Construct parsers (ConstructParser trait + standard parsers, ArgumentParser, their diagnostic conditions)
 - **techy::core::node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData, CommentData, NodeTreeBuilder)
@@ -46,7 +47,7 @@ Key naming rules:
 - Names consciously rejected or replaced must not come back: DESIGN_RATIONALE [§dd-dr:superseded-names]
 
 **Module organization**:
-- `techy::core` = the flat machinery hub (`Language::parse()`, `ParserSession`, `ParseDriver`, state, tokens); `core::constructs` = parsers for individual constructs (traits, parsers); `core::specs` = author-side definitions; `core::node` = the node tree
+- `techy::core` = the flat machinery hub (`Language::parse()`, `ParserSession`, `ParseDriver`, state); `core::token` = the tokenization library (token types, reader, rules); `core::constructs` = parsers for individual constructs (traits, parsers); `core::specs` = author-side definitions; `core::node` = the node tree
 - Node taxonomy is the closed `NodeKind`: `Chars`/`Group`/`Callable`/`Comment`/`List` — "macro"/"environment" are preset vocabulary, not node kinds
 
 

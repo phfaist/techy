@@ -68,9 +68,13 @@
 //!   the [`SerializableLang`](serialize::SerializableLang) declaration, the session
 //!   ([`SerdeSession`](serialize::SerdeSession)) with the standard tables of
 //!   sources, states, specs, providers, trees, diagnostics, and parse results.
-//! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
-//!   and the parse engine ([`Language`](core::Language) + `parse()` →
-//!   [`ParseResult`](core::ParseResult)), with three submodules:
+//! - [`core`] — the machinery hub: the `Lang` contract and parsing state, and the
+//!   parse engine ([`Language`](core::Language) + `parse()` →
+//!   [`ParseResult`](core::ParseResult)), with four submodules:
+//!   - [`core::token`] — the tokenization library: a language's tokenization declared
+//!     as one type, the token types it names, the
+//!     [`TokenReader`](core::token::TokenReader) trait and the standard reader,
+//!     the [`TokenRules`](core::token::TokenRules) data, and the token errors.
 //!   - [`core::specs`] — defining callables: callable specs, providers, packages
 //!     and scopes, command resolution.
 //!   - [`core::constructs`] — construct parsing: the
