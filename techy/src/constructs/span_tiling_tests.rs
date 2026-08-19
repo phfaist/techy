@@ -671,6 +671,12 @@ fn a_comment_and_a_paragraph_break_in_another_source_become_nodes() {
     assert_owned_chars(&roots[3], "b");
     assert_eq!(roots[3].span().range(), 7..8);
     assert_eq!(recompose(&parsed), "a%note\n\nb");
+
+    // This is also where the oracle's gate earns its keep (T10): these siblings do not
+    // even share a source, which the span-tiling law's byte accounting forbids — and
+    // `check_tree_invariants`, run by the harness on every tree here, accepted the tree
+    // because the language declares that law does not apply to it.
+    assert!(!Arc::ptr_eq(roots[0].span().source(), roots[1].span().source()));
 }
 
 // --- T9: a reader that breaks the seam position ---------------------------------------

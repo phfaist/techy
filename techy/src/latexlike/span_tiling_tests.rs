@@ -1,12 +1,12 @@
 //! Preset-side parse tests for a language whose reader serves one parse from **several
-//! sources** — a member of the latexlike family declaring [`Lang::OBEYS_SPAN_TILING`]
-//! `= false`.
+//! sources** — a member of the latexlike family declaring
+//! [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`.
 //!
 //! [`RelaxedScriptedLatexlike`] is the demonstration the plan's rule R7 asks for: the
 //! preset's parsers, driver, specs and node-ext types are generic over the family, so
-//! they serve a member over a *custom tokenization* ([`ScriptedTokenization`], the
-//! multi-source test reader) unchanged. Nothing in the preset had to be relaxed to
-//! instantiate it.
+//! they serve a member over a *custom tokenization*
+//! ([`ScriptedTokenization`](crate::token::ScriptedTokenization), the multi-source test
+//! reader) unchanged. Nothing in the preset had to be relaxed to instantiate it.
 //!
 //! The scripts are written as in `constructs::span_tiling_tests`: segments in stream
 //! order, each a source and a byte range of it, with a **seam** wherever the next token
@@ -24,85 +24,15 @@ use core::ops::Range;
 use crate::constructs::{NodesParser, ParseContext, StopSpec};
 use crate::engine::{ParseResult, ParserSession};
 use crate::error::{ParseError, Recovery};
-use crate::node::{NodeBuildError, NodeKind, NodeRef, StagedChildren};
+use crate::node::{NodeKind, NodeRef};
 use crate::recompose::TreeRecomposer;
 use crate::scopes::Package;
-use crate::source::{MapResolver, Source, SourceSpan, TextContent};
+use crate::source::{MapResolver, Source, TextContent};
 use crate::state::{Lang, ParsingState};
-use crate::token::{ScriptedReader, ScriptedTokenization};
+use crate::token::ScriptedReader;
 
-use super::{
-    check_latexlike_tree_invariants, source_recomposer, CallableType, GroupType,
-    LatexlikeDriver, LatexlikeLang, Mode,
-};
-
-/// A member of the latexlike family that reads its tokens from the scripted
-/// multi-source reader ([`ScriptedTokenization`]) and therefore declares that its parse
-/// trees are **not** span-tiled ([`Lang::OBEYS_SPAN_TILING`] `= false`).
-///
-/// Everything but those two lines is the preset's own: the vocabularies, the seed, the
-/// driver, the node-ext and invocation-syntax types.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RelaxedScriptedLatexlike;
-
-impl Lang for RelaxedScriptedLatexlike {
-    const OBEYS_SPAN_TILING: bool = false;
-
-    type Features = crate::state::AllLangFeatures;
-    type GroupTypeId = GroupType;
-    type CallableTypeId = CallableType;
-    type ModeId = Mode;
-    type StateExt = ();
-    type Event = super::Event;
-    type SessionExt = ();
-    type SourceOrigin = Option<String>;
-    type Tokenization = ScriptedTokenization;
-    type NodeExts = super::LatexlikeNodeExts;
-    type InvocationSyntax =
-        super::InvocationSyntaxData<super::StdEnvironmentSyntax<Self>>;
-    type Driver = LatexlikeDriver<Self>;
-
-    /// The preset's own seed, for this language's vocabularies.
-    fn initial_state_data() -> Result<crate::state::StateData<Self>, crate::state::FinalizeError>
-    {
-        let mut scopes = crate::scopes::ScopeStack::new();
-        scopes.push(super::builtin_package());
-        Ok(crate::state::StateData {
-            rules: super::default_token_rules(),
-            scopes,
-            mode: Mode::Text,
-            ext: (),
-        })
-    }
-
-    fn scan_specials(
-        state: &ParsingState<Self>,
-        content: &str,
-        pos: usize,
-    ) -> Result<Option<crate::token::SpecialsMatch<Self>>, crate::token::SpecialsScanError>
-    {
-        state.scopes().scan_specials(state, content, pos)
-    }
-
-    fn specials_trigger_chars(
-        data: &crate::state::StateData<Self>,
-    ) -> crate::token::TriggerChars {
-        data.scopes.specials_trigger_chars()
-    }
-
-    fn make_node_ext(
-        _kind: &NodeKind<Self>,
-        _span: &SourceSpan<Self::SourceOrigin>,
-        _state: &Arc<ParsingState<Self>>,
-        _children: StagedChildren<'_, Self>,
-    ) -> Result<(), NodeBuildError> {
-        Ok(())
-    }
-}
-
-impl LatexlikeLang for RelaxedScriptedLatexlike {}
-
-const _: () = assert!(!RelaxedScriptedLatexlike::OBEYS_SPAN_TILING);
+use super::test_support::RelaxedScriptedLatexlike;
+use super::{check_latexlike_tree_invariants, source_recomposer, CallableType, LatexlikeDriver};
 
 /// A primary source.
 fn source(content: &str) -> Arc<Source> {
