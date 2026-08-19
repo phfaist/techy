@@ -103,7 +103,20 @@ through [`make_token_reader`](crate::core::ParseDriver::make_token_reader)
 inner [`StdTokenReader`](crate::core::token::StdTokenReader) over the same content,
 build tokens with the `StdToken` constructors, and delegate every question
 about a token to the inner reader — the `TokenReader` page shows that shape
-as a compiling example.
+as a compiling example. A reader that declares a token type of its own
+which wraps standard tokens — read from one source or from several, as a
+macro expander does — keeps one inner `StdTokenReader` per source and works
+through two of its methods:
+[`scan_std_token_at`](crate::core::token::StdTokenReader::scan_std_token_at)
+reads the standard token at a byte offset without moving that reader, and
+[`token_kind_of_std_token`](crate::core::token::StdTokenReader::token_kind_of_std_token)
+answers what one of the standard tokens it stores is; what the stream
+positions on the two sides of a source change mean is
+[*Seams*](crate::core::token::TokenReader#seams--readers-that-serve-several-sources-at-one-nesting-level)
+on the same page. A reader with token kinds of its own builds them instead
+from the *scan helpers* — free functions that each recognize one construct
+at a position and return its byte spans — one helper per construct, listed
+under [Writing a token reader](crate::core::token#writing-a-token-reader).
 
 **Specials** — callables triggered by plain character sequences (`~`,
 `--`) — are recognized by two `Lang` hooks, and here sits a documented
