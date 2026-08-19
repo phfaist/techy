@@ -45,7 +45,7 @@
 //! ```
 
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -53,7 +53,7 @@ use core::fmt;
 
 use crate::constructs::{
     parse_declared_arguments, ChildStateSpec, ConstructParser, ConstructParserResult,
-    GroupArgumentParser, Invocation, ParseContext, StopSpec,
+    GroupArgumentParser, InvalidSourceReferenceArgument, Invocation, ParseContext, StopSpec,
 };
 use crate::node::{
     ArgumentExt, BuildId, ChildRegion, ContentNodes, NodeKind,
@@ -98,14 +98,33 @@ use super::{Latexlike, LatexlikeLang};
 /// and `body()` finds it — the ext axis is selected alone, with no hidden
 /// role conjunction, precisely so that choice cannot become silently unfindable.
 ///
+/// # The reference argument carries plain text
+///
+/// The argument's content must be plain characters. The reference is read off the
+/// staged argument's own node data — the character payloads of its content nodes,
+/// concatenated as read — and that text is what drives resolution. Content that is
+/// anything else carries no such text: a protective group (`\input{{chap.tex}}`), a
+/// callable, a comment inside the braces raise
+/// [`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument)
+/// at the argument's span, and nothing is resolved or attached. Characters are taken as
+/// written, with no trimming: whitespace inside the braces is part of the reference
+/// (`\input{ chap.tex }` resolves `" chap.tex "`), so tolerating padding is the
+/// resolver's choice.
+///
+/// Reading the reference from node data needs no assumption about where the tokens came
+/// from, so the rule is the same under every language — including one declaring
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, whose
+/// argument may be read from several sources.
+///
 /// # Failure conditions
 ///
 /// Resolution failures are diagnosed at the invocation span through the single
 /// raising site ([`ParseContext::attach_source_reference`]):
 /// [`NoSourceResolver`](crate::constructs::NoSourceResolver) when the driver has
 /// no resolver, [`UnresolvableSourceReference`](crate::constructs::UnresolvableSourceReference)
-/// when the resolver fails. Tolerant parses record the condition and stage the
-/// callable *without* an attached slot; strict parses abort.
+/// when the resolver fails; the reference-argument condition above is diagnosed at the
+/// argument instead, before any resolution is attempted. Tolerant parses record the
+/// condition and stage the callable *without* an attached slot; strict parses abort.
 ///
 /// # State handling — `persist_state` decides
 ///
@@ -320,19 +339,34 @@ where
             &end,
         )?;
 
-        // 2. The argument text — the reference, exactly as written. The reference
-        //    drives source resolution, so it is read the way it can be read exactly:
-        //    off the argument's own extent for a language that obeys span tiling, and
-        //    out of the staged nodes' own data for one that does not (there a span
-        //    covering several tokens is only what the reader described for them).
-        let reference: Option<String> = match LLL::OBEYS_SPAN_TILING {
-            true => arguments
-                .first()
-                .and_then(|argument| argument_text_span(cx, argument, &children))
-                .map(|span| span.content().to_string()),
-            false => arguments
-                .first()
-                .and_then(|argument| argument_text(cx, argument, &children)),
+        // 2. The reference, exactly as written. It drives source resolution, so it is
+        //    read where it can be read exactly: off the staged argument's own node data
+        //    — the character payloads of its content nodes — under every language,
+        //    whether or not it obeys span tiling. (A span covering several tokens is
+        //    only what the reader described for them; for a language that obeys span
+        //    tiling it describes them exactly, and then it says nothing the node data
+        //    does not.) The argument's content must be plain characters: anything else
+        //    is diagnosed here and no reference is read.
+        let reference: Option<String> = match arguments.first() {
+            Some(argument) if argument.region.is_some() => {
+                match argument_text(cx, argument, &children) {
+                    text @ Some(_) => text,
+                    None => {
+                        let anchor = argument_span(cx, argument, &children)
+                            .unwrap_or_else(|| at.clone());
+                        cx.recover(
+                            InvalidSourceReferenceArgument::new(
+                                InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS,
+                            ),
+                            anchor,
+                        )?;
+                        None
+                    }
+                }
+            }
+            // An absent argument: the argument parser already diagnosed the missing
+            // mandatory argument, and there is nothing here to add to it.
+            _ => None,
         };
 
         // 3. Resolve + attach through the single raising site, driving the root
@@ -352,13 +386,11 @@ where
                     &mut *parser,
                 )?
             }
-            // No reference to resolve. For an absent argument, the argument parser
-            // already diagnosed it. Under `OBEYS_SPAN_TILING = false` this arm is
-            // also reached for a *provided* argument whose content is not plain
-            // characters (a group, a callable): `argument_text` has no single text
-            // to read off such node data, so nothing is resolved, nothing is
-            // attached and nothing is diagnosed. The tiled route reads the
-            // argument's extent out of the source instead, and has no such case.
+            // No reference to resolve, and the failure is already diagnosed: an
+            // absent argument by the argument parser, a provided argument whose
+            // content is not plain characters by step 2's
+            // `InvalidSourceReferenceArgument`. Nothing is resolved and nothing is
+            // attached in either case.
             None => None,
         };
 
@@ -406,12 +438,13 @@ where
     }
 }
 
-/// The extent of a staged argument's **content** (its designated content nodes): a
-/// delimited group argument's interior, a bare expression's own span; an empty group
-/// interior anchors after the open delimiter. `None` for an absent argument, for
-/// content in no staged node, and for content whose nodes lie in more than one source
-/// (there is no single extent to report then).
-fn argument_text_span<LLL: LatexlikeLang>(
+/// The span of a staged argument itself, for a diagnostic to point at: a delimited
+/// argument's own node (delimiters included), or the extent of the nodes a bare
+/// argument staged. `None` when the argument has no single span to point at — it was
+/// not provided, it staged no node, or its nodes lie in more than one source (which a
+/// language with [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`
+/// allows); the caller then points at the invocation instead.
+fn argument_span<LLL: LatexlikeLang>(
     cx: &ParseContext<'_, '_, LLL>,
     argument: &ParsedArgument<LLL>,
     children: &[BuildId],
@@ -419,47 +452,33 @@ fn argument_text_span<LLL: LatexlikeLang>(
     let region = argument.region.as_ref()?;
     // At parse time the region is staged by construction (`finish` has not run).
     let (offsets, content) = region.staged()?;
-    let region_nodes = children.get(offsets.start as usize..offsets.end as usize)?;
     let staged = cx.staged_nodes();
-    let span_of = |ids: &[BuildId]| -> Option<SourceSpan<LLL::SourceOrigin>> {
-        let first = staged.get(*ids.first()?)?.span().clone();
-        let last = staged.get(*ids.last()?)?.span();
-        if !first.same_source(last) || last.end() < first.start() {
-            return None;
-        }
-        Some(SourceSpan::new(first.source(), first.start()..last.end()))
-    };
-    match content {
-        ContentNodes::InRegion(range) => {
-            span_of(region_nodes.get(range.start as usize..range.end as usize)?)
-        }
-        ContentNodes::InChildrenOf(id, range) => {
-            let view = staged.get(*id)?;
-            let content_children =
-                view.children().get(range.start as usize..range.end as usize)?;
-            if let Some(span) = span_of(content_children) {
-                return Some(span);
-            }
-            // Empty content (`\input{}`): anchor after the open delimiter.
-            if let NodeKind::Group(group) = view.kind() {
-                let open_len = group.open.resolve(view.span().source()).len();
-                let at = view.span().start() + open_len;
-                return Some(SourceSpan::new(view.span().source(), at..at));
-            }
-            None
-        }
+    if let ContentNodes::InChildrenOf(id, _) = content {
+        return Some(staged.get(*id)?.span().clone());
     }
+    let region_nodes = children.get(offsets.start as usize..offsets.end as usize)?;
+    let first = staged.get(*region_nodes.first()?)?.span().clone();
+    let last = staged.get(*region_nodes.last()?)?.span();
+    if !first.same_source(last) || last.end() < first.start() {
+        return None;
+    }
+    Some(SourceSpan::new(first.source(), first.start()..last.end()))
 }
 
-/// The text of a staged argument's **content**, read off the staged nodes' own data
-/// rather than off their coordinates — what a language with
-/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` needs: its
-/// chars nodes carry the text the reader answered, while a span covering several of
-/// them is only a description of the stretch they were read from.
+/// The text of a staged argument's **content**: the character payloads of its content
+/// nodes, concatenated in order and read off the nodes' own data rather than off their
+/// coordinates. Empty content (`\input{}`) reads as the empty text.
+///
+/// Node data is what a reference may be read from under every language. A chars node
+/// carries the text the reader answered for it; a span covering several nodes is only
+/// a description of the stretch they were read from — exact for a language that obeys
+/// span tiling ([`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), and no
+/// more than a description for one that does not.
 ///
 /// `None` for an absent argument, for content in no staged node, and for content that
-/// is not plain characters (a group, a callable): the node data of those has no single
-/// text, and a reference read from a coordinate span would be a guess.
+/// is not plain characters (a group, a callable, a comment): such node data has no
+/// single text, and the caller diagnoses it
+/// ([`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument)).
 fn argument_text<LLL: LatexlikeLang>(
     cx: &ParseContext<'_, '_, LLL>,
     argument: &ParsedArgument<LLL>,
@@ -503,7 +522,8 @@ mod tests {
     };
     use super::*;
     use crate::constructs::{
-        NoSourceResolver, StrayGroupClose, UnresolvableCommand, UnresolvableSourceReference,
+        InvalidSourceReferenceArgument, NoSourceResolver, StrayGroupClose, UnresolvableCommand,
+        UnresolvableSourceReference,
     };
     use crate::engine::Language;
     use crate::error::{DiagnosticInfo, Recovery};
@@ -698,6 +718,102 @@ mod tests {
         assert_eq!(condition.reference, "missing.tex");
         let input = result.tree.root().child(0).unwrap();
         assert!(input.slots().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_reference_is_the_arguments_characters_whitespace_included() {
+        // The reference is the argument's content characters as read, unnormalized:
+        // whitespace inside the braces belongs to the chars node and therefore to the
+        // reference. The resolver keyed on the padded name is what resolves.
+        let padded = language(Recovery::Tolerant, &[(" chap.tex", "included")]);
+        let result = padded.parse(r"\input{ chap.tex}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let input = result.tree.root().child(0).unwrap();
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("included")
+        );
+        // Trailing whitespace belongs to the chars node too, and so to the reference.
+        let plain = language(Recovery::Tolerant, &[("chap.tex ", "included")]);
+        let result = plain.parse(r"\input{chap.tex }").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let input = result.tree.root().child(0).unwrap();
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("included")
+        );
+    }
+
+    #[test]
+    fn a_reference_argument_that_is_not_plain_characters_is_diagnosed() {
+        // The reference argument carries plain text — that is the contract. Here the
+        // content is a protective group (`\input{{chap.tex}}`), which carries no text
+        // to resolve: the condition is raised at the argument's span, nothing is
+        // attached, and the rest of the document parses.
+        let language = language(Recovery::Tolerant, &[("chap.tex", "included")]);
+        let result = language.parse(r"\input{{chap.tex}} tail").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), InvalidSourceReferenceArgument::IDENTIFIER);
+        let condition = diagnostic
+            .data()
+            .downcast_ref::<InvalidSourceReferenceArgument>()
+            .unwrap();
+        assert_eq!(condition.reason, InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS);
+        // The rendered wording names the reason.
+        assert_eq!(
+            diagnostic.message(),
+            "invalid source reference argument: its content is not plain characters"
+        );
+        // Anchored at the argument, delimiters included — `{{chap.tex}}`.
+        assert_eq!(diagnostic.span().range(), 6..18);
+        assert_eq!(diagnostic.span().content(), "{{chap.tex}}");
+
+        // Nothing was resolved: no attached slot, and the resolver — which *does* know
+        // `chap.tex` — was never asked for the braces-included literal.
+        let input = result.tree.root().child(0).unwrap();
+        assert!(input.slots().unwrap().is_empty());
+        assert_eq!(root_shapes(&result), ["Macro(input)", "chars( tail)"]);
+    }
+
+    #[test]
+    fn a_comment_or_a_callable_in_the_reference_argument_is_diagnosed_too() {
+        // The same condition for the other two ways an argument's content stops being
+        // plain characters: a comment node, and a callable node.
+        let language = language(Recovery::Tolerant, &[("chap.tex", "included")]);
+        let result = language.parse("\\input{chap%c\n.tex}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().identifier(),
+            InvalidSourceReferenceArgument::IDENTIFIER
+        );
+
+        let mut macros = Package::new("macros");
+        macros.insert(CallableType::Macro, "x", MacroSpec::new(vec![]));
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("chap.tex", "included")],
+            [input_package(), macros],
+        );
+        let result = language.parse(r"\input{\x}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().identifier(),
+            InvalidSourceReferenceArgument::IDENTIFIER
+        );
+        assert!(result.tree.root().child(0).unwrap().slots().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_strict_parse_aborts_on_a_reference_argument_that_is_not_plain_characters() {
+        let strict = language(Recovery::Strict, &[("chap.tex", "included")]);
+        let err = strict.parse(r"\input{{chap.tex}}").unwrap_err();
+        assert_eq!(err.identifier(), InvalidSourceReferenceArgument::IDENTIFIER);
     }
 
     #[test]

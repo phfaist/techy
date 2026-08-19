@@ -21,9 +21,11 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use crate::constructs::{NodesParser, ParseContext, StopSpec};
+use crate::constructs::{
+    InvalidSourceReferenceArgument, NodesParser, ParseContext, StopSpec,
+};
 use crate::engine::{ParseResult, ParserSession};
-use crate::error::{ParseError, Recovery};
+use crate::error::{DiagnosticInfo, ParseError, Recovery};
 use crate::node::{NodeKind, NodeRef};
 use crate::recompose::TreeRecomposer;
 use crate::scopes::Package;
@@ -352,11 +354,11 @@ fn an_input_reference_read_across_seams_resolves() {
 
 #[test]
 fn an_input_reference_that_is_not_plain_characters_is_not_read() {
-    // The documented `None` answer of the reference read: content that is not plain
-    // characters (here a protective group, `\input{{chap.tex}}`) has no single text in
-    // its node data, and a reference taken from a coordinate span would be a guess. The
-    // reference is therefore not read at all — nothing is resolved and nothing is
-    // attached.
+    // The reference read answers from node data alone: content that is not plain
+    // characters (here a protective group, `\input{{chap.tex}}`) carries no such text,
+    // so no reference is read — and that is an error in the document, diagnosed as
+    // `InvalidSourceReferenceArgument` at the argument's own span. Nothing is resolved
+    // and nothing is attached.
     let a = source("\\input{{chap.tex}}");
     let state = seed(input_package());
     let result = run_script_with(&state, &[(&a, 0..18)], resolving_driver("included"))
@@ -372,9 +374,19 @@ fn an_input_reference_that_is_not_plain_characters_is_not_read() {
         .collect();
     assert_eq!(reference.len(), 1);
     assert!(reference[0].is_group(), "the content is a group, not characters");
-    // The argument is present and well-formed, so nothing diagnoses it: not reading a
-    // reference here is silent.
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    let diagnostic = result.diagnostics.iter().next().expect("the diagnostic");
+    assert_eq!(diagnostic.identifier(), InvalidSourceReferenceArgument::IDENTIFIER);
+    let condition = diagnostic
+        .data()
+        .downcast_ref::<InvalidSourceReferenceArgument>()
+        .expect("the condition type");
+    assert_eq!(condition.reason, InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS);
+    // Anchored at the argument, delimiters included — `{{chap.tex}}`.
+    assert_eq!(diagnostic.span().range(), 6..18);
+    assert!(Arc::ptr_eq(diagnostic.span().source(), &a));
+
     assert!(
         input.slots().expect("a callable node").is_empty(),
         "no source is attached when the reference cannot be read"

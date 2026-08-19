@@ -57,7 +57,10 @@ pub use argument_parsers::{
     ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
     OptionalGroupArgumentParser,
 };
-pub use attached_source::{AttachedSourceOutcome, NoSourceResolver, UnresolvableSourceReference};
+pub use attached_source::{
+    AttachedSourceOutcome, InvalidSourceReferenceArgument, NoSourceResolver,
+    UnresolvableSourceReference,
+};
 pub use chars_group_parser::CharsGroupArgumentParser;
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use embellishments_parser::EmbellishmentsArgumentParser;

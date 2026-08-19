@@ -14,6 +14,13 @@
 //! decides whether the record continues past the inclusion (the
 //! persist-vs-transparent choice).
 //!
+//! The reference itself is the caller's to read, and the contract on it is one line:
+//! an `\input`-style construct's reference argument carries **plain text**. A caller
+//! that finds anything else in the argument (a nested group, a callable, a comment)
+//! raises [`InvalidSourceReferenceArgument`] and resolves nothing — the condition is
+//! defined here, beside the two the door itself raises, so every `\input`-variant spec
+//! reports the three failures with one wording.
+//!
 //! Recursion control is deliberately **not** here: the core never interprets
 //! reference strings, and legitimate self-inclusion exists (`.dtx`-style
 //! self-documenting files). An embedder that wants a cycle or depth bound
@@ -317,6 +324,45 @@ impl fmt::Display for UnresolvableSourceReference {
     }
 }
 
+/// Condition: the reference argument of an `\input`-style construct does not carry
+/// plain text. The argument's content must be plain characters: the reference drives
+/// source resolution, so it is read off the argument's content nodes — their character
+/// payloads, exactly as read. Content that is anything else (a nested group, a
+/// callable, a comment) carries no such text, and no reference is read from it.
+///
+/// Raised by the invocation parser that reads the argument — the preset's `\input`
+/// ([`input_macro_spec`](crate::latexlike::input_macro_spec)) and any `\input`-variant
+/// spec — at the argument's span, through the same recovery entry point as the two
+/// conditions of [`ParseContext::attach_source_reference`]: under
+/// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) the failure is recorded and
+/// the callable is staged **without** an attached slot; under
+/// [`Recovery::Strict`](crate::error::Recovery::Strict) recovery aborts.
+///
+/// Distinct from its two siblings, and the remedies differ: here the *document* must
+/// spell the reference as plain text, whereas [`UnresolvableSourceReference`] means a
+/// reference was read and the resolver failed on it, and [`NoSourceResolver`] means no
+/// resolver is configured at all.
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(
+    id = "core.sources.invalid-reference-argument",
+    message = "invalid source reference argument: {reason}"
+)]
+pub struct InvalidSourceReferenceArgument {
+    /// Why the argument cannot be read as a source reference, as the short phrase the
+    /// message renders. The only value the crate raises is
+    /// [`NOT_PLAIN_CHARACTERS`](InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS);
+    /// match on the condition type (or on [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER)),
+    /// never on this text.
+    pub reason: &'static str,
+}
+
+impl InvalidSourceReferenceArgument {
+    /// The reason for an argument whose content is not plain characters — the only
+    /// reason the crate raises today.
+    pub const NOT_PLAIN_CHARACTERS: &'static str = "its content is not plain characters";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +495,32 @@ mod tests {
         assert_eq!(
             UnresolvableSourceReference::IDENTIFIER,
             "core.sources.unresolvable-reference"
+        );
+        assert_eq!(
+            InvalidSourceReferenceArgument::IDENTIFIER,
+            "core.sources.invalid-reference-argument"
+        );
+    }
+
+    #[test]
+    fn an_invalid_reference_argument_renders_its_reason_and_projects_it() {
+        use crate::error::DiagnosticValue;
+        use alloc::string::ToString;
+
+        let condition = InvalidSourceReferenceArgument::new(
+            InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS,
+        );
+        assert_eq!(
+            condition.to_string(),
+            "invalid source reference argument: its content is not plain characters"
+        );
+        let projected = crate::error::DiagnosticInfo::serializable_data(&condition);
+        assert_eq!(
+            projected,
+            DiagnosticValue::Map(vec![(
+                "reason".into(),
+                DiagnosticValue::Str("its content is not plain characters".into())
+            )])
         );
     }
 

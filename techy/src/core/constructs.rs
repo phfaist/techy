@@ -61,7 +61,7 @@ pub use crate::constructs::{
     ExpectedExpressionArgument, ExpectedVerbatimDelimiter,
     ExpressionCallableRequiresContent, ExpressionParser, FromInvocation,
     GroupAfterEffectsFn, GroupArgumentParser, GroupChildState, GroupParser,
-    ImplementationError, Invocation,
+    ImplementationError, InvalidSourceReferenceArgument, Invocation,
     InvocationChildState,
     MalformedEnvironmentTerminator, MarkerArgumentParser, MissingEnvironmentTerminator,
     MissingMandatoryArgument, MissingTerminatorFound, NameGroup, NoSourceResolver,
