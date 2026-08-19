@@ -194,10 +194,16 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 
 ## Stage 2 — parsers
 
-Status: **implemented** (branch `st-2-parsers`, worktree
-`.claude/worktrees/st-2-parsers`, rebased onto `st-1-contract` at `d525660`; commits
-`07b853e`, `9ac1335`, `28418f6`, `fdbd5ed`, `16e2eb4`, `f2e6cfa`, `cb5891d`, `d51fd9c`,
-plus this file).
+Status: **reviewed** (branch `st-2-parsers`, worktree `.claude/worktrees/st-2-parsers`,
+rebased onto `main` at `610c3d5` — Stages 1, 3a and 4 merged; commits `41aba93`,
+`66a4058`, `22c275d`, `e7c7e8b`, `28b1ae6`, `3f303e8`, `1d41f4f`, `6e0b839`, `d71fe82`,
+plus this file's).
+
+Review PASS with two required fixes, both applied in `d71fe82` (the embellishment
+wrapper's node span, the verbatim content's emptiness gate), together with the four
+non-blocking suggestions: the `read_name_chars` comment, the superseded "parse law"
+wording in this stage's files, two more tests (the latexlike oracle's gate, the
+verbatim nested-close and trailing arms), and the PROGRESS corrections below.
 
 ### Files changed
 
@@ -470,9 +476,10 @@ parsers, driver and node-ext types serve a non-tiled family member unchanged. St
 
 Wording: the superseded "parse law"/"parse-tree law" phrasing is gone from every file
 this stage touched (`latexlike/invariants.rs`, `latexlike/mod.rs`,
-`latexlike/invocation_syntax.rs`, `latexlike/input.rs`, `node/invariants.rs`). It
-survives in `node/mod.rs`, `node/arguments.rs` and `node/builder.rs` — Stage 4's files,
-already merged — for Stage 5's sweep.
+`latexlike/invocation_syntax.rs`, `latexlike/input.rs`, `node/invariants.rs`). After the
+rebase it survives at five in-code comments in `node/mod.rs` (64, 71, 2169),
+`node/arguments.rs` (343) and `node/builder.rs` (655) — Stage 4's files, already merged
+— left for Stage 5's sweep.
 
 Test-language plumbing (reuse, no duplicate): `constructs::tests` is now
 `pub(crate) mod tests` (test builds only) and exports `RelaxedStdLang`, its tiled twin
@@ -487,11 +494,10 @@ language for the same reason.
 
 ```
 ### cargo build
-   Compiling techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.17s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
 
 ### cargo test --workspace
-test result: ok. 1077 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+test result: ok. 1102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -500,38 +506,39 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.37s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.73s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo test --workspace --all-features
-test result: ok. 1116 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.50s
-test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 1141 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.51s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.39s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.13s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo clippy --workspace --all-targets -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.22s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.05s
 
 ### cargo clippy --workspace --all-targets --all-features -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.90s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.33s
 
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.58s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/target/doc/techy/index.html and 1 other file
 ```
 
-Baseline: Stage 1 ran 1067 / 1106 lib tests; Stage 2 adds 10 — 1077 / 1116. No existing test changed its
+Baseline: `main` at `610c3d5` (Stages 1, 3a and 4) runs 1090 / 1129 lib tests; Stage 2
+adds 12 — 1102 / 1141. No existing test changed its
 expectations except `node::invariants::rejects_a_gap_between_siblings`, whose
 `should_panic` string follows the renamed assertion message. `cargo docs --all-features`
 emits no warnings.
