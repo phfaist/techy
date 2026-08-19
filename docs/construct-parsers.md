@@ -176,7 +176,13 @@ recorded and `Ok(None)` comes back with nothing attached — and delegates on
 success.
 [`cx.parse_attached_source(source, state, parser)`](crate::core::constructs::ParseContext::parse_attached_source)
 is the form underneath it, for when you already hold the minted
-[`Source`](crate::source::Source). The sub-parse joins the **running
+[`Source`](crate::source::Source). Reading the reference is your parser's
+part, and its contract is one line: the reference argument carries **plain
+text**, read off the argument's content nodes (their character payloads), so
+an argument holding anything else — a nested group, a callable, a comment —
+raises the third condition,
+[`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument),
+at the argument's span, and resolves nothing. The sub-parse joins the **running
 session** — same builder, so the staged ids it returns are yours to stage
 (for `\input`, as an
 [`Attached`](crate::core::node::SlotRole::Attached) slot of your callable

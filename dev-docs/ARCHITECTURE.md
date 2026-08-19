@@ -827,8 +827,12 @@ returns (nodes, StopCause) — the caller interprets the ending.
   included file's stray `}` never unwinds the includer), and a traceback frame
   anchors conditions at the inclusion site. Beside it,
   `cx.attach_source_reference(reference, at, state, parser)` is the single
-  resolve-diagnose-attach raising site of the two `core.sources.*` conditions
-  (`NoSourceResolver`, `UnresolvableSourceReference`). The door returns an
+  resolve-diagnose-attach raising site of two of the three `core.sources.*`
+  conditions (`NoSourceResolver`, `UnresolvableSourceReference`); the third,
+  `InvalidSourceReferenceArgument`, is defined beside them and raised by the
+  invocation parser that reads the reference argument — its content must be plain
+  characters, the reference coming from the argument's node data under every
+  language ([§dd-dr:span-tiling]). The door returns an
   `AttachedSourceOutcome` — content nodes plus the included run's merged
   after-effect record (`NodesOutcome::after_effects`, the effective as-applied
   deltas merged in application order) — and slot assembly stays the invocation

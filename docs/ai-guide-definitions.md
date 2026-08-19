@@ -220,7 +220,10 @@ either, nothing resolves:
    ([`InputMacroSpec`](crate::latexlike::InputMacroSpec)) — never preloaded;
    its two mandatory constructor choices (whether state changes inside the
    included file persist past the `\input`; how the attached content is
-   marked) are documented on the item.
+   marked) are documented on the item. The reference argument carries plain
+   text — `\input{{chap.tex}}` or a callable inside the braces raises
+   [`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument)
+   and resolves nothing.
 2. **The resolver**: a [`SourceResolver`](crate::source::SourceResolver)
    configured on the driver
    ([`with_source_resolver`](crate::latexlike::LatexlikeDriver::with_source_resolver)).

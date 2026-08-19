@@ -65,16 +65,14 @@
     changes the public `FrameTitle` (a text field beside the anchor span, or a
     `TextContent`), so it needs a decision.
 
-  - **User decision pending**: `\input` under `OBEYS_SPAN_TILING = false` with a provided
-    reference argument whose content is not plain characters (`\input{{chap.tex}}`)
-    resolves nothing, attaches nothing and diagnoses nothing — `argument_text` answers
-    `None` and the call site (`latexlike/input.rs`) is silent; under a language that obeys
-    span tiling the same input takes the span route and diagnoses an unresolvable
-    reference for the literal `"{chap.tex}"`, braces included.  Options: recompose the
-    argument and resolve that (parity); raise a distinct "the reference is not plain
-    characters" condition (least surprising, new public condition); keep the silent
-    `None`; or make the tiled route agree.  Pinned as today's behavior by
-    `an_input_reference_that_is_not_plain_characters_is_not_read`.
+  - ~~`\input` with a provided reference argument whose content is not plain characters
+    (`\input{{chap.tex}}`): silent under `OBEYS_SPAN_TILING = false`, an unresolvable
+    reference for the braces-included literal under a language that obeys span
+    tiling.~~  **DONE** (user ruling): the reference argument must carry plain text, the
+    reference is read off the argument's node data under every language, and content
+    that is not plain characters raises `InvalidSourceReferenceArgument`
+    (`core.sources.invalid-reference-argument`) at the argument's span with nothing
+    attached ([§dd-dr:span-tiling] amendment, [§dd-dr:input-wiring]).
 
 
 ## Smaller todo

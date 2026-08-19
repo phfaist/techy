@@ -2672,15 +2672,23 @@ title renders a span as text, and the environment sites hand it a multi-token sp
 `false` a frame can quote text that was never read (`FrameTitle::Quoted`, and
 `FrameTitle::Callable` where a declared argument's frame is built). It is diagnostic
 decoration — no lookup and no node data depend on it — and repairing it changes the public
-`FrameTitle` (a text field beside the anchor span, or a `TextContent`). Open in the same
-way, and a decision rather than a defect: under `false` an `\input` whose reference argument
-is *provided* but is not plain characters (`\input{{chap.tex}}`) resolves nothing, attaches
-nothing and diagnoses nothing, because the reference comes from node data and node data has
-no single text there; a language that obeys span tiling takes the span route and diagnoses
-an unresolvable reference for the literal `"{chap.tex}"`, braces included. The options are
-to recompose the argument and resolve that, to raise a distinct "the reference is not plain
-characters" condition (the least surprising end state, at the price of a new public
-condition), to keep the silent `None`, or to make the tiled route agree with it.
+`FrameTitle` (a text field beside the anchor span, or a `TextContent`).
+
+*Amendment (user, span-tiling design session).* An `\input`-style construct's reference
+argument carries **plain text**: its content must be plain characters, and an argument
+holding anything else (a protective group `\input{{chap.tex}}`, a callable, a comment)
+raises the condition `InvalidSourceReferenceArgument`
+(`core.sources.invalid-reference-argument`; payload: the reason, today "its content is not
+plain characters") through the recovery policy at the argument's span, with nothing
+resolved and nothing attached. Two consequences, both independent of the declaration: the
+reference is read off the staged argument's **node data** under either regime, so the two
+share one code path and no span-extent route survives; and no reference is ever taken from
+a coordinate span, so the braces-included literal `"{chap.tex}"` is neither resolved nor
+reported as an unresolvable reference for a language that obeys span tiling. An *absent*
+argument is untouched — the argument parser diagnoses the missing mandatory argument, and
+the reference read adds nothing — and a plain-characters reference is unchanged under both
+declarations, whitespace inside the delimiters included (characters are taken as read, with
+no trimming).
 
 Revisit if: a reader must declare the property per driver instance rather than per language;
 or zero-copy content under `false` is demonstrated to matter (verify-then-intern is the
@@ -5142,7 +5150,12 @@ Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
   **`NoSourceResolver`** (`core.sources.no-resolver`) and
   **`UnresolvableSourceReference`** (`core.sources.unresolvable-reference`,
   payload: reference + the `ResolveError` — `Clone` again per the
-  [§dd-dr:resolver-contract] amendment).
+  [§dd-dr:resolver-contract] amendment). The family's third condition,
+  **`InvalidSourceReferenceArgument`** (`core.sources.invalid-reference-argument`),
+  is defined beside them but raised by the invocation parser that *reads* the
+  reference argument, whose content must be plain characters
+  ([§dd-dr:span-tiling]): anything else is diagnosed at the argument's span and
+  no resolution is attempted.
 - **`Language` collapses**: `with_resolver`, `resolver()`, and
   `Language::resolve_source` leave — completing [§dd-dr:language-init]'s expected
   surface (`new(driver, initial_state)` + `parse` + `parse_source` + accessors).
@@ -6241,7 +6254,8 @@ expression-callable-requires-content, repeated-tack-on-field}` (a bare
 `core.verbatim.{unterminated-verbatim, expected-verbatim-delimiter}`;
 `core.token.{end-of-stream-after-escape, forbidden-char}`;
 `core.constructs.implementation-error`;
-`core.sources.{no-resolver, unresolvable-reference}` ([§dd-dr:input-wiring]);
+`core.sources.{no-resolver, unresolvable-reference, invalid-reference-argument}`
+([§dd-dr:input-wiring]);
 `latexlike.environments.*` ×3. Segment policy: keep segments unchanged
 (self-descriptive when quoted alone). The preset→core re-homing rider was
 verified empty.
