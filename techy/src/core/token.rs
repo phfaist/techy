@@ -93,10 +93,12 @@ pub use crate::state::{
     ParagraphOverrides, SpecialsOverrides, TokenRulesOverrides, WhitespaceOverrides,
 };
 pub use crate::token::{
-    skip_whitespace, CommandRule, CommandRules, CommentRule, CommentRules,
-    EndOfStreamAfterEscape, ForbiddenChar, ForbiddenCharsRules, GroupRule, GroupRules,
-    ParagraphRules, PrefixEntry, PrefixTable, SpecialsMatch, SpecialsRules,
-    SpecialsScanError, StdStreamPosition, StdToken, StdTokenReader, StdTokenization,
-    StreamPosition, Token, TokenEdge, TokenError, TokenErrorKind, TokenKind, TokenReader,
-    TokenRecovery, TokenResult, TokenRules, Tokenization, TriggerChars, WhitespaceRules,
+    command_rule_at, scan_command, scan_comment, scan_group_delimiter, scan_paragraph_break,
+    scan_specials_trigger, skip_whitespace, CommandMatch, CommandRule, CommandRules,
+    CommentMatch, CommentRule, CommentRules, EndOfStreamAfterEscape, ForbiddenChar,
+    ForbiddenCharsRules, GroupDelimiterMatch, GroupRule, GroupRules, ParagraphRules,
+    PrefixEntry, PrefixTable, SpecialsMatch, SpecialsRules, SpecialsScanError,
+    StdStreamPosition, StdToken, StdTokenReader, StdTokenization, StreamPosition, Token,
+    TokenEdge, TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery,
+    TokenResult, TokenRules, Tokenization, TriggerChars, WhitespaceRules,
 };

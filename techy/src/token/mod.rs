@@ -91,7 +91,10 @@ pub use rules::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
-pub use scan::skip_whitespace;
+pub use scan::{
+    command_rule_at, scan_command, scan_comment, scan_group_delimiter, scan_paragraph_break,
+    scan_specials_trigger, skip_whitespace, CommandMatch, CommentMatch, GroupDelimiterMatch,
+};
 pub use specials::{SpecialsMatch, SpecialsScanError, TriggerChars};
 pub use token::{StdToken, TokenKind};
 pub use tokenization::{StdTokenization, StreamPosition, Token, Tokenization};
