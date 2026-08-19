@@ -47,6 +47,8 @@ mod environment_parser;
 mod group_parser;
 mod invocation_parser;
 mod nodes_parser;
+#[cfg(test)]
+mod span_tiling_tests;
 mod tack_on_parser;
 mod verbatim_parser;
 
