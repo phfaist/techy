@@ -1135,8 +1135,8 @@ Rejected alternatives: keeping `Option<WhitespaceRules>` alongside the flag (thr
 
 Status: DECIDED (user, design session).
 
-The recognition logic of `StdTokenReader` is public, and as free functions rather than
-methods. A **scan helper** takes the text being scanned and a byte offset into it, and
+The recognition logic of `StdTokenReader` is public, and public as free functions rather
+than as methods. A **scan helper** takes the text being scanned and a byte offset into it, and
 answers what one construct looks like at that offset — a **match value**: byte ranges
 (plain `Span`s) plus the rule or spec that matched, or nothing. The seven are
 `skip_whitespace`, `scan_paragraph_break`, `scan_group_delimiter`, `command_rule_at`,
@@ -1177,9 +1177,9 @@ its own caller hands it once, at its boundary — `scan_std_token_at` reports an
 `start` as an implementation error, never a panic — and passes derived offsets on.
 `scan_command` asserts one thing more, also in all builds: that `rule.escape_char`
 stands at `pos`. A mismatch would otherwise slice mid-character and panic anyway, less
-clearly. The fallback kept in reserve is
-`Option<Result<CommandMatch, EndOfStreamAfterEscape>>` with `None` for the mismatch,
-which hands a caller a case it cannot act on.
+clearly. The fallback kept in reserve, should the granted exception be read as covering
+`pos` alone, is `Option<Result<CommandMatch, EndOfStreamAfterEscape>>` with `None` for
+the mismatch — an answer no caller can act on, which is why the assert was chosen.
 
 Rejected alternatives: a public dispatcher answering a construct *shape* instead of a
 token (it would duplicate what a token's own kind view already carries and blur token
@@ -7084,7 +7084,7 @@ same four parts.
 
 The rule cuts the "token data vs runtime" straddle that had kept the subset in the hub,
 by asking who *reads* an item rather than who carries it. Four families were the
-ambiguous ones, and all four resolve into `core::token`: the rules overrides a
+ambiguous cases, and all four resolve into `core::token`: the rules overrides a
 `ParsingStateDelta` carries; the `PrefixTable`/`TriggerChars` caches a `ParsingState`
 derives; the tokenization declaration a `Lang` names; and the
 `SpecialsMatch`/`SpecialsScanError` a `Lang` hook answers with. In each case the carrying
@@ -7099,8 +7099,8 @@ schedule, and the extraction by itself implies no version bump and no baseline m
 Rejected alternatives: a helper-only namespace (`core::tokenscan`) beside token items
 left in the hub — the trait in the hub with its implementation library one level down is
 the asymmetry `constructs` avoids, and it doubles the places a reader author has to look;
-leaving the straddle uncut and adding the nine new scanning items to the hub (a flat hub
-of ninety items, navigated by no boundary anyone can state).
+leaving the straddle uncut and adding the nine new scanning items to the hub (ninety flat
+items, and "token data vs runtime" is not a line anyone reading the API could draw).
 
 Revisit if: a token item genuinely belongs to two facades — an item that no reader reads,
 produces or answers with would need a rule this one does not supply.

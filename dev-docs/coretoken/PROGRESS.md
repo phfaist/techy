@@ -301,8 +301,8 @@ examples the `TokenReader` and `Tokenization` pages already carry.
 - Worktree: `.claude/worktrees/ct-2-record`
 - Status: implemented (awaiting review)
 - Commits: `20695c8` (`docs/custom-lang.md`), `433a9b1` (`CLAUDE.md`), `2e999ae` (the
-  three adopted Stage 1 advisories), `8c90d6d` (ARCHITECTURE), `aa5651d` +
-  `abbb8f0` (DESIGN_RATIONALE), plus this log entry.
+  three adopted Stage 1 advisories), `8c90d6d` (ARCHITECTURE), `aa5651d` + `abbb8f0` +
+  one wording commit (DESIGN_RATIONALE), plus this log entry.
 - `TODO_Big.md` was **not** touched (user has uncommitted edits to it): what §4 would
   have deferred there is in "Notes for the user" below and in the two new entries'
   Revisit clauses.
