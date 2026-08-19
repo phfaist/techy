@@ -91,6 +91,20 @@
 //! visitor stages its subtree itself). Layering is free: wrapping N deep still
 //! lowers every instruction against the outermost value.
 //!
+//! **Post-processing a fold keeps the contract**: attach a function to the
+//! instruction with [`map`](ConcatPieces::map) — the driver lowers the children
+//! against the outermost recomposer as usual and applies the function to the
+//! assembled result (head and tail included). Folding the children *inside*
+//! [`recompose_node`](Recomposer::recompose_node) instead — through
+//! [`recompose_children`](RecomposeContext::recompose_children), the op-family
+//! mirror of
+//! [`restage_children`](crate::transform::RestageContext::restage_children) —
+//! gives the same reach over the children of any node, but every
+//! [region op](RecomposeContext) is **self-passing**: the sub-fold lowers
+//! against the recomposer the caller hands in, so a recomposer that passes
+//! `self` bypasses whatever wraps it for exactly those children. Pass an op a
+//! recomposer deliberately; post-process with `map`.
+//!
 //! **Targeted replacement is this pattern, not a mechanism**: to replace the
 //! recomposition of selected nodes, wrap the base recomposer and override
 //! exactly those nodes (there is no span-based fast path — see the reading
@@ -144,6 +158,7 @@
 
 use core::fmt;
 
+use alloc::boxed::Box;
 use alloc::string::String;
 
 use crate::engine::DescentWarning;
@@ -243,7 +258,11 @@ pub trait Recomposer<L: Lang, A> {
 
 /// The recomposer's instruction for one node (returned from
 /// [`Recomposer::recompose_node`]).
-#[derive(Clone, Debug)]
+///
+/// Not `Clone`: a [`Concat`](Recompose::Concat) may carry a post-processing
+/// function ([`ConcatPieces::map`]), which is consumed by the one lowering
+/// that runs it.
+#[derive(Debug)]
 pub enum Recompose<P, S> {
     /// This node's recomposition is exactly this piece; the driver does not
     /// descend (whatever the subtree should contribute is already in the
@@ -270,7 +289,10 @@ pub enum Recompose<P, S> {
 /// The default scope is the node's **plain children and `Content` regions**:
 /// children in `Attached` or `Hidden` slot regions are skipped unless
 /// explicitly included (see the [module docs](self)).
-#[derive(Clone, Debug)]
+///
+/// A [`map`](ConcatPieces::map) function may be attached to post-process the
+/// assembled result; it makes the instruction non-`Clone` (the function is
+/// consumed by the lowering that runs it).
 pub struct ConcatPieces<P, S> {
     head: P,
     sep: P,
@@ -278,6 +300,7 @@ pub struct ConcatPieces<P, S> {
     state: Option<S>,
     include_attached: bool,
     include_hidden: bool,
+    map: Option<Box<dyn FnOnce(P) -> P>>,
 }
 
 impl<P: ComposePiece, S> ConcatPieces<P, S> {
@@ -291,6 +314,7 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
             state: None,
             include_attached: false,
             include_hidden: false,
+            map: None,
         }
     }
 
@@ -330,17 +354,90 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
         self
     }
 
-    /// Destructure for the driver: (head, sep, tail, derived state,
-    /// include_attached, include_hidden).
-    pub(crate) fn into_parts(self) -> (P, P, P, Option<S>, bool, bool) {
-        (
-            self.head,
-            self.sep,
-            self.tail,
-            self.state,
-            self.include_attached,
-            self.include_hidden,
-        )
+    /// Post-process this instruction's result: the driver applies `f` to the
+    /// **fully assembled piece** — `head + child₁ + sep + … + childₙ + tail`,
+    /// head and tail included — and the value `f` returns is what the node
+    /// contributes to its parent's fold.
+    ///
+    /// This is the **wrap-transparent** way to post-process a fold: the
+    /// children are lowered against the outermost recomposer of the run (the
+    /// wrapping contract, [module docs](self)), and `f` runs on their assembled
+    /// result afterwards. A recomposer that instead folds the children itself
+    /// — through a [region op](RecomposeContext) with `self` — bypasses any
+    /// recomposer wrapping it for those children.
+    ///
+    /// ```
+    /// # use techy::recompose::ConcatPieces;
+    /// let instruction: ConcatPieces<String, ()> = ConcatPieces::children()
+    ///     .wrap("<", ">")
+    ///     .map(|piece| format!("[{piece}]"));
+    /// ```
+    ///
+    /// Called twice, the functions **compose in registration order**: the
+    /// first-registered runs first, the second on its result.
+    ///
+    /// `f` is deliberately infallible and `'static` (it may not borrow the
+    /// recomposer): a recomposition already has a typed failure channel
+    /// ([`Recomposer::Error`]), so post-processing that can fail belongs in
+    /// the recomposer, which records the failure and answers its own error
+    /// from the next instruction callback.
+    pub fn map(mut self, f: impl FnOnce(P) -> P + 'static) -> ConcatPieces<P, S>
+    where
+        P: 'static,
+    {
+        self.map = Some(match self.map.take() {
+            None => Box::new(f),
+            Some(registered) => Box::new(move |piece| f(registered(piece))),
+        });
+        self
+    }
+
+    /// Destructure for the driver (see [`ConcatLowering`]).
+    pub(crate) fn into_parts(self) -> ConcatLowering<P, S> {
+        ConcatLowering {
+            head: self.head,
+            sep: self.sep,
+            tail: self.tail,
+            state: self.state,
+            include_attached: self.include_attached,
+            include_hidden: self.include_hidden,
+            map: self.map,
+        }
+    }
+}
+
+/// A [`ConcatPieces`] taken apart for the driver's lowering — the same fields,
+/// owned by the driver instead of the instruction.
+pub(crate) struct ConcatLowering<P, S> {
+    pub(crate) head: P,
+    pub(crate) sep: P,
+    pub(crate) tail: P,
+    pub(crate) state: Option<S>,
+    pub(crate) include_attached: bool,
+    pub(crate) include_hidden: bool,
+    pub(crate) map: Option<Box<dyn FnOnce(P) -> P>>,
+}
+
+impl<P: fmt::Debug, S: fmt::Debug> fmt::Debug for ConcatPieces<P, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        /// Stands in for the post-processing function, which has no rendering
+        /// of its own: `map: Some(..)` reports that one is attached.
+        struct Attached;
+        impl fmt::Debug for Attached {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("..")
+            }
+        }
+
+        f.debug_struct("ConcatPieces")
+            .field("head", &self.head)
+            .field("sep", &self.sep)
+            .field("tail", &self.tail)
+            .field("state", &self.state)
+            .field("include_attached", &self.include_attached)
+            .field("include_hidden", &self.include_hidden)
+            .field("map", &self.map.as_ref().map(|_| Attached))
+            .finish()
     }
 }
 

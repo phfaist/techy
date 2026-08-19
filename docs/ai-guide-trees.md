@@ -222,7 +222,14 @@ Facts to know (all from the [`recompose`](crate::recompose) module docs):
   re-enters it — a wrapping recomposer (override some nodes, delegate the
   rest) sees its overrides applied at every depth. Targeted replacement of
   *recomposition* is this pattern; targeted replacement of *content* is
-  transform-then-recompose.
+  transform-then-recompose. To post-process a `Concat` result without taking
+  the descent over, attach
+  [`map`](crate::recompose::ConcatPieces::map) — the driver applies it to the
+  assembled piece after the children lowered against the outermost recomposer.
+  The context ops (including
+  [`recompose_children`](crate::recompose::RecomposeContext::recompose_children),
+  which folds any node's children) are self-passing instead: they lower against
+  the recomposer you hand in, so passing `self` bypasses whatever wraps you.
 - **Streaming**: no sink type exists; a streaming recomposer holds its
   writer in `&mut self` and composes `Piece = ()`.
 - **Reconstruction doctrine** (the reading contract): a recomposer

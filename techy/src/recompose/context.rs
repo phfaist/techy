@@ -126,22 +126,29 @@ where
     {
         Recompose::Emit(piece) => Ok(piece),
         Recompose::Concat(pieces) => {
-            let (head, sep, tail, derived, include_attached, include_hidden) =
-                pieces.into_parts();
+            let lowering = pieces.into_parts();
             // The children fold under the derived state when the instruction
             // carries one, else they inherit the parent's.
-            let child_state = derived.as_ref().unwrap_or(state);
-            let mut acc = head;
+            let child_state = lowering.state.as_ref().unwrap_or(state);
+            let mut acc = lowering.head;
             let mut first = true;
-            for child in scoped_children(node, include_attached, include_hidden) {
+            for child in
+                scoped_children(node, lowering.include_attached, lowering.include_hidden)
+            {
                 if !first {
                     // Per gap — the ComposePiece Clone requirement.
-                    acc.append(sep.clone());
+                    acc.append(lowering.sep.clone());
                 }
                 first = false;
                 acc.append(drive(recomposer, child, child_state, cx)?);
             }
-            acc.append(tail);
+            acc.append(lowering.tail);
+            // The instruction's post-processing sees the whole assembled piece,
+            // head and tail included — after the children lowered against this
+            // (outermost) recomposer.
+            if let Some(map) = lowering.map {
+                acc = map(acc);
+            }
             Ok(acc)
         }
     }
@@ -150,8 +157,8 @@ where
 /// The run context of a [`TreeRecomposer`] fold, handed to every recomposer call.
 /// It carries **no user state** (the three-channel discipline,
 /// [`techy::visit`](crate::visit)); its surface is the self-passing region
-/// ops (arriving with the op roster) that re-enter the fold for one
-/// argument's/slot's nodes — the recompose mirror of
+/// ops (arriving with the op roster) that re-enter the fold for one node's
+/// children or for one argument's/slot's nodes — the recompose mirror of
 /// [`RestageContext`](crate::transform::RestageContext)'s op family.
 pub struct RecomposeContext<'t, L: Lang, A = ()> {
     /// The run's descent guard, consulted by every [`drive`] — the re-entrant
@@ -164,6 +171,45 @@ pub struct RecomposeContext<'t, L: Lang, A = ()> {
 
 impl<L: Lang, A> RecomposeContext<'_, L, A> {
     // --- the region ops (the restage-family mirror) -------------------------------------
+
+    /// Recompose the **children** of `node` — any kind of node, callable or
+    /// not — folded through `recomposer` under `state`, in source order. The
+    /// two flags select the same child scope a
+    /// [`Concat`](Recompose::Concat) instruction does:
+    /// [`Attached`](crate::core::node::SlotRole::Attached) and
+    /// [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions are skipped
+    /// unless `include_attached` / `include_hidden` opts them in (only
+    /// callables carry slots; for every other kind both flags are moot). A node
+    /// with no children in scope composes the empty piece — not an error.
+    ///
+    /// This is the op-family mirror of
+    /// [`restage_children`](crate::transform::RestageContext::restage_children),
+    /// and it is **self-passing** like every op here: the sub-fold lowers
+    /// against the recomposer the caller hands in, so a recomposer that passes
+    /// `self` cannot reach a recomposer wrapping it — those children are folded
+    /// by the callee alone. To post-process a fold *without* stepping outside
+    /// the wrapping contract, return the `Concat` instruction and attach
+    /// [`ConcatPieces::map`](crate::recompose::ConcatPieces::map) instead.
+    ///
+    /// Errors: whatever the fold produces (the descent guard applies, one
+    /// descent per level, exactly as for an instruction's own lowering).
+    pub fn recompose_children<R>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        include_attached: bool,
+        include_hidden: bool,
+        state: &R::State,
+        recomposer: &mut R,
+    ) -> Result<R::Piece, RecomposeError<R::Error>>
+    where
+        R: Recomposer<L, A> + ?Sized,
+    {
+        let mut acc = R::Piece::empty();
+        for child in scoped_children(node, include_attached, include_hidden) {
+            acc.append(drive(recomposer, child, state, self)?);
+        }
+        Ok(acc)
+    }
 
     /// Recompose argument `index` of callable `node` — the **whole region**
     /// (leading noise, wrapper syntax, and content, in source order) folded

@@ -587,6 +587,88 @@ fn op_misuse_answers_the_mirrored_errors() {
     }
 }
 
+// --- the children op --------------------------------------------------------------------
+
+#[test]
+fn recompose_children_folds_a_nodes_children_through_the_passed_recomposer() {
+    /// Groups fold their children through the op — self-passing, from inside
+    /// `recompose_node` — and parenthesize the result; every other kind goes
+    /// through the core reemitter (so the group's own delimiters are dropped).
+    struct GroupChildren;
+    impl<A> Recomposer<Latexlike, A> for GroupChildren {
+        type State = ();
+        type Piece = String;
+        type Error = String;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            state: &(),
+            cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, ()>, String> {
+            if node.is_group() {
+                let inner = cx
+                    .recompose_children(node, false, false, state, self)
+                    .map_err(|error| error.to_string())?;
+                return Ok(Recompose::Emit(format!("({inner})")));
+            }
+            core_source_instruction(node).ok_or_else(|| "callable".to_string())
+        }
+    }
+
+    // Exactly the children, in order — the node's own payload contributes
+    // nothing, and nested groups fold through the same op.
+    let tree = parse("a{b{c}d}e");
+    assert_eq!(recompose(&tree, (), &mut GroupChildren).unwrap(), "a(b(c)d)e");
+
+    // A childless node composes the empty piece — no error.
+    let tree = parse("a{}b");
+    assert_eq!(recompose(&tree, (), &mut GroupChildren).unwrap(), "a()b");
+}
+
+/// Fold the three-slot fixture's callable through
+/// [`RecomposeContext::recompose_children`] with the given widening choices;
+/// chars children emit their text.
+fn children_op_with_scope(attached: bool, hidden: bool) -> String {
+    struct Scoped {
+        attached: bool,
+        hidden: bool,
+    }
+    impl<A> Recomposer<Latexlike, A> for Scoped {
+        type State = ();
+        type Piece = String;
+        type Error = String;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            state: &(),
+            cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, ()>, String> {
+            if let Some(text) = node.chars() {
+                return Ok(Recompose::Emit(text.to_string()));
+            }
+            let (attached, hidden) = (self.attached, self.hidden);
+            let inner = cx
+                .recompose_children(node, attached, hidden, state, self)
+                .map_err(|error| error.to_string())?;
+            Ok(Recompose::Emit(inner))
+        }
+    }
+    let tree = three_slot_fixture();
+    recompose(&tree, (), &mut Scoped { attached, hidden }).unwrap()
+}
+
+#[test]
+fn the_children_op_mirrors_the_concat_scope_flags() {
+    // The default scope: plain children and `Content` regions only.
+    assert_eq!(children_op_with_scope(false, false), "content");
+    // …widened exactly as the instruction's flags widen it.
+    assert_eq!(children_op_with_scope(true, false), "contentattached");
+    assert_eq!(children_op_with_scope(false, true), "contenthidden");
+    assert_eq!(children_op_with_scope(true, true), "contentattachedhidden");
+}
+
 // --- the wrapping contract (M4) ---------------------------------------------------------
 
 #[test]
@@ -622,6 +704,129 @@ fn instructions_lower_against_the_outermost_recomposer() {
     let tree = parse("a{b{X}}");
     let out = recompose(&tree, (), &mut Wrapper { inner: CoreEmitter }).unwrap();
     assert_eq!(out, "a{b{!}}");
+}
+
+// --- instruction post-processing (`ConcatPieces::map`) -----------------------------------
+
+/// Groups concatenate their children wrapped in `<`/`>` and post-process the
+/// assembled piece with `map`; chars emit their text (uppercased when
+/// `shout`), and every other kind concatenates plainly.
+struct Mapper {
+    shout: bool,
+}
+
+impl<A> Recomposer<Latexlike, A> for Mapper {
+    type State = ();
+    type Piece = String;
+    type Error = Infallible;
+
+    fn recompose_node(
+        &mut self,
+        node: NodeRef<'_, Latexlike, A>,
+        _state: &(),
+        _cx: &mut RecomposeContext<'_, Latexlike, A>,
+    ) -> Result<Recompose<String, ()>, Infallible> {
+        Ok(if let Some(text) = node.chars() {
+            Recompose::Emit(if self.shout { text.to_uppercase() } else { text.to_string() })
+        } else if node.is_group() {
+            Recompose::Concat(
+                ConcatPieces::children().wrap("<", ">").map(|piece| format!("[{piece}]")),
+            )
+        } else {
+            Recompose::Concat(ConcatPieces::children())
+        })
+    }
+}
+
+#[test]
+fn a_map_post_processes_the_whole_assembled_piece() {
+    // The map sees head + children + tail, and its result is what the parent
+    // fold receives.
+    let tree = parse("a{b}c");
+    assert_eq!(recompose(&tree, (), &mut Mapper { shout: false }).unwrap(), "a[<b>]c");
+
+    // No children still assembles head + tail, and the map still runs.
+    let tree = parse("a{}c");
+    assert_eq!(recompose(&tree, (), &mut Mapper { shout: false }).unwrap(), "a[<>]c");
+}
+
+#[test]
+fn a_mapped_concat_still_lowers_its_children_against_the_outermost_recomposer() {
+    /// A wrapper over [`Mapper`]: overrides chars nodes (uppercasing them) and
+    /// delegates everything else — including the group instruction carrying
+    /// the base's `map`.
+    struct Wrapper {
+        inner: Mapper,
+    }
+    impl<A> Recomposer<Latexlike, A> for Wrapper {
+        type State = ();
+        type Piece = String;
+        type Error = Infallible;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            state: &(),
+            cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, ()>, Infallible> {
+            if let Some(text) = node.chars() {
+                return Ok(Recompose::Emit(text.to_uppercase()));
+            }
+            self.inner.recompose_node(node, state, cx)
+        }
+    }
+
+    // The base's `map` runs (the brackets), *and* the group's children lowered
+    // against the wrapper (uppercased) — had the base folded the children
+    // itself, the "b" would have come back lowercase.
+    let tree = parse("a{b}c");
+    let mut wrapper = Wrapper { inner: Mapper { shout: false } };
+    assert_eq!(recompose(&tree, (), &mut wrapper).unwrap(), "A[<B>]C");
+}
+
+#[test]
+fn two_maps_compose_in_registration_order() {
+    /// Groups register two post-processing functions in a row.
+    struct TwoMaps;
+    impl<A> Recomposer<Latexlike, A> for TwoMaps {
+        type State = ();
+        type Piece = String;
+        type Error = Infallible;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            _state: &(),
+            _cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, ()>, Infallible> {
+            Ok(if let Some(text) = node.chars() {
+                Recompose::Emit(text.to_string())
+            } else if node.is_group() {
+                Recompose::Concat(
+                    ConcatPieces::children()
+                        .map(|piece| format!("1({piece})"))
+                        .map(|piece| format!("2({piece})")),
+                )
+            } else {
+                Recompose::Concat(ConcatPieces::children())
+            })
+        }
+    }
+
+    // First registered runs first; the second sees its result.
+    let tree = parse("{b}");
+    assert_eq!(recompose(&tree, (), &mut TwoMaps).unwrap(), "2(1(b))");
+}
+
+#[test]
+fn the_instruction_debug_reports_the_map_presence() {
+    let pieces: ConcatPieces<String, ()> = ConcatPieces::children().wrap("{", "}");
+    let rendered = format!("{pieces:?}");
+    assert!(rendered.contains("head: \"{\""), "{rendered}");
+    assert!(rendered.contains("map: None"), "{rendered}");
+
+    let rendered = format!("{:?}", Recompose::Concat(pieces.map(|piece| piece)));
+    assert!(rendered.contains("map: Some(..)"), "{rendered}");
 }
 
 // --- streaming (M4) ---------------------------------------------------------------------
@@ -669,6 +874,9 @@ fn concat_pieces_constructors_chain() {
     let _: ConcatPieces<String, u32> =
         ConcatPieces::children().wrap("{", "}").join(", ").with_state(3);
     let _: ConcatPieces<(), ()> = ConcatPieces::children().include_attached().include_hidden();
+    // The post-processing function chains like the rest and keeps the type.
+    let _: ConcatPieces<String, u32> =
+        ConcatPieces::children().map(|piece| piece).wrap("(", ")");
 }
 
 // --- the descent guard bounds the run ------------------------------------------------
