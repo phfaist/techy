@@ -1345,9 +1345,10 @@ Documentation only — no source file was touched.
     (the oracle's gate, and the rename).
   - **[§dd-dr:superseded-names]** gains the three superseded phrases with their
     replacements, and the note that no mode name is coined for the other regime.
-  - Wording sweep: every "partition invariant" (7 sites) and "parse-law"/"parse-tree
-    law" (11 sites) rewritten to the span-tiling vocabulary; the only remaining
-    occurrences are the ones that *name* the superseded phrase.
+  - Wording sweep: every "partition invariant" (8 sites, [§dd-dr:span-invariants]'s
+    item 5 among them) and every "parse-law"/"parse-tree law" (12 sites) rewritten to
+    the span-tiling vocabulary; the only remaining occurrences are the two that *name*
+    the superseded phrases.
 - **`dev-docs/ARCHITECTURE.md`**
   - New section **`## Span tiling [§dd-arch:span-tiling]`**, between *Node trees* and
     *Construct parsers*: the declaration and the definition by pointer to the const
@@ -1387,9 +1388,8 @@ dev-docs/DESIGN_RATIONALE.md:2867, 6726, 6729 — the sites that *name* the supe
 ```
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
-   Compiling techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.93s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.49s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-5-record/target/doc/techy/index.html and 1 other file
 
 ### cargo test --workspace
