@@ -747,6 +747,11 @@ over resolution would be limited for no gain); a reader reference stored *inside
 `Invocation` (the invocation is held across the parse that borrows the same reader
 mutably — it does not compile).
 
+*Amendment (2026-08-19, user).* The motivating case — a reader serving one parse from
+several sources — is now supported end to end: a language declares whether its parse trees
+are span-tiled, and the parsers of one that does not obey span tiling assume nothing about
+where tokens come from ([§dd-dr:span-tiling]).
+
 Revisit if: a reader needs per-token data the bounds cannot express — that is a change to
 `Tokenization::Token`'s bounds, not a return to readable token fields.
 
@@ -795,6 +800,12 @@ order to implement, and an order within one source would be a capability a reade
 declares, not a blanket bound); deriving a comment's sub-spans from the lengths of the
 view's strings (a reader may normalize what it reports as content, so a span never comes
 from a string's length).
+
+*Amendment (2026-08-19, user).* Two contract clauses now pin what positions mean where a
+reader serves several sources at one nesting level: *moving sets the position* (clause 7)
+plus clause 2 fix where two consecutive tokens meet, at a **seam** between two sources
+included — the place on both sides of a seam is one position value, and the reader chooses
+that value and the coordinate `source_position_at` reports for it ([§dd-dr:span-tiling]).
 
 Revisit if: a reader must expose more of a position than equality.
 
@@ -989,7 +1000,7 @@ implementations:
    underflow it: a lib-code panic reachable from a legitimate impl of a public trait.
 2. *Dangling-escape recovery uses a `Char(escape_char)` placeholder* spanning the escape
    byte (the recovery resumes at that placeholder's end). The byte joins the pending chars run, so the tolerant
-   parse keeps the partition invariant — consistent with [§dd-dr:errors]'s recovery principle (markup
+   parse keeps span tiling — consistent with [§dd-dr:errors]'s recovery principle (markup
    text in a `Chars` node, always with a diagnostic) and with the other content-preserving
    recoveries. Rejected alternatives: the empty `EndOfStream` placeholder (pylatexenc parity) — it
    claimed no bytes while reading resumed past the escape, so the root children did not tile
@@ -1042,6 +1053,12 @@ implementations:
    is thereby parity-by-doctrine, pinned by a test. Rejected alternatives: moving that `'\r'` into
    comment post-space when declared whitespace (briefly implemented) — special-casing
    one legacy line-ending convention inside the scanning core.
+
+*Amendment (2026-08-19, user).* The contract has since gained clause 7 (moving sets the
+position), clause 8 (one source, in reading order, without gaps — required of the readers of
+a language that obeys span tiling) and a *Seams* section for the readers of a language that
+does not; `source_span_describing` joins item 4's family of capabilities a reader must
+answer for, required and undefaulted for the same reason ([§dd-dr:span-tiling]).
 
 #### `TokenListReader` demoted to internal test infrastructure [§dd-dr:token-list-reader-demoted]
 
@@ -2141,7 +2158,7 @@ The resolution argument, in full:
   (span-backed when parsed, owned when synthesized/normalized), which made normalization
   representable and level-2 recomposition self-contained. `post_space` is kept and
   reproduced verbatim (reproduce, don't guess); the whitespace-as-chars-nodes rule restores
-  the exact sibling-span partition invariant. Args vs. slots stay two named concepts over
+  the exact sibling-span tiling. Args vs. slots stay two named concepts over
   shared machinery — the boundary is a spec-owned guideline, not core law.
 Rejected alternatives: `trait Node` + `Box<dyn Node>` + `as_any()` downcasting + `clone_box()` (the
 generated trait-based design) — loses exhaustive matching, adds per-node boxing, makes
@@ -2281,7 +2298,7 @@ content (`\m{}`). Key points:
   non-overlapping; designation sub-ranges within their parent's child list) and at
   `finish()` (content parent reachable and inside its own region's subtree — only checkable
   once the layout exists); debug-assert that regions **tile** the child list exactly (the
-  [§dd-arch:nodes] partition invariant, mechanically checkable).
+  [§dd-arch:nodes] region tiling, mechanically checkable).
 - **Consequences accepted:** a callable's child list is the raw-syntax view (child count ≠
   argument count; `\frac 1 2` costs two whitespace `Chars` nodes); an argument has no single
   node identity — transforms and views splice child *ranges* ([§dd-dr:read-api]);
@@ -2414,7 +2431,7 @@ immediately following token; inline whitespace after `\begin`/`\end` (the comman
 post-space) is tolerated and *not recorded*, an accepted level-2 normalization to the
 canonical spelling. Under rigid syntax, reconstruction from `(callable_type, name)` + spec
 knowledge is deterministic — "reproduce, don't guess" holds because there is nothing to
-guess. The partition invariant holds in its callable form: regions tile the child list, the
+guess. Span tiling holds in its callable form: regions tile the child list, the
 children block is span-contiguous, and the scaffolding is derivable as the two sub-spans
 (node-span start → children start) and (children end → post-space start). A preset that
 wants the verbatim scaffolding strings anyway extracts exactly those two sub-spans at
@@ -2487,6 +2504,146 @@ Status: DECIDED (user).
    `write_begin`/`write_end` bytes — live in the **preset checker**
    `check_latexlike_tree_invariants`, layered on top ([§dd-dr:invocation-syntax]).
 
+*Amendment (2026-08-19, user).* The five invariants above are the statement for a language
+that obeys span tiling ([§dd-dr:span-tiling]). Under `Lang::OBEYS_SPAN_TILING = false`,
+items 1 and 3 record owned text where a single reader answer cannot cover the fact
+(multi-token chars runs, the pre-staged callable post-space), and item 5's byte accounting
+does not apply at all — the test oracle then checks the all-trees law alone.
+
+#### Span tiling is a declared property of the language; parsers assume nothing otherwise [§dd-dr:span-tiling]
+
+Status: DECIDED (user, span-tiling design session).
+
+Whether a language's parse trees are **span-tiled** is a static declaration on the
+language: the associated const `Lang::OBEYS_SPAN_TILING: bool`, defaulted `true`. The
+canonical definition of the property is that const's own documentation and is restated
+nowhere else; its three components are that the children of every `List` and `Group` node
+tile the parent's interior (one source, reading order, no gaps, no overlaps), that a
+`Callable`'s children block is span-contiguous within the node's span (with the
+`Attached`/`Hidden` exclusions of [§dd-dr:slot-roles]), and that every positional payload
+sits at its pinned position — a `Chars` node's content is its whole span, a comment's
+start delimiter, content and post-space partition the comment node's span, a group's
+delimiters are the prefix and the suffix of its span. That every node carries exactly one
+span is *not* part of the definition: that rule is unconditional
+([§dd-dr:mandatory-node-spans]).
+
+The problem the declaration solves: the token layer was designed for a reader that serves
+one parse from several sources — one that substitutes a macro's definition into the stream
+as it reads is the motivating case ([§dd-dr:token-opacity]) — while the tree layer required
+gap-free single-source tiling everywhere. About ten parser sites turn two stream positions
+into one `SourceSpan` and abort when the pair does not delimit one range of one source, and
+the byte accounting of the test oracle rejects the resulting trees; the first third-party
+expanding reader hit exactly that abort. The two halves must agree per *language*, because
+it is the language's tokenization and its parsers that settle the question, and the answer
+is a fact about them rather than a knob a caller turns — hence "obeys". As a const it costs
+nothing at run time: each affected parser branches on it and the compiler drops the untaken
+arm. It is deliberately not a `LangFeatures` member (that axis declares which *storage* a
+language carries, not what its trees guarantee — [§dd-dr:lang-features]) and not a marker
+type (breaking, and nothing needs the property at the type level).
+
+The two regimes:
+
+- `true` — every language of this crate, the preset included: behavior unchanged, byte for
+  byte. The machinery enforces the property (a token stream that breaks it is reported as
+  an implementation error) and every span-based accessor answers exactly.
+- `false` — the parsers make **no** assumption about where tokens come from: not the
+  source, not the reading order, not the absence of gaps.
+
+**The reader describes what it will not delimit.** `TokenReader::source_span_describing(begin,
+end) -> SourceSpan` is a required method with no default body: a reader whose stream cannot
+be delimited must say what a stretch of it *is*, and a default would let a reader ship a
+misleading span it never chose — a missing implementation is a compile error instead. The
+answer is the reader's to choose: any span it considers a useful description of that stretch.
+The machinery derives nothing from it — no content, no structure, no ordering; the span
+becomes the node's span and shows in diagnostics. Recommended: `begin`'s source, running from
+`begin` to where the stream last stood in that source before reaching `end`; where the two
+positions do delimit one range of one source, that range. The method always answers (the
+empty span at `begin` is always available). `ParseContext::source_span_within` is the single
+dispatch point — the reader's `None` is an implementation error for a language that obeys
+span tiling, and the described span otherwise — so construct parsers written outside the
+crate follow the rule without knowing it exists.
+
+**Seams, and what the chars-run check really checks.** The abort the expanding reader hit was
+misnamed: the check in the chars-run loop verifies contract clause 2 (a peeked token's
+`StartBeforePreSpace` edge is the position the peek happened at) together with the meaning of
+`move_to`, not tiling — and that is what the reader had violated. It therefore stays in force
+under both declarations, with a message naming the actual violation. What made this legible is
+the contract clause the work wrote down, clause 7 (*moving sets the position*): with clause 2 it
+fixes where two consecutive tokens meet — `position_at(next, StartBeforePreSpace) ==
+position_at(prev, EndPastPostSpace)` — in every reader, including where `next` is the first
+token of another source. A **seam** is such a place, where the next token comes from a different
+source than the previous one. The two sides of a seam are therefore *one* position value; the
+reader chooses that value and what coordinate it reports for it (the outer trigger or resume
+coordinate is the recommended answer, being the one a reader of a diagnostic can act on). A run
+of content characters may consequently extend across a seam by contract, which is exactly why
+such a run's content cannot be a span and is recorded as owned text.
+
+**The node-data rule decides content storage, and involves no assumption.** A spelling fact the
+reader answered as a span is recorded as `TextContent::Spanned` when it lies in the node's own
+source and as `TextContent::Owned` otherwise (`node_text_content`). Both arms read the very same
+reader answer; what differs is residency — the property the all-trees law checks. Single-token
+facts keep this rule under both declarations, so zero-copy survives wherever it is sound and no
+special case appears. What changes under `false` is everything one reader answer cannot cover:
+chars runs and verbatim content accumulate owned text token by token (each token's pre-space, its
+spelling as the reader classified it, its syntactic post-space — three answers about that one
+token), and payloads built before the node's span is known (the preset's recorded macro
+post-space) are owned outright. Text that *drives* a decision is never read off a described span:
+an environment name is accumulated as it is read and answered by `NameGroup::name_text()`, whose
+coordinates-and-text pairing is not forgeable (the text field is private; construction goes
+through `NameGroup::new`/`with_name_as_read`), and an `\input` reference comes from the staged
+argument's node data.
+
+**The consumers rule** (load-bearing, and the reason the two regimes need no consumer-side
+switch): techy's consumers obtain content from node *data* — `TextContent` resolved against the
+node's own source, names, delimiters, payloads — never from node spans; node spans are provenance
+coordinates. The coordinate accessors (`NodeSlice::span`/`source_text`, `NodeRef::span_content`,
+`SourceSpan::content`) answer exactly what the coordinates say, and say so. Consequences: every
+documented answer of `extract` holds unchanged for owned content (audited item by item, with
+tests over hand-built owned trees); a source reemitter re-emits a non-tiled tree *as stored* and
+claims no byte-equality with any one source; `validate_tree` — the all-trees law
+([§dd-dr:tree-validation]) — is untouched, and non-tiled parse trees satisfy it; the byte
+accounting lives only in the test-only oracle, *the span-tiling law*, which runs the all-trees
+law alone for a language that declares `false`.
+
+**Enforcement is testable without an expander.** The in-crate scripted multi-source test reader
+(test builds only) serves one parse from a script of segments over several sources — chains,
+splices, holes — and is the first in-crate reader with token and position types of its own. Its
+positions are kept in a canonical form in which the place past one entry *is* the place before the
+next, so contract clauses 2 and 7 hold at seams by construction; a deliberately broken variant
+reports the two sides of a seam as two values, which is how the clause-7 check itself is tested.
+Its `source_span_within` answers by the end position's source, so a run ending exactly at a seam
+has none — which is what makes the counter-test fire: the same script under a language that
+declares `true` is rejected as an implementation error.
+
+Costs accepted: under `false` a parse owns its multi-token content (chars runs, verbatim bodies,
+recorded post-space, environment names) — one allocation per such node and no zero-copy for
+content the tree can no longer point at; and two public-API breaks under the soft freeze
+([§dd-dr:stability-rubric]) — `source_span_describing` is a required trait method (deliberately,
+above), and `NameGroup` gains a private field, so it is no longer constructible by struct literal.
+
+Rejected alternatives: a per-*reader* capability flag ("this reader may break the contract") — the
+property belongs to the language, the parsers need it at compile time, and a reader-level flag
+would let one parse mix the two regimes; flushing chars runs whenever the source changes — it
+fixes one of the ten position-pair sites and leaves the remaining tree-law violations silent;
+relaxing contract clause 2 at seams — the un-consume and stop-token behavior every construct
+parser relies on rests on it; declaring the property in `LangFeatures`; a marker type instead of a
+const; a default body for `source_span_describing`; recording *every* fact as owned text under
+`false` — the node-data rule already answers correctly for a single-token fact, so unconditional
+owning would drop zero-copy for nothing.
+
+Deferred: a per-driver-instance declaration (the const is per language; a driver that installs a
+reader inconsistent with it is still caught by the enforcement); zero-copy multi-token content
+under `false` (verify-then-intern); the expanding reader itself, which lives outside this crate.
+Also recorded and deliberately not fixed: a traceback frame's title renders a span as text, and the
+environment sites hand it a multi-token span, so under `false` a frame can quote text that was
+never read (`FrameTitle::Quoted`, and `FrameTitle::Callable` where a declared argument's frame is
+built). It is diagnostic decoration — no lookup and no node data depend on it — and repairing it
+changes the public `FrameTitle` (a text field beside the anchor span, or a `TextContent`).
+
+Revisit if: a reader must declare the property per driver instance rather than per language; or
+zero-copy content under `false` is demonstrated to matter (verify-then-intern is the shape); or a
+construct is found whose legitimate *tiled* behavior the enforcement rejects.
+
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
 Status: DECIDED (user, code-review follow-up session; **superseded** — API review:
@@ -2552,7 +2709,7 @@ Status: DECIDED (user).
   region/content accessors, and the new by-name family (`argument_nodes_named`,
   `argument_content_nodes_named`, `slot_content_nodes_named`). Motivation (user): span
   information belongs **in the return types**, not in a helper recomputing it
-  best-effort — `span()`/`source_text()` are *exact* by the [§dd-arch:nodes] partition invariant
+  best-effort — `span()`/`source_text()` are *exact* on a tree parsed from a language that obeys span tiling ([§dd-dr:span-tiling])
   (first node's start to last node's end), and `Option`-returning with `None` in
   exactly two honest cases (empty run; cross-source siblings of synthesized trees).
   Iteration via `iter()`/`IntoIterator`; call sites chaining adaptors gained one
@@ -2679,18 +2836,18 @@ single-parent, all reachable), region tiling on resolved records (content ranges
 within content parents, content-parent-inside-region), `TextContent` residency
 (valid char-boundary range of the node's own source), regions resolved.
 Deliberately NOT checked: byte partition, children-share-parent's-source, sibling
-source order — the parse-tree law, which legitimate transform output (spliced,
+source order — the span-tiling law, which legitimate transform output (spliced,
 reordered, synthesized nodes) breaks by design. It returns `Err`, never panics:
 its persona is a framework validating rebuilt/spliced trees at runtime (FFI
 included) — the panic policy's outer-layer case; the panicking
-`check_tree_invariants` keeps its test-utility role for the parse-tree
+`check_tree_invariants` keeps its test-utility role for the span-tiling
 law, now `pub(crate)` and re-implemented as a panic-assert wrapper over
 `validate_tree`'s `Result` — ONE canonical check implementation, no duplicated
 invariant logic, with the returned violation carrying enough detail that the
 wrapper's panic message stays as informative as the asserts it replaced
 ([§dd-dr:public-visibility-sweep]). Its byte accounting is scoped per source via
 the `Attached` role, so multi-source parse trees pass it; the two doc pages
-cross-reference — all-trees law ⊂ parse-tree law.
+cross-reference — all-trees law ⊂ span-tiling law.
 
 **Home `core::node`, not `techy::transform`** (user): the function checks the
 universal node-tree law and accepts any tree — transform output is merely its
@@ -2698,13 +2855,18 @@ commonest client; placement follows logical function, not audience. Name
 `validate_tree`: the verb deliberately differs from the panicking `check_*`
 family because the contract differs; the walkthrough wish-name
 `check_transform_tree_invariants` under-claims (parse trees pass too) and is
-superseded. A `validate_parse_tree` sibling (all-trees law + parse-law geometry)
+superseded. A `validate_parse_tree` sibling (all-trees law + the span-tiling law's geometry)
 was proposed and **withdrawn** together with the byte-reconstruction guarantee
 ([§dd-dr:recompose] amendment): the geometric half certifies only that
 gap-filling reproduces source *bytes*, while the semantic half — that those bytes
 match the tree's *content* — is parse provenance no runtime checker can verify;
 a checker that cannot check what its users would believe it checks is a trap.
-Revisit if: a runtime consumer genuinely needs the geometric parse-law check —
+*Amendment (2026-08-19, user).* The oracle's byte accounting holds for the parse trees of a
+language that obeys span tiling; for a language declaring `OBEYS_SPAN_TILING = false` it
+checks the all-trees law alone, and "the span-tiling law" replaces the earlier name
+"parse-tree law" throughout ([§dd-dr:span-tiling]).
+
+Revisit if: a runtime consumer genuinely needs the geometric span-tiling check —
 additive as a sibling, with the semantic limitation stated on it.
 
 ## Tree transformation, annotations, and ext minting [§dd-dr:transform]
@@ -2995,7 +3157,7 @@ bulk-subtree-copy; the earlier public-`add_subtree` framing is superseded). Laye
   lifetime-pinning every pipeline stage alive). Vocabulary: **"original node"** —
   "provenance"/"origin" alone belong to the source model.
 - Riders: the **transform-tier validator** (structure + region tiling + `TextContent`
-  residency, *minus* the parse-law byte accounting) is `validate_tree` in
+  residency, *minus* the span-tiling law's byte accounting) is `validate_tree` in
   **`core::node`** — placement follows what it checks, not its commonest client
   ([§dd-dr:tree-validation]); `NodeRef::tree()` is public.
 
@@ -3112,7 +3274,7 @@ transformed tree) nor reads source text beyond a node's own recorded content.
 resolves span content, the node's own span included — no span fast path (a tree
 carries no reliable freshness signal to gate one); `span_content()` stays a public
 consumer affordance the recomposer simply never uses. Consequently there is **no
-framework-facing byte-reconstruction guarantee**: the parse-law byte accounting is
+framework-facing byte-reconstruction guarantee**: the span-tiling law's byte accounting is
 an in-crate acceptance-suite *oracle* — reassembling the input from a fresh parse
 proves lossless parsing — and parse-output span semantics stay documented for the
 analyze-only/span-patch tooling architecture with the provenance warning
@@ -3218,7 +3380,7 @@ types, is the **pure record contract**:
 Option<EnvironmentTerminatorSyntaxData<L>>) -> Self` plus the **spelling writer
 pair `write_begin`/`write_end`** — the Env type owns its own re-emission (the
 accuracy doctrine made literal; kept as a *pair* because `Concat` head/tail and
-the parse-law prefix/suffix pins need the two sides separately — a fused
+the span-tiling law's prefix/suffix pins need the two sides separately — a fused
 `recompose_environment` writer is a rejected shape; `write_end` on an empty end
 side returns `""`, since reemitting nothing reproduces the recovered input). The
 composition (`EnvironmentInvocationParser`, generic over `LLL`) owns ALL
@@ -3270,7 +3432,7 @@ spelling updates). With it fall the brief's `Hidden`-slot scaffolding storage
 builder change: `SlotRole` stays the ruled three-variant enum, `Hidden` stays
 reserved, and the builder tiling check stays as-is ([§dd-dr:slot-roles]).
 
-The parse-law payload pins live in the preset checker
+The span-tiling law's payload pins live in the preset checker
 `check_latexlike_tree_invariants` (latexlike-side; one call = the core checker +
 the pins; core's callable arm is payload-blind — [§dd-dr:span-invariants]), which
 also pins foreign family members (downcast to
@@ -3496,7 +3658,7 @@ the session:
   to transform-spliced trees; the single-source `finish()` fast-path flag is an
   optimization bit, **not** a semantic tier — a multi-source parse tree is not a
   degraded tree.
-- The parse-law validator scopes byte-accounting per source via the `Attached` role
+- The span-tiling law's byte accounting is scoped per source via the `Attached` role
   ([§dd-dr:slot-roles]); recompose is per-source (verbatim emits `\input{file}`,
   not the content — expansion is an explicit strategy choice); `node_at`'s
   per-source descent already yields the right answers on both sides of the boundary.
@@ -3523,6 +3685,12 @@ guarantee. Riders: the level-0 primitive stays the sanctioned
 cross-tree door ([§dd-dr:restage-ops]); latexpp's verbatim output path needs no
 splicing at all — recompose emits `\input{file}` per source, so per-file
 pipelines compose without tree merging.
+
+*Amendment (2026-08-19, user).* "Every sibling run in a parse tree stays single-source" is
+a statement about a language that obeys span tiling ([§dd-dr:span-tiling]); a language
+declaring `OBEYS_SPAN_TILING = false` can produce a run whose nodes lie in several sources,
+which is one of the two honest `None` cases of the run accessors. The `Attached`-role
+scoping of the byte accounting is unchanged.
 
 Revisit if: the sub-parse-into-same-builder mechanics prove
 unworkable — the fallback is the restage-splice route, accepting its copy cost.
@@ -4575,7 +4743,7 @@ The decisions and their reasons:
   self-describes (spec, own `ParsedArguments`), frames and accessors work, and
   pylatexenc's group-wrapper hack is dropped. Two byte-keeping divergences (user):
   a repeated non-repeatable field is diagnosed (`RepeatedTackOnField`) **and kept**
-  (pylatexenc parses-and-discards, which would break the partition invariants), and
+  (pylatexenc parses-and-discards, which would break span tiling), and
   noise **between** fields is scanned as region noise (pylatexenc stops absorbing at
   a comment; techy's noise-ownership doctrine says scan), with a failed probe
   rewinding only its own scan. Multiplicity is per field
@@ -6480,7 +6648,7 @@ re-opens a settled argument:
   contract is `from_parsed(begin, terminator)` plus the writer pair, scanning
   is composition-owned; `recompose_environment` (a single fused environment
   writer) — rejected shape: the writer PAIR stays (`Concat` head/tail and the
-  parse-law prefix/suffix pins need the sides separately).
+  the span-tiling law's prefix/suffix pins need the sides separately).
 - From the language-init revision ([§dd-dr:language-init]):
   `Language::with_provider`/`Language::with_seed_delta` — seed customization
   moves *before* construction (`ParsingState::lang_initial().derived(&delta)?`;
@@ -6553,6 +6721,15 @@ re-opens a settled argument:
   `TokenBase` — the bounds sit on `Tokenization::Token`, and the name `Token` belongs to
   the alias; a `Lang::TokenReader` associated type (a reader *type* on `Lang`) — the
   language names the lifetime-free bundle, whose factory returns the `dyn` reader.
+- From the span-tiling declaration ([§dd-dr:span-tiling]), three phrases: "partition
+  invariant" as the name of the sibling-span property — the property is **span tiling**,
+  and a tree with it is **span-tiled**; "in-order, gap-free token contract" as the name of
+  the chars-run position check — that check verifies contract clauses 2 and 7 (a peeked
+  token starts where the peek happened; moving sets the position), while reading order and
+  gaps are clause 8; and "parse-tree law" — the test-only byte-accounting oracle is **the
+  span-tiling law**, beside the all-trees law of `validate_tree`. No mode name is coined
+  for the other regime either: documentation says "a language with `OBEYS_SPAN_TILING =
+  false`".
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -6857,7 +7034,7 @@ Three policy anchors, each closing a class of requests:
   so consumers can manufacture values that exercise their violation-handling
   code, and `MacroSpec::with_after_effect`, which replaced in-crate test-only
   scaffolding with the public declarative route). The in-crate invariant
-  checkers stay internal — the byte-accounting parse law is deliberately *not*
+  checkers stay internal — the byte-accounting span-tiling law is deliberately *not*
   the all-trees law.
 
 Rejected alternatives (the declined accessor batch — none urgent, all cut for
@@ -7193,7 +7370,7 @@ and tolerantly stages the consumed extent as one `Chars` node — `\end{name}` w
 user-chosen over `latexlike.begin.*`/`latexlike.end.*`). Implementation fact worth
 remembering: the tolerant chars fallbacks (malformed `\begin`, nameless orphan `\end`)
 must cover the trigger's syntactic *post-space* too — the token span includes it, and
-trimming it would break the sibling partition invariant; the earlier rehearsal had the same
+trimming it would break the sibling span tiling; the earlier rehearsal had the same
 shape. The body-unwind path that leaves a stray `}` for the root recovers cleanly: the
 root stages the consumed delimiter as a `Chars` node (cf. [§dd-dr:language-parse-api],
 second follow-up).
