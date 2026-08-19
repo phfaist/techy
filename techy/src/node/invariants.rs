@@ -820,7 +820,7 @@ fn check_span_tiling_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &No
     }
 }
 
-/// Parse-law point 1: the children of node `i` partition `interior` exactly.
+/// Check helper: the children of node `i` partition `interior` exactly.
 #[cfg(test)]
 fn check_interior_partition<L: Lang, A>(
     tree: &NodeTree<L, A>,

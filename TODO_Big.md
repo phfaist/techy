@@ -11,6 +11,18 @@
   for mandatory args?  E.g. mandatory arg, embellishment arg, + other places we
   seek an expression? Study this possibility.  ### still up-to-date?
 
+- API doc walk-through: Check for banned words in user and developer guides:
+  "door", "funnel", "mint", "trigger token", "vocabulary", "facts", "load-bearing",
+  "straggler".
+  Very careful with the use of "contract" -- contract must be explicitly stated
+  at that point exactly to justify the use of that word. Ban references to dev-docs
+  stages in API docs (e.g. "phase 7.8", "7.8 checkpoint").
+
+
+## Specific things - from Claude
+
+[CLAUDE IS ONLY ALLOWED TO EDIT THIS SECTION.]
+
 - Better tokens — deferred follow-ups (the token/reader port; plan and stage log in
   dev-docs/bettertokens/):
 
@@ -63,15 +75,6 @@
     characters" condition (least surprising, new public condition); keep the silent
     `None`; or make the tiled route agree.  Pinned as today's behavior by
     `an_input_reference_that_is_not_plain_characters_is_not_read`.
-
-- API doc walk-through; 
-
-  - Check for banned words in user and developer guides: "door", "funnel", "mint",
-    "trigger token", "vocabulary", "facts"
-  - Very careful with the use of "contract" -- contract must be explicitly
-    stated at that point exactly to justify the use of that word
-  - References to dev-docs stages in API docs (e.g. "phase 7.8",
-    "7.8 checkpoint") !!! Ban that.
 
 
 ## Smaller todo
