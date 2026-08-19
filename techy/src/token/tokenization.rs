@@ -37,9 +37,10 @@ use super::token::StdToken;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use techy::core::{
-///     Lang, StdStreamPosition, StdToken, StdTokenReader, TokenReader, Tokenization,
+/// use techy::core::token::{
+///     StdStreamPosition, StdToken, StdTokenReader, TokenReader, Tokenization,
 /// };
+/// use techy::core::Lang;
 /// use techy::source::Source;
 ///
 /// #[derive(Debug, Clone, Copy)]

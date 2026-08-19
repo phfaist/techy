@@ -25,10 +25,8 @@
 use std::sync::Arc;
 
 use techy::core::node::NodeRef;
-use techy::core::{
-    CommandOverrides, CommandRule, Language, ParsingState, ParsingStateDelta,
-    StdDescentGuardInit, TokenRulesOverrides,
-};
+use techy::core::token::{CommandOverrides, CommandRule, TokenRulesOverrides};
+use techy::core::{Language, ParsingState, ParsingStateDelta, StdDescentGuardInit};
 use techy::error::Recovery;
 use techy::latexlike::minidefs::minilatex_package;
 use techy::latexlike::{

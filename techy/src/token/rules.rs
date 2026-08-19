@@ -327,7 +327,8 @@ impl ForbiddenCharsRules {
 /// from [`empty()`](Self::empty) with struct-update syntax:
 ///
 /// ```
-/// # use techy::core::{TokenRules, CommandRule, CommandRules, TrivialLang};
+/// # use techy::core::token::{CommandRule, CommandRules, TokenRules};
+/// # use techy::core::TrivialLang;
 /// # use std::sync::Arc;
 /// # // The example language declares every feature present (`TrivialLang`), so the
 /// # // recipe compiles here as-is; for a partially-absent language the same recipe

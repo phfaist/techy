@@ -285,10 +285,11 @@ impl StdStreamPosition {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use techy::core::{
-///     ParsingState, StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenKind,
-///     TokenReader, TokenResult, TrivialLang,
+/// use techy::core::token::{
+///     StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenKind, TokenReader,
+///     TokenResult,
 /// };
+/// use techy::core::{ParsingState, TrivialLang};
 /// use techy::source::{SourcePos, SourceSpan};
 ///
 /// #[derive(Debug, Clone, Copy)]

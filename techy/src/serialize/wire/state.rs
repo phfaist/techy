@@ -61,7 +61,7 @@ pub(crate) struct WireTokenRules {
     pub(crate) forbidden_chars: Option<WireForbiddenCharsRules>,
 }
 
-/// [`WhitespaceRules`](crate::core::WhitespaceRules).
+/// [`WhitespaceRules`](crate::core::token::WhitespaceRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireWhitespaceRules {
     /// The gate.
@@ -72,7 +72,7 @@ pub(crate) struct WireWhitespaceRules {
     pub(crate) chars: String,
 }
 
-/// [`ParagraphRules`](crate::core::ParagraphRules).
+/// [`ParagraphRules`](crate::core::token::ParagraphRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireParagraphRules {
     /// The gate.
@@ -80,7 +80,7 @@ pub(crate) struct WireParagraphRules {
     pub(crate) enabled: bool,
 }
 
-/// [`GroupRules`](crate::core::GroupRules).
+/// [`GroupRules`](crate::core::token::GroupRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireGroupRules {
     /// The gate.
@@ -97,7 +97,7 @@ pub(crate) struct WireGroupRules {
     pub(crate) expecting_close: Option<WireGroupRule>,
 }
 
-/// [`GroupRule`](crate::core::GroupRule).
+/// [`GroupRule`](crate::core::token::GroupRule).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireGroupRule {
     /// The group class, in the language's own form (`GroupTypeId`'s value
@@ -112,7 +112,7 @@ pub(crate) struct WireGroupRule {
     pub(crate) close: String,
 }
 
-/// [`CommandRules`](crate::core::CommandRules).
+/// [`CommandRules`](crate::core::token::CommandRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireCommandRules {
     /// The gate.
@@ -123,7 +123,7 @@ pub(crate) struct WireCommandRules {
     pub(crate) rules: Vec<WireCommandRule>,
 }
 
-/// [`CommandRule`](crate::core::CommandRule).
+/// [`CommandRule`](crate::core::token::CommandRule).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireCommandRule {
     /// The escape character (a one-character string).
@@ -134,7 +134,7 @@ pub(crate) struct WireCommandRule {
     pub(crate) name_chars: String,
 }
 
-/// [`CommentRules`](crate::core::CommentRules).
+/// [`CommentRules`](crate::core::token::CommentRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireCommentRules {
     /// The gate.
@@ -145,7 +145,7 @@ pub(crate) struct WireCommentRules {
     pub(crate) rules: Vec<WireCommentRule>,
 }
 
-/// [`CommentRule`](crate::core::CommentRule).
+/// [`CommentRule`](crate::core::token::CommentRule).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireCommentRule {
     /// The comment-start delimiter.
@@ -153,7 +153,7 @@ pub(crate) struct WireCommentRule {
     pub(crate) start: String,
 }
 
-/// [`SpecialsRules`](crate::core::SpecialsRules).
+/// [`SpecialsRules`](crate::core::token::SpecialsRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireSpecialsRules {
     /// The gate.
@@ -161,7 +161,7 @@ pub(crate) struct WireSpecialsRules {
     pub(crate) enabled: bool,
 }
 
-/// [`ForbiddenCharsRules`](crate::core::ForbiddenCharsRules).
+/// [`ForbiddenCharsRules`](crate::core::token::ForbiddenCharsRules).
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireForbiddenCharsRules {
     /// The forbidden characters.

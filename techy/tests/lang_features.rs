@@ -44,12 +44,14 @@ mod support {
     use techy::core::specs::{
         CallableSpec, CommandResolution, ResolvedCallable, ScopeStack, StdCallableSpec,
     };
-    use techy::core::{
-        CommandResolver, CommandRule, CommandRules, FeatureAbsent, FeaturePresent,
-        FinalizeError, GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures,
-        ParseResult, ParsingState, SpecialsMatch, SpecialsScanError, StateData,
-        StdParseDriver, StdToken, TokenKind, TokenReader, TokenRules, TriggerChars,
+    use techy::core::token::{
+        CommandRule, CommandRules, GroupRule, GroupRules, SpecialsMatch,
+        SpecialsScanError, StdToken, TokenKind, TokenReader, TokenRules, TriggerChars,
         WhitespaceRules,
+    };
+    use techy::core::{
+        CommandResolver, FeatureAbsent, FeaturePresent, FinalizeError, Lang, LangFeatures,
+        Language, NoLangFeatures, ParseResult, ParsingState, StateData, StdParseDriver,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -97,7 +99,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Tokenization = techy::core::StdTokenization;
+        type Tokenization = techy::core::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
@@ -164,7 +166,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Tokenization = techy::core::StdTokenization;
+        type Tokenization = techy::core::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
@@ -249,7 +251,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
-        type Tokenization = techy::core::StdTokenization;
+        type Tokenization = techy::core::token::StdTokenization;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver<FixedTableResolver>;
@@ -376,9 +378,8 @@ mod support {
 mod plain_chars {
     use super::support::*;
     use std::sync::Arc;
-    use techy::core::{
-        Language, ParsingState, ParsingStateDelta, StdParseDriver, TokenRulesOverrides,
-    };
+    use techy::core::token::TokenRulesOverrides;
+    use techy::core::{Language, ParsingState, ParsingStateDelta, StdParseDriver};
     use techy::error::Recovery;
 
     fn language(recovery: Recovery) -> Language<PlainCharsLang> {
@@ -463,10 +464,11 @@ mod plain_chars {
         use techy::core::constructs::{
             ConstructParser, ImplementationError, NodesParser, ParseContext, StopSpec,
         };
-        use techy::core::{
-            ParserSession, StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenKind,
+        use techy::core::token::{
+            StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenKind,
             TokenReader, TokenResult,
         };
+        use techy::core::ParserSession;
         use techy::error::DiagnosticInfo;
         use techy::source::{Source, SourcePos, SourceSpan, Span};
 
@@ -593,10 +595,10 @@ mod groups_only {
     use super::support::*;
     use std::sync::Arc;
     use techy::source::Source;
-    use techy::core::{
-        Language, ParsingState, ParsingStateDelta, StdParseDriver, StdToken, StdTokenReader,
-        TokenEdge, TokenKind, TokenReader, TokenRulesOverrides,
+    use techy::core::token::{
+        StdToken, StdTokenReader, TokenEdge, TokenKind, TokenReader, TokenRulesOverrides,
     };
+    use techy::core::{Language, ParsingState, ParsingStateDelta, StdParseDriver};
     use techy::error::Recovery;
 
     fn language(recovery: Recovery) -> Language<GroupsOnlyLang> {
@@ -716,10 +718,8 @@ mod commands_without_scopes {
     use super::support::*;
     use std::sync::Arc;
     use techy::core::specs::{Package, ScopeOp, ScopeOpError, ScopeStack, SpecsProvider};
-    use techy::core::{
-        Language, ParsingState, ParsingStateDelta, StdParseDriver, TokenRulesOverrides,
-        WhitespaceOverrides,
-    };
+    use techy::core::token::{TokenRulesOverrides, WhitespaceOverrides};
+    use techy::core::{Language, ParsingState, ParsingStateDelta, StdParseDriver};
     use techy::error::Recovery;
 
     fn language(recovery: Recovery) -> Language<CommandsWithoutScopesLang> {
@@ -842,8 +842,9 @@ mod feature_composition {
     use std::sync::Arc;
     use techy::core::constructs::verbatim_state_delta;
     use techy::core::specs::{ScopeOp, ScopeStack, SpecsProvider};
+    use techy::core::token::GroupRule;
     use techy::core::{
-        FeaturePresence, GroupRule, Lang, LangFeatures, LangHasCommands, LangHasGroups,
+        FeaturePresence, Lang, LangFeatures, LangHasCommands, LangHasGroups,
         LangHasScopes, LangHasWhitespace, ParsingStateDelta, TrivialLang,
     };
 
@@ -943,10 +944,8 @@ mod storage_collapse {
     use core::mem::size_of;
 
     use techy::core::specs::ScopeStack;
-    use techy::core::{
-        ParsingState, ParsingStateDelta, StateData, TokenRules, TokenRulesOverrides,
-        TrivialLang,
-    };
+    use techy::core::token::{TokenRules, TokenRulesOverrides};
+    use techy::core::{ParsingState, ParsingStateDelta, StateData, TrivialLang};
 
     use super::support::PlainCharsLang;
 

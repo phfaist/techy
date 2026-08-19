@@ -97,7 +97,7 @@ fn a_field_level_key_attribute_renames_the_serialization_key_only() {
     );
     assert_eq!(keyed.to_string(), "saw ‘x’ at 3");
     // The crate's own use of it: `ForbiddenChar` projects its character under `char`.
-    let forbidden = techy::core::ForbiddenChar::new('$');
+    let forbidden = techy::core::token::ForbiddenChar::new('$');
     assert_eq!(
         DiagnosticInfo::serializable_data(&forbidden),
         DiagnosticValue::Map(vec![("char".into(), DiagnosticValue::Str("$".into()))])

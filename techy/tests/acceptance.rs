@@ -43,10 +43,10 @@ mod support {
     use techy::core::node::{validate_tree, NodeRef};
     use techy::core::specs::{FallbackProvider, Package, ScopeOp};
     use techy::core::specs::ArgumentSpec;
-    use techy::core::{
-        ForbiddenCharsOverrides, GroupOverrides, ParsingState, ParsingStateDelta,
-        StdDescentGuardInit, TokenRulesOverrides,
+    use techy::core::token::{
+        ForbiddenCharsOverrides, GroupOverrides, TokenRulesOverrides,
     };
+    use techy::core::{ParsingState, ParsingStateDelta, StdDescentGuardInit};
 
     /// Argument specs from per-argument code strings ([`argument_specs`] + unwrap).
     pub fn args(codes: &[&str]) -> Vec<Arc<ArgumentSpec<Latexlike>>> {
