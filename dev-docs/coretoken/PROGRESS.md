@@ -249,7 +249,8 @@ examples the `TokenReader` and `Tokenization` pages already carry.
    `skip_whitespace` already had ("out of bounds or not a char boundary"), which is what
    the `#[should_panic(expected = "char boundary")]` tests match on. `skip_whitespace`
    itself is untouched (§1.4: it moves unchanged), so it alone still panics only when
-   whitespace handling is on.
+   whitespace handling is on. *(Superseded in Stage 2, deviation 1: it now calls
+   `check_pos` up front like the other six.)*
 2. **`reader.rs`'s `mod tests` import list changed** (two lines). Deleting the five
    private methods left `TokenRules`, `CommandRule`, `EndOfStreamAfterEscape` and
    `SpecialsScanError` unused in the file's own code; their rustdoc links are now
