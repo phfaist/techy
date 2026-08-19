@@ -323,7 +323,7 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   `EndPastPostSpace` and `StartBeforePreSpace` positions differ), which the standard
   sibling loop enforces uniformly for all token sources — a consumed token that left the
   position unchanged is an implementation error, not a hang; an empty *span* stays
-  legitimate, what the clause requires being two distinct positions
+  legitimate: what the clause requires is two distinct positions
   ([§dd-dr:token-progress-guard]). A reader is
   installed by the language, as its `Lang::Tokenization` ([§dd-dr:tokenization]); a
   driver whose reader needs configuration the driver instance holds overrides the defaulted

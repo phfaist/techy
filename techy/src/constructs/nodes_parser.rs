@@ -1007,7 +1007,11 @@ where
             // report the violation as an implementation error — an abort under any
             // recovery policy, never a hang. A sub-parser descent that consumed nothing
             // and moved nothing is caught by the same compare, which is intended: it is
-            // the same non-terminating loop.
+            // the same non-terminating loop. The compare also fires on a descent that
+            // rewound past its own trigger to re-tokenize under a new state — which
+            // clause 1 counts as progress, but a position compare cannot see it: that is
+            // the accepted cost of comparing positions only, and no in-crate parser
+            // rewinds that way ([§dd-dr:token-progress-guard]).
             //
             // The check runs before the peek, which keeps it independent of the recovery
             // arm below: that arm has its own guard on `TokenRecovery::resume` (the arm
@@ -2729,11 +2733,11 @@ mod tests {
     /// A token source that violates `TokenReader` contract clause 9: every `peek` serves
     /// a `Char` token whose two ends are the same stream position, so consuming it leaves
     /// the stream where it was and the content loop reads the same token again.
-    struct StuckTokenReader<'s> {
+    struct NonAdvancingTokenReader<'s> {
         inner: StdTokenReader<'s>,
     }
 
-    impl<'s> StuckTokenReader<'s> {
+    impl<'s> NonAdvancingTokenReader<'s> {
         fn inner(&self) -> &dyn TokenReader<'s, TestLang> {
             &self.inner
         }
@@ -2743,7 +2747,7 @@ mod tests {
         }
     }
 
-    impl<'s> TokenReader<'s, TestLang> for StuckTokenReader<'s> {
+    impl<'s> TokenReader<'s, TestLang> for NonAdvancingTokenReader<'s> {
         fn peek(
             &mut self,
             _state: &Arc<ParsingState<TestLang>>,
@@ -2814,7 +2818,7 @@ mod tests {
     fn a_token_that_does_not_advance_the_stream_is_an_implementation_error() {
         let st = state();
         let source: Arc<Source> = Arc::new(Source::new("ab"));
-        let mut reader = StuckTokenReader { inner: StdTokenReader::new(&source) };
+        let mut reader = NonAdvancingTokenReader { inner: StdTokenReader::new(&source) };
         let error = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect_err("a token that does not advance the stream must abort the parse");
         let detail = error

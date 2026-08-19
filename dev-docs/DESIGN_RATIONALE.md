@@ -6093,25 +6093,28 @@ without moving the stream is an `ImplementationError`, aborting under any recove
 The decisive reason is that clauses 1, 2 and 7 make a same-position token *unparseable*
 rather than merely odd: the reader owes the same token again at the same position under
 the same state, so every arm that consumes it returns to where it started and the loop
-never ends. Position inequality is therefore exactly the hang condition, and it is also
-the only comparison stream positions admit ([§dd-dr:stream-position]). The guard is the
-whole-token analogue of the recovery arm's resume check ([§dd-dr:resume-pos-contract]),
-which stays where it is: that arm consumes no token, so only `resume` can move its stream,
-and it reports the token error rather than a contract violation. A sub-parser descent that
-consumed and changed nothing trips the same compare, which is the same non-terminating
-loop and equally a bug.
+never ends. Equality of the two positions is therefore exactly the hang condition, and
+equality is the only comparison stream positions admit ([§dd-dr:stream-position]). The
+guard is the whole-token analogue of the recovery arm's resume check
+([§dd-dr:resume-pos-contract]), which stays where it is: that arm consumes no token, so
+only `resume` can move its stream, and it reports the token error rather than a contract
+violation. A sub-parser descent that consumed and changed nothing trips the same compare,
+which is the same non-terminating loop and equally a bug — as does a descent that rewinds
+past its own trigger to re-tokenize under a new state, which clause 1 blesses as progress;
+that is the accepted cost of comparing positions only, and no in-crate parser does it.
 
 Rejected alternatives: a byte-*width* check (an empty span is legitimate — a reader may
-serve a synthesized delimiter with no bytes behind it, and it must mint distinct positions
-for that token's two ends anyway, since clauses 1–3 require un-consuming and re-peeking it
-to work — and a zero-width span is not what hangs the loop); distinguishing reader-served
-tokens from scanned ones (`StdTokenReader` cannot produce the case at all, its scan hooks
+serve a synthesized delimiter with no bytes behind it, and it must hand out distinct
+positions for that token's two ends anyway, since clauses 1–3 require un-consuming and
+re-peeking it to work — and a zero-width span is not what hangs the loop); distinguishing
+reader-served tokens from scanned ones (`StdTokenReader` cannot produce the case at all, its scan hooks
 rejecting zero-width specials matches, and a contract that holds for one token source
 holds for all); a guard in every bounded token loop (the verbatim parser, embellishments,
 the tack-on argument scan — over-engineering: those loops are bounded and rest on the
 documented clause, like the rest of the machinery).
 
-Revisit if: a loop other than the sibling loop is shown to spin in practice.
+Revisit if: a loop other than the sibling loop is shown to spin in practice, or a
+legitimate construct parser needs to rewind past its own trigger.
 
 #### Structured diagnostics: condition payloads, not prose [§dd-dr:structured-diagnostics]
 
