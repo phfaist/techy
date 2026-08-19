@@ -149,7 +149,9 @@ fn run_script_with(
         (outcome.nodes, root_span)
     };
     let kind = NodeKind::list();
-    let ext = RelaxedScriptedLatexlike::make_node_ext(
+    // The root's node ext, minted through the language's own hook exactly as
+    // `ParseContext::stage_node` would (`()` for this language, hence no binding).
+    RelaxedScriptedLatexlike::make_node_ext(
         &kind,
         &root_span,
         state,
@@ -158,7 +160,7 @@ fn run_script_with(
     .expect("mint the root's node ext");
     let root = session
         .builder
-        .add(kind, root_span, Arc::clone(state), nodes, ext, ())
+        .add(kind, root_span, Arc::clone(state), nodes, (), ())
         .expect("stage the root list");
     let result = session.finish(root).expect("freeze the tree");
     crate::node::validate_tree(&result.tree).expect("the all-trees law holds");
