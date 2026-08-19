@@ -96,7 +96,7 @@
 //! in [`StdToken`]/[`StdStreamPosition`]. What the stream positions on the two sides of a
 //! source change mean is
 //! [*Seams*](TokenReader#seams--readers-that-serve-several-sources-at-one-nesting-level)
-//! on the same page, and reading tokens from several sources during one parse requires
+//! on the same page, and one reader serving several sources at one nesting level requires
 //! the language to declare
 //! [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`.
 //!

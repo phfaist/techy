@@ -113,10 +113,11 @@ reads the standard token at a byte offset without moving that reader, and
 answers what one of the standard tokens it stores is; what the stream
 positions on the two sides of a source change mean is
 [*Seams*](crate::core::token::TokenReader#seams--readers-that-serve-several-sources-at-one-nesting-level)
-on the same page. A reader with token kinds of its own builds them instead
-from the *scan helpers* — free functions that each recognize one construct
-at a position and return its byte spans — one helper per construct, listed
-under [Writing a token reader](crate::core::token#writing-a-token-reader).
+on the `TokenReader` page. A reader with token kinds of its own builds them
+instead from the *scan helpers* — free functions that each recognize one
+construct at a position and return its byte spans plus the rule or spec that
+matched — one helper per construct, listed under
+[Writing a token reader](crate::core::token#writing-a-token-reader).
 
 **Specials** — callables triggered by plain character sequences (`~`,
 `--`) — are recognized by two `Lang` hooks, and here sits a documented

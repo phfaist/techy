@@ -334,8 +334,8 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   sources (a macro expander) keeps one inner `StdTokenReader` per source and reuses
   that reader's two public scanning methods directly — `scan_std_token_at` and
   `token_kind_of_std_token` — since the trait implementation for `StdTokenReader`
-  serves only languages tokenized in `StdToken`/`StdStreamPosition`, and reading
-  from several sources in one parse means declaring `OBEYS_SPAN_TILING = false`
+  serves only languages tokenized in `StdToken`/`StdStreamPosition`; one reader
+  serving several sources at one nesting level requires `OBEYS_SPAN_TILING = false`
   ([§dd-dr:scan-helpers], [§dd-arch:span-tiling]).
   `TokenListReader` — internal test infrastructure only — is the second in-crate
   reader: the two-reader agreement harness runs every construct-parser parse

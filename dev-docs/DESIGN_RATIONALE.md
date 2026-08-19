@@ -1131,7 +1131,7 @@ not "off, remembering what on meant".
 Rejected alternatives: keeping `Option<WhitespaceRules>` alongside the flag (three states, two meaning
 "off"); `enable_forbidden_chars` (uniformity for its own sake).
 
-#### The scan helpers: public recognition primitives; the standard reader as their composition [§dd-dr:scan-helpers]
+#### The scan helpers: public, token-agnostic recognition primitives; the standard reader as their composition [§dd-dr:scan-helpers]
 
 Status: DECIDED (user, design session).
 
@@ -1152,9 +1152,10 @@ Two reuse cases asked for this, and different items serve them:
   calls the two methods promoted with this decision — `scan_std_token_at` (the standard
   token at an offset, without moving that reader) and `token_kind_of_std_token`
   (interpret one of the standard tokens it stores, under any `L`). The trait method
-  `token_kind` is out of reach for such a language, whose `Lang::Tokenization` is not
-  `StdTokenization` ([§dd-dr:tokenization]); the in-crate scripted test reader is the
-  proof that these two suffice.
+  `token_kind` is out of reach for such a language, since the `TokenReader`
+  implementation of `StdTokenReader` serves only languages tokenized in
+  `StdToken`/`StdStreamPosition` ([§dd-dr:tokenization]); the in-crate scripted test
+  reader is the proof that these two suffice.
 - A reader with token kinds of its own composes the helpers for the constructs it wants
   recognized the way the standard reader recognizes them, and builds its own tokens from
   the answers.
@@ -5884,10 +5885,10 @@ Four rules:
    constructors, which inherit the same slot for the span coherence each one asserts
    (the eighth, `StdToken::end_of_stream`, takes no span and never panics): a
    documented-contract violation panics in every build — these functions are either deliberately infallible (no
-   `Err` channel exists to prefer) or, for the three helpers that do have one, report
-   through it about the scanned content and not about their caller's mistake;
-   the checks are O(1), and the always-on panic keeps
-   invalid values unrepresentable where the release alternative was unspecified
+   `Err` channel exists to prefer) or, for the two helpers that do have one —
+   `scan_command` and `scan_specials_trigger` — report through it about the scanned
+   content and not about their caller's mistake; the checks are O(1), and the always-on
+   panic keeps invalid values unrepresentable where the release alternative was unspecified
    misbehavior or a later cryptic panic far from the cause (the std str/slice-indexing
    convention). Each site documents the all-builds panic in its rustdoc with a pointer
    to rule 3, pinned by `should_panic` tests; invalid `Span`/`StdToken`/`SourceSpan`/`SourcePos` values are thereby
