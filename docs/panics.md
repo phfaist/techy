@@ -6,10 +6,12 @@ of the API returns a `Result`. The panicking items of the public API are exactly
 families below; those panics guard against programming errors in calling code — no
 document content can trigger them.
 
-**Precondition asserts.** Five value functions and the seven span-taking
+**Precondition asserts.** Four span and position functions, the seven scan helpers of
+[`core::token`](crate::core::token), and the seven span-taking
 [`StdToken`](crate::core::token::StdToken) constructors document a precondition on their
-arguments and panic, in all builds, when calling code violates it. These functions
-are deliberately infallible (there is no error channel to prefer), the checks are
+arguments and panic, in all builds, when calling code violates it. These functions are
+either deliberately infallible (there is no error channel to prefer) or answer about the
+content they were handed rather than about a mistake in calling code; the checks are
 cheap, and the immediate panic keeps invalid values unrepresentable instead of
 letting them cause misbehavior far from the mistake:
 
@@ -33,8 +35,15 @@ letting them cause misbehavior far from the mistake:
   than the post-space begins. The eighth constructor,
   [`end_of_stream`](crate::core::token::StdToken::end_of_stream), takes no span of its
   own and never panics;
-- [`skip_whitespace`](crate::core::token::skip_whitespace) — requires `pos` to lie
-  within the content, on a `char` boundary.
+- the scan helpers [`skip_whitespace`](crate::core::token::skip_whitespace),
+  [`scan_paragraph_break`](crate::core::token::scan_paragraph_break),
+  [`scan_group_delimiter`](crate::core::token::scan_group_delimiter),
+  [`command_rule_at`](crate::core::token::command_rule_at),
+  [`scan_command`](crate::core::token::scan_command),
+  [`scan_comment`](crate::core::token::scan_comment) and
+  [`scan_specials_trigger`](crate::core::token::scan_specials_trigger) — each requires
+  `pos` to lie within the content, on a `char` boundary; `scan_command` additionally
+  requires `rule.escape_char` to stand at `pos`.
 
 **Indexing-style accessors.** Accessors that follow the standard library's
 slice-indexing convention: the panicking form is for ids, spans, and regions
