@@ -38,6 +38,7 @@ use crate::source::{Source, TextContent};
 use crate::state::{Lang, ParsingState};
 use crate::token::GroupRule;
 
+use super::driver::LatexlikeParseDriver;
 use super::invocation_syntax::EnvironmentSyntax;
 use super::{CallableType, Event, GroupType, MathGroupForm, Mode};
 
@@ -226,8 +227,9 @@ pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
 /// the latexlike role traits ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
 /// [`LatexlikeMode`], [`LatexlikeEvent`], and — on the invocation-syntax
 /// payload — [`LatexlikeInvocationSyntax`] +
-/// [`FromInvocation`](crate::constructs::FromInvocation)) — the bound every
-/// generic preset component takes (conventional parameter `LLL`), plus the
+/// [`FromInvocation`](crate::constructs::FromInvocation)) and whose driver
+/// implements the preset's driver extension ([`LatexlikeParseDriver`]) — the bound
+/// every generic preset component takes (conventional parameter `LLL`), plus the
 /// preset's language-level behavior defaults as **overridable defaulted
 /// methods**.
 ///
@@ -236,6 +238,11 @@ pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
 /// deliberately **no blanket impl** over the vocabulary bounds: coherence would
 /// make the defaulted methods un-overridable (a blanket impl's defaults cannot be
 /// specialized per language).
+///
+/// The driver bound mirrors the core's own `Driver: `[`ParseDriver`](crate::engine::ParseDriver)
+/// clause ([`Lang::Driver`]) one layer up: a custom driver for a latexlike language
+/// opts in with its own one-liner — `impl LatexlikeParseDriver<MyLang> for MyDriver
+/// {}` — since every hook of [`LatexlikeParseDriver`] is defaulted.
 ///
 /// [`ClosedVocabulary`](crate::state::ClosedVocabulary) is *not* a supertrait —
 /// it stays the opt-in tooling bound, stated where enumeration is actually used.
@@ -252,6 +259,7 @@ pub trait LatexlikeLang:
         CallableTypeId: LatexlikeCallableType,
         ModeId: LatexlikeMode,
         Event: LatexlikeEvent,
+        Driver: LatexlikeParseDriver<Self>,
         InvocationSyntax: LatexlikeInvocationSyntax<Self>
                               + crate::constructs::FromInvocation<Self>,
     >

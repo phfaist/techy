@@ -85,6 +85,7 @@ use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 use crate::token::{GroupRule, TokenEdge};
 
+use super::driver::LatexlikeParseDriver;
 use super::invocation_syntax::EnvironmentSyntax;
 use super::lang::{
     LatexlikeCallableType, LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang,
@@ -288,6 +289,15 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// the returned parser must produce an [`EnvironmentBody`] and no pass-through
     /// delta (its reported [terminator facts](EnvironmentBody::terminator) feed the
     /// invocation-syntax recording).
+    ///
+    /// The produced body also **reports the interior's after-effect record and exit
+    /// state** ([`EnvironmentBody::after_effects`], [`EnvironmentBody::exit_state`]),
+    /// which the composition routes through
+    /// [`LatexlikeParseDriver::environment_after_effects`] — the environment's escape
+    /// channel. A takeover body parser that runs a content loop fills them honestly
+    /// from its [`NodesOutcome`](crate::constructs::NodesOutcome); one that reports
+    /// `None` and its entry state (a raw body — [`VerbatimBodyParser`]) lets nothing
+    /// escape.
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p, LLL>,
@@ -953,12 +963,16 @@ where
             Some(delta) => cx.derive_state(delta)?,
             None => Arc::clone(&cx.state),
         };
+        // The invocation facts and the body's initial state outlive the body parse: the
+        // after-effect routing below reports both to the driver, while the parser
+        // consumes the facts and the parse consumes the state.
+        let hook_invocation = env_invocation.clone();
         let mut body_parser = match behavior {
             Some(b) => b.make_body_parser(env_invocation),
             None => default_body_parser(env_invocation),
         };
         let (body, passthrough) =
-            cx.parse_construct(&mut *body_parser, Some(body_state), None)?;
+            cx.parse_construct(&mut *body_parser, Some(Arc::clone(&body_state)), None)?;
         drop(body_parser);
         // A behavior-supplied body parser is outer-layer input; its documented
         // contract (no pass-through delta) is enforced as an implementation
@@ -969,6 +983,26 @@ where
                 trigger_span,
             ));
         }
+        // The interior's after-effect facts, taken off the body before its remaining
+        // fields are consumed below.
+        let body_exit_state = body.exit_state;
+        let body_after_effects = body.after_effects;
+        // The body's merged after-effect record, routed through the driver's filter:
+        // the answer is this environment invocation's own after-effect, which the
+        // enclosing content loop applies and records — that is what lets an escape from
+        // inside an environment compose outward exactly as a group's does. Called
+        // unconditionally, an empty record included; an `Err` aborts under any recovery
+        // policy, with the live traceback attached here (a driver hook has no session).
+        let driver = cx.driver;
+        let after_effects = driver
+            .environment_after_effects(
+                &hook_invocation,
+                &spec,
+                &body_state,
+                &body_exit_state,
+                body_after_effects,
+            )
+            .map_err(|error| cx.attach_hook_frames(error))?;
 
         // The payload, constructed once at staging time: the begin facts the
         // composition scanned plus the terminator facts the body parser (the
@@ -1017,7 +1051,7 @@ where
                 children,
             )
             .map_err(|error| cx.staging_error(error, node_span))?;
-        Ok((id, None))
+        Ok((id, after_effects))
     }
 }
 

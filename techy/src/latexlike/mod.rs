@@ -13,7 +13,10 @@
 //!   an `LLL: LatexlikeLang`, and a framework language with its own vocabularies or
 //!   exts joins the family instead of forking the preset;
 //! - [`LatexlikeDriver`] — the preset's [`ParseDriver`](crate::engine::ParseDriver):
-//!   recovery policy, scope-stack command resolution, and the math-mode group plug;
+//!   recovery policy, scope-stack command resolution, and the math-mode group plug —
+//!   plus [`LatexlikeParseDriver`], the preset's driver extension (the hooks that speak
+//!   preset vocabulary, e.g. what an environment body's after-effects may escape),
+//!   which every family member's driver implements;
 //! - [`default_token_rules`] and [`builtin_package`] — the canonical seed data behind
 //!   [`Latexlike::initial_state_data`];
 //! - [`minidefs`] — the opt-in toy `"minilatex"` package (a handful of familiar
@@ -93,7 +96,7 @@ pub use arguments::{
 };
 pub use driver::{
     exit_math_context_delta, make_paragraph_break_node, math_group_interior_delta,
-    LatexlikeDriver, ParagraphBreakSpec, ParagraphBreakStyle,
+    LatexlikeDriver, LatexlikeParseDriver, ParagraphBreakSpec, ParagraphBreakStyle,
 };
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,

@@ -852,6 +852,11 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                 terminator: raw_end
                     .terminator
                     .map(|span| self.terminator.syntax_data(span, end.clone())),
+                // A raw body runs no content loop: no sibling construct parsed inside
+                // it, so nothing evolved the state it was read under and nothing can
+                // escape it. The honest facts are the entry state and an empty record.
+                exit_state: Arc::clone(&cx.state),
+                after_effects: None,
             },
             None,
         ))

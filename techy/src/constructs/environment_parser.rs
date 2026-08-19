@@ -7,7 +7,7 @@ use crate::engine::{Frame, FrameTitle};
 use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, ContentNodes, NodeKind};
 use crate::source::SourceSpan;
-use crate::state::{Lang, ParsingStateDelta};
+use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, StreamPosition, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
@@ -478,6 +478,32 @@ pub struct EnvironmentBody<L: Lang> {
     /// to its environment record's constructor (together with the begin side's
     /// [`EnvironmentBeginSyntaxData`]) when it builds the payload at staging time.
     pub terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
+    /// The body content run's **exit state** ([`NodesOutcome::state`](super::NodesOutcome::state)):
+    /// the state the run actually reached, after the sibling after-effects it applied
+    /// evolved it — and the only place the definitions [`after_effects`](EnvironmentBody::after_effects)
+    /// records are inspectable (`state.scopes().retrieve_spec(…)`), since the record
+    /// itself carries operations, not a symbol table. It dies with the invocation: the
+    /// driving composition's routing hook is its last reader.
+    ///
+    /// A body that runs **no content loop** (a verbatim body — raw text, no sibling
+    /// after-effects possible) reports the state it read the body under at entry:
+    /// nothing evolved it.
+    pub exit_state: Arc<ParsingState<L>>,
+    /// The body content run's merged after-effect record
+    /// ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)) — one
+    /// delta, the run's sibling after-effects merged in application order, with no
+    /// provenance — **raw and unfiltered**: a body parser is a blind helper like
+    /// [`NodesParser`](super::NodesParser), reporting what the parsed nodes generated,
+    /// and the driving composition decides what (if anything) escapes the environment.
+    /// `None` = the run applied none (and for a body that runs no content loop, where
+    /// nothing can escape).
+    ///
+    /// This is *reported*, never *returned*: the body parser's pass-through delta stays
+    /// `None` — routing an interior escape outward is the driving composition's
+    /// decision, not the body helper's (the preset routes it through
+    /// [`LatexlikeParseDriver::environment_after_effects`](crate::latexlike::LatexlikeParseDriver::environment_after_effects),
+    /// the environment sibling of [`GroupAfterEffectsFn`](super::GroupAfterEffectsFn)).
+    pub after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`.
@@ -489,6 +515,8 @@ impl<L: Lang> Clone for EnvironmentBody<L> {
             end: self.end.clone(),
             content: self.content.clone(),
             terminator: self.terminator.clone(),
+            exit_state: Arc::clone(&self.exit_state),
+            after_effects: self.after_effects.clone(),
         }
     }
 }
@@ -500,6 +528,8 @@ impl<L: Lang> fmt::Debug for EnvironmentBody<L> {
             .field("end", &self.end)
             .field("content", &self.content)
             .field("terminator", &self.terminator)
+            .field("exit_state", &self.exit_state)
+            .field("after_effects", &self.after_effects)
             .finish()
     }
 }
@@ -525,9 +555,12 @@ impl<L: Lang> fmt::Debug for EnvironmentBody<L> {
 /// This parser parses sibling content up to the terminator command, and handles the
 /// terminator.  Possible conditions that can arise:
 /// [`EnvironmentTerminatorMismatch`], [`MalformedEnvironmentTerminator`],
-/// [`MissingEnvironmentTerminator`].  The parser stages the body `List`. Returns no
-/// after-effect delta.
-/// 
+/// [`MissingEnvironmentTerminator`].  The parser stages the body `List`. It returns no
+/// pass-through after-effect delta — it *reports* the body content run's merged
+/// after-effect record and its exit state on the produced
+/// [`EnvironmentBody`](EnvironmentBody::after_effects) instead, for the driving
+/// composition to route (the parser is a blind helper: it says what the body's nodes
+/// generated, never what escapes the environment).
 ///
 /// # Design
 ///
@@ -798,6 +831,13 @@ where
                 cx.here(),
             ));
         }
+        // The interior run's after-effect facts, taken off the outcome before its
+        // remaining fields are consumed below: the state the run reached and its merged
+        // record, reported raw on the produced body ([`EnvironmentBody::after_effects`]).
+        // This parser's own pass-through delta stays `None` — what escapes an
+        // environment is the driving composition's call, not the body helper's.
+        let exit_state = Arc::clone(&outcome.state);
+        let after_effects = outcome.after_effects;
 
         // The body's content interior ends where the reader stands: the content loop
         // leaves every stop token unconsumed at its own start, with its pre-space
@@ -858,6 +898,8 @@ where
                 end,
                 content: ContentNodes::InChildrenOf(body, 0..child_count),
                 terminator,
+                exit_state,
+                after_effects,
             },
             None,
         ))

@@ -14,6 +14,7 @@
 //! inputs the driver feeds ([`ParsingStateStack::from_node_ancestors`] supplies
 //! the stack with no session anywhere).
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -33,8 +34,8 @@ use crate::state::{
 use crate::token::{GroupRule, Token, TokenReader};
 
 use super::{
-    Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType,
-    LatexlikeInvocationSyntax, LatexlikeLang, LatexlikeMode,
+    EnvironmentInvocation, Latexlike, LatexlikeCallableType, LatexlikeEvent,
+    LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang, LatexlikeMode,
 };
 
 /// How [`LatexlikeDriver`] emits the node for a paragraph-break token (a whitespace
@@ -486,6 +487,115 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         Ok(event.is_exit_math_context().then(|| exit_math_context_delta(stack)))
     }
 }
+
+// --- the preset's driver extension ----------------------------------------------------
+
+/// The preset's **driver extension**: the parse-time behavior hooks that speak
+/// *latexlike* vocabulary. It is a preset trait rather than [`ParseDriver`] methods
+/// on purpose — "environment" is a preset concept (the `\begin{name} … \end{name}`
+/// composition of [`BeginSpec`](super::BeginSpec)), and the core driver must not
+/// privilege it.
+///
+/// Every family member's [`Driver`](crate::state::Lang::Driver) implements this trait
+/// — [`LatexlikeLang`] demands it in its bounds — so the preset's compositions reach
+/// these hooks on the concretely typed
+/// [`ParseContext::driver`](crate::constructs::ParseContext::driver), with no downcast
+/// and no per-invocation installation. Every method is defaulted to the behavior every
+/// existing driver already has, so opting a custom driver in is one line:
+///
+/// ```ignore
+/// impl LatexlikeParseDriver<MyLang> for MyDriver {}
+/// ```
+pub trait LatexlikeParseDriver<LLL: LatexlikeLang>: ParseDriver<LLL> {
+    /// The hook by which an **environment leaks an after-effect** to its caller: it
+    /// maps the body's interior content run's merged after-effect record to the delta
+    /// the environment invocation returns as its own after-effect (the `\gdef` shape).
+    /// The environment sibling of the core's group-level
+    /// [`GroupAfterEffectsFn`](crate::constructs::GroupAfterEffectsFn), whose contract
+    /// this one mirrors; the notes there on what a merged record can express apply
+    /// verbatim.
+    ///
+    /// The arguments, in order:
+    ///
+    /// 1. The **invocation facts** ([`EnvironmentInvocation`]) and, next, the resolved
+    ///    **spec** — jointly what a policy keys on (the environment's name, its
+    ///    spelling pieces, its definition's identity), in place of the group hook's
+    ///    matched [`GroupRule`]: a language may let `\gdef` escape a `center` but
+    ///    nothing escape an `equation`.
+    /// 2. The body's **initial state** — what the body parsed under before any sibling
+    ///    after-effect evolved it: the invocation's base with the behavior's
+    ///    [`body_state_delta`](super::EnvironmentBehavior::body_state_delta) stacked on
+    ///    it.
+    /// 3. The body's **exit state**
+    ///    ([`EnvironmentBody::exit_state`](crate::constructs::EnvironmentBody::exit_state))
+    ///    — the state the body run actually reached, and the only place the definitions
+    ///    the record made are inspectable (`state.scopes().retrieve_spec(…)`). It is
+    ///    discarded with the invocation; this hook is the last reader.
+    /// 4. The body's **merged record**
+    ///    ([`EnvironmentBody::after_effects`](crate::constructs::EnvironmentBody::after_effects)),
+    ///    passed **by value** so a hook may filter it in place and hand the same box
+    ///    back rather than cloning.
+    ///
+    /// The return is the environment invocation's after-effect for the enclosing
+    /// content run. `Ok(None)` — the default — is the ordinary "nothing escapes"
+    /// answer, and is what every driver that does not override this method reports for
+    /// every environment.
+    ///
+    /// The composition calls this **unconditionally**, an empty record included (like
+    /// the group hook): a hook that keys on the invocation alone still runs, and
+    /// "the body generated nothing" is a fact worth being told.
+    ///
+    /// # What a hook can discriminate
+    ///
+    /// The record is **one merged delta** — rules overrides last-writer-wins, scope ops
+    /// and events concatenated in application order — and carries no provenance: it
+    /// cannot say which construct inside the body contributed what. A `\gdef`-vs-`\def`
+    /// split is therefore expressed **structurally**, by the language tagging its own
+    /// ops — `\gdef` emitting a [`ScopeOp::Define`](crate::scopes::ScopeOp) against a
+    /// globally-named scope, `\def` a local one — after which the hook keeps the
+    /// globally-targeted ops and drops the rest. The rules, mode and ext overrides
+    /// carry no such tag and merge last-writer-wins, so for those the only honest
+    /// answers are all or nothing. [`GroupAfterEffectsFn`](crate::constructs::GroupAfterEffectsFn)
+    /// documents the mechanics in full.
+    ///
+    /// Escapes **compose outward** exactly as a group's do: the enclosing content loop
+    /// applies the returned delta to its own state *and* merges it into its own record,
+    /// so the next group or environment out sees it in argument 4 and may let it escape
+    /// again.
+    ///
+    /// # Errors
+    ///
+    /// `Err` **aborts the parse** under any recovery policy, propagated exactly like a
+    /// construct parser's own `Err`, with the live traceback attached at the call site
+    /// — a driver hook has no session access. Carry
+    /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
+    /// hook's own code,
+    /// [`ImplementationError`](crate::constructs::ImplementationError) for a violated
+    /// library contract. An infallible hook wraps its answer in `Ok(…)` and that is the
+    /// only change.
+    ///
+    /// Deterministic and side-effect free, like the core's descent-state and
+    /// group-after-effect callbacks: a hook whose answer depends on call order would be
+    /// fragile.
+    fn environment_after_effects(
+        &self,
+        invocation: &EnvironmentInvocation<'_, LLL>,
+        spec: &Arc<dyn CallableSpec<LLL>>,
+        initial: &Arc<ParsingState<LLL>>,
+        exit: &Arc<ParsingState<LLL>>,
+        record: Option<Box<ParsingStateDelta<LLL>>>,
+    ) -> Result<
+        Option<Box<ParsingStateDelta<LLL>>>,
+        crate::error::ParseError<LLL::SourceOrigin>,
+    > {
+        let _ = (invocation, spec, initial, exit, record);
+        Ok(None)
+    }
+}
+
+/// The canned assembly opts in with the trait defaults: no environment leaks an
+/// after-effect (the scoped-descent behavior the preset has always had).
+impl<LLL: LatexlikeLang> LatexlikeParseDriver<LLL> for LatexlikeDriver<LLL> {}
 
 #[cfg(test)]
 mod tests {
