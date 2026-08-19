@@ -391,8 +391,11 @@ fn read_name_chars<L: Lang>(
         }
         match cx.tokens.token_kind(&token) {
             TokenKind::Char(c) => {
-                // The rigid check above proves this token's pre-space empty; the
-                // recipe is the one all multi-token content follows.
+                // The recipe all multi-token content follows: pre-space, spelling,
+                // post-space, each as the reader answers it for this token. (The
+                // rigid check above rejects a token whose pre-space edge and start
+                // edge differ, so the pre-space is empty here — but the recipe does
+                // not need to know that.)
                 push_token_text(&mut name_as_read, cx, &token, c.encode_utf8(&mut [0u8; 4]));
                 name_end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);

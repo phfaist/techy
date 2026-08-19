@@ -838,7 +838,7 @@ mod tests {
         let result = language.parse(source_text).unwrap();
         check_latexlike_tree_invariants(&result.tree);
 
-        // Root children tile the includer's source exactly (the parse law over
+        // Root children tile the includer's source exactly (span tiling over
         // the primary source ignores the attached region).
         let root = result.tree.root();
         let mut rebuilt = String::new();

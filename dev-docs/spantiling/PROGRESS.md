@@ -228,18 +228,26 @@ plus this file).
   the doc's three end cases extended by the `false` case and the `Err` paragraph scoped
   to a tiled language. New `pub(crate)` helpers `push_pre_space_text` and
   `push_token_text` (the per-token owned-text recipe, D4), shared by R1 and R4.
-- `techy/src/constructs/verbatim_parser.rs` (**R4**) — `read_raw_content` accumulates
+- `techy/src/constructs/verbatim_parser.rs` (**R4**; emptiness gate from the Stage 2
+  review) — `read_raw_content` accumulates
   the content's text under `!L::OBEYS_SPAN_TILING`: per consumed token the R1 recipe
   (pre-space + spelling + post-space), including a nested close read as content by the
   pairing rule, plus the pre-space of the terminator / end-of-stream token (which lies
   before `content_end` and is content). `RawContentEnd` carries it as `content_text`,
-  and `raw_content_text` records `Owned`/`Spanned` at both content sites (the delimited
-  argument and the environment body). Module docs state the two representations; the
+  and `raw_content_text` answers the node data at both content sites (the delimited
+  argument and the environment body) — as an `Option`, because *whether there is
+  content* is decided the same way as the content itself: the span's emptiness under
+  `true` (bit-identical behavior), the accumulated text's emptiness under `false`, where
+  the span is only a description and could be empty over real content or non-empty over
+  none. A parse whose content starts at a seam is where that matters; the reader for
+  such a test is Stage 3a's scripted reader, so the test belongs in Stage 3b. Module docs state the two representations; the
   "partition invariants" phrase is gone.
 - `techy/src/constructs/argument_parsers.rs` (**R1/R4 by the user's ruling**) —
   `MarkerArgumentParser`'s node covers one token per marker character; under `false` it
   records `TextContent::Owned(self.marker)`, which is exactly what was read (every token
   was checked to spell the expected character, consecutively). Unchanged under `true`.
+- `techy/src/constructs/embellishments_parser.rs` (**Stage 2 review, required fix 1**)
+  — the embellishment wrapper's span (see the R5 correction below).
 - `techy/src/constructs/environment_parser.rs` (**the name-as-read rule**, user ruling
   2026-08-19) — `read_name_chars` accumulates the name's characters as it reads them
   under `false` (the shared `push_token_text` recipe; the rigid check proves each
@@ -267,7 +275,11 @@ plus this file).
   — the trigger's own span (one reader answer about one token, taken from its `Start` so
   the pre-space the content loop already staged stays out) plus the name group's
   delimiters as written (the rule cloned off the matched open token) around the name.
-  Unchanged under `true`. The name part of that text, the `OrphanEnd` condition's name
+  Unchanged under `true` — except that the *quoted terminator* of the diagnostic is now
+  assembled from the same pieces in both cases rather than sliced from the span; for a
+  tiled parse the two are the same string, which the existing tiled orphan tests pin
+  (`orphan ‘\end{itemize}’`, `orphan ‘\end’`). The name part of that text, the
+  `OrphanEnd` condition's name
   and the begin side's lookup name all read `NameGroup::name_text()`; the diagnostic's
   quoted terminator is assembled by the same closure as the recovery text (one edge
   parameter apart — without a name group the quote stops at the command word), so the
@@ -337,8 +349,9 @@ excluded) classified by how many tokens its span covers:
 | `constructs/attached_source.rs:187`, `engine/language.rs:239` | the stop cause's span (one token) | exact |
 | `latexlike/environments.rs:855` `MalformedBegin` | the trigger command (one token) | exact |
 | `latexlike/driver.rs:275` paragraph-break specials name | the break token's span | exact |
+| `engine/driver.rs:334` the default paragraph-break node | the break token's span | exact |
 | `latexlike/invocation_syntax.rs:149` macro post-space | one token's sub-span | exact (R3) |
-| `engine/mod.rs:104,107` frame titles | `FrameTitle::Callable`: one token. `FrameTitle::Quoted`: **the name-group span** | see the open question |
+| `engine/mod.rs:104,107` frame titles | **the name-group span** for both variants at the environment sites | see the open question |
 
 `extract`, `recompose`, `node/` were left alone: they are consumers, and §1.6 gives them
 to Stage 4.
@@ -363,10 +376,20 @@ node span and goes through `node_text_content`. No further change needed.
 `grep -rn "tokens\.source_span_within\|tokens\.source_span_describing" techy/src
 techy/tests` outside `techy/src/token/` returns exactly the four lines inside the two
 `ParseContext` helpers (`constructs/mod.rs:267`, `:269`, `:449`, `:451`) plus the
-delegating lines of the five test readers. Every node/body/name span goes through
-`cx.source_span_within` / `invocation_span_within`; after carry-over A there is no
-longer a site building a node span with `SourceSpan::new` from a child's coordinates
-either.
+delegating lines of the five test readers: every node/body/name span goes through
+`cx.source_span_within` / `invocation_span_within`.
+
+**Correction (Stage 2 review).** That grep does not catch a node span built with
+`SourceSpan::new` out of a staged child's coordinates, and two sites did exactly that:
+`stage_invocation`'s no-explicit-end arm (carry-over A, fixed earlier) and the
+embellishment wrapper (`constructs/embellishments_parser.rs`), which took
+`marker_span.start()..child.end()` after filtering the child on `same_source`. The
+wrapper now mirrors carry-over A: under `false` its span is what the reader describes
+for the stretch from the marker's start position to where the stream stands (just past
+the expression), through `cx.source_span_within`; the tiled arm is the previous code,
+textually unchanged, inside the `true` arm. `grep -rn "SourceSpan::new" techy/src`
+outside `token/`, `source/` and test modules now shows no node-span construction from
+another node's coordinates.
 
 ### R7 grep — concrete `Latexlike` impls
 
@@ -426,11 +449,30 @@ declaration through the shared helpers. Nothing to make generic.
 - the orphan-`\end` test now also asserts the rendered diagnostic quotes the terminator
   as read (`orphan ‘\end{itemize}’`, and `orphan ‘\end’` for the malformed arm).
 
-`RelaxedLatexlike` (test-only, in `latexlike/environments.rs`'s test module) is a
+- `latexlike/invariants.rs`:
+  `a_language_that_does_not_obey_span_tiling_skips_the_payload_pins` — the counterpart
+  of the core gate's test: a payload whose escape character and spelling are nowhere in
+  the node's bytes (the tree `rejects_a_macro_escape_char_not_in_the_bytes` panics on)
+  passes the oracle under `RelaxedLatexlike`, while `validate_tree` still holds.
+- `constructs/verbatim_parser.rs`:
+  `relaxed_verbatim_content_covers_the_nested_close_and_trailing_arms` — `\verb{a{b}c}`
+  (a nested close read as content by the pairing rule, so the loop's group-close arm
+  contributes its spelling) and `\verb|ab  |` (characters up to the delimiter): the
+  owned text equals the tiled parse's slice in both.
+
+`RelaxedLatexlike` (test-only, now in `latexlike/test_support.rs` — the preset's shared
+`#[cfg(test)]` helper module, so `environments.rs` and `invariants.rs` share one
+definition) is a
 latexlike-family language with the preset's vocabularies and seed and
 `OBEYS_SPAN_TILING = false`. It is **R7's concrete demonstration**: the preset's generic
 parsers, driver and node-ext types serve a non-tiled family member unchanged. Stage 3b's
 `LatexlikeLang` over `ScriptedTokenization` can build on it.
+
+Wording: the superseded "parse law"/"parse-tree law" phrasing is gone from every file
+this stage touched (`latexlike/invariants.rs`, `latexlike/mod.rs`,
+`latexlike/invocation_syntax.rs`, `latexlike/input.rs`, `node/invariants.rs`). It
+survives in `node/mod.rs`, `node/arguments.rs` and `node/builder.rs` — Stage 4's files,
+already merged — for Stage 5's sweep.
 
 Test-language plumbing (reuse, no duplicate): `constructs::tests` is now
 `pub(crate) mod tests` (test builds only) and exports `RelaxedStdLang`, its tiled twin
@@ -508,6 +550,19 @@ emits no warnings.
 - The position check of `extend_run_to` stays unconditional (user ruling, 2026-08-19);
   only its message and the surrounding docs changed.
 
+### Public API breaks (for the Stage 5 record)
+
+Two, both deliberate, both of the shape `cargo-semver-checks` names:
+
+1. `TokenReader::source_span_describing` is a **required** trait method (Stage 1, §1.3:
+   a missing implementation must be a compile error, never a misleading span).
+2. `NameGroup` gains a **private** field
+   (`constructible_struct_adds_private_field`), so it is no longer constructible by
+   struct literal outside the crate: `NameGroup::new` plus `with_name_as_read` replace
+   that. The pairing of coordinates and text is exactly what must not be forgeable — a
+   span paired with text that disagrees with it would defeat the rule the field exists
+   for.
+
 ### Deviations from §1
 
 1. **`extend_run_to` lost its `what` parameter.** §1.5 R1 prescribes a message that
@@ -548,14 +603,18 @@ emits no warnings.
    accumulation in `read_name_chars`, the assembled orphan quote, and `\input`'s
    reference from node data.
 
-   **New, reported not fixed:** `FrameTitle::Quoted { label, name: SourceSpan }`
-   (`engine/mod.rs:104`) renders its span as the quoted text of a traceback frame, and
-   the environment sites hand it the *name-group span*
-   (`environment_parser.rs` `with_invocation_name_span`, `latexlike/environments.rs`
-   `name_span`, and `parse_declared_arguments`'s anchor). Under `false` that frame title
-   can therefore quote the wrong text. It is a diagnostic decoration — no lookup, no
-   node data — and fixing it means changing the public `FrameTitle` (a text field beside
-   the anchor span, or a `TextContent`), which is a design decision, not a Stage 2 fix.
+   **New, reported not fixed — for the Stage 5 record.** A frame's title renders a span
+   as text, and the environment sites hand it a *multi-token* one, so under `false` a
+   traceback frame can quote the wrong text. Both variants are affected:
+   `FrameTitle::Quoted { label, name }` (`engine/mod.rs:104`) — fed the name-group span
+   by `environment_parser`'s `with_invocation_name_span` and `latexlike/environments`'
+   `name_span` — and `FrameTitle::Callable { spec, role, name }` (`engine/mod.rs:107`) —
+   fed the same span by `parse_declared_arguments`
+   (`constructs/invocation_parser.rs:60`), which is where every declared argument's
+   frame title comes from. (`FrameTitle::Callable` is exact at the macro sites, which
+   pass one token's span.) It is diagnostic decoration — no lookup, no node data — and
+   fixing it changes the public `FrameTitle` (a text field beside the anchor span, or a
+   `TextContent`), so it is a decision for the user rather than a Stage 2 fix.
 2. **Confirmed (user, 2026-08-19).** `recover_as_chars` and the other one-token
    fallbacks record `Spanned` even though
    the node's span is a reader answer about a token that may have edges in two sources

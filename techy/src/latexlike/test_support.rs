@@ -18,7 +18,10 @@ use crate::scopes::{IntoSpecsProvider, Package};
 use crate::spec::StdCallableSpec;
 use crate::state::ParsingState;
 
-use super::{CallableType, Latexlike, LatexlikeDriver, Mode};
+use super::{CallableType, GroupType, Latexlike, LatexlikeDriver, LatexlikeLang, Mode};
+use crate::node::NodeKind;
+use crate::source::SourceSpan;
+use crate::state::Lang;
 
 /// A strict-recovery latexlike `Language` (the seed defaults).
 pub(super) fn strict() -> Language<Latexlike> {
@@ -90,3 +93,67 @@ pub(super) fn macro_package(
         }
     })
 }
+
+/// A member of the latexlike family whose parse trees are **not** span-tiled: the
+/// preset's vocabularies and behavior, only the declaration differs. The preset's
+/// parsers are generic over the family, so they serve it unchanged — which is what
+/// makes the recovery node below the site under test.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RelaxedLatexlike;
+
+impl Lang for RelaxedLatexlike {
+    const OBEYS_SPAN_TILING: bool = false;
+
+    type Features = crate::state::AllLangFeatures;
+    type GroupTypeId = GroupType;
+    type CallableTypeId = CallableType;
+    type ModeId = Mode;
+    type StateExt = ();
+    type Event = crate::latexlike::Event;
+    type SessionExt = ();
+    type SourceOrigin = Option<String>;
+    type Tokenization = crate::token::StdTokenization;
+    type NodeExts = crate::latexlike::LatexlikeNodeExts;
+    type InvocationSyntax =
+        crate::latexlike::InvocationSyntaxData<crate::latexlike::StdEnvironmentSyntax<Self>>;
+    type Driver = LatexlikeDriver<Self>;
+
+    /// The preset's own seed, for this language's vocabularies.
+    fn initial_state_data() -> Result<crate::state::StateData<Self>, crate::state::FinalizeError>
+    {
+        let mut scopes = crate::scopes::ScopeStack::new();
+        scopes.push(crate::latexlike::builtin_package());
+        Ok(crate::state::StateData {
+            rules: crate::latexlike::default_token_rules(),
+            scopes,
+            mode: Mode::Text,
+            ext: (),
+        })
+    }
+
+    fn scan_specials(
+        state: &ParsingState<Self>,
+        content: &str,
+        pos: usize,
+    ) -> Result<Option<crate::token::SpecialsMatch<Self>>, crate::token::SpecialsScanError>
+    {
+        state.scopes().scan_specials(state, content, pos)
+    }
+
+    fn specials_trigger_chars(
+        data: &crate::state::StateData<Self>,
+    ) -> crate::token::TriggerChars {
+        data.scopes.specials_trigger_chars()
+    }
+
+    fn make_node_ext(
+        _kind: &NodeKind<Self>,
+        _span: &SourceSpan<Self::SourceOrigin>,
+        _state: &Arc<ParsingState<Self>>,
+        _children: crate::node::StagedChildren<'_, Self>,
+    ) -> Result<(), crate::node::NodeBuildError> {
+        Ok(())
+    }
+}
+
+impl LatexlikeLang for RelaxedLatexlike {}

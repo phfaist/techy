@@ -300,7 +300,7 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
 /// the record records what its parser consumed.
 ///
 /// Re-emission stays a **writer pair** ([`write_begin`]/[`write_end`]) — the
-/// recompose stage's `Concat` head/tail and the parse-law checker's
+/// recompose stage's `Concat` head/tail and the span-tiling checker's
 /// prefix/suffix pins each need the two sides separately — and is the accuracy
 /// rule made concrete: what `from_parsed` recorded is exactly what the
 /// writers emit.

@@ -163,19 +163,34 @@ where
             // from the marker to the end of the expression's last staged node, when
             // that node lies in the marker's own source; to the marker's end
             // otherwise.
-            let child_span = wrapper_children
-                .last()
-                .and_then(|last| cx.staged_nodes().get(*last))
-                .map(|child| child.span().clone())
-                .filter(|child| {
-                    child.same_source(&marker_span) && child.end() >= marker_span.end()
-                });
-            let span = match child_span {
-                Some(child) => SourceSpan::new(
-                    marker_span.source(),
-                    marker_span.start()..child.end(),
-                ),
-                None => marker_span.clone(),
+            let span = match L::OBEYS_SPAN_TILING {
+                true => {
+                    let child_span = wrapper_children
+                        .last()
+                        .and_then(|last| cx.staged_nodes().get(*last))
+                        .map(|child| child.span().clone())
+                        .filter(|child| {
+                            child.same_source(&marker_span)
+                                && child.end() >= marker_span.end()
+                        });
+                    match child_span {
+                        Some(child) => SourceSpan::new(
+                            marker_span.source(),
+                            marker_span.start()..child.end(),
+                        ),
+                        None => marker_span.clone(),
+                    }
+                }
+                // No assumption about the staged child: a language that does not obey
+                // span tiling gives no relation between its span and the marker's, and
+                // the child's end is not a stream position to measure the wrapper
+                // with. The span is what the reader describes for the stretch from the
+                // marker's start to where the stream now stands — just past the
+                // expression the wrapper holds.
+                false => cx.source_span_within(
+                    &cx.tokens.position_at(&first, TokenEdge::Start),
+                    &cx.tokens.position_here(),
+                )?,
             };
             let data = GroupData::untyped(
                 node_text_content(&marker_span, &span),

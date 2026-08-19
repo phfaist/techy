@@ -165,7 +165,7 @@ fn validate_node<L: Lang, A>(
         NodeKind::Callable(callable) => {
             // The invocation-syntax payload is Lang-opaque to the all-trees law
             // (its span-backed fields are the Lang's recording discipline; the
-            // in-crate parse-law oracle checks the shipped payloads).
+            // in-crate span-tiling oracle checks the shipped payloads).
             validate_regions(tree, parent, i, data, callable)
         }
     }
@@ -1191,7 +1191,7 @@ mod tests {
 
     #[test]
     fn validate_does_no_byte_accounting() {
-        // A sibling gap (bytes 0..1 unrepresented) and off-span content: parse-law
+        // A sibling gap (bytes 0..1 unrepresented) and off-span content: span-tiling
         // violations, but the all-trees law passes.
         let source: Arc<Source> = Arc::new(Source::new("ab"));
         let st = state();
@@ -1211,7 +1211,7 @@ mod tests {
         validate_tree(&builder.finish(root).unwrap()).unwrap();
     }
 
-    // --- check_tree_invariants: the parse-law oracle ----------------------------------
+    // --- check_tree_invariants: the span-tiling oracle -------------------------------
 
     #[test]
     fn accepts_a_valid_tree() {

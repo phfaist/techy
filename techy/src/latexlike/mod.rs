@@ -109,7 +109,7 @@ pub use lang::{
 pub use recompose::{source_recomposer, SourceRecomposeError, SourceRecomposer};
 pub use spec::{MacroSpec, SpecialsSpec};
 
-// The latexlike parse-law oracle (core parse law + the payload pins) — the
+// The latexlike span-tiling oracle (the core span-tiling law + the payload pins) — the
 // preset-side sibling of core's `check_tree_invariants` mechanism (in-crate test
 // utility, never public; D-plan-12 Option B).
 #[cfg(test)]

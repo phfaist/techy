@@ -161,20 +161,26 @@ struct RawContentEnd<L: Lang> {
     end: StreamPosition<L>,
 }
 
-/// The raw content as node data on a `Chars` node spanning `content_span`: the text
-/// the loop accumulated where it accumulated one (a language with
+/// The raw content as node data on a `Chars` node spanning `content_span` — or `None`
+/// when there is no content to stage (techy stages no empty chars node).
+///
+/// The text the loop accumulated where it accumulated one (a language with
 /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`), the exact
-/// span slice otherwise.
+/// span slice otherwise — and *emptiness is decided the same way*: for such a language
+/// the span is only what the reader described for the stretch the content was read
+/// from, so whether there is content is the accumulated text's answer, not the span's.
 fn raw_content_text<L: Lang, O>(
     raw_end: &RawContentEnd<L>,
     content_span: &SourceSpan<O>,
-) -> TextContent
+) -> Option<TextContent>
 where
     O: crate::source::SourceOrigin,
 {
     match &raw_end.content_text {
-        Some(text) => TextContent::Owned(text.as_str().into()),
-        None => TextContent::Spanned(content_span.span()),
+        Some(text) if text.is_empty() => None,
+        Some(text) => Some(TextContent::Owned(text.as_str().into())),
+        None if content_span.is_empty() => None,
+        None => Some(TextContent::Spanned(content_span.span())),
     }
 }
 
@@ -455,10 +461,10 @@ where
         // verbatim state, the group under the surrounding state.
         let mut children = Vec::new();
         let content_span = cx.source_span_within(&content_start, &raw_end.content_end)?;
-        if !content_span.is_empty() {
+        if let Some(content) = raw_content_text(&raw_end, &content_span) {
             let id = cx
                 .stage_node(
-                    NodeKind::chars(raw_content_text(&raw_end, &content_span)),
+                    NodeKind::chars(content),
                     content_span.clone(),
                     Arc::clone(&content_state),
                     vec![],
@@ -810,10 +816,10 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         }
 
         let content_span = cx.source_span_within(&content_start, &raw_end.content_end)?;
-        if !content_span.is_empty() {
+        if let Some(content) = raw_content_text(&raw_end, &content_span) {
             let id = cx
                 .stage_node(
-                    NodeKind::chars(raw_content_text(&raw_end, &content_span)),
+                    NodeKind::chars(content),
                     content_span.clone(),
                     Arc::clone(&verbatim_state),
                     vec![],
@@ -1646,6 +1652,54 @@ mod tests {
         let data = group.group().expect("a group node");
         assert_eq!(data.open.resolve(group.source()), "|");
         crate::node::validate_tree(&relaxed.tree).expect("the all-trees law holds");
+    }
+
+    /// The same, for the two content arms the per-token recipe has to get right: a
+    /// nested close read as content by the pairing rule, and characters that reach the
+    /// terminator's own pre-space position. Both must read back as the tiled parse's
+    /// span slice.
+    #[test]
+    fn relaxed_verbatim_content_covers_the_nested_close_and_trailing_arms() {
+        let spec: Arc<dyn CallableSpec<RelaxedStdLang>> =
+            Arc::new(StdCallableSpec::new([ArgumentSpec::new_unnamed(Arc::new(
+                VerbatimArgumentParser::new(GT_VERB),
+            ))]));
+        let mut package = Package::new("test-macros");
+        package.insert(CT_MACRO, "verb", spec);
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(package));
+        let seed = Arc::new(ParsingState::new(StateData {
+            rules: rules::<RelaxedStdLang>(),
+            scopes,
+            mode: (),
+            ext: (),
+        }));
+        let language = crate::engine::Language::new(relaxed_driver(Recovery::Strict), seed);
+
+        for (input, expected) in [
+            // Paired delimiters: the inner `}` is ordinary content (the pairing rule),
+            // so the loop's group-close arm contributes its spelling to the text.
+            (r"\verb{a{b}c}", "a{b}c"),
+            // Characters up to the closing delimiter, whitespace included — the
+            // verbatim state reads them as plain `Char` tokens.
+            (r"\verb|ab  |", "ab  "),
+        ] {
+            let tiled = parse(
+                input,
+                &state_with(&[("verb", vec![verb_arg()])]),
+                Recovery::Strict,
+            );
+            assert_eq!(verb_content(root_child(&tiled, 0)).chars(), Some(expected));
+
+            let relaxed = language.parse(input).expect("the parse runs");
+            let content = verb_content(relaxed.tree.root().child(0).expect("the callable"));
+            assert_eq!(content.chars(), Some(expected), "relaxed content of {input:?}");
+            assert!(
+                matches!(content.kind(), NodeKind::Chars { content: TextContent::Owned(_), .. }),
+                "the content of a relaxed verbatim parse is owned text"
+            );
+            crate::node::validate_tree(&relaxed.tree).expect("the all-trees law holds");
+        }
     }
 
     /// The raw-content `Chars` child of a `\verb`-style callable's verbatim group.

@@ -7,7 +7,7 @@
 //! invocation-syntax payload is Lang-owned, and core cannot pin facts it cannot
 //! read (the D-plan-12 Option B ruling — the pins live with the preset that owns
 //! the payload types). One call to [`check_latexlike_tree_invariants`] runs both:
-//! the core parse law, then the payload pins for every callable whose payload is
+//! the core span-tiling law, then the payload pins for every callable whose payload is
 //! the family enum over the family's standard environment record
 //! ([`InvocationSyntaxData<StdEnvironmentSyntax<LLL>>`]); a custom `Env` type is
 //! its language's own recording discipline and is skipped.
@@ -301,6 +301,58 @@ mod tests {
                 end: None,
             }),
         });
+        check_latexlike_tree_invariants(&tree);
+    }
+    // --- the gate: a language that does not obey span tiling (PLAN §1.5 R6) ----------
+
+    /// The payload pins are byte accounting, so they hold for a language that obeys
+    /// span tiling only. The very tree `rejects_a_macro_escape_char_not_in_the_bytes`
+    /// panics on passes the oracle under a language declaring `false` — where the
+    /// node's span is what the reader described and pins nothing, while the all-trees
+    /// law (which this still runs) holds.
+    #[test]
+    fn a_language_that_does_not_obey_span_tiling_skips_the_payload_pins() {
+        use super::super::test_support::RelaxedLatexlike;
+
+        let source: Arc<Source> = Arc::new(Source::new("\\emph x"));
+        let st: Arc<ParsingState<RelaxedLatexlike>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
+        let mut builder: NodeTreeBuilder<RelaxedLatexlike> = NodeTreeBuilder::new();
+        let node = builder
+            .add(
+                NodeKind::callable(CallableData {
+                    callable_type: CallableType::Macro,
+                    name: "emph".into(),
+                    spec: Arc::new(MacroSpec::default()),
+                    arguments: ParsedArguments::empty(),
+                    slots: ParsedSlots::empty(),
+                    // Neither the escape character nor the spelling is in the node's
+                    // bytes — exactly what the pins reject for a tiled language.
+                    invocation_syntax: InvocationSyntaxData::Macro {
+                        escape_char: '@',
+                        post_space: TextContent::Owned("  ".into()),
+                    },
+                }),
+                SourceSpan::new(&source, 0..7),
+                Arc::clone(&st),
+                Vec::<BuildId>::new(),
+                (),
+                (),
+            )
+            .unwrap();
+        let root = builder
+            .add(
+                NodeKind::list(),
+                SourceSpan::new(&source, 0..7),
+                Arc::clone(&st),
+                alloc::vec![node],
+                (),
+                (),
+            )
+            .unwrap();
+        let tree = builder.finish(root).unwrap();
+
+        crate::node::validate_tree(&tree).expect("the all-trees law holds");
         check_latexlike_tree_invariants(&tree);
     }
 }
