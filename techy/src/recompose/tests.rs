@@ -669,6 +669,43 @@ fn the_children_op_mirrors_the_concat_scope_flags() {
     assert_eq!(children_op_with_scope(true, true), "contentattachedhidden");
 }
 
+#[test]
+fn the_children_op_folds_through_whichever_recomposer_it_is_handed() {
+    /// Groups hand their children to a *different* recomposer (the core
+    /// reemitter) instead of `self`; chars this recomposer sees itself are
+    /// shouted, so the output shows which recomposer folded what.
+    struct Delegating;
+    impl<A> Recomposer<Latexlike, A> for Delegating {
+        type State = ();
+        type Piece = String;
+        type Error = String;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            state: &(),
+            cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, ()>, String> {
+            if let Some(text) = node.chars() {
+                return Ok(Recompose::Emit(text.to_uppercase()));
+            }
+            if node.is_group() {
+                let inner = cx
+                    .recompose_children(node, false, false, state, &mut CoreEmitter)
+                    .map_err(|error| error.to_string())?;
+                return Ok(Recompose::Emit(format!("({inner})")));
+            }
+            Ok(Recompose::Concat(ConcatPieces::children()))
+        }
+    }
+
+    // "a" and "c" are folded by `Delegating` (shouted); everything inside the
+    // group went to `CoreEmitter`, which reemits it verbatim — the delegate's
+    // behavior applies there, not the caller's, all the way down.
+    let tree = parse("a{b{d}}c");
+    assert_eq!(recompose(&tree, (), &mut Delegating).unwrap(), "A(b{d})C");
+}
+
 // --- the wrapping contract (M4) ---------------------------------------------------------
 
 #[test]
@@ -709,11 +746,9 @@ fn instructions_lower_against_the_outermost_recomposer() {
 // --- instruction post-processing (`ConcatPieces::map`) -----------------------------------
 
 /// Groups concatenate their children wrapped in `<`/`>` and post-process the
-/// assembled piece with `map`; chars emit their text (uppercased when
-/// `shout`), and every other kind concatenates plainly.
-struct Mapper {
-    shout: bool,
-}
+/// assembled piece with `map`; chars emit their text, and every other kind
+/// concatenates plainly.
+struct Mapper;
 
 impl<A> Recomposer<Latexlike, A> for Mapper {
     type State = ();
@@ -727,7 +762,7 @@ impl<A> Recomposer<Latexlike, A> for Mapper {
         _cx: &mut RecomposeContext<'_, Latexlike, A>,
     ) -> Result<Recompose<String, ()>, Infallible> {
         Ok(if let Some(text) = node.chars() {
-            Recompose::Emit(if self.shout { text.to_uppercase() } else { text.to_string() })
+            Recompose::Emit(text.to_string())
         } else if node.is_group() {
             Recompose::Concat(
                 ConcatPieces::children().wrap("<", ">").map(|piece| format!("[{piece}]")),
@@ -743,11 +778,11 @@ fn a_map_post_processes_the_whole_assembled_piece() {
     // The map sees head + children + tail, and its result is what the parent
     // fold receives.
     let tree = parse("a{b}c");
-    assert_eq!(recompose(&tree, (), &mut Mapper { shout: false }).unwrap(), "a[<b>]c");
+    assert_eq!(recompose(&tree, (), &mut Mapper).unwrap(), "a[<b>]c");
 
     // No children still assembles head + tail, and the map still runs.
     let tree = parse("a{}c");
-    assert_eq!(recompose(&tree, (), &mut Mapper { shout: false }).unwrap(), "a[<>]c");
+    assert_eq!(recompose(&tree, (), &mut Mapper).unwrap(), "a[<>]c");
 }
 
 #[test]
@@ -780,7 +815,7 @@ fn a_mapped_concat_still_lowers_its_children_against_the_outermost_recomposer() 
     // against the wrapper (uppercased) — had the base folded the children
     // itself, the "b" would have come back lowercase.
     let tree = parse("a{b}c");
-    let mut wrapper = Wrapper { inner: Mapper { shout: false } };
+    let mut wrapper = Wrapper { inner: Mapper };
     assert_eq!(recompose(&tree, (), &mut wrapper).unwrap(), "A[<B>]C");
 }
 
@@ -816,6 +851,81 @@ fn two_maps_compose_in_registration_order() {
     // First registered runs first; the second sees its result.
     let tree = parse("{b}");
     assert_eq!(recompose(&tree, (), &mut TwoMaps).unwrap(), "2(1(b))");
+}
+
+#[test]
+fn a_map_sees_the_separators_of_its_own_instruction() {
+    /// Groups comma-join their children and post-process the result.
+    struct JoinedMap;
+    impl<A> Recomposer<Latexlike, A> for JoinedMap {
+        type State = ();
+        type Piece = String;
+        type Error = Infallible;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            _state: &(),
+            _cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, ()>, Infallible> {
+            Ok(if let Some(text) = node.chars() {
+                Recompose::Emit(text.to_string())
+            } else if node.is_group() {
+                Recompose::Concat(
+                    ConcatPieces::children()
+                        .wrap("<", ">")
+                        .join(", ")
+                        .map(|piece| format!("[{piece}]")),
+                )
+            } else {
+                Recompose::Concat(ConcatPieces::children())
+            })
+        }
+    }
+
+    // Head, separators, and tail are all in the piece the map receives.
+    let tree = parse("{a{b}c}");
+    assert_eq!(recompose(&tree, (), &mut JoinedMap).unwrap(), "[<a, [<b>], c>]");
+}
+
+#[test]
+fn a_map_and_a_derived_state_apply_to_the_same_instruction() {
+    /// Groups derive `state + 1` for their children and bracket the assembled
+    /// result with the state the group itself was composed under.
+    struct StatefulMap;
+    impl<A> Recomposer<Latexlike, A> for StatefulMap {
+        type State = usize;
+        type Piece = String;
+        type Error = Infallible;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike, A>,
+            state: &usize,
+            _cx: &mut RecomposeContext<'_, Latexlike, A>,
+        ) -> Result<Recompose<String, usize>, Infallible> {
+            Ok(if let Some(text) = node.chars() {
+                Recompose::Emit(format!("{text}@{state}"))
+            } else if node.is_group() {
+                let own = *state;
+                Recompose::Concat(
+                    ConcatPieces::children()
+                        .with_state(state + 1)
+                        .map(move |piece| format!("[{own}:{piece}]")),
+                )
+            } else {
+                Recompose::Concat(ConcatPieces::children())
+            })
+        }
+    }
+
+    // The children see the derived state (1, then 2); each map runs on the
+    // assembled result under the state its own node was composed with.
+    let tree = parse("a{b{c}}");
+    assert_eq!(
+        recompose(&tree, 0, &mut StatefulMap).unwrap(),
+        "a@0[0:b@1[1:c@2]]"
+    );
 }
 
 #[test]

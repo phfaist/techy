@@ -126,7 +126,7 @@ where
     {
         Recompose::Emit(piece) => Ok(piece),
         Recompose::Concat(pieces) => {
-            let lowering = pieces.into_parts();
+            let lowering = pieces.into_lowering();
             // The children fold under the derived state when the instruction
             // carries one, else they inherit the parent's.
             let child_state = lowering.state.as_ref().unwrap_or(state);
@@ -183,8 +183,10 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
     /// with no children in scope composes the empty piece — not an error.
     ///
     /// This is the op-family mirror of
-    /// [`restage_children`](crate::transform::RestageContext::restage_children),
-    /// and it is **self-passing** like every op here: the sub-fold lowers
+    /// [`restage_children`](crate::transform::RestageContext::restage_children)
+    /// — with the scope flags added, since the transform side descends
+    /// role-blind and recompose is the one role-sensitive site — and it is
+    /// **self-passing** like every op here: the sub-fold lowers
     /// against the recomposer the caller hands in, so a recomposer that passes
     /// `self` cannot reach a recomposer wrapping it — those children are folded
     /// by the callee alone. To post-process a fold *without* stepping outside

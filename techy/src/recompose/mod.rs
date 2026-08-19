@@ -98,8 +98,10 @@
 //! [`recompose_node`](Recomposer::recompose_node) instead — through
 //! [`recompose_children`](RecomposeContext::recompose_children), the op-family
 //! mirror of
-//! [`restage_children`](crate::transform::RestageContext::restage_children) —
-//! gives the same reach over the children of any node, but every
+//! [`restage_children`](crate::transform::RestageContext::restage_children)
+//! carrying the scope flags the transform side has no use for (recompose is
+//! the one role-sensitive site) — gives the same reach over the children of
+//! any node, but every
 //! [region op](RecomposeContext) is **self-passing**: the sub-fold lowers
 //! against the recomposer the caller hands in, so a recomposer that passes
 //! `self` bypasses whatever wraps it for exactly those children. Pass an op a
@@ -261,7 +263,10 @@ pub trait Recomposer<L: Lang, A> {
 ///
 /// Not `Clone`: a [`Concat`](Recompose::Concat) may carry a post-processing
 /// function ([`ConcatPieces::map`]), which is consumed by the one lowering
-/// that runs it.
+/// that runs it. That function is also why an instruction is neither `Send`
+/// nor `Sync` for any piece or state type — deliberately, so that a
+/// post-processing closure need not be: an instruction is built and consumed
+/// inside one driver call, never handed to another thread.
 #[derive(Debug)]
 pub enum Recompose<P, S> {
     /// This node's recomposition is exactly this piece; the driver does not
@@ -292,7 +297,8 @@ pub enum Recompose<P, S> {
 ///
 /// A [`map`](ConcatPieces::map) function may be attached to post-process the
 /// assembled result; it makes the instruction non-`Clone` (the function is
-/// consumed by the lowering that runs it).
+/// consumed by the lowering that runs it) and neither `Send` nor `Sync` (the
+/// function is not required to be either — see [`Recompose`]).
 pub struct ConcatPieces<P, S> {
     head: P,
     sep: P,
@@ -376,6 +382,10 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
     /// Called twice, the functions **compose in registration order**: the
     /// first-registered runs first, the second on its result.
     ///
+    /// `f` runs only when the fold of this node succeeds: a failing child
+    /// returns its error before the assembly completes, and the function is
+    /// dropped unused.
+    ///
     /// `f` is deliberately infallible and `'static` (it may not borrow the
     /// recomposer): a recomposition already has a typed failure channel
     /// ([`Recomposer::Error`]), so post-processing that can fail belongs in
@@ -392,8 +402,9 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
         self
     }
 
-    /// Destructure for the driver (see [`ConcatLowering`]).
-    pub(crate) fn into_parts(self) -> ConcatLowering<P, S> {
+    /// Take this instruction apart for the driver's lowering (see
+    /// [`ConcatLowering`]).
+    pub(crate) fn into_lowering(self) -> ConcatLowering<P, S> {
         ConcatLowering {
             head: self.head,
             sep: self.sep,
