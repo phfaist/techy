@@ -5854,12 +5854,94 @@ scope naming already expresses it as data.
 Known remaining hole: group-delimited **arguments** still drop what their groups leak. They
 descend through `cx.parse_group` like anything else, but an `ArgumentParser` has no
 after-effect channel to its caller, so `\gdef` inside `\foo{…}` does not escape. Closing it
-means giving the argument route a delta channel — a separate decision, not taken here.
+means giving the argument route a delta channel — a separate decision, not taken here. The
+other route that swallowed escapes, environment bodies, is closed:
+[§dd-dr:environment-after-effects].
 
-Revisit if: a language needs escapes out of argument extents or environment bodies (the
-argument channel above), or the op-tagging filter proves too weak for a real `\gdef` — the
-next step would be per-op provenance in the record, which was deliberately not built
-speculatively.
+Revisit if: a language needs escapes out of argument extents (the argument channel above;
+the environment half is settled by [§dd-dr:environment-after-effects]), or the op-tagging
+filter proves too weak for a real `\gdef` — the next step would be per-op provenance in the
+record, which was deliberately not built speculatively.
+
+#### An environment body may leak an after-effect: the `LatexlikeParseDriver` hook [§dd-dr:environment-after-effects]
+
+Status: DECIDED (user, this session; direct companion to [§dd-dr:group-after-effects]).
+
+A `\gdef` written inside `\begin{center}…\end{center}` escapes the environment exactly as
+one written inside `{…}` does. It did not before: `EnvironmentBodyParser` dropped the body
+content run's merged record (`NodesOutcome::after_effects`) together with the body, and the
+preset's `\begin` composition returned no after-effect, so one and the same definition
+escaped a group and died in an environment — the registered "revisit if" of
+[§dd-dr:group-after-effects]. Three pieces, split along the who-knows-what line:
+
+- **`EnvironmentBody` reports facts; the body parser stays blind.** The body outcome gains
+  two fields — `exit_state: Arc<ParsingState<L>>`, the body content run's exit state
+  (`NodesOutcome::state`: the only place the record's definitions are actually inspectable,
+  and, for a verbatim body that runs no content loop at all, the entry state) — and
+  `after_effects: Option<Box<ParsingStateDelta<L>>>`, the interior run's merged record
+  **raw and unfiltered**. `EnvironmentBodyParser` stays the collector it is, a blind helper
+  in the mold of `NodesParser`: it reports what happened and interprets none of it, because
+  "what may escape an environment" is a statement about a *language*, and this parser
+  serves every language. Its pass-through-delta contract is untouched — it still returns
+  `None`, so the unfiltered record never rides a channel whose documented meaning is
+  "apply me".
+- **The filter is a preset-driver hook, not a core one.** `LatexlikeParseDriver<LLL>:
+  ParseDriver<LLL>` carries exactly one defaulted method — `environment_after_effects`,
+  taking the `EnvironmentInvocation`, the environment's resolved
+  `Arc<dyn CallableSpec<LLL>>`, the body's initial and exit states and the record by value,
+  answering `Result<Option<Box<ParsingStateDelta<LLL>>>, ParseError<…>>` and defaulting to
+  `Ok(None)`: nothing escapes, every existing driver's behavior unchanged. The arguments
+  are `GroupAfterEffectsFn`'s, with the invocation facts plus the resolved spec where the
+  group hook has the matched `GroupRule` — the discriminator a language keys on ("let it
+  escape `{…}` but not `$…$`") is per environment here, by name and by definition.
+  Everything else matches on purpose: `Err` aborts under any recovery policy with the live
+  traceback attached at the call site (`HookFailed` for an operational failure in the
+  hook's own code, `ImplementationError` for a violated contract;
+  [§dd-dr:hook-fallibility]); the record still carries no provenance, so a `\gdef`-vs-`\def`
+  split stays structural (ops targeting a globally-named scope survive) and rules/mode/ext
+  overrides remain all-or-nothing; the hook is consulted unconditionally, so its answer
+  never depends on whether the body happened to produce a record at all. The cost is stated
+  as a cost: `LatexlikeLang` gains the supertrait bound `Driver: LatexlikeParseDriver<Self>`,
+  `LatexlikeDriver` opts in with an empty impl, and a custom driver for a family language
+  opts in with one line.
+- **The `\begin` composition routes the record; outward composition needs nothing new.**
+  The environment invocation parser hands the hook the invocation, the resolved spec, the
+  body's initial state, `EnvironmentBody::exit_state` and `EnvironmentBody::after_effects`,
+  and returns the survivor as the *invocation's* own after-effect. The enclosing content
+  loop already applies and records an invocation's returned delta exactly as it does a
+  group's escape (the invocation arm of the content loop), so escapes chain through
+  arbitrarily nested groups and environments — one hook per level, each seeing the level
+  below's escape in its own record.
+
+The decisive constraint was placement. "Environment" is preset vocabulary — the same ground
+`EnvironmentBodyParser`'s core home stands on ([§dd-dr:no-privileged-concepts],
+[§dd-dr:begin-composition]) — so the hook cannot sit on the core `ParseDriver`, however
+convenient that would be. And `EnvironmentBody` is precisely the composition-facing report
+of what a body parse found, so growing it was the honest channel: it becomes to the
+`\begin` composition what `NodesOutcome` is to `GroupParser`.
+
+Acceptance shape: under a driver installing both hooks with the same
+keep-globally-targeted-defines filter, `{\gdef\x{a}}\x` and
+`\begin{center}\gdef\x{a}\end{center}\x` resolve `\x` identically, a plain `\def` stays
+local in both, and under the stock `LatexlikeDriver` nothing escapes either construct.
+
+Rejected alternatives: *an environment after-effects method on the core `ParseDriver`* — a
+core object would acquire a hook named for a preset concept, exactly the line
+[§dd-dr:no-privileged-concepts] draws; the `Driver:` bound and the one-line opt-in are the
+accepted price. *Calling the hook from inside `EnvironmentBodyParser`* — it would need that
+core driver hook to reach one at all, and it would seat language policy inside a collector
+whose whole value is having none. *Returning the raw record through the body parser's
+existing pass-through delta slot* — that channel means "apply me", the composition enforces
+`None` there as an implementation error, and an unfiltered interior record is not an
+after-effect; weakening an enforced contract to smuggle data of another kind, purely to
+avoid adding a field, is a bad trade.
+
+Revisit if: a language needs escapes out of **argument** extents — the remaining half of
+[§dd-dr:group-after-effects]'s hole, which needs an `ArgumentParser` delta channel and is a
+separate decision; or a filter policy genuinely needs per-op provenance in the record
+(still deliberately not built speculatively); or takeover body parsers prove unable to
+report their records honestly, at which point the reported field pair is what to
+re-examine.
 
 ## Generics strategy [§dd-dr:generics]
 

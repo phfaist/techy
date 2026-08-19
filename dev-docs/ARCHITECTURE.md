@@ -823,12 +823,18 @@ returns (nodes, StopCause) — the caller interprets the ending.
   definition group-scoped — but a language installing `GroupAfterEffectsFn` through
   `make_group_parser` maps that record to the group's own after-effect for its caller (the
   `\gdef` shape). The `GroupOpen` arm applies and records it like an invocation's, so escapes
-  compose outward, one hook per nesting level; the argument route still drops them (it has no
-  delta channel).
+  compose outward, one hook per nesting level. An environment body leaks the same way, one
+  layer up (next bullet, [§dd-dr:environment-after-effects]); the argument route still drops
+  escapes (it has no delta channel).
 - **Environment bodies** run through the core, parameterized `EnvironmentBodyParser`
   (terminator command + rigid name group + invocation-name back-reference); a
   terminator mismatch closes without consuming, letting enclosing levels claim their
-  own terminators ([§dd-dr:terminator-mismatch-recovery]).
+  own terminators ([§dd-dr:terminator-mismatch-recovery]). The parser is a blind
+  collector ([§dd-dr:environment-after-effects]): beside the staged body,
+  `EnvironmentBody` reports the body content run's `exit_state` and its merged,
+  **unfiltered** `after_effects` record, and the parser itself still returns no
+  pass-through delta — what may escape an environment is the driving composition's
+  business, hence the language's, not a core parser's.
 - **Every descent goes through one entry point**:
   `cx.parse_construct(parser, state, frame)` is the single, normative (MUST) way
   one construct parser runs another — it scopes the state structurally
@@ -1240,6 +1246,16 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   [§dd-dr:math-no-nesting]), `exit_math_context_delta` (the event lowering behind
   `resolve_state_event` — restore the innermost non-math enclosing context), and
   `make_paragraph_break_node`.
+- **`LatexlikeParseDriver<LLL>`** ([§dd-dr:environment-after-effects]) is the preset's
+  own driver surface — a `ParseDriver<LLL>` supertrait that the family bound requires
+  of `LatexlikeLang::Driver` — holding the hooks that speak preset vocabulary the core
+  driver must not learn. Its one defaulted method, `environment_after_effects`, filters
+  what a finished environment body leaks to its caller: the `\gdef` shape of
+  [§dd-dr:group-after-effects] carried across `\end`, keyed on the environment's
+  invocation facts and resolved spec, reading the body's initial and exit states and
+  the body's unfiltered record, and defaulting to "nothing escapes".
+  `LatexlikeDriver` opts in with an empty impl, as does any custom driver for a family
+  language.
 - **Default token rules**: `\` escape, `{}` content groups, `$ $$ \( \[` math groups,
   `%` comments. `[]` is deliberately **not** a group type — plain characters; optional
   arguments recognize brackets through per-use temporary rules.
@@ -1340,4 +1356,5 @@ event),
 [§dd-dr:environment-body-content], [§dd-dr:argument-specs-factory],
 [§dd-dr:argument-specs-list-primary], [§dd-dr:expression-fallback],
 [§dd-dr:paragraph-break-style], [§dd-dr:acceptance-suite],
-[§dd-dr:begin-composition].
+[§dd-dr:begin-composition], [§dd-dr:environment-after-effects] (the
+`LatexlikeParseDriver` supertrait and its environment after-effects filter).
