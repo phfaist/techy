@@ -196,8 +196,8 @@ Baseline for comparison: `main` at `fb3d39c` ran 1062 / 1101 lib tests. Stage 1 
 
 Status: **implemented** (branch `st-2-parsers`, worktree
 `.claude/worktrees/st-2-parsers`, rebased onto `st-1-contract` at `d525660`; commits
-`07b853e`, `9ac1335`, `28418f6`, `fdbd5ed`, `16e2eb4`, `f2e6cfa`, `cb5891d`, plus this
-file).
+`07b853e`, `9ac1335`, `28418f6`, `fdbd5ed`, `16e2eb4`, `f2e6cfa`, `cb5891d`, `d51fd9c`,
+plus this file).
 
 ### Files changed
 
@@ -240,15 +240,38 @@ file).
   `MarkerArgumentParser`'s node covers one token per marker character; under `false` it
   records `TextContent::Owned(self.marker)`, which is exactly what was read (every token
   was checked to spell the expected character, consecutively). Unchanged under `true`.
-- `techy/src/constructs/environment_parser.rs` — wording only ("the gap-free tiling
+- `techy/src/constructs/environment_parser.rs` (**the name-as-read rule**, user ruling
+  2026-08-19) — `read_name_chars` accumulates the name's characters as it reads them
+  under `false` (the shared `push_token_text` recipe; the rigid check proves each
+  token's pre-space empty). `NameGroup` keeps `name: SourceSpan` as the coordinates and
+  gains a **private** `name_as_read: Option<Box<str>>` plus `NameGroup::new`,
+  `with_name_as_read` and `name_text()` — the text is read through `name_text()`, which
+  answers the characters as read where there are any and the span's content otherwise.
+  The private field makes the constructors the only way in; the terminator match in
+  this file reads `name_text()`. Also wording ("the gap-free tiling
   contract" → "span tiling, where the language obeys it").
+- `techy/src/constructs/verbatim_parser.rs` (**the name-as-read rule**) — the composed
+  `StopEnvironmentCommand` terminator's `NameGroup` is built through `NameGroup::new`
+  (the only other in-crate construction site). Its pieces are sliced from the matched
+  terminator's own single-token span, so the span's content *is* the name under either
+  declaration — no name-as-read needed, stated in a comment.
+- `techy/src/latexlike/input.rs` (**the name-as-read rule**) — `\input`'s reference is
+  the other text that drives a lookup. Under `false` it comes from the staged
+  argument's **node data** (the new `argument_text`, folding the content nodes' chars
+  payloads) instead of the argument's extent span; under `true` the span path is
+  unchanged. `None` for content that is not plain characters — node data has no single
+  text there, and a span would be a guess.
 - `techy/src/latexlike/environments.rs` (**R1/R4 by the user's ruling**) — the
   orphan-`\end` recovery node covers the trigger and, when one was read, the name group;
   under `false` its content is assembled from what the site has in hand about each piece
   — the trigger's own span (one reader answer about one token, taken from its `Start` so
   the pre-space the content loop already staged stays out) plus the name group's
   delimiters as written (the rule cloned off the matched open token) around the name.
-  Unchanged under `true`.
+  Unchanged under `true`. The name part of that text, the `OrphanEnd` condition's name
+  and the begin side's lookup name all read `NameGroup::name_text()`; the diagnostic's
+  quoted terminator is assembled by the same closure as the recovery text (one edge
+  parameter apart — without a name group the quote stops at the command word), so the
+  diagnostic quotes what was read.
 - `techy/src/latexlike/invocation_syntax.rs` (**R3**) — `from_invocation`'s macro arm
   records `post_space` as `Spanned` under `true` and `Owned` under `false`, with the
   comment rewritten (the "sound because the node starts at this very token" argument
@@ -298,6 +321,27 @@ already did, and every other production site takes one token's span —
 the close delimiter as matched), `scopes/mod.rs:1637` and `latexlike/environments.rs:862`
 (the trigger), `latexlike/driver.rs:267` (the paragraph break),
 `argument_parsers.rs:207/263/307/318`, `nodes_parser.rs:908`, `verbatim_parser.rs:785`.
+
+**Text-from-coordinates sweep (user ruling, 2026-08-19).** Every `.content()` in
+production parser code (`constructs/`, `latexlike/`, `engine/`, `scopes/`, test modules
+excluded) classified by how many tokens its span covers:
+
+| Site | Span | Verdict |
+|---|---|---|
+| `constructs/environment_parser.rs` `read_name_chars` | several `Char` tokens | **fixed**: characters accumulated, `name_text()` |
+| `latexlike/environments.rs` orphan `\end` (quote + recovery text) | trigger + name group | **fixed**: assembled per token |
+| `latexlike/input.rs:327` `\input` reference | the argument's content nodes | **fixed**: node data under `false` |
+| `constructs/mod.rs:143` `node_text_content` | the fact handed in — one token's span at every call site | exact |
+| `constructs/mod.rs:160,187` `push_pre_space_text`/`push_token_text` | one token's sub-span | exact (they *are* the recipe) |
+| `constructs/environment_parser.rs:151` `name_text()`'s fallback | the name span, only when no text was recorded | exact by construction |
+| `constructs/attached_source.rs:187`, `engine/language.rs:239` | the stop cause's span (one token) | exact |
+| `latexlike/environments.rs:855` `MalformedBegin` | the trigger command (one token) | exact |
+| `latexlike/driver.rs:275` paragraph-break specials name | the break token's span | exact |
+| `latexlike/invocation_syntax.rs:149` macro post-space | one token's sub-span | exact (R3) |
+| `engine/mod.rs:104,107` frame titles | `FrameTitle::Callable`: one token. `FrameTitle::Quoted`: **the name-group span** | see the open question |
+
+`extract`, `recompose`, `node/` were left alone: they are consumers, and §1.6 gives them
+to Stage 4.
 
 The single-token facts already going through `node_text_content` before this stage —
 group delimiters (`group_parser.rs`), verbatim delimiters (`verbatim_parser.rs`),
@@ -369,6 +413,19 @@ declaration through the shared helpers. Nothing to make generic.
   `Latexlike` and under the new `RelaxedLatexlike`: same recovered text, `Owned` against
   `Spanned`, `check_latexlike_tree_invariants` and `validate_tree` OK.
 
+- `constructs/environment_parser.rs`: `a_name_group_answers_the_name_as_read` — the
+  accessor's contract directly: recorded characters win over a span that covers
+  something else, and the span stays the coordinates.
+- `latexlike/environments.rs`:
+  `an_environment_name_is_read_exactly_where_the_language_does_not_obey_span_tiling` —
+  `\begin{itemize}x\end{itemize}` under `Latexlike` and `RelaxedLatexlike`: the lookup
+  resolves (no diagnostics), same node `name`, same span, same shape. Over the standard
+  reader the described span happens to be the exact range, so what this pins is the
+  accumulation path — the name the lookup and the node see is the one `read_name_chars`
+  collected; a reader whose description disagrees is Stage 3b's scripted reader.
+- the orphan-`\end` test now also asserts the rendered diagnostic quotes the terminator
+  as read (`orphan ‘\end{itemize}’`, and `orphan ‘\end’` for the malformed arm).
+
 `RelaxedLatexlike` (test-only, in `latexlike/environments.rs`'s test module) is a
 latexlike-family language with the preset's vocabularies and seed and
 `OBEYS_SPAN_TILING = false`. It is **R7's concrete demonstration**: the preset's generic
@@ -389,10 +446,10 @@ language for the same reason.
 ```
 ### cargo build
    Compiling techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.33s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.17s
 
 ### cargo test --workspace
-test result: ok. 1075 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+test result: ok. 1077 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -401,38 +458,38 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.33s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.37s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo test --workspace --all-features
-test result: ok. 1114 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.53s
-test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1116 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.50s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.85s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.39s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 ### cargo clippy --workspace --all-targets -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.17s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.22s
 
 ### cargo clippy --workspace --all-targets --all-features -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.07s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.90s
 
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.74s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.58s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/target/doc/techy/index.html and 1 other file
 ```
 
-Baseline: Stage 1 ran 1067 / 1106 lib tests; Stage 2 adds 8 — 1075 / 1114. No existing test changed its
+Baseline: Stage 1 ran 1067 / 1106 lib tests; Stage 2 adds 10 — 1077 / 1116. No existing test changed its
 expectations except `node::invariants::rejects_a_gap_between_siblings`, whose
 `should_panic` string follows the renamed assertion message. `cargo docs --all-features`
 emits no warnings.
@@ -484,17 +541,21 @@ emits no warnings.
    sites now record text (see "Files changed" and the sweep above), with a test each;
    the crate-wide re-grep found no third site outside test modules.
 
-   One **residual**, reported rather than fixed because it changes a public core type:
-   `NameGroup::name` (`constructs/environment_parser.rs`, filled by `read_name_chars`)
-   is itself a `cx.source_span_within` span over several `Char` tokens, so under `false`
-   *its* `content()` is the described span's text. It feeds the environment node's
-   `name` (an owned `String`), the `OrphanEnd` condition's name, and — through the
-   orphan-`\end` node above — the name part of that recovery text. Making it exact means
-   accumulating the characters in `read_name_chars` and carrying them on `NameGroup`
-   (a new public field, or a `TextContent`), which is a design decision for the user,
-   not a Stage 2 fix. Same shape: the `quoted` terminator spelling just above the
-   recovery node (`latexlike/environments.rs`), which renders a described span into the
-   diagnostic's message.
+   The **residual** this raised — the name group's own `name` span being multi-token —
+   was ruled on the same day: the name must be exact, since it drives the lookup, the
+   node data and the diagnostics. Implemented as the name-as-read rule (see "Files
+   changed" and the text-from-coordinates sweep): `NameGroup::name_text()`, the
+   accumulation in `read_name_chars`, the assembled orphan quote, and `\input`'s
+   reference from node data.
+
+   **New, reported not fixed:** `FrameTitle::Quoted { label, name: SourceSpan }`
+   (`engine/mod.rs:104`) renders its span as the quoted text of a traceback frame, and
+   the environment sites hand it the *name-group span*
+   (`environment_parser.rs` `with_invocation_name_span`, `latexlike/environments.rs`
+   `name_span`, and `parse_declared_arguments`'s anchor). Under `false` that frame title
+   can therefore quote the wrong text. It is a diagnostic decoration — no lookup, no
+   node data — and fixing it means changing the public `FrameTitle` (a text field beside
+   the anchor span, or a `TextContent`), which is a design decision, not a Stage 2 fix.
 2. **Confirmed (user, 2026-08-19).** `recover_as_chars` and the other one-token
    fallbacks record `Spanned` even though
    the node's span is a reader answer about a token that may have edges in two sources
