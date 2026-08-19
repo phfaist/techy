@@ -40,6 +40,19 @@
     it still uses "mint", "facts", "vocabulary", "funnel" and "trigger token" — the
     walk-through below is where that gets settled.
 
+- Span tiling — deliberately unfixed, recorded in [§dd-dr:span-tiling]:
+
+  - A traceback frame's title renders a span as text, and the environment sites hand it a
+    *multi-token* span, so under `OBEYS_SPAN_TILING = false` a frame can quote text that
+    was never read.  Both variants are affected: `FrameTitle::Quoted { label, name }` (fed
+    the name-group span by `environment_parser`'s `with_invocation_name_span` and
+    `latexlike/environments`' `name_span`) and `FrameTitle::Callable { spec, role, name }`
+    (fed the same span by `parse_declared_arguments`, which is where every declared
+    argument's frame title comes from; it is exact at the macro sites, which pass one
+    token's span).  Diagnostic decoration only — no lookup, no node data — and the fix
+    changes the public `FrameTitle` (a text field beside the anchor span, or a
+    `TextContent`), so it needs a decision.
+
 - API doc walk-through; 
 
   - Check for banned words in user and developer guides: "door", "funnel", "mint",

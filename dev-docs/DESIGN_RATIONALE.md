@@ -747,7 +747,7 @@ over resolution would be limited for no gain); a reader reference stored *inside
 `Invocation` (the invocation is held across the parse that borrows the same reader
 mutably — it does not compile).
 
-*Amendment (2026-08-19, user).* The motivating case — a reader serving one parse from
+*Amendment (user, span-tiling design session).* The motivating case — a reader serving one parse from
 several sources — is now supported end to end: a language declares whether its parse trees
 are span-tiled, and the parsers of one that does not obey span tiling assume nothing about
 where tokens come from ([§dd-dr:span-tiling]).
@@ -801,7 +801,7 @@ declares, not a blanket bound); deriving a comment's sub-spans from the lengths 
 view's strings (a reader may normalize what it reports as content, so a span never comes
 from a string's length).
 
-*Amendment (2026-08-19, user).* Two contract clauses now pin what positions mean where a
+*Amendment (user, span-tiling design session).* Two contract clauses now pin what positions mean where a
 reader serves several sources at one nesting level: *moving sets the position* (clause 7)
 plus clause 2 fix where two consecutive tokens meet, at a **seam** between two sources
 included — the place on both sides of a seam is one position value, and the reader chooses
@@ -1054,11 +1054,16 @@ implementations:
    comment post-space when declared whitespace (briefly implemented) — special-casing
    one legacy line-ending convention inside the scanning core.
 
-*Amendment (2026-08-19, user).* The contract has since gained clause 7 (moving sets the
+*Amendment (user, span-tiling design session).* The contract has since gained clause 7 (moving sets the
 position), clause 8 (one source, in reading order, without gaps — required of the readers of
 a language that obeys span tiling) and a *Seams* section for the readers of a language that
-does not; `source_span_describing` joins item 4's family of capabilities a reader must
-answer for, required and undefaulted for the same reason ([§dd-dr:span-tiling]).
+does not, which settles four further rules for such a reader: termination is its own
+responsibility (an expansion that never ends is an endless token stream), positions and
+tokens stay valid inside sources the stream has already left, an expansion's source is
+minted with `SourceProvenance::Synthesized` and pushes no `Frame`, and `EndOfStream` means
+the end of the *whole* input rather than of an exhausted expansion. `source_span_describing`
+joins item 4's family of capabilities a reader must answer for, required and undefaulted for
+the same reason ([§dd-dr:span-tiling]).
 
 #### `TokenListReader` demoted to internal test infrastructure [§dd-dr:token-list-reader-demoted]
 
@@ -2504,11 +2509,12 @@ Status: DECIDED (user).
    `write_begin`/`write_end` bytes — live in the **preset checker**
    `check_latexlike_tree_invariants`, layered on top ([§dd-dr:invocation-syntax]).
 
-*Amendment (2026-08-19, user).* The five invariants above are the statement for a language
+*Amendment (user, span-tiling design session).* The five invariants above are the statement for a language
 that obeys span tiling ([§dd-dr:span-tiling]). Under `Lang::OBEYS_SPAN_TILING = false`,
-items 1 and 3 record owned text where a single reader answer cannot cover the fact
-(multi-token chars runs, the pre-staged callable post-space), and item 5's byte accounting
-does not apply at all — the test oracle then checks the all-trees law alone.
+item 1's chars runs record owned text (no single reader answer covers a
+multi-token run), item 3's post-space is owned outright (that payload is built before the
+node's span exists, so the node-data rule has nothing to test residency against), and item
+5's byte accounting does not apply at all — the test oracle then checks the all-trees law alone.
 
 #### Span tiling is a declared property of the language; parsers assume nothing otherwise [§dd-dr:span-tiling]
 
@@ -2516,14 +2522,14 @@ Status: DECIDED (user, span-tiling design session).
 
 Whether a language's parse trees are **span-tiled** is a static declaration on the language:
 the associated const `Lang::OBEYS_SPAN_TILING: bool`, defaulted `true`. The canonical
-definition of the property is that const's own documentation and is restated nowhere else;
-its three components are that the children of every `List` and `Group` node tile the
-parent's interior (one source, reading order, no gaps, no overlaps), that a `Callable`'s
-children block is span-contiguous within the node's span (with the `Attached`/`Hidden`
-exclusions of [§dd-dr:slot-roles]), and that every positional payload sits at its pinned
-position — a `Chars` node's content is its whole span, a comment's start delimiter, content
-and post-space partition the comment node's span, a group's delimiters are the prefix and
-the suffix of its span. That every node carries exactly one span is *not* part of the
+definition lives on that const; the three components are named here, but the wording is the
+const's: the children of every `List` and `Group` node tile the parent's interior (one
+source, reading order, no gaps, no overlaps), that a `Callable`'s children block is
+span-contiguous within the node's span (with the `Attached`/`Hidden` exclusions of
+[§dd-dr:slot-roles]), and that every positional payload sits at its pinned position — a
+`Chars` node's content is its whole span, a comment's start delimiter, content and
+post-space partition the comment node's span, a group's delimiters are the prefix and the
+suffix of its span. That every node carries exactly one span is *not* part of the
 definition: that rule is unconditional ([§dd-dr:mandatory-node-spans]).
 
 The problem the declaration solves: the token layer was designed for a reader that serves
@@ -2558,10 +2564,10 @@ content, no structure, no ordering; the span becomes the node's span and shows i
 diagnostics. Recommended: `begin`'s source, running from `begin` to where the stream last
 stood in that source before reaching `end`; where the two positions do delimit one range of
 one source, that range. The method always answers (the empty span at `begin` is always
-available). `ParseContext::source_span_within` is the single dispatch point — the reader's
+available). `ParseContext::source_span_within` is the public dispatch point — the reader's
 `None` is an implementation error for a language that obeys span tiling, and the described
-span otherwise — so construct parsers written outside the crate follow the rule without
-knowing it exists.
+span otherwise; the private `invocation_span_within` mirrors it for the invocation span — so
+construct parsers written outside the crate follow the rule without knowing it exists.
 
 **Seams, and what the chars-run check really checks.** The check whose abort that reader hit
 is misnamed if it is read as a tiling check: the chars-run loop verifies contract clause 2
@@ -2587,43 +2593,49 @@ checks. Single-token facts keep this rule under both declarations, so zero-copy 
 wherever it is sound and no special case appears. What changes under `false` is everything
 one reader answer cannot cover: chars runs and verbatim content accumulate owned text token
 by token (each token's pre-space, its spelling as the reader classified it, its syntactic
-post-space — three answers about that one token), and payloads built before the node's span
-is known (the preset's recorded macro post-space) are owned outright. Text that *drives* a
-decision is never read off a described span: an environment name is accumulated as it is
-read and answered by `NameGroup::name_text()`, whose coordinates-and-text pairing is not
-forgeable (the text field is private; construction goes through
-`NameGroup::new`/`with_name_as_read`), and an `\input` reference comes from the staged
-argument's node data.
+post-space — three answers about that one token). The rule in general form: under `false` no
+multi-token `Chars` node records `Spanned` content — recovery nodes and marker-argument
+nodes included, since "as described" text is exactly the inaccuracy owned content exists to
+avoid. Separately, a payload built *before* the node's span exists — the preset's recorded
+macro post-space, which is one reader answer about one token — is owned outright under
+`false`, because the node-data rule has no node span yet to test residency against. Text
+that *drives* a decision is never read off a described span: an environment name is
+accumulated as it is read and answered by `NameGroup::name_text()`, whose
+coordinates-and-text pairing is not forgeable (the text field is private; construction goes
+through `NameGroup::new`/`with_name_as_read`), and an `\input` reference comes from the
+staged argument's node data.
 
 **The consumers rule** (load-bearing, and the reason the two regimes need no consumer-side
 switch): techy's consumers obtain content from node *data* — `TextContent` resolved against
 the node's own source, names, delimiters, payloads — never from node spans; node spans are
 provenance coordinates. The coordinate accessors (`NodeSlice::span`/`source_text`,
 `NodeRef::span_content`, `SourceSpan::content`) answer exactly what the coordinates say, and
-say so. Consequences: every documented answer of `extract` holds unchanged for owned content
-(audited item by item, with tests over hand-built owned trees); a source reemitter re-emits
-a non-tiled tree *as stored* and claims no byte-equality with any one source;
-`validate_tree` — the all-trees law ([§dd-dr:tree-validation]) — is untouched, and non-tiled
-parse trees satisfy it; the byte accounting lives only in the test-only oracle, *the
-span-tiling law*, which runs the all-trees law alone for a language that declares `false`.
+say so. Consequences: every documented answer of `extract` holds for owned content — after
+three doc claims were narrowed to what the code does (`piece_span`, the module docs,
+`split_at_chars`) — audited item by item with tests over hand-built owned trees; a source
+reemitter re-emits a non-tiled tree *as stored* and claims no byte-equality with any one
+source; `validate_tree` — the all-trees law ([§dd-dr:tree-validation]) — is untouched, and
+non-tiled parse trees satisfy it; the byte accounting lives only in the test-only oracle,
+*the span-tiling law*, which runs the all-trees law alone for a language that declares
+`false`.
 
 **Enforcement is testable without an expander.** The in-crate scripted multi-source test
 reader (test builds only) serves one parse from a script of segments over several sources —
 chains, splices, holes — and is the first in-crate reader with token and position types of
 its own. Its positions are kept in a canonical form in which the place past one entry *is*
 the place before the next, so contract clauses 2 and 7 hold at seams by construction; a
-deliberately broken variant reports the two sides of a seam as two values, which is how the
-clause-7 check itself is tested. Its `source_span_within` answers by the end position's
-source, so a run ending exactly at a seam has none — which is what makes the counter-test
-fire: the same script under a language that declares `true` is rejected as an implementation
-error.
+deliberately broken variant reports the two sides of a seam as two values, and exists for
+the parse-level clause-7 test. Its `source_span_within` answers by the end position's
+source, so a run ending exactly at a seam has none — which is what lets a tiled counter-test
+over a seam-crossing script prove clause 8's enforcement: the same script under a language
+that declares `true` is rejected as an implementation error.
 
 Costs accepted: under `false` a parse owns its multi-token content (chars runs, verbatim
-bodies, recorded post-space, environment names) — one allocation per such node and no
-zero-copy for content the tree can no longer point at; and two public-API breaks under the
-soft freeze ([§dd-dr:stability-rubric]) — `source_span_describing` is a required trait
-method (deliberately, above), and `NameGroup` gains a private field, so it is no longer
-constructible by struct literal.
+bodies, environment names) and the pre-staged callable post-space — one allocation per such
+node and no zero-copy for content the tree can no longer point at; and two public-API breaks
+under the soft freeze ([§dd-dr:stability-rubric]) — `source_span_describing` is a required
+trait method (deliberately, above), and `NameGroup` gains a private field, so it is no
+longer constructible by struct literal.
 
 Rejected alternatives: a per-*reader* capability flag ("this reader may break the contract")
 — the property belongs to the language, the parsers need it at compile time, and a
@@ -2867,7 +2879,7 @@ was proposed and **withdrawn** together with the byte-reconstruction guarantee
 gap-filling reproduces source *bytes*, while the semantic half — that those bytes
 match the tree's *content* — is parse provenance no runtime checker can verify;
 a checker that cannot check what its users would believe it checks is a trap.
-*Amendment (2026-08-19, user).* The oracle's byte accounting holds for the parse trees of a
+*Amendment (user, span-tiling design session).* The oracle's byte accounting holds for the parse trees of a
 language that obeys span tiling; for a language declaring `OBEYS_SPAN_TILING = false` it
 checks the all-trees law alone, and "the span-tiling law" replaces the earlier name
 "parse-tree law" throughout ([§dd-dr:span-tiling]).
@@ -3692,7 +3704,7 @@ cross-tree door ([§dd-dr:restage-ops]); latexpp's verbatim output path needs no
 splicing at all — recompose emits `\input{file}` per source, so per-file
 pipelines compose without tree merging.
 
-*Amendment (2026-08-19, user).* "Every sibling run in a parse tree stays single-source" is
+*Amendment (user, span-tiling design session).* "Every sibling run in a parse tree stays single-source" is
 a statement about a language that obeys span tiling ([§dd-dr:span-tiling]); a language
 declaring `OBEYS_SPAN_TILING = false` can produce a run whose nodes lie in several sources,
 which is one of the two honest `None` cases of the run accessors. The `Attached`-role
@@ -6653,7 +6665,7 @@ re-opens a settled argument:
   `record_std_end_facts` as `EnvironmentSyntax` method names — the record
   contract is `from_parsed(begin, terminator)` plus the writer pair, scanning
   is composition-owned; `recompose_environment` (a single fused environment
-  writer) — rejected shape: the writer PAIR stays (`Concat` head/tail and the
+  writer) — rejected shape: the writer PAIR stays (`Concat` head/tail and
   the span-tiling law's prefix/suffix pins need the sides separately).
 - From the language-init revision ([§dd-dr:language-init]):
   `Language::with_provider`/`Language::with_seed_delta` — seed customization

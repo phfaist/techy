@@ -634,69 +634,69 @@ transformation topic ([§dd-dr:transform]): [§dd-dr:node-annotations],
 ## Span tiling [§dd-arch:span-tiling]
 
 Whether a language's parse trees are **span-tiled** is a fact the language declares: the
-associated const `Lang::OBEYS_SPAN_TILING: bool`, defaulted `true`. That const's rustdoc
-is the canonical definition — the children of every `List` and `Group` node tile the
-parent's interior (one source, reading order, no gaps, no overlaps); a `Callable`'s
-children block is span-contiguous within the node's span (with the `Attached`/`Hidden`
-exclusions of [§dd-dr:slot-roles]); and every positional payload sits at its pinned
-position (a `Chars` node's content is its whole span, a comment's start delimiter,
-content and post-space partition the comment node's span, a group's delimiters are the
-prefix and the suffix) — and no other page restates it in different words. "Obeys",
-because the property follows from the language's tokenization and its parsers rather than
-from a knob: it is not a `LangFeatures` member (that axis declares storage,
-[§dd-arch:state]) and not a marker type. That every node carries exactly one span is a
-separate, unconditional rule.
+associated const `Lang::OBEYS_SPAN_TILING: bool`, defaulted `true`. That const's rustdoc is
+the canonical definition — the children of every `List` and `Group` node tile the parent's
+interior (one source, reading order, no gaps, no overlaps); a `Callable`'s children block is
+span-contiguous within the node's span (with the `Attached`/`Hidden` exclusions of
+[§dd-dr:slot-roles]); and every positional payload sits at its pinned position (a `Chars`
+node's content is its whole span, a comment's start delimiter, content and post-space
+partition the comment node's span, a group's delimiters are the prefix and the suffix); the
+components are named here, the wording is the const's. "Obeys", because the property follows
+from the language's tokenization and its parsers rather than from a knob: it is not a
+`LangFeatures` member (that axis declares storage, [§dd-arch:state]) and not a marker type.
+That every node carries exactly one span is a separate, unconditional rule.
 
 The two regimes:
 
-- **`OBEYS_SPAN_TILING = true`** — the default, and what `TrivialLang`, the preset and
-  every language of this crate declare. The machinery enforces the property (a token
-  stream that breaks it is reported as an implementation error) and the span-based
-  accessors answer exactly: `NodeSlice::span`/`source_text` cover a sibling run with no
-  holes, `NodeRef::span_content` reads back the text the node was parsed from, and the
-  preset's source recomposer re-emits the input byte for byte.
-- **`OBEYS_SPAN_TILING = false`** — the parsers assume nothing about where tokens come
-  from (not the source, not the order, not the absence of gaps). A node covering several
-  tokens is recorded with the span the reader *describes*
-  (`TokenReader::source_span_describing`, required, no default body); content that no
-  single reader answer covers is accumulated as owned text token by token (chars runs,
-  verbatim bodies, the recorded macro post-space, and an environment name — the last read
-  back through `NameGroup::name_text`, since the name drives a lookup); single-token facts
-  keep the node-data rule (`node_text_content`: a span of the node's own source where the
-  fact lies in it, the text itself otherwise). Node spans are coordinates the parser
-  recorded, nothing more.
+- **`OBEYS_SPAN_TILING = true`** — the default, and what every shipped language declares
+  (`TrivialLang`, the preset; the in-crate test languages that declare `false` are the
+  exception). The machinery enforces the property (a token stream that breaks it is reported
+  as an implementation error) and the span-based accessors answer exactly:
+  `NodeSlice::span`/`source_text` cover a sibling run with no holes, `NodeRef::span_content`
+  reads back the text the node was parsed from, and the preset's source recomposer re-emits
+  the input byte for byte.
+- **`OBEYS_SPAN_TILING = false`** — the parsers assume nothing about where tokens come from
+  (not the source, not the order, not the absence of gaps). A node covering several tokens
+  is recorded with the span the reader *describes* (`TokenReader::source_span_describing`,
+  required, no default body); content that no single reader answer covers is accumulated as
+  owned text token by token (chars runs, verbatim bodies, and an environment name — the last
+  read back through `NameGroup::name_text`, since the name drives a lookup), and no
+  multi-token `Chars` node records span-backed content. Single-token facts keep the
+  node-data rule (`node_text_content`: a span of the node's own source where the fact lies
+  in it, the text itself otherwise), except where the payload is built before the node's
+  span exists — the preset's recorded macro post-space, owned outright because there is no
+  node span yet to test residency against. Node spans are coordinates the parser recorded,
+  nothing more.
 
-`ParseContext::source_span_within` is the single dispatch point between the two — the
-reader's `None` is an implementation error under `true`, the described span under `false` —
-so construct parsers written outside the crate get the behavior without special-casing it.
+`ParseContext::source_span_within` is the public dispatch point between the two — the
+reader's `None` is an implementation error under `true`, the described span under `false`;
+the private `invocation_span_within` mirrors it for the invocation span — so construct
+parsers written outside the crate get the behavior without special-casing it.
 
 **The consumers rule** (load-bearing): techy's consumers obtain content from node *data* —
 `TextContent` resolved against the node's own source, names, delimiters, payloads — never
 from node spans, which are provenance coordinates. The coordinate accessors
 (`NodeSlice::span`/`source_text`, `NodeRef::span_content`, `SourceSpan::content`) answer
-exactly what the coordinates say, and say so. Every consumer therefore behaves as
-documented under either declaration: `extract` reads node data throughout, and a source
-reemitter re-emits a non-tiled tree *as stored*, claiming no byte-equality with any one
-source.
+exactly what the coordinates say, and say so. Every consumer therefore behaves as documented
+under either declaration: `extract` reads node data throughout, and a source reemitter
+re-emits a non-tiled tree *as stored*, claiming no byte-equality with any one source.
 
 The token-side half of the property is the reader contract ([§dd-arch:token]): clause 7
 (moving sets the position) together with clause 2 fixes where two consecutive tokens meet;
 clause 8 (one source, in reading order, without gaps) is what the readers of a tiled
 language promise; and the contract's *Seams* section states what positions mean where a
-reader serves several sources at one nesting level — a **seam** being a place where the
-next token comes from a different source, whose two sides are one position value. A chars
-run may therefore legitimately cross a seam, which is why such content is recorded as
-owned text.
+reader serves several sources at one nesting level — a **seam** being a place where the next
+token comes from a different source, whose two sides are one position value. A chars run may
+therefore legitimately cross a seam, which is why such content is recorded as owned text.
 
 **Two laws, two audiences.** `validate_tree` is the public **all-trees law** — structural
-sanity, region (index) tiling, `TextContent` residency — which every finished tree
-satisfies whatever its origin, non-tiled parse trees included. The byte accounting of span
-tiling is the **span-tiling law**, an in-crate test oracle only (`check_tree_invariants`,
-with the preset's payload pins layered on it), and it checks the all-trees law alone for a
-language declaring `false`. The matching test infrastructure is a scripted multi-source
-reader (test builds only) that serves one parse from segments of several sources, with
-positions in a canonical form so that contract clauses 2 and 7 hold at seams by
-construction.
+sanity, region (index) tiling, `TextContent` residency — which every finished tree satisfies
+whatever its origin, non-tiled parse trees included. The byte accounting of span tiling is
+the **span-tiling law**, an in-crate test oracle only (`check_tree_invariants`, with the
+preset's payload pins layered on it), and it checks the all-trees law alone for a language
+declaring `false`. The matching test infrastructure is a scripted multi-source reader (test
+builds only) that serves one parse from segments of several sources, with positions in a
+canonical form so that contract clauses 2 and 7 hold at seams by construction.
 
 Documentation coins no name for the second regime: it says "a language with
 `OBEYS_SPAN_TILING = false`". The phrasings this vocabulary replaced are listed with the

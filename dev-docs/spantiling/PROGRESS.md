@@ -533,7 +533,7 @@ test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; fini
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.34s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-2-parsers/target/doc/techy/index.html and 1 other file
 ```
 
@@ -1301,8 +1301,10 @@ span_tiling` filter matches 28 — it also catches the Stage 2 tests whose names
 
 ## Stage 5 — record
 
-Status: **implemented** (branch `st-5-record`, worktree `.claude/worktrees/st-5-record`,
-base `main` at `4f45340`).
+Status: **reviewed** (branch `st-5-record`, worktree `.claude/worktrees/st-5-record`,
+base `main` at `4f45340`). Review **PASS** with four required fixes and nine precision
+items, all applied (see *Review fixes* below). Merges only after Stage 3b lands on
+`main`; the two test claims are then made factual (required fix 3).
 
 Documentation only — no source file was touched.
 
@@ -1370,18 +1372,35 @@ Documentation only — no source file was touched.
 
 ```
 $ grep -n "§dd-dr:span-tiling]" dev-docs/ARCHITECTURE.md
-705:Decisions behind this section: [§dd-dr:span-tiling]; the invariants it qualifies —
+709:Decisions behind this section: [§dd-dr:span-tiling]; the invariants it qualifies —
 
 $ python3 -c "<every §dd-dr heading label vs ARCHITECTURE>"
 215 heading labels; 0 missing from ARCHITECTURE
 
-$ grep -rn "partition invariant\|parse-tree law\|in-order, gap-free" --include='*.md' --include='*.rs' .
-  (excluding target/, dev-docs/archive/, dev-docs/bettertokens/, dev-docs/spantiling/)
-techy/src/token/reader.rs:2664   — pre-existing test comment, see the open question below
-dev-docs/DESIGN_RATIONALE.md:2867, 6726, 6729 — the sites that *name* the superseded
-                                 phrases (the [§dd-dr:tree-validation] amendment and the
-                                 [§dd-dr:superseded-names] bullet)
+$ grep -rni "partition invariant\|parse.law\|parse.tree law\|in-order, gap.free" \
+      dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md techy/src docs
+dev-docs/DESIGN_RATIONALE.md:2884, 6743, 6746   the three sites that *name* the superseded
+                                                phrases (the [§dd-dr:tree-validation]
+                                                amendment, the [§dd-dr:superseded-names]
+                                                bullet)
+techy/src/token/reader.rs:2664                  "partition invariant" (test comment)
+techy/src/node/mod.rs:64, :71, :2169            "parse-law" (comments)
+techy/src/node/arguments.rs:343                 "parse-law checker" (rustdoc)
+techy/src/node/builder.rs:655                   "parse-law oracle" (comment)
 ```
+
+`ARCHITECTURE.md` is clean. The six source hits are **handed to the running Stage 3b
+implementer** (Stage 5 is documentation-only and must not touch source): five say
+"parse-law" and become "the span-tiling law", one says "partition invariant" and becomes
+"span tiling". Two further findings go with them, for that implementer's judgement:
+`techy/src/node/invariants.rs:823` ("Parse-law point 1", prose — rename) and the private
+helper *identifier* `check_parse_law_node` (`invariants.rs:599`, `:616`) — an identifier,
+not prose, so renaming it to `check_span_tiling_node` is optional and behavior-free.
+
+Deliberately **not** swept: `dev-docs/DESIGN_RATIONALE.md:611-612` "a token-span partition
+invariant" — that is a *token-level* property (whitespace as its own token would have made
+the token spans partition the input), unrelated to the tree-level property this project
+names, and it stays as written.
 
 ### Gate results (verbatim, run from the worktree)
 
@@ -1389,7 +1408,7 @@ dev-docs/DESIGN_RATIONALE.md:2867, 6726, 6729 — the sites that *name* the supe
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.49s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.34s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-5-record/target/doc/techy/index.html and 1 other file
 
 ### cargo test --workspace
@@ -1408,6 +1427,51 @@ test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; fini
 
 Same counts as `main` at `4f45340` — nothing in the crate depends on these files.
 `cargo docs --all-features` emits no warnings.
+
+### Review fixes (all applied)
+
+Required:
+
+1. **The macro post-space had the wrong reason.** It *is* one reader answer
+   (`source_span_between(token, End, EndPastPostSpace)`); it is owned under `false`
+   because the payload is built before the node's span exists, so the node-data rule has
+   no node span to test residency against. Corrected in the [§dd-dr:span-invariants]
+   amendment, in the entry's costs paragraph, and in the ARCHITECTURE `false` bullet (the
+   entry's node-data paragraph already said it correctly, and now says it separately from
+   the token-by-token accumulation).
+2. **Typo from the rename** — the duplicated "the" in [§dd-dr:superseded-names]'s
+   environment-writer bullet.
+3. **Two claims about tests that do not exist on `main` yet** are reworded as design
+   intent: the broken scripted variant "exists for the parse-level clause-7 test", and the
+   end-position rule "is what lets a tiled counter-test over a seam-crossing script prove
+   clause 8's enforcement". To be made factual after Stage 3b lands.
+4. **The superseded-phrase gate** now greps the `parse-law` spelling too, lists the six
+   source hits routed to Stage 3b, and states the two sites that stay (see *Grep gates*).
+
+Precision:
+
+5. The six amendment notes lost their dates — `*Amendment (user, span-tiling design
+   session).*`, matching the status-line style and the documented rule (dates only inside
+   reversal notes).
+6. "restated nowhere else" / "no other page restates it" → the components are named here,
+   the wording is the const's.
+7. "the single dispatch point" → "the public dispatch point", with the private
+   `invocation_span_within` named as its mirror (both documents).
+8. ARCHITECTURE: "every language of this crate" → "every shipped language", with the
+   in-crate test languages named as the exception.
+9. Ruling 4 is now recorded in full: the [§dd-dr:token-contract-hardening] amendment names
+   the four further rules (termination is the reader's; positions and tokens stay valid in
+   exhausted sources; `SourceProvenance::Synthesized` with no `Frame` for an expansion's
+   source; `EndOfStream` = the end of the whole input).
+10. The multi-token ruling is stated in general form — under `false` no multi-token `Chars`
+    node records `Spanned` content, recovery and marker nodes included — beside the
+    enumeration (both documents).
+11. The `extract` claim names its price: the documented answers hold *after* three doc
+    claims were narrowed to what the code does (`piece_span`, the module docs,
+    `split_at_chars`).
+12. `TODO_Big.md` gains a *Span tiling* item for the `FrameTitle::Quoted`/`Callable`
+    span-quoting under `false`, pointing at [§dd-dr:span-tiling].
+13. Stale line numbers in this section refreshed.
 
 ### Deviations
 
@@ -1428,16 +1492,16 @@ Same counts as `main` at `4f45340` — nothing in the crate depends on these fil
 
 ### Open questions for the user
 
-1. **One superseded phrase survives in a source file**: `techy/src/token/reader.rs:2664`,
-   a test comment reading "the tolerant parse keeps the partition invariant". Stage 4
-   left it (its file belonged to Stages 1 and 3a) and this stage may not touch source
-   files. It is a one-word comment fix whenever a source-touching change passes through
-   that file. The same sentence in [§dd-dr:token-contract-hardening] item 2 *was* swept.
+1. **Six superseded phrases survive in source comments** (listed under *Grep gates*);
+   routed to the Stage 3b implementer by the orchestrator, since Stage 5 is
+   documentation-only. The same sentence in [§dd-dr:token-contract-hardening] item 2 *was*
+   swept here.
 2. **The `FrameTitle` defect stays recorded, not fixed** (carried from Stage 2's open
    question 1): under `OBEYS_SPAN_TILING = false` a traceback frame's title can quote
-   text that was never read, because it renders a multi-token span. The record names
-   both affected variants and the two feeding sites, and says the repair changes the
-   public `FrameTitle`.
+   text that was never read, because it renders a multi-token span. The record names both
+   affected variants and the feeding sites and says the repair changes the public
+   `FrameTitle`; `TODO_Big.md` now carries it as its own item, pointing at
+   [§dd-dr:span-tiling].
 3. **`TODO_Big.md`'s remaining "Better tokens" items** were left as they stand; only the
    chars-run item is this project's. The item just below it
    (`LatexlikeDriver::with_token_reader`) is also PLAN §10 item 4, still deferred.
