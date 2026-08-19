@@ -1557,10 +1557,10 @@ mod tests {
                 assert_eq!(escape_char, '\\');
                 assert_eq!(&text[command_word.range()], "end");
                 assert_eq!(post_space.range(), command_word.end()..command_word.end());
-                assert_eq!(name_group.name.content(), "verbatim");
-                assert_eq!(name_group.end, run.end);
-                assert_eq!(name_group.rule.group_type, GT_BRACE);
-                assert_eq!((&*name_group.rule.open, &*name_group.rule.close), ("{", "}"));
+                assert_eq!(name_group.name_text(), "verbatim");
+                assert_eq!(*name_group.end(), run.end);
+                assert_eq!(name_group.rule().group_type, GT_BRACE);
+                assert_eq!((&*name_group.rule().open, &*name_group.rule().close), ("{", "}"));
                 // The whole terminator is exactly the span the pieces tile.
                 assert_eq!(
                     command_word.start() - escape_char.len_utf8(),

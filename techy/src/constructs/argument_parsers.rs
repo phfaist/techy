@@ -779,15 +779,14 @@ fn probe_minted_group<'s, L: LangHasGroups>(
 ///   group nodes (pylatexenc parity).
 /// - **Braces protect, at any depth**: a descent into any *other* group strips the
 ///   rule for that whole subtree — `]` is an ordinary character inside
-///   `[{arg with ]}]`, and equally at depth two, `[a[b{c]}]]` — beyond pylatexenc,
-///   which mangles that shape (3.0a33-checked).
+///   `[{arg with ]}]`, and equally at depth two, `[a[b{c]}]]`.
 ///
 /// Invocations inside the option inherit the contents state as-is: their
 /// group-delimited arguments protect through the same stripping (`[\m{a]b}]` holds),
 /// while their **non-group** token consumption sees the minted rule in force — a
 /// deliberate, narrow divergence from pylatexenc's revert-to-outer-state semantics
 /// (subject to revision — a preset argument-parser helper could reset `groups` or the
-/// temporaries through its own delta).
+/// temporaries through its own delta).   ### UNCLEAR, REFORMULATE
 ///
 /// **Protection presupposes the close spelling is not otherwise special in the
 /// argument state.** If the base rules class `[`/`]` as a genuine group pairing of the

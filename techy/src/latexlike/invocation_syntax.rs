@@ -414,7 +414,7 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
                 escape_char,
                 command_word: node_text_content(command_word, node_span),
                 post_space: node_text_content(post_space, node_span),
-                name_group_rule: Arc::clone(&name_group.rule),
+                name_group_rule: Arc::clone(name_group.rule()),
             }
         };
         let begin_side = transcribe_side(

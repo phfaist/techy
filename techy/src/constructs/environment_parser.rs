@@ -88,24 +88,36 @@ impl fmt::Display for MissingEnvironmentTerminator {
 /// A successfully read rigid name group: the name (the exact content between the
 /// delimiters, possibly empty), the stream position just past the close delimiter, and
 /// the group rule the delimiters matched.
+///
+/// # Why a span *and* a text, rather than one `TextContent`
+///
+/// The name is needed in two roles that are read through two getters:
+/// [`name_span()`](NameGroup::name_span) gives **where** the name lies — the
+/// coordinates that anchor diagnostics, the argument parse that follows the group, and
+/// the node's invocation-name span; [`name_text()`](NameGroup::name_text) gives
+/// **what** the name is — the characters the parser read, which drive lookups, node
+/// data and diagnostic messages. For a language that obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) the two agree:
+/// the text is the span's [`content()`](SourceSpan::content). For a language with
+/// `OBEYS_SPAN_TILING = false` they need not: the span is only what the reader
+/// *described* for the stretch the name was read from, so the parser records the
+/// characters as read ([`with_name_as_read`](NameGroup::with_name_as_read)) and
+/// `name_text()` answers those — while the span is still needed, unchanged, as the
+/// coordinates. A [`TextContent`](crate::source::TextContent) models the opposite
+/// shape (content first, with a bare provenance range or none at all), so it could not
+/// replace the span without losing the coordinates in exactly the non-tiling case;
+/// stored beside the span it would only duplicate the span's range. The fields are
+/// private so that the name is never read off the span by accident.
 pub struct NameGroup<L: Lang> {
-    /// Where the name lies — the coordinates. The text is
-    /// [`name_text()`](NameGroup::name_text), which is not always this span's
-    /// [`content()`](SourceSpan::content): see that method.
-    pub name: SourceSpan<L::SourceOrigin>,
-    /// The stream position just past the group's close delimiter.
-    pub end: StreamPosition<L>,
-    /// The group rule the name group's delimiters matched — the `Arc` cloned from
-    /// the matched `GroupOpen` token, so its `open`/`close` strings are the exact
-    /// delimiter bytes as written (a name group never exists in delimiter-diverged
-    /// form: any deviation makes the whole read report "not a name group"). The
-    /// invocation-syntax recording channel: an environment payload stores this rule
-    /// as its name-group fact.
-    pub rule: Arc<GroupRule<L>>,
-    /// The name as the parser read it, when the [`name`](NameGroup::name) span cannot
-    /// answer it — see [`name_text`](NameGroup::name_text). Private: a name group is
-    /// built through [`new`](NameGroup::new) (plus
-    /// [`with_name_as_read`](NameGroup::with_name_as_read)), so no caller can pair a
+    /// Where the name lies — see [`name_span`](NameGroup::name_span).
+    name: SourceSpan<L::SourceOrigin>,
+    /// See [`end`](NameGroup::end).
+    end: StreamPosition<L>,
+    /// See [`rule`](NameGroup::rule).
+    rule: Arc<GroupRule<L>>,
+    /// The name as the parser read it, when the `name` span cannot answer it — see
+    /// [`name_text`](NameGroup::name_text). Set only through
+    /// [`with_name_as_read`](NameGroup::with_name_as_read), so no caller can pair a
     /// span with text that disagrees with it.
     name_as_read: Option<Box<str>>,
 }
@@ -134,22 +146,45 @@ impl<L: Lang> NameGroup<L> {
         self
     }
 
+    /// Where the name lies — the coordinates: the stretch between the delimiters, as
+    /// the reader described it. Use this span to anchor diagnostics, to start the
+    /// argument parse that follows the group, and as the node's invocation-name span.
+    /// Its content is the name only for a language that obeys span tiling — read the
+    /// name through [`name_text`](NameGroup::name_text), never off this span.
+    pub fn name_span(&self) -> &SourceSpan<L::SourceOrigin> {
+        &self.name
+    }
+
     /// The name as read — the exact characters between the delimiters.
     ///
     /// For a language that obeys span tiling
     /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) that is the
-    /// [`name`](NameGroup::name) span's content, and the span is where the name lies.
-    /// For a language with `OBEYS_SPAN_TILING = false` the span is only what the reader
-    /// described for the stretch the name was read from — its content need not be the
-    /// name at all — so the parser records the characters as it reads them
+    /// [`name_span`](NameGroup::name_span)'s content. For a language with
+    /// `OBEYS_SPAN_TILING = false` the span is only what the reader described for the
+    /// stretch the name was read from — its content need not be the name at all — so
+    /// the parser records the characters as it reads them
     /// ([`with_name_as_read`](NameGroup::with_name_as_read)) and this method answers
-    /// those. Read the name through this method, never off the span: the name drives
-    /// lookups, node data and diagnostics.
+    /// those. The name drives lookups, node data and diagnostics.
     pub fn name_text(&self) -> &str {
         match &self.name_as_read {
             Some(name) => name,
             None => self.name.content(),
         }
+    }
+
+    /// The stream position just past the group's close delimiter.
+    pub fn end(&self) -> &StreamPosition<L> {
+        &self.end
+    }
+
+    /// The group rule the name group's delimiters matched — the `Arc` cloned from
+    /// the matched `GroupOpen` token, so its `open`/`close` strings are the exact
+    /// delimiter bytes as written (a name group never exists in delimiter-diverged
+    /// form: any deviation makes the whole read report "not a name group"). The
+    /// invocation-syntax recording channel: an environment payload stores this rule
+    /// as its name-group fact.
+    pub fn rule(&self) -> &Arc<GroupRule<L>> {
+        &self.rule
     }
 }
 
@@ -587,7 +622,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
 
     /// Provide the span of the invocation name as written in the source, so the body's
     /// traceback frame can quote it (`environment ‘align’`). Drivers that read the name
-    /// from a name group pass that group's [`name`](NameGroup::name).
+    /// from a name group pass that group's [`name_span()`](NameGroup::name_span).
     pub fn with_invocation_name_span(mut self, name_span: SourceSpan<L::SourceOrigin>) -> Self {
         self.invocation_name_span = Some(name_span);
         self
@@ -656,7 +691,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                     // The consumed terminator's spelling, straight off the
                     // command token (kind validated at the re-peek above) and the
                     // matched name group.
-                    let end = name_group.end.clone();
+                    let end = name_group.end().clone();
                     let facts = Some(EnvironmentTerminatorSyntaxData::Scanned {
                         escape_char: token_escape_char,
                         command_word,
@@ -670,7 +705,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                     // level.
                     let terminator_start =
                         cx.tokens.position_at(&end_token, TokenEdge::Start);
-                    let span = cx.source_span_within(&terminator_start, &name_group.end)?;
+                    let span = cx.source_span_within(&terminator_start, name_group.end())?;
                     cx.recover(
                         EnvironmentTerminatorMismatch::new(self.invocation_name, name),
                         span,
@@ -1066,7 +1101,7 @@ mod tests {
                 ).unwrap();
                 return Ok((id, None));
             };
-            let name = name_group.name.content();
+            let name = name_group.name_text();
 
             // Resolve the environment's spec by name. A provider failure is an
             // operational error, not a source condition — abort via the
@@ -1076,13 +1111,13 @@ mod tests {
                 .state
                 .scopes()
                 .retrieve_spec(&query, &cx.state)
-                .map_err(|error| cx.implementation_error(error, name_group.name.clone()))?;
+                .map_err(|error| cx.implementation_error(error, name_group.name_span().clone()))?;
             let spec: Arc<dyn CallableSpec<EnvLang>> = match resolved {
                 Some(spec) => spec,
                 None => {
                     cx.recover(
                         UnknownEnvironment { name: name.into() },
-                        name_group.name.clone(),
+                        name_group.name_span().clone(),
                     )?;
                     // Tolerant fallback: an argument-less body-only environment,
                     // so the body still parses to its terminator.
@@ -1093,7 +1128,7 @@ mod tests {
             // Arguments: the 6.5 machinery, shared with StdInvocationParser. The
             // argument frames quote the *environment's* name, not `\begin`'s.
             let (mut children, arguments) =
-                parse_declared_arguments(cx, &spec, &name_group.name)?;
+                parse_declared_arguments(cx, &spec, name_group.name_span())?;
 
             // The body: parsed under the slot's state (the body delta stacked on the
             // invocation's base, session-mediated; structural revert) up to and
@@ -1113,7 +1148,7 @@ mod tests {
             let trigger_start = cx.tokens.position_at(trigger, TokenEdge::Start);
             let mut body_parser =
                 EnvironmentBodyParser::new(trigger_span, name, "end", GT_BRACE)
-                    .with_invocation_name_span(name_group.name.clone());
+                    .with_invocation_name_span(name_group.name_span().clone());
             let (body, delta) =
                 cx.parse_construct(&mut body_parser, Some(slot_state), None)?;
             debug_assert!(delta.is_none());

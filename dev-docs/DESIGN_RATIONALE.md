@@ -2714,8 +2714,9 @@ Costs accepted: under `false` a parse owns its multi-token content (chars runs, 
 bodies, environment names) and the pre-staged callable post-space — one allocation per such
 node and no zero-copy for content the tree can no longer point at; and two public-API breaks
 under the soft freeze ([§dd-dr:stability-rubric]) — `source_span_describing` is a required
-trait method (deliberately, above), and `NameGroup` gains a private field, so it is no
-longer constructible by struct literal.
+trait method (deliberately, above), and `NameGroup` keeps its fields private behind
+getters (`name_span`/`name_text`/`end`/`rule`), so it is no longer constructible by struct
+literal.
 
 Rejected alternatives: a per-*reader* capability flag ("this reader may break the contract")
 — the property belongs to the language, the parsers need it at compile time, and a

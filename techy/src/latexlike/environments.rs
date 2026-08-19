@@ -899,11 +899,11 @@ where
             .state
             .scopes()
             .retrieve_spec(&query, &cx.state)
-            .map_err(|error| cx.implementation_error(error, name_group.name.clone()))?;
+            .map_err(|error| cx.implementation_error(error, name_group.name_span().clone()))?;
         let spec: Arc<dyn CallableSpec<LLL>> = match resolved {
             Some(spec) => spec,
             None => {
-                cx.recover(UnknownEnvironment::new(name), name_group.name.clone())?;
+                cx.recover(UnknownEnvironment::new(name), name_group.name_span().clone())?;
                 // Tolerant fallback: an argument-less body-only environment, so the
                 // body still parses to its terminator.
                 Arc::new(EnvironmentSpec::<LLL>::new(vec![]))
@@ -913,7 +913,7 @@ where
         // Declared arguments: the shared core loop; the argument frames quote the
         // *environment's* name, not `\begin`.
         let (mut children, arguments) =
-            parse_declared_arguments(cx, &spec, &name_group.name)?;
+            parse_declared_arguments(cx, &spec, name_group.name_span())?;
 
         // The environment's behavior, through the funnel downcast. A
         // non-`EnvironmentSpec` registration has no behavior to offer and gets the
@@ -927,11 +927,11 @@ where
         // `Arc` clone pins the delimiter strings for the borrow; the escape char
         // transcribes from the already-validated command trigger; the terminator
         // command name comes from the dispatching spec.
-        let name_group_rule = Arc::clone(&name_group.rule);
+        let name_group_rule = Arc::clone(name_group.rule());
         let env_invocation = EnvironmentInvocation {
             trigger_span: trigger_span.clone(),
             name,
-            name_span: name_group.name.clone(),
+            name_span: name_group.name_span().clone(),
             escape_char,
             name_group_open: &name_group_rule.open,
             name_group_close: &name_group_rule.close,
@@ -1049,7 +1049,7 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
         let name_group = read_rigid_name_group(cx, LLL::GroupTypeId::content_group())?;
         let (name, end) = match &name_group {
             // The name as read, never the span's content (see the begin side).
-            Some(group) => (Some(String::from(group.name_text())), group.end.clone()),
+            Some(group) => (Some(String::from(group.name_text())), group.end().clone()),
             // Malformed name group: nothing past the trigger was consumed.
             None => (None, after_trigger),
         };
@@ -1065,9 +1065,9 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
                 cx.tokens.source_span_between(trigger, TokenEdge::Start, edge).content(),
             );
             if let Some(group) = &name_group {
-                text.push_str(&group.rule.open);
+                text.push_str(&group.rule().open);
                 text.push_str(group.name_text());
-                text.push_str(&group.rule.close);
+                text.push_str(&group.rule().close);
             }
             text
         };
