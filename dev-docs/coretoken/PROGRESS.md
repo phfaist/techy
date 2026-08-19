@@ -303,7 +303,9 @@ examples the `TokenReader` and `Tokenization` pages already carry.
 - Status: implemented (awaiting review)
 - Commits: `20695c8` (`docs/custom-lang.md`), `433a9b1` (`CLAUDE.md`), `2e999ae` (the
   three adopted Stage 1 advisories), `8c90d6d` (ARCHITECTURE), `aa5651d` + `abbb8f0` +
-  one wording commit (DESIGN_RATIONALE), plus this log entry.
+  `591eb17` (DESIGN_RATIONALE: the entries, a banned word dropped, a wording polish),
+  `6fdba4b` (the superseded-marker on Stage 1's `skip_whitespace` note), `f6d129d`
+  (the review-round-1 fixes), plus this log entry.
 - `TODO_Big.md` was **not** touched (user has uncommitted edits to it): what §4 would
   have deferred there is in "Notes for the user" below and in the two new entries'
   Revisit clauses.
@@ -364,7 +366,7 @@ examples the `TokenReader` and `Tokenization` pages already carry.
 - `docs/panics.md`, `techy/src/core/token.rs`, `techy/src/token/scan.rs` — the three
   adopted Stage 1 advisories (see the deviations below for the `skip_whitespace` one).
 
-### Gates (final tree, `abbb8f0`, all run in the worktree)
+### Gates (final tree, `f6d129d`, all run in the worktree)
 
 - `cargo test --workspace` — `1170 passed; 0 failed; 0 ignored` for the lib (Stage 1's
   1169 plus the one new `skip_whitespace` test), then `30`, `9`, `14`, `23`, `0`, `0`,
@@ -432,6 +434,34 @@ examples the `TokenReader` and `Tokenization` pages already carry.
 4. **The placement rule ends its own sentence in ARCHITECTURE**, with the label citation
    in a following sentence ("The extraction itself, with its item-by-item resolution:
    [§dd-dr:core-token-facade]."), so that the rule stays verbatim to the last period.
+
+### Review round 1 — required fixes applied (`f6d129d`)
+
+The reviewer passed every gate and required three corrections in
+`dev-docs/DESIGN_RATIONALE.md`; four wording items were adopted with them.
+
+1. [§dd-dr:panic-policy]: "the three helpers that do have one" → the **two** that do,
+   named — `scan_command` and `scan_specials_trigger` (the other five answer `usize` or
+   `Option`).
+2. [§dd-dr:scan-helpers]: the reason `token_kind` is out of reach was wrong and
+   contradicted the entry it cited. The `TokenReader` implementation of `StdTokenReader`
+   is bound on the *token type*
+   (`L::Tokenization: Tokenization<L, Token = StdToken<L>, StreamPosition = StdStreamPosition>`,
+   `techy/src/token/reader.rs:823-827`), never on `Lang<Tokenization = StdTokenization>`;
+   the entry now uses the wording ARCHITECTURE and the facade docs already carry.
+3. [§dd-dr:scan-helpers]'s title is PLAN §4's: "The scan helpers: public,
+   token-agnostic recognition primitives; the standard reader as their composition"
+   (label unchanged).
+4. `docs/custom-lang.md`: the *Seams* section is "on the `TokenReader` page" — the
+   nearest antecedent of "the same page" was `StdTokenReader`.
+5. `docs/custom-lang.md`: a scan helper returns "its byte spans plus the rule or spec
+   that matched", which is how `core::token`, ARCHITECTURE and the two entries define a
+   match value.
+6. ARCHITECTURE [§dd-arch:token] and `techy/src/core/token.rs`: "one reader serving
+   several sources at one nesting level requires `OBEYS_SPAN_TILING = false`", in both
+   places — a nested `\input` parse reads a second source under `true`, so the old
+   "reading from several sources in one parse" was too broad.
+7. This log: the commit list and the gate-transcript label name the final commit.
 
 ### Open questions
 
