@@ -1057,7 +1057,11 @@ implementations:
 *Amendment (user, span-tiling design session).* The contract has since gained clause 7 (moving sets the
 position), clause 8 (one source, in reading order, without gaps — required of the readers of
 a language that obeys span tiling) and a *Seams* section for the readers of a language that
-does not, which settles four further rules for such a reader: termination is its own
+does not, which settles five further rules for such a reader: the pre-space of the first
+token drawn from a new source lies within that source (that token's `StartBeforePreSpace`
+edge is the trigger position and the new source starts at the same shared place, so
+outer-source pre-space would sit between equal position values and read as no pre-space —
+a downstream expansion reader lost such a space this way, 2026-08-20), termination is its own
 responsibility (an expansion that never ends is an endless token stream), positions and
 tokens stay valid inside sources the stream has already left, an expansion's source is
 minted with `SourceProvenance::Synthesized` and pushes no `Frame`, and `EndOfStream` means

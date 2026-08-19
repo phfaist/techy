@@ -266,8 +266,24 @@ impl StdStreamPosition {
 /// across one — which is why the parsers of such a language record multi-token
 /// content as owned text rather than as a span.
 ///
-/// Four further rules for these readers:
+/// Five further rules for these readers:
 ///
+/// - **The pre-space of the first token drawn from a new source must lie within that
+///   source.** That token's [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace)
+///   edge is the trigger position, and the trigger position and the start of the new
+///   source are one shared place (above) — so attributing whitespace of the *outer*
+///   source to that token as pre-space puts real whitespace between two equal
+///   position values. The parsing machinery decides whether a token has pre-space by
+///   comparing exactly those two positions: equal values read as no pre-space, the
+///   pre-space text is never asked for, and the whitespace disappears from the parsed
+///   content without any diagnostic. Outer whitespace that precedes a seam must
+///   therefore be served in the outer source — as the post-space of the token before
+///   the seam, or by starting the new source's content with that whitespace so the
+///   first token's pre-space lies past the seam. (The mirrored attribution is sound:
+///   outer whitespace after an exhausted source may be the last inner token's
+///   post-space, because [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — the
+///   resume position, past that whitespace — is then a different position value than
+///   [`End`](TokenEdge::End).)
 /// - **Termination is the reader's responsibility.** An expansion that never ends is
 ///   simply an endless token stream; the engine's descent guard
 ///   ([`DescentGuard`](crate::engine::DescentGuard)) counts parser nesting, not tokens,

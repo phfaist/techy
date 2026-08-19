@@ -651,6 +651,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// For a language with
     /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
     /// pre-space text the reader answers for *this* token joins the run's owned text.
+    ///
+    /// Equal `StartBeforePreSpace` and `Start` positions read as no pre-space — the
+    /// two edges of the first token drawn from a new source compare equal unless its
+    /// pre-space lies within that source, which is why the [`TokenReader`] contract's
+    /// seam rules require exactly that of such a token (see *Seams* there).
     fn take_pre_space(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
