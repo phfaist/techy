@@ -296,13 +296,188 @@ examples the `TokenReader` and `Tokenization` pages already carry.
 - No semver measurement was re-run for this stage: it adds public items and widens two
   methods' visibility (both minor), and breaks no path. Stage 0's note stands.
 
-## Stage 2 — guide and record (`ct-2-record` ← `ct-1-scan`)
+## Stage 2 — guide and record (`ct-2-record` ← `ct-1-scan` @ 5940d3b)
 
-- Status: not started
+- Worktree: `.claude/worktrees/ct-2-record`
+- Status: implemented (awaiting review)
+- Commits: `20695c8` (`docs/custom-lang.md`), `433a9b1` (`CLAUDE.md`), `2e999ae` (the
+  three adopted Stage 1 advisories), `8c90d6d` (ARCHITECTURE), `aa5651d` +
+  `abbb8f0` (DESIGN_RATIONALE), plus this log entry.
+- `TODO_Big.md` was **not** touched (user has uncommitted edits to it): what §4 would
+  have deferred there is in "Notes for the user" below and in the two new entries'
+  Revisit clauses.
+
+### What changed, per file
+
+- `docs/custom-lang.md` — the tokenization-behavior paragraph gains two sentences after
+  the "Keeping the standard token type …" one: the several-sources case (a token type of
+  one's own wrapping standard tokens, one inner `StdTokenReader` per source,
+  `scan_std_token_at` to read and `token_kind_of_std_token` to interpret, with the
+  `TokenReader` *Seams* section linked by anchor) and the own-token-kinds case (the scan
+  helpers, defined in passing as "free functions that each recognize one construct at a
+  position and return its byte spans", linking `core::token`'s *Writing a token reader*
+  section). Both anchors were checked against the generated pages.
+- `CLAUDE.md` — the `techy::core::token` bullet names the seven scan helpers and their
+  three match values; `skip_whitespace` moved from the reader group into that list, so it
+  is named once.
+- `dev-docs/ARCHITECTURE.md` — [§dd-arch:arch]: the satellites are
+  `core::{token, constructs, specs, node}`, the placement rule of `core::token` is
+  recorded verbatim, and the section's decision list names [§dd-dr:core-token-facade].
+  [§dd-arch:token]: the public path of the concrete token shapes is `techy::core::token`
+  (it still said `techy::core`); the "custom reader over standard tokens" bullet gains
+  the several-sources sentence (one inner reader per source, the two promoted methods, and
+  the `OBEYS_SPAN_TILING = false` requirement); a new bullet, "The scanning primitives are
+  public", lists the seven helpers, their source-free match values, the dispatcher as
+  their composition, and the family's `pos` panic; the closing decision list gains both
+  new labels. The S1 sketch was left alone — it lists internal topic modules, not public
+  paths.
+- `dev-docs/DESIGN_RATIONALE.md` — two new entries and three amendments:
+  - [§dd-dr:core-token-facade] (in `## Crate organization and dependency model`, right
+    before [§dd-dr:stability-rubric]): the placement rule verbatim, why the extraction
+    happens now (the token topic is a third of the hub and growing; the `constructs`
+    satellite is the same four-part shape), the four straddling families resolved item by
+    item (the delta's rules overrides, the state's `PrefixTable`/`TriggerChars`, the
+    tokenization declaration a `Lang` names, the specials-hook answer types) with the
+    carrying item staying in the hub behind an accepted cross-facade signature reference,
+    the accepted path breaks under the soft freeze, the rejected `core::tokenscan`
+    helper-only namespace and the rejected uncut straddle, and the Revisit clause.
+  - [§dd-dr:public-namespace-topology] gains a *Reversal note (2026-08-19, user)* — the
+    only dated line in the file's new text — plus a `techy::core::token` entry in its
+    layout list and a hub bullet that no longer claims the token machinery.
+  - [§dd-dr:scan-helpers] (at the end of `## Tokens and tokenization`): the two reuse
+    cases and which items serve each, source-free match values (why: one helper set for
+    all sources), minimal inputs, the absent-feature branch, the family's `pos`
+    requirement with the shared up-front check (ahead of every feature gate, so the
+    family behaves identically whatever the rules say), the division of labor with the
+    composing reader, D3's second precondition with its reason and the reserved
+    `Option<Result<…>>` fallback, the two promoted method names, and the three rejected
+    alternatives (a public shape-returning dispatcher, `Result` per helper for a bad
+    `pos`, a validated cursor newtype).
+  - [§dd-dr:superseded-names] gains one bullet with the seven retired private member
+    names and what replaced each.
+  - [§dd-dr:panic-policy] rule 3(b) gains the family line once — the four value functions,
+    then the seven scan helpers (with `scan_command`'s second precondition), then the
+    seven `StdToken` constructors — worded as `docs/panics.md` words it; its
+    "deliberately infallible" justification now also covers the three helpers that do have
+    an error channel, and the `skip_whitespace` consequence bullet became the family's.
+- `docs/panics.md`, `techy/src/core/token.rs`, `techy/src/token/scan.rs` — the three
+  adopted Stage 1 advisories (see the deviations below for the `skip_whitespace` one).
+
+### Gates (final tree, `abbb8f0`, all run in the worktree)
+
+- `cargo test --workspace` — `1170 passed; 0 failed; 0 ignored` for the lib (Stage 1's
+  1169 plus the one new `skip_whitespace` test), then `30`, `9`, `14`, `23`, `0`, `0`,
+  `0`, `1` for the integration binaries, doc-tests `86 passed; 0 failed; 4 ignored`,
+  `techy_derive` doc-tests `0 passed; 0 failed; 2 ignored`. All `test result: ok.`
+- `cargo test --lib token::scan` — `45 passed; 0 failed; 0 ignored`.
+- `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero `warning`/`error`
+  lines. Same with `--all-features` — exit 0, zero lines.
+- `rm -rf target/doc && cargo docs --all-features` — exit 0; output is `Documenting
+  techy-derive`, `Documenting techy`, `Finished`, `Generated` and nothing else. Same for
+  plain `cargo docs` (also after `rm -rf target/doc`).
+- Link checks on the generated pages: `id="writing-a-token-reader"` exists on
+  `core/token/index.html`, and `guide/custom_lang/index.html` carries
+  `href="../../core/token/index.html#writing-a-token-reader"`,
+  `href="../../core/token/trait.TokenReader.html#seams--readers-that-serve-several-sources-at-one-nesting-level"`,
+  and the two `struct.StdTokenReader.html#method.…` links.
+  `core/token/fn.skip_whitespace.html` now carries `id="panics"`, like
+  `fn.scan_comment.html`.
+- `git grep -n 'dd-dr:core-token-facade'` — the DESIGN_RATIONALE heading (line 7063),
+  three further DESIGN_RATIONALE citations, and four ARCHITECTURE references (lines 155,
+  176, 275, 377), plus the two PLAN.md lines.
+- `git grep -n 'dd-dr:scan-helpers'` — the DESIGN_RATIONALE heading (line 1134), four
+  further DESIGN_RATIONALE citations, and three ARCHITECTURE references (lines 339, 360,
+  375), plus one PLAN.md line.
+- The placement rule is byte-identical (whitespace-normalized, with the facade's
+  `[hub](crate::core)` link read as "hub") in all three places: `core/token.rs`'s
+  "What lives here", ARCHITECTURE [§dd-arch:arch], and the new DESIGN_RATIONALE entry.
+- Banned-word grep over every added line of `git diff ct-1-scan..HEAD` — 0 hits for
+  each of "door", "funnel", "mint", "trigger token", "vocabulary", "facts",
+  "load-bearing", "straggler". (One "next door" in the first draft of the facade entry
+  was removed in `abbb8f0`.) The word "contract" appears on two added lines, both stating
+  the requirement in the same sentence: the panic-policy rule-3(b) rewrap and
+  `skip_whitespace`'s `# Panics` section (the wording the other six helpers use).
+- `§dd-` labels in user-facing documentation: `grep -rn '§dd-' docs` — 0 hits. In
+  `techy/src`, 111 hits, of which 8 are in doc-comment form; all 8 sit on private items
+  and none reaches the rendered documentation —
+  `grep -rl '§dd-' target/doc --exclude-dir=src` finds 0 pages (the 31 pages under
+  `target/doc/src/` are the source-code view, which shows the source as written). The 8
+  are pre-existing and untouched here:
+  `techy/src/token/scan.rs:534` (private `checked_scan_error`, added in Stage 1),
+  `spec/mod.rs:87`, `serialize/tests.rs:25`, `serialize/wire/tests.rs:384`,
+  `constructs/argument_parsers.rs:696`, `constructs/nodes_parser.rs:649` and `:699`,
+  `latexlike/serialize_tests.rs:6`.
+
+### Deviations from §1 and §4 (all recorded, none silent)
+
+1. **`skip_whitespace` no longer "moves unchanged"** (§1.4 said it does; adopted Stage 1
+   review advisory). Two changes: its docs state the panic under a `# Panics` heading,
+   in the form the six other helpers use, and its body calls the shared `check_pos` up
+   front, before the feature/enabled early return. Reason: an enforcement gap against its
+   own documented promise — the docs said "in all builds", but a call with whitespace
+   handling absent or disabled returned `pos` unchecked. The family rule is now uniform
+   and is recorded as such in [§dd-dr:scan-helpers] and in [§dd-dr:panic-policy]'s
+   consequence bullet. One `#[should_panic]` test covers the whitespace-disabled path
+   (`skip_whitespace_panics_on_an_invalid_pos_with_whitespace_disabled`); the
+   `content.get(pos..)` fallback panic in the body is gone, since `check_pos` has already
+   validated the offset. `scan.rs`'s private module docs needed no change: they said each
+   helper states the panic "in its `# Panics` section", which is true only now.
+2. **`TODO_Big.md` untouched** (§4's file list allows it "if anything is deferred"): the
+   user has uncommitted edits there. The deferred items are in "Notes for the user".
+3. **Two ARCHITECTURE lines beyond §4 step 2's three bullets**: the token section's
+   "public path: `techy::core`" (now `techy::core::token` — Stage 0 missed it and it was
+   wrong as it stood), and the topology section's decision list, which gains
+   [§dd-dr:core-token-facade] beside [§dd-dr:public-namespace-topology].
+4. **The placement rule ends its own sentence in ARCHITECTURE**, with the label citation
+   in a following sentence ("The extraction itself, with its item-by-item resolution:
+   [§dd-dr:core-token-facade]."), so that the rule stays verbatim to the last period.
+
+### Open questions
+
+- None new. The user decisions still outstanding are collected in "Notes for the user".
 
 ## Notes for the user (collected)
 
-- semver: path breaks for the 41 moved items (soft freeze); `api-baseline` not moved.
-  Measured after Stage 0 (`BASELINE_REV=main`): 38 path-break entries, all of them
-  `techy::core::<moved item>`; the three type aliases (`Token`, `StreamPosition`,
-  `TokenResult`) are not linted by cargo-semver-checks. Nothing else broke.
+1. **Semver: the path breaks stand and `api-baseline` was not moved.** All 41 moved items
+   change their public path (`techy::core::<item>` → `techy::core::token::<item>`), which
+   is deliberate under the soft freeze ([§dd-dr:stability-rubric]) and recorded in
+   [§dd-dr:core-token-facade]. Measured after Stage 0 with `BASELINE_REV=main`:
+   38 path-break entries, all of them `techy::core::<moved item>`; the three type aliases
+   (`Token`, `StreamPosition`, `TokenResult`) are not linted by cargo-semver-checks, which
+   accounts for the difference from 41. Nothing else broke, and Stages 1 and 2 only add
+   items and widen two methods' visibility. Moving `api-baseline` and deciding a version
+   number are your deliberate acts after the merge; nothing in this project does either.
+2. **D3 — `scan_command`'s second precondition.** Implemented as PLAN §1.8 specifies: the
+   function asserts in all builds that `rule.escape_char` stands at `pos`, with the
+   message "the rule's escape character 'X' does not stand at pos N". The panic exception
+   you granted names only an invalid `pos`, so this is the one point that goes beyond the
+   wording of the grant. It is documented in the function's `# Panics` section, in
+   `docs/panics.md`'s family bullet, in [§dd-dr:panic-policy] rule 3(b) and in
+   [§dd-dr:scan-helpers], and one test covers it. Please confirm — or choose the recorded
+   fallback, `-> Option<Result<CommandMatch, EndOfStreamAfterEscape>>` with `None` for the
+   mismatch, which is a small change to the function and to the one arm of the dispatcher
+   that calls it.
+3. **`skip_whitespace` was changed, though §1.4 said it moves unchanged** (Stage 2
+   deviation 1 above): a `# Panics` heading and the shared `check_pos` called before the
+   feature gate, so all seven helpers enforce the documented `pos` requirement
+   identically. Behavior changes only for calls that were already violating the
+   documented requirement, and only from "returns `pos`" to "panics", which is what the
+   docs promised all along. Reversible in one commit if you would rather keep the old
+   body.
+4. **`README.md`'s facade list is still incomplete** — it names `techy::source`,
+   `techy::error`, `techy::extract`, `techy::core` (with its four satellites) and
+   `techy::latexlike`, and omits `techy::transform`, `techy::visit`, `techy::recompose`
+   and `techy::serialize`. Pre-existing, unrelated to this project, and deliberately not
+   touched here (Stage 0 only added the `core::token` satellite to that list).
+5. **Deferred by PLAN §7, none of it done** (and none of it in `TODO_Big.md`, which was
+   left alone): (a) a public "nearest valid offset" utility for anchoring a report at an
+   invalid position — today a private method of `StdTokenReader`, and a custom reader
+   validating its own caller's offsets may want it; (b) `StdTokenReader::source()`
+   visibility — an open item that predates this project; (c) an end-of-content or
+   `is_forbidden_char` helper — deliberately not provided (one-liners the dispatcher keeps
+   inline); (d) the `api-baseline` move / version bump of note 1.
+6. **Two smaller Stage 1 observations were adopted here and need no decision**:
+   `docs/panics.md`'s justification clause now reads as plain English, and
+   `core::token`'s module docs say "one of the item groups that rule places here".
+   `CLAUDE.md`'s `core::token` bullet now names the whole helper family, as Stage 1
+   suggested.
