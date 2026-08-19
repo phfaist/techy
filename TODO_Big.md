@@ -53,6 +53,17 @@
     changes the public `FrameTitle` (a text field beside the anchor span, or a
     `TextContent`), so it needs a decision.
 
+  - **User decision pending**: `\input` under `OBEYS_SPAN_TILING = false` with a provided
+    reference argument whose content is not plain characters (`\input{{chap.tex}}`)
+    resolves nothing, attaches nothing and diagnoses nothing — `argument_text` answers
+    `None` and the call site (`latexlike/input.rs`) is silent; under a language that obeys
+    span tiling the same input takes the span route and diagnoses an unresolvable
+    reference for the literal `"{chap.tex}"`, braces included.  Options: recompose the
+    argument and resolve that (parity); raise a distinct "the reference is not plain
+    characters" condition (least surprising, new public condition); keep the silent
+    `None`; or make the tiled route agree.  Pinned as today's behavior by
+    `an_input_reference_that_is_not_plain_characters_is_not_read`.
+
 - API doc walk-through; 
 
   - Check for banned words in user and developer guides: "door", "funnel", "mint",

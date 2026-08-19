@@ -2624,11 +2624,25 @@ reader (test builds only) serves one parse from a script of segments over severa
 chains, splices, holes — and is the first in-crate reader with token and position types of
 its own. Its positions are kept in a canonical form in which the place past one entry *is*
 the place before the next, so contract clauses 2 and 7 hold at seams by construction; a
-deliberately broken variant reports the two sides of a seam as two values, and exists for
-the parse-level clause-7 test. Its `source_span_within` answers by the end position's
-source, so a run ending exactly at a seam has none — which is what lets a tiled counter-test
-over a seam-crossing script prove clause 8's enforcement: the same script under a language
-that declares `true` is rejected as an implementation error.
+deliberately broken variant reports the two sides of a seam as two values, and the
+parse-level clause-7 test drives it under both declarations
+(`techy/src/constructs/span_tiling_tests.rs`, beside the single-source version of the same
+check in `constructs/nodes_parser.rs`). Its `source_span_within` answers by the end
+position's source, so a run ending exactly at a seam has none: the tiled counter-tests of
+that module run seam-crossing and hole-crossing scripts under a tiled twin language and get
+the implementation error out of the parser's own run flush — clause 8's enforcement
+demonstrated rather than asserted. The preset needed no change whatever to serve a language
+of the other regime: a latexlike family member over the scripted tokenization compiles and
+parses through the generic driver, specs, syntax record, oracle and source recomposer as
+they stand.
+
+Two arms of the crate are right for a reader of this class and reachable by no scanning
+reader, so they are covered only through the scripted one, and are recorded here rather than
+left looking accidental: the verbatim recipe treats the terminator's and the end-of-stream
+token's pre-space as content, which a reader re-tokenizing under the recipe state can never
+produce (that state turns whitespace off), and `comment_node_kind`'s owned arm needs a
+comment token with edges in two sources, which no reader that scans a token inside one
+segment produces. Both are kept deliberately: a reader that splices mid-stream reaches them.
 
 Costs accepted: under `false` a parse owns its multi-token content (chars runs, verbatim
 bodies, environment names) and the pre-staged callable post-space — one allocation per such
@@ -2656,7 +2670,15 @@ title renders a span as text, and the environment sites hand it a multi-token sp
 `false` a frame can quote text that was never read (`FrameTitle::Quoted`, and
 `FrameTitle::Callable` where a declared argument's frame is built). It is diagnostic
 decoration — no lookup and no node data depend on it — and repairing it changes the public
-`FrameTitle` (a text field beside the anchor span, or a `TextContent`).
+`FrameTitle` (a text field beside the anchor span, or a `TextContent`). Open in the same
+way, and a decision rather than a defect: under `false` an `\input` whose reference argument
+is *provided* but is not plain characters (`\input{{chap.tex}}`) resolves nothing, attaches
+nothing and diagnoses nothing, because the reference comes from node data and node data has
+no single text there; a language that obeys span tiling takes the span route and diagnoses
+an unresolvable reference for the literal `"{chap.tex}"`, braces included. The options are
+to recompose the argument and resolve that, to raise a distinct "the reference is not plain
+characters" condition (the least surprising end state, at the price of a new public
+condition), to keep the silent `None`, or to make the tiled route agree with it.
 
 Revisit if: a reader must declare the property per driver instance rather than per language;
 or zero-copy content under `false` is demonstrated to matter (verify-then-intern is the
@@ -6745,7 +6767,8 @@ re-opens a settled argument:
   the chars-run position check — that check verifies contract clauses 2 and 7 (a peeked
   token starts where the peek happened; moving sets the position), while reading order and
   gaps are clause 8; and "parse-tree law" — the test-only byte-accounting oracle is **the
-  span-tiling law**, beside the all-trees law of `validate_tree`. No mode name is coined
+  span-tiling law**, beside the all-trees law of `validate_tree`, and its in-crate helper is
+  `check_span_tiling_node`. No mode name is coined
   for the other regime either: documentation says "a language with `OBEYS_SPAN_TILING =
   false`".
 

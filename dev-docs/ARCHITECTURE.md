@@ -696,7 +696,9 @@ the **span-tiling law**, an in-crate test oracle only (`check_tree_invariants`, 
 preset's payload pins layered on it), and it checks the all-trees law alone for a language
 declaring `false`. The matching test infrastructure is a scripted multi-source reader (test
 builds only) that serves one parse from segments of several sources, with positions in a
-canonical form so that contract clauses 2 and 7 hold at seams by construction.
+canonical form so that contract clauses 2 and 7 hold at seams by construction; a latexlike
+family member declaring `false` over that tokenization instantiates the preset unchanged —
+driver, specs, syntax record, oracle and source recomposer are all generic over the family.
 
 Documentation coins no name for the second regime: it says "a language with
 `OBEYS_SPAN_TILING = false`". The phrasings this vocabulary replaced are listed with the

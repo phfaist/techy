@@ -1301,10 +1301,11 @@ span_tiling` filter matches 28 — it also catches the Stage 2 tests whose names
 
 ## Stage 5 — record
 
-Status: **reviewed** (branch `st-5-record`, worktree `.claude/worktrees/st-5-record`,
-base `main` at `4f45340`). Review **PASS** with four required fixes and nine precision
-items, all applied (see *Review fixes* below). Merges only after Stage 3b lands on
-`main`; the two test claims are then made factual (required fix 3).
+Status: **reviewed**, rebased onto `main` at `514154f` (branch `st-5-record`, worktree
+`.claude/worktrees/st-5-record`). Review **PASS** with four required fixes and nine
+precision items, all applied (see *Review fixes* below). After Stage 3b merged, the two
+test claims were made factual and Stage 3b's findings were folded into the entry (see
+*Post-Stage-3b* below).
 
 Documentation only — no source file was touched.
 
@@ -1372,30 +1373,27 @@ Documentation only — no source file was touched.
 
 ```
 $ grep -n "§dd-dr:span-tiling]" dev-docs/ARCHITECTURE.md
-709:Decisions behind this section: [§dd-dr:span-tiling]; the invariants it qualifies —
+707:Decisions behind this section: [§dd-dr:span-tiling]; the invariants it qualifies —
 
 $ python3 -c "<every §dd-dr heading label vs ARCHITECTURE>"
 215 heading labels; 0 missing from ARCHITECTURE
 
 $ grep -rni "partition invariant\|parse.law\|parse.tree law\|in-order, gap.free" \
-      dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md techy/src docs
-dev-docs/DESIGN_RATIONALE.md:2884, 6743, 6746   the three sites that *name* the superseded
+      dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md techy/src techy/tests docs
+dev-docs/DESIGN_RATIONALE.md:2907, 6766, 6769   the three sites that *name* the superseded
                                                 phrases (the [§dd-dr:tree-validation]
                                                 amendment, the [§dd-dr:superseded-names]
                                                 bullet)
-techy/src/token/reader.rs:2664                  "partition invariant" (test comment)
-techy/src/node/mod.rs:64, :71, :2169            "parse-law" (comments)
-techy/src/node/arguments.rs:343                 "parse-law checker" (rustdoc)
-techy/src/node/builder.rs:655                   "parse-law oracle" (comment)
+techy/src/node/invariants.rs:823                "Parse-law point 1" (rustdoc on a private
+                                                cfg(test) helper) — see below
 ```
 
-`ARCHITECTURE.md` is clean. The six source hits are **handed to the running Stage 3b
-implementer** (Stage 5 is documentation-only and must not touch source): five say
-"parse-law" and become "the span-tiling law", one says "partition invariant" and becomes
-"span tiling". Two further findings go with them, for that implementer's judgement:
-`techy/src/node/invariants.rs:823` ("Parse-law point 1", prose — rename) and the private
-helper *identifier* `check_parse_law_node` (`invariants.rs:599`, `:616`) — an identifier,
-not prose, so renaming it to `check_span_tiling_node` is optional and behavior-free.
+`ARCHITECTURE.md` is clean, and Stage 3b swept the six source hits this stage had routed to
+it (`token/reader.rs`, `node/mod.rs` ×3, `node/arguments.rs`, `node/builder.rs`) and renamed
+`check_parse_law_node` to `check_span_tiling_node`. **One occurrence survives that sweep**
+because its grep was case-sensitive: `techy/src/node/invariants.rs:823` still begins
+"Parse-law point 1". Stage 5 is documentation-only, so it is left for the next
+source-touching change (a one-word doc-comment fix: "Span-tiling law, point 1").
 
 Deliberately **not** swept: `dev-docs/DESIGN_RATIONALE.md:611-612` "a token-span partition
 invariant" — that is a *token-level* property (whitespace as its own token would have made
@@ -1408,11 +1406,11 @@ names, and it stays as written.
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.34s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.89s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-5-record/target/doc/techy/index.html and 1 other file
 
 ### cargo test --workspace
-test result: ok. 1102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 1122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -1425,8 +1423,40 @@ test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; fin
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
-Same counts as `main` at `4f45340` — nothing in the crate depends on these files.
-`cargo docs --all-features` emits no warnings.
+Same counts as `main` at `514154f` (1122 lib tests, Stage 3b's twenty included) — nothing
+in the crate depends on these files. `cargo docs --all-features` emits no warnings.
+
+### Post-Stage-3b (the record made factual)
+
+The rebase onto `514154f` conflicted only in this file's status table (kept every stage's
+row; 1, 2, 3a, 3b, 4 = merged, 5 = reviewed). The entry then changed in four places:
+
+1. **The two test claims are facts now.** The enforcement paragraph names
+   `techy/src/constructs/span_tiling_tests.rs` as where the parse-level clause-7 test drives
+   the broken scripted variant under both declarations (beside the single-source version of
+   the same check in `constructs/nodes_parser.rs`), and says the tiled counter-tests of that
+   module run seam-crossing and hole-crossing scripts and get the implementation error out
+   of the parser's own run flush — clause 8's enforcement demonstrated rather than asserted.
+   Cited by module path, no line numbers.
+2. **R7's proof recorded** — the preset serves a latexlike family member over the scripted
+   tokenization with no preset change at all (driver, specs, syntax record, oracle and
+   source recomposer are generic over the family); the plan's risk row did not materialize.
+   One clause added to [§dd-arch:span-tiling] as well.
+3. **The two deliberately kept, scanning-unreachable arms** are recorded in their own
+   paragraph so they do not read as accidental: the verbatim recipe's terminator and
+   end-of-stream pre-space arms (the recipe state turns whitespace off, so a re-tokenizing
+   reader never produces that pre-space) and `comment_node_kind`'s owned arm (it needs a
+   comment token with edges in two sources). Both are right for a reader that splices
+   mid-stream, and both are covered only through the scripted reader.
+4. **The `\input` question is recorded as a user decision**, in the entry's deferred
+   paragraph and as its own `TODO_Big.md` bullet: under `false` a *provided* reference
+   argument that is not plain characters (`\input{{chap.tex}}`) resolves, attaches and
+   diagnoses nothing, while the tiled route diagnoses an unresolvable reference for the
+   literal `"{chap.tex}"`; the four options are named (recompose-and-resolve, a distinct
+   "reference is not plain characters" condition, keep `None`, make the tiled route agree).
+
+Also: [§dd-dr:superseded-names] now names the renamed in-crate helper
+(`check_span_tiling_node`).
 
 ### Review fixes (all applied)
 
@@ -1492,17 +1522,20 @@ Precision:
 
 ### Open questions for the user
 
-1. **Six superseded phrases survive in source comments** (listed under *Grep gates*);
-   routed to the Stage 3b implementer by the orchestrator, since Stage 5 is
-   documentation-only. The same sentence in [§dd-dr:token-contract-hardening] item 2 *was*
-   swept here.
+1. **One superseded phrase survives in source**: `techy/src/node/invariants.rs:823`
+   ("Parse-law point 1"), missed by Stage 3b's case-sensitive sweep. Stage 5 is
+   documentation-only; it is a one-word doc-comment fix for the next change that touches
+   that file.
 2. **The `FrameTitle` defect stays recorded, not fixed** (carried from Stage 2's open
    question 1): under `OBEYS_SPAN_TILING = false` a traceback frame's title can quote
    text that was never read, because it renders a multi-token span. The record names both
    affected variants and the feeding sites and says the repair changes the public
    `FrameTitle`; `TODO_Big.md` now carries it as its own item, pointing at
    [§dd-dr:span-tiling].
-3. **`TODO_Big.md`'s remaining "Better tokens" items** were left as they stand; only the
+3. **`\input` with a non-chars reference under `OBEYS_SPAN_TILING = false`** (Stage 3b's
+   open question 2) is recorded, not decided: the entry's deferred paragraph and
+   `TODO_Big.md` carry the four options. Today's silence is pinned by a test.
+4. **`TODO_Big.md`'s remaining "Better tokens" items** were left as they stand; only the
    chars-run item is this project's. The item just below it
    (`LatexlikeDriver::with_token_reader`) is also PLAN §10 item 4, still deferred.
 
