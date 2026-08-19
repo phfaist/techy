@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::constructs::{
-    InvalidSourceReferenceArgument, NodesParser, ParseContext, StopSpec,
+    InvalidReferenceReason, InvalidSourceReferenceArgument, NodesParser, ParseContext, StopSpec,
 };
 use crate::engine::{ParseResult, ParserSession};
 use crate::error::{DiagnosticInfo, ParseError, Recovery};
@@ -353,7 +353,7 @@ fn an_input_reference_read_across_seams_resolves() {
 }
 
 #[test]
-fn an_input_reference_that_is_not_plain_characters_is_not_read() {
+fn an_input_reference_that_is_not_plain_characters_is_an_invalid_reference_argument() {
     // The reference read answers from node data alone: content that is not plain
     // characters (here a protective group, `\input{{chap.tex}}`) carries no such text,
     // so no reference is read — and that is an error in the document, diagnosed as
@@ -382,7 +382,7 @@ fn an_input_reference_that_is_not_plain_characters_is_not_read() {
         .data()
         .downcast_ref::<InvalidSourceReferenceArgument>()
         .expect("the condition type");
-    assert_eq!(condition.reason, InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS);
+    assert_eq!(condition.reason, InvalidReferenceReason::NotPlainCharacters);
     // Anchored at the argument, delimiters included — `{{chap.tex}}`.
     assert_eq!(diagnostic.span().range(), 6..18);
     assert!(Arc::ptr_eq(diagnostic.span().source(), &a));

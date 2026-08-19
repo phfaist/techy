@@ -15,7 +15,11 @@
 //! parsers, parameterized by group types and rules.
 //!
 //! Diagnostic condition types stay producer-side: each parser's conditions are
-//! defined here, next to the parser that raises them.
+//! defined here, next to the parser that raises them — with one deliberate exception,
+//! [`InvalidSourceReferenceArgument`], which is defined beside the two conditions of
+//! [`ParseContext::attach_source_reference`] and raised by the include-like specs that
+//! read a source reference out of an argument, so that all three failures of an
+//! inclusion read the same wherever they come from.
 //!
 //! Three module-level contracts hold for everything in this module:
 //!
@@ -61,7 +65,7 @@ pub use crate::constructs::{
     ExpectedExpressionArgument, ExpectedVerbatimDelimiter,
     ExpressionCallableRequiresContent, ExpressionParser, FromInvocation,
     GroupAfterEffectsFn, GroupArgumentParser, GroupChildState, GroupParser,
-    ImplementationError, InvalidSourceReferenceArgument, Invocation,
+    ImplementationError, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
     InvocationChildState,
     MalformedEnvironmentTerminator, MarkerArgumentParser, MissingEnvironmentTerminator,
     MissingMandatoryArgument, MissingTerminatorFound, NameGroup, NoSourceResolver,

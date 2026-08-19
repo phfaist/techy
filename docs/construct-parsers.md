@@ -177,7 +177,7 @@ success.
 [`cx.parse_attached_source(source, state, parser)`](crate::core::constructs::ParseContext::parse_attached_source)
 is the form underneath it, for when you already hold the minted
 [`Source`](crate::source::Source). Reading the reference is your parser's
-part, and its contract is one line: the reference argument carries **plain
+part, and the rule on it is one line: the reference argument carries **plain
 text**, read off the argument's content nodes (their character payloads), so
 an argument holding anything else — a nested group, a callable, a comment —
 raises the third condition,

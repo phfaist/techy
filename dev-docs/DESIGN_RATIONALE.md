@@ -2678,9 +2678,14 @@ decoration — no lookup and no node data depend on it — and repairing it chan
 argument carries **plain text**: its content must be plain characters, and an argument
 holding anything else (a protective group `\input{{chap.tex}}`, a callable, a comment)
 raises the condition `InvalidSourceReferenceArgument`
-(`core.sources.invalid-reference-argument`; payload: the reason, today "its content is not
-plain characters") through the recovery policy at the argument's span, with nothing
-resolved and nothing attached. Two consequences, both independent of the declaration: the
+(`core.sources.invalid-reference-argument`; payload: the closed `InvalidReferenceReason`,
+today `NotPlainCharacters` alone) through the recovery policy at the argument's span, with
+nothing resolved and nothing attached. What counts is the staged nodes: an unresolvable
+command inside the delimiters is recovered as characters and its text becomes the
+reference, while a paragraph break staged as a callable node (the preset's
+`ParagraphBreakStyle::Specials`) raises the condition. A staged record that does not
+resolve is an implementation error, never this condition — a document is not blamed for a
+machinery bug. Two consequences, both independent of the declaration: the
 reference is read off the staged argument's **node data** under either regime, so the two
 share one code path and no span-extent route survives; and no reference is ever taken from
 a coordinate span, so the braces-included literal `"{chap.tex}"` is neither resolved nor

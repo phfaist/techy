@@ -53,7 +53,8 @@ use core::fmt;
 
 use crate::constructs::{
     parse_declared_arguments, ChildStateSpec, ConstructParser, ConstructParserResult,
-    GroupArgumentParser, InvalidSourceReferenceArgument, Invocation, ParseContext, StopSpec,
+    GroupArgumentParser, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
+    ParseContext, StopSpec,
 };
 use crate::node::{
     ArgumentExt, BuildId, ChildRegion, ContentNodes, NodeKind,
@@ -110,6 +111,15 @@ use super::{Latexlike, LatexlikeLang};
 /// written, with no trimming: whitespace inside the braces is part of the reference
 /// (`\input{ chap.tex }` resolves `" chap.tex "`), so tolerating padding is the
 /// resolver's choice.
+///
+/// What counts is the staged *nodes*, not the source text. An unresolvable command
+/// inside the delimiters therefore does not raise the condition: the content run
+/// recovers it as characters, and the recovered text becomes the reference the resolver
+/// is asked for (`\input{\undefined.tex}` asks for `"\undefined.tex"`, after the
+/// unresolvable-command condition). Conversely, a driver configured with
+/// [`ParagraphBreakStyle::Specials`](super::ParagraphBreakStyle::Specials) stages a
+/// paragraph break as a callable node, so a blank line inside the argument raises the
+/// condition, where the default whitespace-characters shape would not.
 ///
 /// Reading the reference from node data needs no assumption about where the tokens came
 /// from, so the rule is the same under every language — including one declaring
@@ -347,26 +357,33 @@ where
         //    tiling it describes them exactly, and then it says nothing the node data
         //    does not.) The argument's content must be plain characters: anything else
         //    is diagnosed here and no reference is read.
-        let reference: Option<String> = match arguments.first() {
-            Some(argument) if argument.region.is_some() => {
-                match argument_text(cx, argument, &children) {
-                    text @ Some(_) => text,
-                    None => {
-                        let anchor = argument_span(cx, argument, &children)
-                            .unwrap_or_else(|| at.clone());
-                        cx.recover(
-                            InvalidSourceReferenceArgument::new(
-                                InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS,
-                            ),
-                            anchor,
-                        )?;
-                        None
-                    }
+        let reference: Option<String> = match arguments
+            .first()
+            .filter(|argument| argument.is_provided())
+        {
+            Some(argument) => match argument_text(cx, argument, &children) {
+                Ok(text) => Some(text),
+                // The document's mistake: recovered, nothing resolved.
+                Err(ArgumentTextError::NotPlainCharacters) => {
+                    let anchor =
+                        argument_span(cx, argument, &children).unwrap_or_else(|| at.clone());
+                    cx.recover(
+                        InvalidSourceReferenceArgument::new(
+                            InvalidReferenceReason::NotPlainCharacters,
+                        ),
+                        anchor,
+                    )?;
+                    None
                 }
-            }
+                // A staged record that does not resolve is a bug in the machinery, never
+                // the document's doing — it aborts under any recovery policy.
+                Err(ArgumentTextError::Malformed(detail)) => {
+                    return Err(cx.implementation_error(detail, at.clone()))
+                }
+            },
             // An absent argument: the argument parser already diagnosed the missing
             // mandatory argument, and there is nothing here to add to it.
-            _ => None,
+            None => None,
         };
 
         // 3. Resolve + attach through the single raising site, driving the root
@@ -465,50 +482,79 @@ fn argument_span<LLL: LatexlikeLang>(
     Some(SourceSpan::new(first.source(), first.start()..last.end()))
 }
 
-/// The text of a staged argument's **content**: the character payloads of its content
+/// Why [`argument_text`] could not answer.
+enum ArgumentTextError {
+    /// The argument's content is not plain characters — the document's mistake, which
+    /// the caller diagnoses as
+    /// [`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument).
+    NotPlainCharacters,
+    /// A staged record did not resolve: the region, its offsets, or a node it names.
+    /// None of this depends on the document — the caller reports it as an
+    /// implementation error, aborting under any recovery policy.
+    Malformed(&'static str),
+}
+
+/// The text of a **provided** argument's content: the character payloads of its content
 /// nodes, concatenated in order and read off the nodes' own data rather than off their
 /// coordinates. Empty content (`\input{}`) reads as the empty text.
 ///
 /// Node data is what a reference may be read from under every language. A chars node
-/// carries the text the reader answered for it; a span covering several nodes is only
-/// a description of the stretch they were read from — exact for a language that obeys
+/// carries the text the reader answered for it; a span covering several nodes is only a
+/// description of the stretch they were read from — exact for a language that obeys
 /// span tiling ([`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), and no
 /// more than a description for one that does not.
 ///
-/// `None` for an absent argument, for content in no staged node, and for content that
-/// is not plain characters (a group, a callable, a comment): such node data has no
-/// single text, and the caller diagnoses it
-/// ([`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument)).
+/// [`NotPlainCharacters`](ArgumentTextError::NotPlainCharacters) for content holding a
+/// group, a callable or a comment node: such node data carries no single text.
+/// [`Malformed`](ArgumentTextError::Malformed) for a staged record that does not
+/// resolve — the caller must have checked
+/// [`is_provided`](crate::node::ParsedArgument::is_provided) first.
 fn argument_text<LLL: LatexlikeLang>(
     cx: &ParseContext<'_, '_, LLL>,
     argument: &ParsedArgument<LLL>,
     children: &[BuildId],
-) -> Option<String> {
-    let region = argument.region.as_ref()?;
+) -> Result<String, ArgumentTextError> {
+    let malformed = ArgumentTextError::Malformed;
+    let region = argument
+        .region
+        .as_ref()
+        .ok_or(malformed("a provided reference argument records no child region"))?;
     // At parse time the region is staged by construction (`finish` has not run).
-    let (offsets, content) = region.staged()?;
-    let region_nodes = children.get(offsets.start as usize..offsets.end as usize)?;
+    let (offsets, content) = region
+        .staged()
+        .ok_or(malformed("the reference argument's child region is already resolved"))?;
+    let region_nodes = children
+        .get(offsets.start as usize..offsets.end as usize)
+        .ok_or(malformed("the reference argument's region lies outside the staged children"))?;
     let staged = cx.staged_nodes();
-    let text_of = |ids: &[BuildId]| -> Option<String> {
+    let text_of = |ids: &[BuildId]| -> Result<String, ArgumentTextError> {
         let mut text = String::new();
         for id in ids {
-            let view = staged.get(*id)?;
+            let view = staged
+                .get(*id)
+                .ok_or(malformed("the reference argument names a node that is not staged"))?;
             match view.kind() {
                 NodeKind::Chars { content, .. } => {
                     text.push_str(content.resolve(view.span().source()))
                 }
-                _ => return None,
+                _ => return Err(ArgumentTextError::NotPlainCharacters),
             }
         }
-        Some(text)
+        Ok(text)
     };
     match content {
-        ContentNodes::InRegion(range) => {
-            text_of(region_nodes.get(range.start as usize..range.end as usize)?)
-        }
+        ContentNodes::InRegion(range) => text_of(
+            region_nodes
+                .get(range.start as usize..range.end as usize)
+                .ok_or(malformed("the reference argument's content lies outside its region"))?,
+        ),
         ContentNodes::InChildrenOf(id, range) => {
-            let view = staged.get(*id)?;
-            text_of(view.children().get(range.start as usize..range.end as usize)?)
+            let view = staged.get(*id).ok_or(malformed(
+                "the reference argument's content parent is not staged",
+            ))?;
+            text_of(view.children().get(range.start as usize..range.end as usize).ok_or(
+                malformed("the reference argument's content lies outside its content parent"),
+            )?)
         }
     }
 }
@@ -522,8 +568,8 @@ mod tests {
     };
     use super::*;
     use crate::constructs::{
-        InvalidSourceReferenceArgument, NoSourceResolver, StrayGroupClose, UnresolvableCommand,
-        UnresolvableSourceReference,
+        InvalidReferenceReason, InvalidSourceReferenceArgument, NoSourceResolver, StrayGroupClose,
+        UnresolvableCommand, UnresolvableSourceReference,
     };
     use crate::engine::Language;
     use crate::error::{DiagnosticInfo, Recovery};
@@ -747,7 +793,7 @@ mod tests {
 
     #[test]
     fn a_reference_argument_that_is_not_plain_characters_is_diagnosed() {
-        // The reference argument carries plain text — that is the contract. Here the
+        // The reference argument carries plain text — that is the rule. Here the
         // content is a protective group (`\input{{chap.tex}}`), which carries no text
         // to resolve: the condition is raised at the argument's span, nothing is
         // attached, and the rest of the document parses.
@@ -762,7 +808,7 @@ mod tests {
             .data()
             .downcast_ref::<InvalidSourceReferenceArgument>()
             .unwrap();
-        assert_eq!(condition.reason, InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS);
+        assert_eq!(condition.reason, InvalidReferenceReason::NotPlainCharacters);
         // The rendered wording names the reason.
         assert_eq!(
             diagnostic.message(),
@@ -807,6 +853,34 @@ mod tests {
             InvalidSourceReferenceArgument::IDENTIFIER
         );
         assert!(result.tree.root().child(0).unwrap().slots().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unresolvable_command_in_the_argument_is_recovered_as_reference_characters() {
+        // The condition fires on callable *nodes*, and an unresolvable command never
+        // stages one: the content run recovers it as characters, so the recovered text
+        // is the reference the resolver is asked for.
+        let language = language(Recovery::Tolerant, &[("chap.tex", "included")]);
+        let result = language.parse(r"\input{\undefined.tex}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+
+        let identifiers: Vec<_> =
+            result.diagnostics.iter().map(|d| d.identifier()).collect();
+        assert_eq!(
+            identifiers,
+            [UnresolvableCommand::IDENTIFIER, UnresolvableSourceReference::IDENTIFIER],
+            "{:?}",
+            result.diagnostics
+        );
+        let condition = result
+            .diagnostics
+            .iter()
+            .nth(1)
+            .unwrap()
+            .data()
+            .downcast_ref::<UnresolvableSourceReference>()
+            .unwrap();
+        assert_eq!(condition.reference, r"\undefined.tex");
     }
 
     #[test]

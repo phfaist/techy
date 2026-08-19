@@ -71,8 +71,9 @@
     tiling.~~  **DONE** (user ruling): the reference argument must carry plain text, the
     reference is read off the argument's node data under every language, and content
     that is not plain characters raises `InvalidSourceReferenceArgument`
-    (`core.sources.invalid-reference-argument`) at the argument's span with nothing
-    attached ([§dd-dr:span-tiling] amendment, [§dd-dr:input-wiring]).
+    (`core.sources.invalid-reference-argument`, reason `InvalidReferenceReason`) at the
+    argument's span with nothing attached ([§dd-dr:span-tiling] amendment,
+    [§dd-dr:input-wiring]).
 
 
 ## Smaller todo

@@ -14,12 +14,13 @@
 //! decides whether the record continues past the inclusion (the
 //! persist-vs-transparent choice).
 //!
-//! The reference itself is the caller's to read, and the contract on it is one line:
-//! an `\input`-style construct's reference argument carries **plain text**. A caller
-//! that finds anything else in the argument (a nested group, a callable, a comment)
-//! raises [`InvalidSourceReferenceArgument`] and resolves nothing — the condition is
-//! defined here, beside the two the door itself raises, so the three ways an inclusion
-//! fails read the same across every `\input`-variant spec and framework.
+//! The reference itself is the caller's to read, and the rule on it is one line: an
+//! `\input`-style construct's reference argument carries **plain text**. A caller that
+//! finds anything else in the argument (a nested group, a callable, a comment) raises
+//! [`InvalidSourceReferenceArgument`] and resolves nothing — the condition is defined
+//! here, beside the two that [`ParseContext::attach_source_reference`] raises, so the
+//! three ways an inclusion fails read the same across every `\input`-variant spec and
+//! framework.
 //!
 //! Recursion control is deliberately **not** here: the core never interprets
 //! reference strings, and legitimate self-inclusion exists (`.dtx`-style
@@ -36,7 +37,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver};
-use crate::error::DiagnosticInfo;
+use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind};
 use crate::source::{resolve_source_reference, ResolveError, Source, SourceSpan};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
@@ -344,23 +345,33 @@ impl fmt::Display for UnresolvableSourceReference {
 /// resolver is configured at all.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(
-    id = "core.sources.invalid-reference-argument",
-    message = "invalid source reference argument: {reason}"
-)]
+#[diagnostic(id = "core.sources.invalid-reference-argument")]
 pub struct InvalidSourceReferenceArgument {
-    /// Why the argument cannot be read as a source reference, as the short phrase the
-    /// message renders. The only value the crate raises is
-    /// [`NOT_PLAIN_CHARACTERS`](InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS);
-    /// match on the condition type (or on [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER)),
-    /// never on this text.
-    pub reason: &'static str,
+    /// Why the argument cannot be read as a source reference.
+    pub reason: InvalidReferenceReason,
 }
 
-impl InvalidSourceReferenceArgument {
-    /// The reason for an argument whose content is not plain characters — the only
-    /// reason the crate raises today.
-    pub const NOT_PLAIN_CHARACTERS: &'static str = "its content is not plain characters";
+/// Why an [`InvalidSourceReferenceArgument`] argument cannot be read as a source
+/// reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
+#[non_exhaustive]
+pub enum InvalidReferenceReason {
+    /// The argument's content is not plain characters — it holds a group, a callable
+    /// or a comment node, none of which carries reference text.
+    NotPlainCharacters,
+}
+
+// Hand-written wording: the message varies by reason (a match, which the message
+// format string cannot express), and the reason's own wire value is the enum's, not
+// this English phrasing.
+impl fmt::Display for InvalidSourceReferenceArgument {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.reason {
+            InvalidReferenceReason::NotPlainCharacters => {
+                f.write_str("invalid source reference argument: its content is not plain characters")
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -507,19 +518,19 @@ mod tests {
         use crate::error::DiagnosticValue;
         use alloc::string::ToString;
 
-        let condition = InvalidSourceReferenceArgument::new(
-            InvalidSourceReferenceArgument::NOT_PLAIN_CHARACTERS,
-        );
+        let condition =
+            InvalidSourceReferenceArgument::new(InvalidReferenceReason::NotPlainCharacters);
         assert_eq!(
             condition.to_string(),
             "invalid source reference argument: its content is not plain characters"
         );
+        // The wire value is the reason's own name, not the rendered English.
         let projected = crate::error::DiagnosticInfo::serializable_data(&condition);
         assert_eq!(
             projected,
             DiagnosticValue::Map(vec![(
                 "reason".into(),
-                DiagnosticValue::Str("its content is not plain characters".into())
+                DiagnosticValue::Str("not-plain-characters".into())
             )])
         );
     }

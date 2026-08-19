@@ -58,8 +58,8 @@ pub use argument_parsers::{
     OptionalGroupArgumentParser,
 };
 pub use attached_source::{
-    AttachedSourceOutcome, InvalidSourceReferenceArgument, NoSourceResolver,
-    UnresolvableSourceReference,
+    AttachedSourceOutcome, InvalidReferenceReason, InvalidSourceReferenceArgument,
+    NoSourceResolver, UnresolvableSourceReference,
 };
 pub use chars_group_parser::CharsGroupArgumentParser;
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
