@@ -644,8 +644,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// 5. a comment ([`scan_comment`]);
     /// 6. a specials trigger ([`scan_specials_trigger`]);
     /// 7. a forbidden character
-    ///    ([`TokenRules::forbidden_chars`](super::TokenRules::forbidden_chars)), reported as the
-    ///    failure below;
+    ///    ([`TokenRules::forbidden_chars`](super::TokenRules::forbidden_chars)), reported
+    ///    as the failure below;
     /// 8. otherwise a single content character — a
     ///    [`Char`](TokenKind::Char) token.
     ///

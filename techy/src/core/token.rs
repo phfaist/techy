@@ -22,6 +22,13 @@
 //! `Lang` trait (its associated types and hooks), the parsing state and its deltas, and
 //! the engine.
 //!
+//! A **scan helper**, one of the things that rule places here, is a free function that
+//! recognizes one construct at a byte offset in the text being scanned and answers what it
+//! found — byte ranges into that text ([`Span`](crate::source::Span)s), plus the rule or
+//! the specification that matched — or nothing. A helper advances no position, builds no
+//! token, and never sees the [`Source`](crate::source::Source) the text came from.
+//! *Writing a token reader* below lists the seven of them.
+//!
 //! # The items, by group
 //!
 //! - **The tokenization declaration** — [`Tokenization`] and the standard
@@ -78,15 +85,50 @@
 //! on the [`TokenReader`] page states how that delegation goes and shows a complete
 //! example. A reader that instead declares a token type of its own — one that wraps
 //! standard tokens read from one or several sources, as a macro expander does — keeps one
-//! inner [`StdTokenReader`] per source; what the stream positions on the two sides of a
+//! inner [`StdTokenReader`] per source and works through two methods of it, which need no
+//! tokenization declaration of their own:
+//! [`scan_std_token_at`](StdTokenReader::scan_std_token_at) reads the standard token at an
+//! offset without moving that inner reader, and
+//! [`token_kind_of_std_token`](StdTokenReader::token_kind_of_std_token) answers what one of
+//! the standard tokens it stores is — the trait method
+//! [`token_kind`](TokenReader::token_kind) is out of reach for such a language, since the
+//! implementation of [`TokenReader`] for [`StdTokenReader`] serves only languages tokenized
+//! in [`StdToken`]/[`StdStreamPosition`]. What the stream positions on the two sides of a
 //! source change mean is
 //! [*Seams*](TokenReader#seams--readers-that-serve-several-sources-at-one-nesting-level)
 //! on the same page, and reading tokens from several sources during one parse requires
 //! the language to declare
 //! [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`.
 //!
-//! **A reader with its own token kinds.** The scan helpers are described with the
-//! functions themselves.
+//! **A reader with its own token kinds.** A language whose tokens are not the standard
+//! ones at all — its own kinds, carrying its own data — implements [`TokenReader`] over a
+//! token type of its own, and composes the scan helpers for whichever constructs it wants
+//! recognized the way the standard reader recognizes them: [`skip_whitespace`] for a
+//! whitespace run, [`scan_paragraph_break`] for a paragraph break,
+//! [`scan_group_delimiter`] for a group delimiter (answering a [`GroupDelimiterMatch`]),
+//! [`command_rule_at`] and then [`scan_command`] for a command (a [`CommandMatch`]),
+//! [`scan_comment`] for a whole comment (a [`CommentMatch`]), and
+//! [`scan_specials_trigger`] for a specials trigger (a [`SpecialsMatch`]). Each answers
+//! byte ranges and the rule that matched, and the reader builds whatever token it likes
+//! from that. [`StdTokenReader::scan_std_token_at`] is itself written as a composition of
+//! these seven, so a construct is recognized in one place and nowhere else; the order it
+//! tries them in is documented there. Three of its steps are a line each rather than a
+//! helper: the test for the end of the content, the forbidden-character test
+//! ([`TokenRules::forbidden_chars`] answers the empty string for a language that declares
+//! no such feature), and the fallback to a single content character.
+//!
+//! # Where a scan helper may be asked to look
+//!
+//! Every scan helper takes the text being scanned and a byte offset `pos` into it, and
+//! every one of them requires `pos <= content.len()` with `pos` on a `char` boundary.
+//! `pos == content.len()` is valid and names the end of the content: a helper answers
+//! that nothing is there. A `pos` that violates the requirement panics, in all builds —
+//! it is a mistake in the calling code, which no scanned text can cause, and it is one of
+//! this crate's few deliberate panics (the [Panics list](crate::guide::panics) names them
+//! all). A reader validates the offsets that reach it from its own caller once, where
+//! they reach it — which is what [`StdTokenReader::scan_std_token_at`] does with `start`,
+//! reporting an invalid one as an implementation error instead of panicking — and passes
+//! offsets derived from a validated one to the helpers.
 
 pub use crate::state::{
     CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
