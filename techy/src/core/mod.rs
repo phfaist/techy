@@ -1,15 +1,16 @@
-//! The machinery hub: the [`Lang`] contract and parsing state, and the parse engine.
+//! The machinery hub: the [`Lang`] trait and parsing state, and the parse engine.
 //!
 //! The hub is deliberately **flat**. State and the engine form one mutually recursive
 //! cluster — the state carries what the engine's next step needs, the state is derived
 //! through the engine's session, and readers and parsers run over both — so the hub keeps
 //! the whole [`Language::parse()`](Language::parse) → [`ParseResult`] flow on one page:
 //!
-//! - **Language contract and state** — [`Lang`] (the compile-time customization
+//! - **Language trait and state** — [`Lang`] (the compile-time customization
 //!   bundle) and its [`LangFeatures`] feature-presence declarations,
 //!   [`ParsingState`] and its reified [`ParsingStateDelta`]s (which carry the token
 //!   layer's [`TokenRulesOverrides`](token::TokenRulesOverrides)), [`StateData`], the
 //!   [`NodeExtTypes`] ext bundle, and the [`TrivialLang`] test lang.
+//! - **Tokens** — the tokenization library is the [`token`] submodule.
 //! - **Engine** — the [`Language`] runtime bundle and its `parse()` entry,
 //!   [`ParserSession`], the [`ParseDriver`] customization point ([`StdParseDriver`]),
 //!   [`ParseResult`], the live parse-frame stack ([`Frame`], [`FrameTitle`],

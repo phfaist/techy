@@ -8,7 +8,8 @@ stage agents append here. Statuses: started / implemented / reviewed / merged.
 - Worktree: `.claude/worktrees/ct-0-facade`
 - Status: implemented (awaiting review)
 - Commits: `e446b61` (facade), `a794842` (topology lists), `2503eee` (guide links),
-  `f404068` (rustdoc links, doctests, tests), plus this log entry.
+  `f404068` (rustdoc links, doctests, tests), `519a0ec` (`TriggerChars` wording), the
+  review-round-1 fixes, plus this log entry.
 
 ### What changed, per file
 
@@ -69,7 +70,10 @@ stage agents append here. Statuses: started / implemented / reviewed / merged.
   `target/doc/techy/core/token/` holds exactly 41 item pages; no token-named page is
   left under `target/doc/techy/core/`.
 - §1.2 grep — `grep -rEn "core::(<41-item regex>)\b" techy/src techy/tests docs
-  README.md CLAUDE.md` exits 1 (no match); `core::token::` occurs on 92 lines.
+  README.md CLAUDE.md` exits 1 (no match). `grep -rn "core::token::" techy/src
+  techy/tests docs README.md CLAUDE.md | wc -l` — 106 lines (15 in `techy/src`, 13 in
+  `techy/tests`, 78 in `docs`, 0 in `README.md` and `CLAUDE.md`, which name the module
+  but no item path).
 - `git diff --stat main..HEAD` — no change under `techy/src/state/`; under
   `techy/src/token/` only the three doctest `use` lines (`reader.rs` +4/-3,
   `rules.rs` +2/-1, `tokenization.rs` +3/-2), all inside `///` blocks.
@@ -79,13 +83,43 @@ stage agents append here. Statuses: started / implemented / reviewed / merged.
   linted). Against the frozen `api-baseline` the same script reports 19 major
   categories, dominated by breaks that predate this branch.
 
+### Review round 1 — required fixes applied
+
+The reviewer passed every gate and required four fixes; three wording improvements
+were adopted with them.
+
+1. The placement rule is now verbatim against the amended §1.2 (`ca81cff`, which
+   dropped the "contract" wording): "the `TokenReader` trait and the standard reader"
+   and "the `Lang` trait (its associated types and hooks)". The sentence keeps the
+   `core` hub link around the word "hub"; no other word differs from the plan.
+2. `README.md` (the crates.io readme) — its facade list said "three satellites" and
+   put the token items in the `techy::core` bullet. The bullet now names the state and
+   the engine only, the list says "four satellites", and a `techy::core::token`
+   sub-bullet stands before `core::specs`.
+3. The two `TokenReader` sections item 4b names are hyperlinked by anchor, verified
+   against the generated page (both anchors exist and both links appear on the facade
+   page).
+4. This log: the corrections below and the re-measured `core::token::` count.
+5. Wording: "one block per tokenization feature" (`LangFeatures` has eight members and
+   `Scopes` has no rules block), "the caches a parsing state derives at each state
+   transition" (`TriggerChars` comes from the `Lang::specials_trigger_chars` hook over
+   the state data, not from the rules), and "spelled everywhere else through the two
+   aliases" for `Token<L>`/`StreamPosition<L>` (the word `docs/custom-lang.md` uses).
+6. `core/mod.rs` — the hub's top-level list has a one-line **Tokens** bullet pointing
+   at the [`token`] submodule again (§1.2's "replaced by a sentence pointing at
+   `token`"), and its summary line and state bullet say "`Lang` trait" / "Language
+   trait and state".
+
 ### Deviations from §1 (all recorded, none silent)
 
 1. §1.2 item 4b is written without links to `StdTokenReader::scan_std_token_at` and
    `token_kind_of_std_token`: both are still `pub(crate)` in Stage 0 and
-   `broken_intra_doc_links` is `deny`. The paragraph describes the delegating wrapper
-   fully, and the several-sources case in prose (one inner `StdTokenReader` per source,
-   the *Seams* section linked, the `Lang::OBEYS_SPAN_TILING = false` requirement named).
+   `broken_intra_doc_links` is `deny`. Everything else of item 4b is there: the
+   delegating wrapper, and the several-sources case (one inner `StdTokenReader` per
+   source, the `Lang::OBEYS_SPAN_TILING = false` requirement named), with both named
+   sections of the `TokenReader` page hyperlinked by anchor —
+   `TokenReader#writing-a-reader-over-standard-tokens` and
+   `TokenReader#seams--readers-that-serve-several-sources-at-one-nesting-level`.
    Stage 1 adds the two method links per §1.3.
 2. §1.2 items 4c and 5 are the one-line placeholder §2 step 1 prescribes ("The scan
    helpers are described with the functions themselves."). Consequence to fix in Stage
@@ -95,18 +129,15 @@ stage agents append here. Statuses: started / implemented / reviewed / merged.
    groups: the rules data, its `*Overrides`, and the caches derived from them are one
    "Token rules" bullet with two sub-bullets (the grouping the placement rule itself
    uses). All 41 items are linked exactly once.
-4. The placement rule is recorded verbatim, so its "the reader contract" survives in a
-   sentence that does not state that contract — the banned-word rule for "contract" is
-   waived for the verbatim text only. Elsewhere in the new doc lines the topology
-   bullets say "the `TokenReader` trait" instead.
-5. One topology list beyond §1.2's three was updated: `docs/ai-guide.md`'s "Module
+4. One topology list beyond §1.2's three was updated: `docs/ai-guide.md`'s "Module
    topology" table, which ends with "Every item has exactly one canonical public path
    (the paths above)" and would otherwise have been wrong.
-6. Four doc lines were re-wrapped where `token::` pushed them past the file's ~88-column
+5. Four doc lines were re-wrapped where `token::` pushed them past the file's ~88-column
    wrap (three regions in `docs/panics.md`, one in `docs/concepts-overview.md`). Three
    lines that consist of a single link stay 92–94 columns and were left alone
-   (`docs/custom-lang.md` 326 and 332, `docs/construct-parsers.md` 80).
-7. `core/mod.rs`'s state bullet keeps its rules-override mention, retargeted as
+   (`docs/custom-lang.md` 326 and 332, `docs/construct-parsers.md` 80), as does the
+   96-column section link added by review fix 3 (`core/token.rs` 77).
+6. `core/mod.rs`'s state bullet keeps its rules-override mention, retargeted as
    `token::TokenRulesOverrides` (dropping it would have lost the pointer that a state
    delta carries the overrides; leaving it unqualified would have broken the link).
 

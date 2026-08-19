@@ -57,9 +57,10 @@ libraries at the top level, the machinery in `techy::core`, the preset in
 - **`techy::error`**: span-based structured diagnostics, tolerant parsing policy
 - **`techy::extract`**: content-extraction helpers over parsed node trees
 - **`techy::core`**: the flat machinery hub — the `Lang` trait and immutable
-  parsing state, zero-copy tokens and data-driven tokenization rules, and the
-  parse engine (`Language` + `parse()`, drivers, sessions, results) — with three
-  satellites:
+  parsing state, and the parse engine (`Language` + `parse()`, drivers, sessions,
+  results) — with four satellites:
+  - **`techy::core::token`**: the tokenization library — zero-copy tokens, the
+    token reader, and data-driven tokenization rules
   - **`techy::core::specs`**: defining callables — callable specs and argument
     structures, definition packages, the scope stack, command resolution
   - **`techy::core::constructs`**: the construct parsers and the content

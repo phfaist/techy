@@ -15,17 +15,17 @@
 //! # What lives here
 //!
 //! `core::token` holds what a token reader produces, consumes and answers with — the
-//! token and stream-position types, the reader contract and the standard reader, the scan
-//! helpers, the token rules the reader reads together with the overrides that change them
-//! mid-parse and the caches derived from them, the types the specials-scan hooks answer
-//! with, and the token conditions and errors. The [`core`](crate::core) hub keeps the
-//! `Lang` contract (its associated types and hooks), the parsing state and its deltas,
-//! and the engine.
+//! token and stream-position types, the `TokenReader` trait and the standard reader, the
+//! scan helpers, the token rules the reader reads together with the overrides that change
+//! them mid-parse and the caches derived from them, the types the specials-scan hooks
+//! answer with, and the token conditions and errors. The [hub](crate::core) keeps the
+//! `Lang` trait (its associated types and hooks), the parsing state and its deltas, and
+//! the engine.
 //!
 //! # The items, by group
 //!
 //! - **The tokenization declaration** — [`Tokenization`] and the standard
-//!   [`StdTokenization`], read everywhere else through their two projections,
+//!   [`StdTokenization`], spelled everywhere else through the two aliases
 //!   [`Token<L>`](Token) and [`StreamPosition<L>`](StreamPosition).
 //! - **Token values and views** — the standard token [`StdToken`] and the standard stream
 //!   position [`StdStreamPosition`]; [`TokenKind`], the view a reader answers a token's
@@ -33,8 +33,8 @@
 //! - **The reader** — the [`TokenReader`] trait that every reader implements and the
 //!   parser side calls, the standard [`StdTokenReader`], and [`skip_whitespace`], the
 //!   whitespace-skipping primitive that never crosses a paragraph break.
-//! - **Token rules** — [`TokenRules`], the tokenization data a parsing state holds, with
-//!   one block per language feature: [`WhitespaceRules`], [`ParagraphRules`],
+//! - **Token rules** — [`TokenRules`], the tokenization data a parsing state holds, one
+//!   block per tokenization feature: [`WhitespaceRules`], [`ParagraphRules`],
 //!   [`GroupRules`] of [`GroupRule`]s, [`CommandRules`] of [`CommandRule`]s,
 //!   [`CommentRules`] of [`CommentRule`]s, [`SpecialsRules`], and
 //!   [`ForbiddenCharsRules`]. Two families come with them:
@@ -42,9 +42,9 @@
 //!     [`TokenRulesOverrides`] and its per-block [`WhitespaceOverrides`],
 //!     [`ParagraphOverrides`], [`GroupOverrides`], [`CommandOverrides`],
 //!     [`CommentOverrides`], [`SpecialsOverrides`], [`ForbiddenCharsOverrides`];
-//!   - the caches a parsing state derives from the rules once, at each state transition:
-//!     the group-delimiter [`PrefixTable`] of [`PrefixEntry`]s, and [`TriggerChars`], the
-//!     filter saying which characters a specials match may start with.
+//!   - the caches a parsing state derives at each state transition: the group-delimiter
+//!     [`PrefixTable`] of [`PrefixEntry`]s, and [`TriggerChars`], the filter saying which
+//!     characters a specials match may start with.
 //! - **What a specials scan answers with** — [`SpecialsMatch`] for a match and
 //!   [`SpecialsScanError`] for a failure of
 //!   [`Lang::scan_specials`](crate::core::Lang::scan_specials), the hook a reader consults
@@ -74,13 +74,15 @@
 //! in content — implements [`TokenReader`] itself while keeping [`StdToken`] as its token
 //! type: hold an inner [`StdTokenReader`] over the same content, build tokens with the
 //! [`StdToken`] constructors, and delegate every interpretive method to the inner reader.
-//! The *Writing a reader over standard tokens* section of the [`TokenReader`]
-//! documentation states how that delegation goes and shows a complete example. A reader
-//! that instead declares a token type of its own — one that wraps standard tokens read
-//! from one or several sources, as a macro expander does — keeps one inner
-//! [`StdTokenReader`] per source; what the stream positions on the two sides of a source
-//! change mean is the *Seams* section of the same documentation, and reading tokens from
-//! several sources during one parse requires the language to declare
+//! [*Writing a reader over standard tokens*](TokenReader#writing-a-reader-over-standard-tokens)
+//! on the [`TokenReader`] page states how that delegation goes and shows a complete
+//! example. A reader that instead declares a token type of its own — one that wraps
+//! standard tokens read from one or several sources, as a macro expander does — keeps one
+//! inner [`StdTokenReader`] per source; what the stream positions on the two sides of a
+//! source change mean is
+//! [*Seams*](TokenReader#seams--readers-that-serve-several-sources-at-one-nesting-level)
+//! on the same page, and reading tokens from several sources during one parse requires
+//! the language to declare
 //! [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`.
 //!
 //! **A reader with its own token kinds.** The scan helpers are described with the
