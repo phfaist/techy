@@ -84,6 +84,8 @@ pub mod serialize;
 mod serialize_tests;
 mod spec;
 #[cfg(test)]
+mod span_tiling_tests;
+#[cfg(test)]
 mod test_support;
 
 pub use arguments::{
