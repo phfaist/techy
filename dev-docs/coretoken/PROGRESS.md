@@ -148,9 +148,146 @@ were adopted with them.
   `skip_whitespace` bullet are Stage 1 (§1.6), and the tokenization paragraphs of
   `docs/custom-lang.md` are Stage 2.
 
-## Stage 1 — promoted methods + scan helpers (`ct-1-scan` ← `ct-0-facade`)
+## Stage 1 — promoted methods + scan helpers (`ct-1-scan` ← `ct-0-facade` @ 35eab33)
 
-- Status: not started
+- Worktree: `.claude/worktrees/ct-1-scan`
+- Status: implemented (awaiting review)
+- Commits: `dababe4` (the two promoted methods), `ddc5721` (`scan.rs` with
+  `skip_whitespace` moved), `21c6e00` (the helpers and match types), `a61f077` (the
+  dispatcher recomposed), `ccf006c` (`docs/panics.md`), `4935a3b` (the helper tests),
+  `8809724` (the facade module docs), `1f4cae0` (a stale mention of a deleted method
+  name), plus this log entry.
+
+### What changed, per file
+
+- `techy/src/token/scan.rs` (new, 1335 lines) — the scan-helper file. `skip_whitespace`
+  and its private companion `paragraph_continues` moved in unchanged, then the six
+  helpers and three match types of §1.4: `scan_paragraph_break`,
+  `scan_group_delimiter` + `GroupDelimiterMatch` (with `span()`/`rule()` and
+  hand-written `Clone`/`Copy`/`Debug`/`PartialEq`/`Eq` carrying no `L:` bounds, as
+  `TokenKind`'s do), `command_rule_at`, `scan_command` + `CommandMatch`, `scan_comment`
+  + `CommentMatch`, `scan_specials_trigger`. Two private items: `check_pos`, which
+  raises the family's `pos` panic in one place with one wording, and
+  `checked_scan_error`, the span-validating half of the reader's former
+  `lift_specials_scan_error`. Its `mod tests` holds 44 tests (the three moved
+  `skip_whitespace` ones included).
+- `techy/src/token/reader.rs` (−196 lines net) — `scan_token_at` →
+  `pub fn scan_std_token_at` and `token_kind_of` → `pub fn token_kind_of_std_token`,
+  both with the docs of §1.3 (priority order, where `start` may point, which failures
+  carry a recovery; who needs the interpretation and how a foreign token reads).
+  `scan_std_token_at`'s body is the composition of §1.5, and the five private methods
+  are deleted. The `TokenReader` docs' *Writing a reader over standard tokens* section
+  gains the sentence pointing at the two methods; the module docs say the scanning core
+  is composed of the scan helpers instead of private methods.
+- `techy/src/token/mod.rs` — `mod scan;` added; `skip_whitespace` re-exported from
+  `scan` instead of `reader` (public path unchanged), together with the nine new items.
+- `techy/src/core/token.rs` — the nine new items exported flat; module docs completed:
+  the definition of "scan helper" right after the placement rule, the two promoted
+  methods named and linked in way (b), way (c) written out (the seven helpers with
+  their match types, the composition sentence, the three steps that are a line each
+  rather than a helper), and a new closing section stating the family's `pos`
+  requirement once.
+- `techy/src/token/scripted_reader.rs` — the three call sites renamed (one `match`
+  re-wrapped to stay inside the file's line width).
+- `docs/panics.md` — the `skip_whitespace` bullet becomes the family bullet of §1.6;
+  the lead sentence counts precisely and its justification clause now also covers a
+  helper that answers about the content it was handed.
+- `techy/src/constructs/nodes_parser.rs` — one doc comment that pointed at
+  `detect_group_delimiter` now links `core::token::scan_group_delimiter`.
+
+### Gates (final tree, `1f4cae0`)
+
+- `cargo build` — `Finished \`dev\` profile [unoptimized + debuginfo] target(s)`.
+- `cargo test --workspace` — `1169 passed; 0 failed; 0 ignored` for the lib, then `30`,
+  `9`, `14`, `23`, `0`, `0`, `0`, `1` for the integration binaries, doc-tests
+  `86 passed; 0 failed; 4 ignored`, `techy_derive` doc-tests `0 passed; 0 failed; 2
+  ignored`. All `test result: ok.` (Stage 0's lib count was 1128; +41 = the 44 new
+  `scan.rs` tests less the 3 that moved out of `reader.rs`.)
+- `cargo test --workspace --all-features` — `1208 passed; 0 failed; 1 ignored`, then
+  `30`, `9`, `14`, `23`, `3`, `2`, `5`, `1`, doc-tests `87 passed; 0 failed; 4 ignored`,
+  derive doc-tests `0 passed; 0 failed; 2 ignored`. All `test result: ok.`
+- `cargo test --lib token::scan` — `44 passed; 0 failed; 0 ignored; 1125 filtered out`.
+- `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warning or
+  error lines. Same with `--all-features`.
+- `rm -rf target/doc && cargo docs --all-features` — exit 0, no rustdoc output beyond
+  `Documenting`/`Finished`/`Generated`. Same for plain `cargo docs`.
+  `target/doc/techy/core/token/` holds 50 item pages (41 + the 9 new ones), the seven
+  `fn.*.html` pages are the helper family, and the facade page's links to
+  `StdTokenReader#method.scan_std_token_at` and `#method.token_kind_of_std_token`
+  resolve.
+- The seven superseded names, grepped whole-word over `techy/src`
+  (`grep -rnw "detect_paragraph_break\|detect_group_delimiter\|read_command\|
+  read_comment\|lift_specials_scan_error\|scan_token_at\|token_kind_of"`, written on
+  one line): exit 1, no match. Likewise over `docs README.md CLAUDE.md techy/tests`.
+- The Stage-0 §1.2 grep (`core::<moved item>` over `techy/src techy/tests docs
+  README.md CLAUDE.md`) still exits 1.
+- Banned-word grep over every added line of `git diff ct-0-facade..HEAD` — no match.
+  The word "contract" appears only in the `# Panics` sections (which state the
+  requirement in the same sentence, the wording `skip_whitespace` already used) and in
+  comments moved verbatim from the deleted method bodies.
+- `git diff ct-0-facade..HEAD -- techy/src/token/reader.rs` inside `mod tests`: two
+  hunks only — the import list (three names the file no longer needs outside its tests)
+  and the removal of the three `skip_whitespace` tests that moved to `scan.rs`. No test
+  body was edited; the two renamed methods are not called from `reader.rs`'s tests at
+  all (they go through the `TokenReader` trait).
+
+### Decisions under §1.8
+
+D1, D2, D4, D5, D6, D7, D8 as written; no deviation. D3 is implemented as specified and
+flagged below. On D7 no doctest was added — the optional one was not worth the fixture a
+helper example needs (a `TokenRules` value), and the module docs link the compiling
+examples the `TokenReader` and `Tokenization` pages already carry.
+
+### Deviations from §1 (all recorded, none silent)
+
+1. **The family panic is raised up front, by a shared `check_pos`.** §1.4 requires an
+   invalid `pos` to panic in all builds but does not say where; the moved bodies would
+   have panicked from a `content[pos..]` slice, with std's wording, and only in the
+   branches that reach a slice (a helper whose feature is disabled returns before
+   touching the content). One private `check_pos` at the top of each of the six new
+   helpers makes the panic unconditional and gives the whole family the wording
+   `skip_whitespace` already had ("out of bounds or not a char boundary"), which is what
+   the `#[should_panic(expected = "char boundary")]` tests match on. `skip_whitespace`
+   itself is untouched (§1.4: it moves unchanged), so it alone still panics only when
+   whitespace handling is on.
+2. **`reader.rs`'s `mod tests` import list changed** (two lines). Deleting the five
+   private methods left `TokenRules`, `CommandRule`, `EndOfStreamAfterEscape` and
+   `SpecialsScanError` unused in the file's own code; their rustdoc links are now
+   written with an explicit `super::` target, and the test module — which used them
+   through `use super::*` — imports the three its fixtures need. No test body was
+   touched. §3's gate wording ("no edits inside `mod tests` other than the two method
+   renames") did not anticipate this; the alternative was keeping four imports alive
+   with an `allow` attribute.
+3. **The three `skip_whitespace` tests moved out of `reader.rs`** — prescribed by §3
+   step 2 and D6, and therefore also an edit inside `mod tests`. Their bodies are
+   unchanged; `scan.rs`'s own fixtures (a `TrivialLang`-based `TestLang` and the same
+   `latex_rules`) replace `reader.rs`'s.
+4. **`docs/panics.md`'s lead sentence lost the word "value"**: "Four span and position
+   functions, the seven scan helpers of `core::token`, and the seven span-taking
+   `StdToken` constructors". Its justification clause also gained "or answer about the
+   content they were handed rather than about a mistake in calling code", since three of
+   the seven helpers do have an error channel and "deliberately infallible" would have
+   been wrong about them. §1.6 asked for the count; this is the same sentence made
+   true.
+5. **One file outside §3's list was edited**: `techy/src/constructs/nodes_parser.rs`,
+   whose `group_close_type` doc comment named `detect_group_delimiter`. Leaving it would
+   have kept a superseded name alive and failed the stage's own grep.
+
+### Open questions and flags for the user
+
+- **D3 (flag required by §1.8).** `scan_command` asserts, in all builds, that
+  `rule.escape_char` stands at `pos`, with the message "the rule's escape character 'X'
+  does not stand at pos N". The panic exception the user granted names only an invalid
+  `pos`, so this second precondition is the one point of Stage 1 that goes beyond the
+  wording of the grant. It is documented in the function's `# Panics` section and in the
+  `docs/panics.md` family bullet, and one test covers it. The fallback if the user
+  objects stays available: `-> Option<Result<CommandMatch, EndOfStreamAfterEscape>>`
+  with `None` for the mismatch.
+- Deviation 1 above (the up-front `check_pos`) is an implementation choice inside §1.4's
+  rule, not a design question, but it does make the family's panic behavior uniform in a
+  way the plan text left open — worth a glance.
+- No semver measurement was re-run for this stage: it adds public items and widens two
+  methods' visibility (both minor), and breaks no path. Stage 0's note stands.
 
 ## Stage 2 — guide and record (`ct-2-record` ← `ct-1-scan`)
 
