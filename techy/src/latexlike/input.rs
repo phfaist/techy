@@ -320,11 +320,20 @@ where
             &end,
         )?;
 
-        // 2. The argument text — the reference, exactly as written.
-        let reference: Option<String> = arguments
-            .first()
-            .and_then(|argument| argument_text_span(cx, argument, &children))
-            .map(|span| span.content().to_string());
+        // 2. The argument text — the reference, exactly as written. The reference
+        //    drives source resolution, so it is read the way it can be read exactly:
+        //    off the argument's own extent for a language that obeys span tiling, and
+        //    out of the staged nodes' own data for one that does not (there a span
+        //    covering several tokens is only what the reader described for them).
+        let reference: Option<String> = match LLL::OBEYS_SPAN_TILING {
+            true => arguments
+                .first()
+                .and_then(|argument| argument_text_span(cx, argument, &children))
+                .map(|span| span.content().to_string()),
+            false => arguments
+                .first()
+                .and_then(|argument| argument_text(cx, argument, &children)),
+        };
 
         // 3. Resolve + attach through the single raising site, driving the root
         //    nodes-parse shape under the state at the `\input` point.
@@ -432,6 +441,49 @@ fn argument_text_span<LLL: LatexlikeLang>(
                 return Some(SourceSpan::new(view.span().source(), at..at));
             }
             None
+        }
+    }
+}
+
+/// The text of a staged argument's **content**, read off the staged nodes' own data
+/// rather than off their coordinates — what a language with
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` needs: its
+/// chars nodes carry the text the reader answered, while a span covering several of
+/// them is only a description of the stretch they were read from.
+///
+/// `None` for an absent argument, for content in no staged node, and for content that
+/// is not plain characters (a group, a callable): the node data of those has no single
+/// text, and a reference read from a coordinate span would be a guess.
+fn argument_text<LLL: LatexlikeLang>(
+    cx: &ParseContext<'_, '_, LLL>,
+    argument: &ParsedArgument<LLL>,
+    children: &[BuildId],
+) -> Option<String> {
+    let region = argument.region.as_ref()?;
+    // At parse time the region is staged by construction (`finish` has not run).
+    let (offsets, content) = region.staged()?;
+    let region_nodes = children.get(offsets.start as usize..offsets.end as usize)?;
+    let staged = cx.staged_nodes();
+    let text_of = |ids: &[BuildId]| -> Option<String> {
+        let mut text = String::new();
+        for id in ids {
+            let view = staged.get(*id)?;
+            match view.kind() {
+                NodeKind::Chars { content, .. } => {
+                    text.push_str(content.resolve(view.span().source()))
+                }
+                _ => return None,
+            }
+        }
+        Some(text)
+    };
+    match content {
+        ContentNodes::InRegion(range) => {
+            text_of(region_nodes.get(range.start as usize..range.end as usize)?)
+        }
+        ContentNodes::InChildrenOf(id, range) => {
+            let view = staged.get(*id)?;
+            text_of(view.children().get(range.start as usize..range.end as usize)?)
         }
     }
 }

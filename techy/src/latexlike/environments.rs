@@ -867,7 +867,10 @@ where
                 .map_err(|error| cx.implementation_error(error, trigger_span))?;
             return Ok((id, None));
         };
-        let name = name_group.name.content();
+        // The name as read, never the span's content: the span is only what the reader
+        // described for the stretch when the language does not obey span tiling, and
+        // the name drives the spec lookup, the node's `name` and the diagnostics.
+        let name = name_group.name_text();
 
         // The begin side's spelling facts (escape char, command word, post-space,
         // matched name group) — recorded, no longer normalized away; handed to the
@@ -1044,53 +1047,47 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
         };
         let after_trigger = cx.tokens.position_at(trigger, TokenEdge::EndPastPostSpace);
         let name_group = read_rigid_name_group(cx, LLL::GroupTypeId::content_group())?;
-        let (name, end, quoted_end) = match &name_group {
-            Some(group) => (
-                Some(String::from(group.name.content())),
-                group.end.clone(),
-                group.end.clone(),
-            ),
+        let (name, end) = match &name_group {
+            // The name as read, never the span's content (see the begin side).
+            Some(group) => (Some(String::from(group.name_text())), group.end.clone()),
             // Malformed name group: nothing past the trigger was consumed.
-            None => (
-                None,
-                after_trigger,
-                cx.tokens.position_at(trigger, command_end),
-            ),
+            None => (None, after_trigger),
         };
         let span = cx.source_span_within(&trigger_start, &end)?;
+        // What was consumed, as text: the trigger up to `edge` — one reader answer
+        // about one token, taken from its `Start` so the pre-space the content loop
+        // already staged stays out — then the name group, its delimiters as written
+        // (the rule cloned off the matched open token) around the name as read. The
+        // span from `trigger_start` cannot answer this: for a language that does not
+        // obey span tiling it is only what the reader describes for the stretch.
+        let consumed = |cx: &ParseContext<'_, '_, LLL>, edge: TokenEdge| -> String {
+            let mut text = String::from(
+                cx.tokens.source_span_between(trigger, TokenEdge::Start, edge).content(),
+            );
+            if let Some(group) = &name_group {
+                text.push_str(&group.rule.open);
+                text.push_str(group.name_text());
+                text.push_str(&group.rule.close);
+            }
+            text
+        };
         // The condition quotes the terminator as written — its command name is this
-        // spec's registration name, not a fixed spelling.
-        let quoted = cx.source_span_within(&trigger_start, &quoted_end)?;
-        let terminator = String::from(quoted.content());
+        // spec's registration name, not a fixed spelling. Without a name group the
+        // quote stops at the command word (`command_end`): the trigger's own
+        // post-space is consumed with it and would read as a trailing blank inside
+        // the quotes.
+        let quoted_edge = match &name_group {
+            Some(_) => TokenEdge::EndPastPostSpace,
+            None => command_end,
+        };
+        let terminator = consumed(cx, quoted_edge);
         cx.recover(OrphanEnd::new(name, terminator), span.clone())?;
         // The node covers the trigger and, when one was read, the name group — several
-        // tokens. For a language with
-        // [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
-        // recorded span is only what the reader *describes* for that stretch, so the
-        // content is assembled from what the site has in hand about each piece: the
-        // trigger's own span (one reader answer about one token, from its start so the
-        // pre-space the content loop already staged stays out) and the name group's
-        // delimiters as written — the rule cloned off the matched open token — around
-        // the name.
+        // tokens — so for a language with `OBEYS_SPAN_TILING = false` its content is
+        // what was consumed (`consumed`, above), not the recorded span.
         let content = match LLL::OBEYS_SPAN_TILING {
             true => TextContent::Spanned(span.span()),
-            false => {
-                let mut text = String::from(
-                    cx.tokens
-                        .source_span_between(
-                            trigger,
-                            TokenEdge::Start,
-                            TokenEdge::EndPastPostSpace,
-                        )
-                        .content(),
-                );
-                if let Some(group) = &name_group {
-                    text.push_str(&group.rule.open);
-                    text.push_str(group.name.content());
-                    text.push_str(&group.rule.close);
-                }
-                TextContent::Owned(text.into())
-            }
+            false => TextContent::Owned(consumed(cx, TokenEdge::EndPastPostSpace).into()),
         };
         let id = cx
             .stage_node(
@@ -2056,18 +2053,75 @@ mod tests {
 
     impl LatexlikeLang for RelaxedLatexlike {}
 
+    /// A `Language` over [`RelaxedLatexlike`] with `itemize` defined.
+    fn relaxed_language() -> Language<RelaxedLatexlike> {
+        let mut package: Package<RelaxedLatexlike> = Package::new("relaxed-envs");
+        package
+            .define_environment("itemize", core::iter::empty::<&str>())
+            .expect("no argument codes");
+        Language::new(
+            LatexlikeDriver::new(Recovery::Tolerant),
+            ParsingState::lang_initial_with_packages([Arc::new(package)]).expect("seed state"),
+        )
+    }
+
+    /// The environment's name is read from a rigid name group — several `Char` tokens
+    /// — and drives the spec lookup, the node's `name` and the diagnostics. For a
+    /// language with `OBEYS_SPAN_TILING = false` it therefore comes from the characters
+    /// as read, not from the name group's span; a wrong name would show up here as an
+    /// unresolved environment.
+    #[test]
+    fn an_environment_name_is_read_exactly_where_the_language_does_not_obey_span_tiling() {
+        // Over the standard reader the described span happens to be the exact range,
+        // so what this pins is the accumulation path: the name the lookup and the node
+        // see is the one `read_name_chars` collected character by character. A reader
+        // whose described span says something else is the scripted reader's business.
+        let input = r"\begin{itemize}x\end{itemize}";
+
+        let mut package: Package<Latexlike> = Package::new("envs");
+        package.define_environment("itemize", core::iter::empty::<&str>()).unwrap();
+        let tiled = Language::new(
+            LatexlikeDriver::new(Recovery::Tolerant),
+            ParsingState::lang_initial_with_packages([Arc::new(package)]).expect("seed state"),
+        )
+        .parse(input)
+        .expect("the parse runs");
+        let relaxed = relaxed_language().parse(input).expect("the parse runs");
+
+        assert!(tiled.diagnostics.is_empty(), "{:?}", tiled.diagnostics);
+        assert!(
+            relaxed.diagnostics.is_empty(),
+            "the lookup found the environment: {:?}",
+            relaxed.diagnostics
+        );
+
+        let tiled_env = tiled.tree.root().child(0).expect("the environment");
+        let relaxed_env = relaxed.tree.root().child(0).expect("the environment");
+        assert_eq!(tiled_env.name(), Some("itemize"));
+        assert_eq!(relaxed_env.name(), Some("itemize"));
+        assert_eq!(tiled_env.span().range(), relaxed_env.span().range());
+        assert_eq!(
+            tiled_env.children().len(),
+            relaxed_env.children().len(),
+            "the two environments differ in shape"
+        );
+        crate::node::validate_tree(&relaxed.tree).expect("the all-trees law holds");
+        crate::latexlike::check_latexlike_tree_invariants(&relaxed.tree);
+    }
+
     /// The orphan-`\end` recovery node covers the trigger and its name group — several
     /// tokens — so for a language with `OBEYS_SPAN_TILING = false` its content is the
     /// text of what was consumed, not the recorded span (which is only what the reader
-    /// describes for the stretch).
+    /// describes for the stretch). The diagnostic quotes the same text.
     #[test]
     fn the_orphan_end_recovery_owns_its_text_where_the_language_does_not_obey_span_tiling() {
-        let relaxed: Language<RelaxedLatexlike> = Language::new(
-            LatexlikeDriver::new(Recovery::Tolerant),
-            ParsingState::lang_initial().expect("seed state"),
-        );
+        let relaxed = relaxed_language();
 
-        for (input, recovered) in [("a\\end{itemize}b", "\\end{itemize}"), ("\\end x", "\\end ")] {
+        for (input, recovered, quoted) in [
+            ("a\\end{itemize}b", "\\end{itemize}", "\\end{itemize}"),
+            // Without a name group the quote stops at the command word.
+            ("\\end x", "\\end ", "\\end"),
+        ] {
             // The tiled parse of the same input, for comparison.
             let tiled = parse_tolerant(input);
             let index = usize::from(input.starts_with('a'));
@@ -2083,6 +2137,15 @@ mod tests {
 
             let result = relaxed.parse(input).expect("tolerant recovery");
             crate::latexlike::check_latexlike_tree_invariants(&result.tree);
+            // The condition quotes the terminator as written — assembled the same way,
+            // so the diagnostic names what was actually read.
+            let rendered: Vec<String> =
+                result.diagnostics.iter().map(|d| d.message().to_string()).collect();
+            assert_eq!(rendered.len(), 1, "{rendered:?}");
+            assert!(
+                rendered[0].contains(&alloc::format!("orphan ‘{quoted}’")),
+                "the diagnostic quotes the terminator as read: {rendered:?}"
+            );
             let node = result.tree.root().child(index).expect("the recovery node");
             assert_eq!(node.chars(), Some(recovered), "the recovered text differs from {input:?}");
             assert!(

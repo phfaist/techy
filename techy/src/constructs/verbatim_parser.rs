@@ -615,11 +615,14 @@ impl<L: Lang> VerbatimBodyTerminator<'_, L> {
                     escape_char: *escape_char,
                     command_word: piece(command_word_start, stop_command_name.len()),
                     post_space: piece(command_word_end, 0),
-                    name_group: NameGroup {
-                        name: piece(name_start, invocation_name.len()),
+                    // The pieces are sliced from the matched terminator's own
+                    // single-token span, so the name span's content *is* the name
+                    // under either span-tiling declaration: no name-as-read needed.
+                    name_group: NameGroup::new(
+                        piece(name_start, invocation_name.len()),
                         end,
-                        rule: Arc::clone(name_group_rule),
-                    },
+                        Arc::clone(name_group_rule),
+                    ),
                 }
             }
         }

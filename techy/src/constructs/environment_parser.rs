@@ -12,7 +12,7 @@ use crate::token::{GroupRule, StreamPosition, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
-use super::{ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
+use super::{push_token_text, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
 /// Condition: an environment's body ran into the terminator of a *different*
 /// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
@@ -89,8 +89,9 @@ impl fmt::Display for MissingEnvironmentTerminator {
 /// delimiters, possibly empty), the stream position just past the close delimiter, and
 /// the group rule the delimiters matched.
 pub struct NameGroup<L: Lang> {
-    /// The name between the delimiters — the text is its
-    /// [`content()`](SourceSpan::content).
+    /// Where the name lies — the coordinates. The text is
+    /// [`name_text()`](NameGroup::name_text), which is not always this span's
+    /// [`content()`](SourceSpan::content): see that method.
     pub name: SourceSpan<L::SourceOrigin>,
     /// The stream position just past the group's close delimiter.
     pub end: StreamPosition<L>,
@@ -101,6 +102,55 @@ pub struct NameGroup<L: Lang> {
     /// invocation-syntax recording channel: an environment payload stores this rule
     /// as its name-group fact.
     pub rule: Arc<GroupRule<L>>,
+    /// The name as the parser read it, when the [`name`](NameGroup::name) span cannot
+    /// answer it — see [`name_text`](NameGroup::name_text). Private: a name group is
+    /// built through [`new`](NameGroup::new) (plus
+    /// [`with_name_as_read`](NameGroup::with_name_as_read)), so no caller can pair a
+    /// span with text that disagrees with it.
+    name_as_read: Option<Box<str>>,
+}
+
+impl<L: Lang> NameGroup<L> {
+    /// A name group whose name is exactly what its `name` span covers — the case for a
+    /// language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), and for
+    /// any name whose span was derived from a single token's own span.
+    pub fn new(
+        name: SourceSpan<L::SourceOrigin>,
+        end: StreamPosition<L>,
+        rule: Arc<GroupRule<L>>,
+    ) -> NameGroup<L> {
+        NameGroup { name, end, rule, name_as_read: None }
+    }
+
+    /// Record the name **as read** — the characters the parser actually consumed —
+    /// which [`name_text`](NameGroup::name_text) then answers instead of the `name`
+    /// span's content. What a parser of a language with
+    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` records:
+    /// there the span is only what the reader *described* for the stretch the name was
+    /// read from, so its content need not be the name.
+    pub fn with_name_as_read(mut self, name: impl Into<Box<str>>) -> NameGroup<L> {
+        self.name_as_read = Some(name.into());
+        self
+    }
+
+    /// The name as read — the exact characters between the delimiters.
+    ///
+    /// For a language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) that is the
+    /// [`name`](NameGroup::name) span's content, and the span is where the name lies.
+    /// For a language with `OBEYS_SPAN_TILING = false` the span is only what the reader
+    /// described for the stretch the name was read from — its content need not be the
+    /// name at all — so the parser records the characters as it reads them
+    /// ([`with_name_as_read`](NameGroup::with_name_as_read)) and this method answers
+    /// those. Read the name through this method, never off the span: the name drives
+    /// lookups, node data and diagnostics.
+    pub fn name_text(&self) -> &str {
+        match &self.name_as_read {
+            Some(name) => name,
+            None => self.name.content(),
+        }
+    }
 }
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug` although only an `Arc`
@@ -112,6 +162,7 @@ impl<L: Lang> Clone for NameGroup<L> {
             name: self.name.clone(),
             end: self.end.clone(),
             rule: Arc::clone(&self.rule),
+            name_as_read: self.name_as_read.clone(),
         }
     }
 }
@@ -122,6 +173,7 @@ impl<L: Lang> fmt::Debug for NameGroup<L> {
             .field("name", &self.name)
             .field("end", &self.end)
             .field("rule", &self.rule)
+            .field("name_as_read", &self.name_as_read)
             .finish()
     }
 }
@@ -313,12 +365,20 @@ pub fn read_rigid_name_group<L: Lang>(
 
 /// The interior loop of [`read_rigid_name_group`]: consecutive `Char` tokens — no
 /// whitespace anywhere, rigid — up to the close delimiter of `rule`.
+///
+/// The name spans several tokens, so for a language with
+/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` its
+/// characters are accumulated as they are read and recorded on the group
+/// ([`NameGroup::with_name_as_read`]): there the span between the two positions is only
+/// what the reader describes for the stretch, and the name drives lookups, node data
+/// and diagnostics.
 fn read_name_chars<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     rule: &Arc<GroupRule<L>>,
 ) -> ConstructParserResult<L, Option<NameGroup<L>>> {
     let name_start = cx.tokens.position_here();
     let mut name_end = name_start.clone();
+    let mut name_as_read = (!L::OBEYS_SPAN_TILING).then(String::new);
     let state = Arc::clone(&cx.state);
     loop {
         let Some(token) = cx.probe_token(&state)? else {
@@ -330,16 +390,23 @@ fn read_name_chars<L: Lang>(
             return Ok(None);
         }
         match cx.tokens.token_kind(&token) {
-            TokenKind::Char(_) => {
+            TokenKind::Char(c) => {
+                // The rigid check above proves this token's pre-space empty; the
+                // recipe is the one all multi-token content follows.
+                push_token_text(&mut name_as_read, cx, &token, c.encode_utf8(&mut [0u8; 4]));
                 name_end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
             TokenKind::GroupClose { delim } if *delim == *rule.close => {
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
-                return Ok(Some(NameGroup {
-                    name: cx.source_span_within(&name_start, &name_end)?,
-                    end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
-                    rule: Arc::clone(rule),
+                let group = NameGroup::new(
+                    cx.source_span_within(&name_start, &name_end)?,
+                    cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
+                    Arc::clone(rule),
+                );
+                return Ok(Some(match name_as_read {
+                    Some(name) => group.with_name_as_read(name),
+                    None => group,
                 }));
             }
             _ => return Ok(None),
@@ -581,7 +648,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
 
         match read_rigid_name_group(cx, self.name_group_type)? {
             Some(name_group) => {
-                let name = name_group.name.content();
+                let name = name_group.name_text();
                 if !self.match_invocation_name || name == self.invocation_name {
                     // The consumed terminator's spelling, straight off the
                     // command token (kind validated at the re-peek above) and the
@@ -2315,5 +2382,40 @@ mod tests {
 
         assert!(parsed.result.diagnostics.is_empty());
         assert_eq!(parsed.pos, content.len());
+    }
+    // --- the name group's text vs its coordinates (PLAN §1.5, the name-as-read rule) ---
+
+    /// [`NameGroup::name_text`] answers the name **as read** where the parser recorded
+    /// one, and the span's content otherwise. The two are separate facts once the
+    /// language does not obey span tiling: there the span is only what the reader
+    /// described for the stretch the name was read from.
+    #[test]
+    fn a_name_group_answers_the_name_as_read() {
+        let source: Arc<Source> = Arc::new(Source::new("{itemize}"));
+        let rule: Arc<GroupRule<EnvLang>> = Arc::new(GroupRule {
+            group_type: GT_BRACE,
+            open: String::from("{"),
+            close: String::from("}"),
+        });
+
+        // No name as read: the span is the name (a tiled parse, or a name sliced out
+        // of one token's own span).
+        let spanned = NameGroup::new(
+            SourceSpan::new(&source, 1..8),
+            StdStreamPosition::at(9),
+            Arc::clone(&rule),
+        );
+        assert_eq!(spanned.name_text(), "itemize");
+
+        // A described span that covers something else entirely: the recorded
+        // characters win, and the span stays what it is (the node's coordinates).
+        let as_read = NameGroup::new(
+            SourceSpan::new(&source, 0..1),
+            StdStreamPosition::at(9),
+            Arc::clone(&rule),
+        )
+        .with_name_as_read("itemize");
+        assert_eq!(as_read.name_text(), "itemize");
+        assert_eq!(as_read.name.content(), "{");
     }
 }
