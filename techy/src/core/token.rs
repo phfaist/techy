@@ -44,7 +44,7 @@
 //!     [`CommentOverrides`], [`SpecialsOverrides`], [`ForbiddenCharsOverrides`];
 //!   - the caches a parsing state derives from the rules once, at each state transition:
 //!     the group-delimiter [`PrefixTable`] of [`PrefixEntry`]s, and [`TriggerChars`], the
-//!     set of characters a specials match may start with.
+//!     filter saying which characters a specials match may start with.
 //! - **What a specials scan answers with** — [`SpecialsMatch`] for a match and
 //!   [`SpecialsScanError`] for a failure of
 //!   [`Lang::scan_specials`](crate::core::Lang::scan_specials), the hook a reader consults
