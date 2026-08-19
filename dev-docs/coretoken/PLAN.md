@@ -70,11 +70,11 @@ file layout stays as is and stays invisible.
 
 **Placement rule (record verbatim in the facade's module docs, ARCHITECTURE and the
 DESIGN_RATIONALE entry):** *`core::token` holds what a token reader produces, consumes
-and answers with — the token and stream-position types, the reader contract and the
-standard reader, the scan helpers, the token rules the reader reads together with the
-overrides that change them mid-parse and the caches derived from them, the types the
-specials-scan hooks answer with, and the token conditions and errors. The hub keeps
-the `Lang` contract (its associated types and hooks), the parsing state and its
+and answers with — the token and stream-position types, the `TokenReader` trait and
+the standard reader, the scan helpers, the token rules the reader reads together with
+the overrides that change them mid-parse and the caches derived from them, the types
+the specials-scan hooks answer with, and the token conditions and errors. The hub
+keeps the `Lang` trait (its associated types and hooks), the parsing state and its
 deltas, and the engine.*
 
 **Items that move from `techy::core` to `techy::core::token`** (41; every one keeps
