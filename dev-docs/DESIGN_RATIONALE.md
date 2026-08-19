@@ -1131,6 +1131,69 @@ not "off, remembering what on meant".
 Rejected alternatives: keeping `Option<WhitespaceRules>` alongside the flag (three states, two meaning
 "off"); `enable_forbidden_chars` (uniformity for its own sake).
 
+#### The scan helpers: public recognition primitives; the standard reader as their composition [§dd-dr:scan-helpers]
+
+Status: DECIDED (user, design session).
+
+The recognition logic of `StdTokenReader` is public, and as free functions rather than
+methods. A **scan helper** takes the text being scanned and a byte offset into it, and
+answers what one construct looks like at that offset — a **match value**: byte ranges
+(plain `Span`s) plus the rule or spec that matched, or nothing. The seven are
+`skip_whitespace`, `scan_paragraph_break`, `scan_group_delimiter`, `command_rule_at`,
+`scan_command`, `scan_comment` and `scan_specials_trigger`; the match values are
+`GroupDelimiterMatch`, `CommandMatch`, `CommentMatch` and the already-public
+`SpecialsMatch`. `StdTokenReader::scan_std_token_at` is rewritten as their composition,
+so each construct is recognized in exactly one place.
+
+Two reuse cases asked for this, and different items serve them:
+
+- A reader whose token type wraps standard tokens drawn from one or several sources (a
+  macro expander) needs no helper: it keeps one inner `StdTokenReader` per source and
+  calls the two methods promoted with this decision — `scan_std_token_at` (the standard
+  token at an offset, without moving that reader) and `token_kind_of_std_token`
+  (interpret one of the standard tokens it stores, under any `L`). The trait method
+  `token_kind` is out of reach for such a language, whose `Lang::Tokenization` is not
+  `StdTokenization` ([§dd-dr:tokenization]); the in-crate scripted test reader is the
+  proof that these two suffice.
+- A reader with token kinds of its own composes the helpers for the constructs it wants
+  recognized the way the standard reader recognizes them, and builds its own tokens from
+  the answers.
+
+Shape choices that carried it. Match values hold plain `Span`s and never a `SourceSpan`:
+a helper is handed a `&str` and knows no `Source`, which is what lets a reader serving
+several sources at once use one set of helpers for all of them. Each helper takes the
+least it can — `&TokenRules<L>` where the rules suffice, `&ParsingState<L>` only where a
+state-derived cache or a `Lang` hook is involved — so no caller has to build a state to
+scan. A helper for a construct whose feature the language declares absent answers
+"nothing here", and that branch compiles away ([§dd-dr:lang-features]).
+
+The `pos` requirement is the family's one panic: `pos <= content.len()`, on a `char`
+boundary, checked in all builds by one shared private routine called at the top of every
+helper — ahead of every feature gate, so the family behaves identically whatever the
+rules say and whichever branch would have touched the text. It is an approved exception
+under [§dd-dr:panic-policy] rule 3 and named in the user-facing panics guide. The
+division of labor behind it: the reader that composes the helpers validates the offsets
+its own caller hands it once, at its boundary — `scan_std_token_at` reports an invalid
+`start` as an implementation error, never a panic — and passes derived offsets on.
+`scan_command` asserts one thing more, also in all builds: that `rule.escape_char`
+stands at `pos`. A mismatch would otherwise slice mid-character and panic anyway, less
+clearly. The fallback kept in reserve is
+`Option<Result<CommandMatch, EndOfStreamAfterEscape>>` with `None` for the mismatch,
+which hands a caller a case it cannot act on.
+
+Rejected alternatives: a public dispatcher answering a construct *shape* instead of a
+token (it would duplicate what a token's own kind view already carries and blur token
+opacity, [§dd-dr:token-opacity]; the two cases above cover the need); `Result` on every
+helper for an invalid `pos` (an error channel on otherwise infallible answers, for a
+condition no scanned text can cause and no caller can handle); a validated
+cursor/offset newtype instead of a bare `usize` (it centralizes the check but changes
+`skip_whitespace`'s long-standing signature and makes every caller wrap an offset it
+computed itself).
+
+Revisit if: a third reuse case appears that neither the two promoted methods nor the
+helpers serve; or a helper genuinely needs the `Source` behind the text — the reader
+adds it today, which is exactly what keeps the helpers usable across sources.
+
 ## Parsing state and deltas [§dd-dr:parsing-state]
 
 #### Tokenization config is plain data (`TokenRules`), not per-facet traits [§dd-dr:token-rules-data]
@@ -5810,13 +5873,20 @@ Four rules:
    `ChildRegion::staged`)
    — the std `Index`-vs-`get` convention: the panicking form for ids/spans the caller
    obtained from this very tree/source, the `Option` form for values of unknown
-   provenance; (b) *always-on precondition asserts* on the five
-   deep value functions `Span::new`, `Span::extend_to`, `SourceSpan::new`,
-   `SourcePos::new` and `skip_whitespace`, and on the seven span-taking `StdToken`
+   provenance; (b) *always-on precondition asserts* on the four
+   deep value functions `Span::new`, `Span::extend_to`, `SourceSpan::new` and
+   `SourcePos::new`, on the seven scan helpers of `core::token`
+   (`skip_whitespace`, `scan_paragraph_break`, `scan_group_delimiter`,
+   `command_rule_at`, `scan_command`, `scan_comment`, `scan_specials_trigger` — each
+   requires `pos` to lie within the content it is handed, on a `char` boundary, and
+   `scan_command` additionally requires `rule.escape_char` to stand at `pos`;
+   [§dd-dr:scan-helpers]), and on the seven span-taking `StdToken`
    constructors, which inherit the same slot for the span coherence each one asserts
    (the eighth, `StdToken::end_of_stream`, takes no span and never panics): a
-   documented-contract violation panics in every build — these functions are deliberately infallible (no
-   `Err` channel exists to prefer), the checks are O(1), and the always-on panic keeps
+   documented-contract violation panics in every build — these functions are either deliberately infallible (no
+   `Err` channel exists to prefer) or, for the three helpers that do have one, report
+   through it about the scanned content and not about their caller's mistake;
+   the checks are O(1), and the always-on panic keeps
    invalid values unrepresentable where the release alternative was unspecified
    misbehavior or a later cryptic panic far from the cause (the std str/slice-indexing
    convention). Each site documents the all-builds panic in its rustdoc with a pointer
@@ -5843,8 +5913,11 @@ Consequences applied with the decision:
   node-stop test treats a missing id as "condition did not fire"; invocation/body span
   read-backs fall back to the trigger/body start). No silently-wrong tree results: the
   bogus id still lands in `builder.add`'s child list, where it is diagnosed.
-- `skip_whitespace` panics on an invalid `pos` (rule-3(b); a debug assert
-  with a return-unchanged release fallback was consciously superseded); `Span::len`'s
+- The scan helpers panic on an invalid `pos` (rule-3(b)), `skip_whitespace` included —
+  a debug assert with a return-unchanged release fallback was consciously superseded
+  there — and the check runs at the top of each helper, ahead of every feature gate, so
+  the family behaves identically whatever the rules say ([§dd-dr:scan-helpers]);
+  `Span::len`'s
   saturation is defensive only, since inverted spans are unrepresentable under
   rule-3(b)'s asserted constructors; `ParserSession::finish` returns
   `Result<ParseResult, NodeBuildError>`.
@@ -6782,6 +6855,20 @@ re-opens a settled argument:
   `TokenBase` — the bounds sit on `Tokenization::Token`, and the name `Token` belongs to
   the alias; a `Lang::TokenReader` associated type (a reader *type* on `Lang`) — the
   language names the lifetime-free bundle, whose factory returns the `dyn` reader.
+- From the `core::token` extraction and the scan-helper family
+  ([§dd-dr:core-token-facade], [§dd-dr:scan-helpers]), the seven private
+  `StdTokenReader` member names retired when their logic became public: `scan_token_at`
+  — the promoted method is `scan_std_token_at` ("std" says the token it answers is a
+  `StdToken<L>` for any `L`); `token_kind_of` — `token_kind_of_std_token`, which keeps
+  the `token_kind` stem of the trait method it implements; `detect_paragraph_break` and
+  `detect_group_delimiter` — the free `scan_paragraph_break` and
+  `scan_group_delimiter` ("scan" is the family's verb for recognizing at a position
+  without moving); `read_command` and `read_comment` — `scan_command` and
+  `scan_comment`, for the same reason ("read" suggested the advance the helpers never
+  make); `lift_specials_scan_error` — the private span-validating half is
+  `checked_scan_error`, and the specials step a reader calls is
+  `scan_specials_trigger`, deliberately not named after the `Lang::scan_specials` hook
+  it wraps.
 - From the span-tiling declaration ([§dd-dr:span-tiling]), three phrases: "partition
   invariant" as the name of the sibling-span property — the property is **span tiling**,
   and a tree with it is **span-tiled**; "in-order, gap-free token contract" as the name of
@@ -6895,8 +6982,12 @@ function/use* (never by frequency of use, never mirroring internal layout). Layo
   libraries over node trees, top-level.
   The top level is thus *role-based*: data models and consumer tool libraries up top,
   machinery in `core`, preset in `latexlike`.
-- `techy::core` — flat hub holding the mutually-recursive heart: `Lang`/state, token
-  machinery, engine (entry, result, sessions, drivers, command resolution).
+- `techy::core` — flat hub holding the mutually-recursive heart: `Lang`/state, engine
+  (entry, result, sessions, drivers, command resolution).
+- `techy::core::token` — the tokenization library (token and stream-position types, the
+  `TokenReader` trait and the standard reader, the scan helpers, the rules data with its
+  overrides and derived caches, the token conditions), extracted from the hub by
+  [§dd-dr:core-token-facade].
 - `techy::core::constructs` — the construct-parsing library (dispatch, standard
   parsers, their conditions).
 - `techy::core::specs` — defining callables: callable specs, the argument model,
@@ -6952,12 +7043,66 @@ stages); **`techy::util`** (the canonical vague name; S0's models are not utilit
 stronger); **`parsing` as facade name** (forks path vocabulary from the wire
 identifiers' `core.*` areas); **a conditions registry module** (above).
 
+*Reversal note (2026-08-19, user).* The token subset no longer stays in the hub. This
+entry counted "token data vs runtime" among the decided cycle edges and kept the token
+items uncut in `techy::core`; the revisit clause below ("the hub grows uncomfortably
+large") is what fired, and the subset is extracted into `techy::core::token` under an
+explicit placement rule that cuts that straddle — [§dd-dr:core-token-facade], which also
+records the item-by-item resolution and the accepted path breaks. The layout list above
+is the post-extraction one; everything else in this entry stands, including the
+one-canonical-path rule the extraction obeys (each moved item is reachable at exactly
+one new path).
+
 Revisit if: a future public item genuinely belongs to two groups; the hub grows
 uncomfortably large (extracting a further subset is breaking — weigh before the first
 external dependent); or the crate is split (S0/topic modules convert to crate
 re-exports losslessly — the facade model is what makes that lossless).
 
 ---
+
+#### `core::token`: the token subset extracted from the hub; the placement rule [§dd-dr:core-token-facade]
+
+Status: DECIDED (user, design session).
+
+The token items leave the flat `techy::core` hub for a fourth satellite,
+`techy::core::token`, bounded by this placement rule: *`core::token` holds what a token
+reader produces, consumes and answers with — the token and stream-position types, the
+`TokenReader` trait and the standard reader, the scan helpers, the token rules the reader
+reads together with the overrides that change them mid-parse and the caches derived from
+them, the types the specials-scan hooks answer with, and the token conditions and errors.
+The hub keeps the `Lang` trait (its associated types and hooks), the parsing state and
+its deltas, and the engine.* Forty-one items move; every one keeps its name.
+
+Why now, when [§dd-dr:public-namespace-topology] deliberately left the token subset in
+the hub: the token topic has since grown — the tokenization bundle
+([§dd-dr:tokenization]), the per-feature rules blocks with their overrides, and now nine
+public scanning items ([§dd-dr:scan-helpers]) — to a third of the hub's items and
+counting, which is that decision's own revisit condition. The extracted shape also
+already exists next door: `core::constructs` holds a trait, its shipped implementations,
+its helpers and its conditions together, and the token topic has the same four parts.
+
+The rule cuts the "token data vs runtime" straddle that had kept the subset in the hub,
+by asking who *reads* an item rather than who carries it. Four families were the
+ambiguous ones, and all four resolve into `core::token`: the rules overrides a
+`ParsingStateDelta` carries; the `PrefixTable`/`TriggerChars` caches a `ParsingState`
+derives; the tokenization declaration a `Lang` names; and the
+`SpecialsMatch`/`SpecialsScanError` a `Lang` hook answers with. In each case the carrying
+item stays in the hub and its signature names a `core::token` type across the boundary —
+the accepted kind of cross-facade reference (`Lang::make_node_ext` already names
+`core::node` types).
+
+Accepted cost: every `techy::core::<token item>` path breaks. That is deliberate inside
+the soft-freeze window ([§dd-dr:stability-rubric]); dependent projects adapt on their own
+schedule, and the extraction by itself implies no version bump and no baseline move.
+
+Rejected alternatives: a helper-only namespace (`core::tokenscan`) beside token items
+left in the hub — the trait in the hub with its implementation library one level down is
+the asymmetry `constructs` avoids, and it doubles the places a reader author has to look;
+leaving the straddle uncut and adding the nine new scanning items to the hub (a flat hub
+of ninety items, navigated by no boundary anyone can state).
+
+Revisit if: a token item genuinely belongs to two facades — an item that no reader reads,
+produces or answers with would need a rule this one does not supply.
 
 #### API stability rubric: one stability class, soft freeze until framework adoption [§dd-dr:stability-rubric]
 

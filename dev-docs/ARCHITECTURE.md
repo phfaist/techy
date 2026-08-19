@@ -151,8 +151,8 @@ stream-position types, the `TokenReader` trait and the standard reader, the scan
 helpers, the token rules the reader reads together with the overrides that change
 them mid-parse and the caches derived from them, the types the specials-scan hooks
 answer with, and the token conditions and errors. The hub keeps the `Lang` trait
-(its associated types and hooks), the parsing state and its deltas, and the engine
-([§dd-dr:core-token-facade]).
+(its associated types and hooks), the parsing state and its deltas, and the engine.
+The extraction itself, with its item-by-item resolution: [§dd-dr:core-token-facade].
 The topic modules sketched above describe the *internal* organization only. Full
 decision incl. the specs-vs-hub author-side/run-side rule and rejected shapes:
 [§dd-dr:public-namespace-topology]; the top-level standing of `techy::recompose`
