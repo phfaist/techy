@@ -53,7 +53,8 @@ mod tack_on_parser;
 mod verbatim_parser;
 
 pub use argument_parsers::{
-    scan_argument_noise, stage_pre_space, ArgumentNoise, ExpectedExpressionArgument,
+    peek_adjacent_argument, scan_argument_noise, stage_pre_space, ArgumentNoise,
+    ExpectedExpressionArgument,
     ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
     OptionalGroupArgumentParser,
 };

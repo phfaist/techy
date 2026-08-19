@@ -4879,6 +4879,42 @@ Revisit if: a consumer needs per-embellishment diagnostics for dangling markers
 (`\op^` silently unmatching), or a field spec needs takeover-level access to the
 absorbing invocation (the configured spec sees only its own invocation).
 
+#### Argument adjacency is a parser opt-in, not a state delta [§dd-dr:argument-adjacency]
+
+Status: DECIDED (user).
+
+pylatexenc's `allow_pre_space=False` (its `\\` spec — `A=0 \\ [C,D]=0` in an AMS
+alignment must not read `[C,D]` as a spacing argument — and `lstlisting`'s `[`) is
+techy's `require_adjacent()` builder opt-in on `GroupArgumentParser` and
+`OptionalGroupArgumentParser`, backed by the shared helper `peek_adjacent_argument`: in
+place of the leading noise scan, the parser peeks one token and accepts it only when it
+carries no pre-space and is not a comment; otherwise it takes its ordinary absent path
+(optional: silent, nothing consumed; mandatory: missing-mandatory at the position where
+the argument should have begun, fallback expression included — adjacency governs the
+argument whatever its form). The decisive reason for the placement: the noise-ownership
+doctrine ([§dd-dr:parity-parsers], `CharsGroupArgumentParser` bullet) already makes the
+leading scan *the parser's own step*, so declining it is a parser property; a
+`ParsingStateDelta` on the argument spec could not express it, since the delta governs
+the argument's whole extent — contents included — while adjacency is a property of the
+leading edge alone (disabling whitespace for the contents would be absurd). "Adjacent"
+is the reader's classification, deliberately: a named command's post-space belongs to the
+command token (`\item [a]` is adjacent — pylatexenc's tokenizer attaches the same
+`post_space` to the macro, so parity holds), a single-character command takes none
+(`\\ [x]` is not). No argument code carries the opt-in (pylatexenc's codes do not
+either; it is a parser constructor property).
+
+Rejected alternatives: a per-argument `parsing_state_delta` disabling whitespace /
+comments (whole-extent scope — see above); a constructor flag `with_adjacency(bool)`
+(the default is the same for every constructor, so the one-way opt-in suffices, unlike
+`with_expression_fallback` whose defaults differ by form); a dedicated "whitespace
+before argument" diagnostic for the mandatory case (pylatexenc's "expected expression
+w/o leading whitespace") — missing-mandatory at the exact position says the same thing
+without a new condition type.
+
+Revisit if: the preset's `\\`/`lstlisting` specs land and a consumer needs the
+non-adjacent *mandatory* case to recover differently (pylatexenc skips the whitespace
+and takes the argument anyway after diagnosing; techy leaves it unconsumed).
+
 #### `ParseDriver`: parse behavior is a Lang-provided instance [§dd-dr:parse-driver]
 
 Status: DECIDED (user).

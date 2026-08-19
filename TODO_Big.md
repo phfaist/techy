@@ -36,7 +36,12 @@ CLAUDE/AI AGENTS ARE ONLY ALLOWED TO EDIT THE SECTION BELOW MARKED
 
 [CLAUDE IS ONLY ALLOWED TO EDIT THIS SECTION.]
 
-- (empty)
+- When the latexlike preset grows `\\` (AMS line break with `[<skip>]`) and
+  `lstlisting`-style definitions, wire their optional arguments with
+  `OptionalGroupArgumentParser::require_adjacent()` ([§dd-dr:argument-adjacency] —
+  pylatexenc's `allow_pre_space=False` specs). `latexlike::argument_specs` has no
+  code for it (pylatexenc's codes don't either); programmatic wiring, or decide a
+  code then.
 
 
 ## Smaller todo

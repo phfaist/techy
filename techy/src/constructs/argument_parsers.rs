@@ -17,7 +17,16 @@
 //! ordinary nodes ahead of the argument's syntax, under the argument's own state — the
 //! caller ([`StdInvocationParser`](super::StdInvocationParser)) has already stacked the
 //! [`ArgumentSpec::parsing_state_delta`] on the invocation's base state, so noise
-//! policy runs under the argument's rules. Content is designated at parse time
+//! policy runs under the argument's rules. Because the leading scan is the parser's
+//! own step, a parser can also *decline* it: the group parsers' adjacency opt-in
+//! ([`GroupArgumentParser::require_adjacent`],
+//! [`OptionalGroupArgumentParser::require_adjacent`]) replaces the scan with
+//! [`peek_adjacent_argument`], which accepts the argument only when nothing — no
+//! whitespace, no comment — separates it from what precedes (pylatexenc's
+//! `allow_pre_space=False`). That policy lives in the parser precisely because a
+//! state delta could not express it: a delta governs the whole argument, contents
+//! included, while adjacency is a property of the argument's leading edge alone.
+//! Content is designated at parse time
 //! ([`ContentNodes`]): the parser knows whether a group's braces are argument syntax
 //! (content = the group's children) or the node itself is the value (a `\frac 1 2`
 //! single token, a `*` marker — both **count as content**, pylatexenc parity).
@@ -136,7 +145,10 @@ pub struct ArgumentNoise<L: Lang> {
     /// argument being present). `None` when a tokenizer error sits at the position
     /// (tolerant mode): the error is neither consumed nor diagnosed by the argument
     /// parser — it reports the argument absent, and the enclosing content loop
-    /// re-reads and recovers the token itself.
+    /// re-reads and recovers the token itself. Also `None` from
+    /// [`peek_adjacent_argument`] when the next token is *not* adjacent (it carries
+    /// pre-space, or is a comment): the adjacency-requiring parsers take their absent
+    /// path on that answer exactly as they would at end of input.
     pub next: Option<Token<L>>,
 }
 
@@ -188,6 +200,43 @@ pub fn scan_argument_noise<'s, L: Lang>(
             _ => return Ok(ArgumentNoise { nodes, start, next: Some(token) }),
         }
     }
+}
+
+/// The adjacency counterpart of [`scan_argument_noise`], for an argument that must
+/// **immediately follow** what precedes it — pylatexenc's `allow_pre_space=False`: peek
+/// the next token and answer it as `next` only when it is *adjacent*, meaning it
+/// carries no pre-space and is not a comment. Otherwise `next` is `None` (the token is
+/// left where it is; nothing has been staged or consumed), so the calling parser
+/// reports the argument absent through its ordinary absent path — silently for an
+/// optional argument, as missing-mandatory for a mandatory one. The `nodes` list is
+/// always empty: an adjacent token has no pre-space to stage.
+///
+/// "Adjacent" is judged by the reader's own classification, so what the language
+/// attaches to the *preceding* token does not count as separation: a named command's
+/// post-space belongs to the command token (`\cmd {x}` is adjacent), while a
+/// single-character command takes no post-space (`\\ [x]` is not — the AMS `\\`
+/// idiom pylatexenc's `allow_pre_space=False` exists for).
+///
+/// Used by the group argument parsers' `require_adjacent` opt-in
+/// ([`GroupArgumentParser::require_adjacent`],
+/// [`OptionalGroupArgumentParser::require_adjacent`]); custom [`ArgumentParser`]s
+/// with the same adjacency requirement use it in place of the noise scan.
+pub fn peek_adjacent_argument<'s, L: Lang>(
+    cx: &mut ParseContext<'_, 's, L>,
+) -> ConstructParserResult<L, ArgumentNoise<L>> {
+    let start = cx.tokens.position_here();
+    let state = Arc::clone(&cx.state);
+    let next = match cx.probe_token(&state)? {
+        Some(token) => {
+            let has_pre_space = cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace)
+                != cx.tokens.position_at(&token, TokenEdge::Start);
+            let is_comment =
+                matches!(cx.tokens.token_kind(&token), TokenKind::Comment { .. });
+            (!has_pre_space && !is_comment).then_some(token)
+        }
+        None => None,
+    };
+    Ok(ArgumentNoise { nodes: Vec::new(), start, next })
 }
 
 /// Stage `tok`'s pre-space as a whitespace-only `Chars` node (if non-empty) and record
@@ -527,12 +576,22 @@ where
 /// diagnosed here as missing-mandatory (tolerant) or abort (strict), argument absent,
 /// nothing consumed. The condition is the same with the fallback on or off.
 ///
+/// Also orthogonal: the **adjacency requirement**
+/// ([`require_adjacent`](GroupArgumentParser::require_adjacent), pylatexenc's
+/// `allow_pre_space=False`). By default the argument may follow whitespace and
+/// comments, which become the region's leading noise; with the requirement, the
+/// argument — delimited form or fallback expression alike — must begin immediately,
+/// and whitespace or a comment in between counts as the argument missing
+/// (diagnosed as above, nothing consumed; see [`peek_adjacent_argument`] for what
+/// counts as adjacent).
+///
 /// Requires a language with the groups feature ([`LangHasGroups`]): the rule form
 /// installs its minted delimiters as temporary group rules, and the delimited form of
 /// either flavor is a group.
 pub struct GroupArgumentParser<L: Lang> {
     form: GroupArgumentForm<L>,
     expression_fallback: bool,
+    require_adjacent: bool,
 }
 
 /// The two delimited forms of [`GroupArgumentParser`] (see the type docs). `Rules`
@@ -547,7 +606,11 @@ impl<L: LangHasGroups> GroupArgumentParser<L> {
     /// A mandatory argument delimited by any group rule of class `group_type`, with
     /// the single-expression fallback on (pylatexenc's `'{'`).
     pub fn new(group_type: L::GroupTypeId) -> GroupArgumentParser<L> {
-        GroupArgumentParser { form: GroupArgumentForm::Class(group_type), expression_fallback: true }
+        GroupArgumentParser {
+            form: GroupArgumentForm::Class(group_type),
+            expression_fallback: true,
+            require_adjacent: false,
+        }
     }
 
     /// A mandatory argument delimited exactly by `rule`, minted for the occasion as a
@@ -567,13 +630,26 @@ impl<L: LangHasGroups> GroupArgumentParser<L> {
         rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
     ) -> GroupArgumentParser<L> {
         let rules: Vec<Arc<GroupRule<L>>> = rules.into_iter().collect();
-        GroupArgumentParser { form: GroupArgumentForm::Rules(rules), expression_fallback: false }
+        GroupArgumentParser {
+            form: GroupArgumentForm::Rules(rules),
+            expression_fallback: false,
+            require_adjacent: false,
+        }
     }
 
     /// Set the single-expression fallback (see the type docs; the constructor defaults
     /// are class form on, rule form off).
     pub fn with_expression_fallback(mut self, expression_fallback: bool) -> Self {
         self.expression_fallback = expression_fallback;
+        self
+    }
+
+    /// Require the argument to begin immediately — no whitespace, no comment between
+    /// the preceding token and the argument's first token (pylatexenc's
+    /// `allow_pre_space=False`; see the type docs and [`peek_adjacent_argument`]).
+    /// Off by default.
+    pub fn require_adjacent(mut self) -> Self {
+        self.require_adjacent = true;
         self
     }
 }
@@ -596,7 +672,11 @@ where
                 cx.here(),
             ));
         }
-        let mut noise = scan_argument_noise(cx)?;
+        let mut noise = if self.require_adjacent {
+            peek_adjacent_argument(cx)?
+        } else {
+            scan_argument_noise(cx)?
+        };
 
         match &self.form {
             // The rule form: probe with the minted rules in force (the temporary-rule
@@ -800,6 +880,16 @@ fn probe_minted_group<'s, L: LangHasGroups>(
 /// designates *that* group's children instead, the parse-time resolution of
 /// pylatexenc's post-hoc `unwrap_double_group` accessor hack.
 ///
+/// **Adjacency** ([`require_adjacent`](OptionalGroupArgumentParser::require_adjacent),
+/// pylatexenc's `allow_pre_space=False`): by default the opening delimiter may follow
+/// whitespace and comments (the region's leading noise); with the requirement it must
+/// come immediately, and an opener after whitespace or a comment is *not* this
+/// argument — absent, silently, nothing consumed, the `[` left for the enclosing
+/// content. The use case is pylatexenc's own: `\\` in an AMS alignment, where
+/// `A=0 \\ [C,D]=0` must not read `[C,D]` as a spacing argument; likewise a
+/// `\begin{lstlisting} [` whose `[` is verbatim content. See
+/// [`peek_adjacent_argument`] for what counts as adjacent.
+///
 /// Requires a language with the groups feature ([`LangHasGroups`]): the parser
 /// installs its minted delimiters as temporary group rules.
 ///
@@ -808,6 +898,7 @@ fn probe_minted_group<'s, L: LangHasGroups>(
 pub struct OptionalGroupArgumentParser<L: Lang> {
     rules: Vec<Arc<GroupRule<L>>>,
     unwrap_lone_group: Option<L::GroupTypeId>,
+    require_adjacent: bool,
 }
 
 impl<L: LangHasGroups> OptionalGroupArgumentParser<L> {
@@ -825,13 +916,22 @@ impl<L: LangHasGroups> OptionalGroupArgumentParser<L> {
         rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
     ) -> OptionalGroupArgumentParser<L> {
         let rules: Vec<Arc<GroupRule<L>>> = rules.into_iter().collect();
-        OptionalGroupArgumentParser { rules, unwrap_lone_group: None }
+        OptionalGroupArgumentParser { rules, unwrap_lone_group: None, require_adjacent: false }
     }
 
     /// Designate the children of a lone child group of class `group_type` as the
     /// content (the protective-braces idiom — see the type docs).
     pub fn with_unwrap_lone_group(mut self, group_type: L::GroupTypeId) -> Self {
         self.unwrap_lone_group = Some(group_type);
+        self
+    }
+
+    /// Require the opening delimiter to come immediately — no whitespace, no comment
+    /// between the preceding token and the opener (pylatexenc's
+    /// `allow_pre_space=False`; see the type docs and [`peek_adjacent_argument`]).
+    /// Off by default.
+    pub fn require_adjacent(mut self) -> Self {
+        self.require_adjacent = true;
         self
     }
 }
@@ -854,7 +954,11 @@ where
                 cx.here(),
             ));
         }
-        let mut noise = scan_argument_noise(cx)?;
+        let mut noise = if self.require_adjacent {
+            peek_adjacent_argument(cx)?
+        } else {
+            scan_argument_noise(cx)?
+        };
         if noise.next.is_none() {
             noise.rewind(cx);
             return Ok(None);
@@ -1026,7 +1130,9 @@ impl<L: Lang> fmt::Debug for GroupArgumentParser<L> {
             GroupArgumentForm::Class(group_type) => s.field("group_type", group_type),
             GroupArgumentForm::Rules(rules) => s.field("rules", rules),
         };
-        s.finish()
+        s.field("expression_fallback", &self.expression_fallback)
+            .field("require_adjacent", &self.require_adjacent)
+            .finish()
     }
 }
 
@@ -1035,6 +1141,7 @@ impl<L: Lang> fmt::Debug for OptionalGroupArgumentParser<L> {
         f.debug_struct("OptionalGroupArgumentParser")
             .field("rules", &self.rules)
             .field("unwrap_lone_group", &self.unwrap_lone_group)
+            .field("require_adjacent", &self.require_adjacent)
             .finish()
     }
 }
@@ -1199,6 +1306,18 @@ mod tests {
     fn brace_arg_without_fallback() -> Arc<ArgumentSpec<ArgLang>> {
         Arc::new(ArgumentSpec::new_unnamed(Arc::new(
             GroupArgumentParser::new(GT_BRACE).with_expression_fallback(false),
+        )))
+    }
+
+    fn adjacent_optional_arg() -> Arc<ArgumentSpec<ArgLang>> {
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(
+            OptionalGroupArgumentParser::new(option_rule()).require_adjacent(),
+        )))
+    }
+
+    fn adjacent_brace_arg() -> Arc<ArgumentSpec<ArgLang>> {
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(
+            GroupArgumentParser::new(GT_BRACE).require_adjacent(),
         )))
     }
 
@@ -1730,6 +1849,148 @@ mod tests {
         assert_eq!(content.len(), 1);
         assert!(content[0].is_group());
         assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    // --- the adjacency requirement (pylatexenc's `allow_pre_space=False`) --------------
+
+    #[test]
+    fn adjacent_optional_present_when_the_opener_is_immediate() {
+        // The AMS `\\[2mm]` idiom: a single-character command takes no post-space, so
+        // `[` directly after it is adjacent.
+        let st = state_with(&[("\\", vec![adjacent_optional_arg()])]);
+        let parsed = parse_std(r"\\[2mm]x", &st, Recovery::Strict);
+
+        let linebreak = root_child(&parsed, 0);
+        assert_eq!(linebreak.span().range(), 0..7);
+        let content = content_of(linebreak, 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("2mm"));
+        assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn adjacent_optional_absent_after_whitespace_leaves_the_bracket_alone() {
+        // pylatexenc's motivating case: `A=0 \\ [C,D]=0` in an alignment — `[C,D]`
+        // is content, not a spacing argument. Silent, nothing consumed.
+        let st = state_with(&[("\\", vec![adjacent_optional_arg()])]);
+        let parsed = parse_std(r"A=0 \\ [C,D]=0", &st, Recovery::Strict);
+
+        assert_eq!(root_child(&parsed, 0).chars(), Some("A=0 "));
+        let linebreak = root_child(&parsed, 1);
+        assert!(linebreak.is_callable());
+        assert_eq!(linebreak.span().range(), 4..6);
+        assert!(!linebreak.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 2).chars(), Some(" [C,D]=0"));
+        assert_eq!(parsed.result.tree.node_count(), 4);
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn adjacent_optional_absent_after_a_comment() {
+        // A comment separates as much as whitespace does (pylatexenc: the comment is
+        // the first token, and it is no opening delimiter).
+        let st = state_with(&[("\\", vec![adjacent_optional_arg()])]);
+        let parsed = parse_std("\\\\%c\n[x]", &st, Recovery::Strict);
+
+        let linebreak = root_child(&parsed, 0);
+        assert_eq!(linebreak.span().range(), 0..2);
+        assert!(!linebreak.arguments().unwrap().get(0).unwrap().is_provided());
+        assert!(root_child(&parsed, 1).is_comment());
+        assert_eq!(root_child(&parsed, 2).chars(), Some("[x]"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn adjacency_is_the_readers_classification_a_named_commands_post_space_does_not_separate() {
+        // `\item [a]`: the space is the command token's own post-space (a named command
+        // swallows it), so `[` carries no pre-space and is adjacent — as in pylatexenc,
+        // whose tokenizer attaches the same post_space to the macro token. After a
+        // brace argument, by contrast, the space belongs to nobody but the `[`.
+        let st = state_with(&[
+            ("item", vec![adjacent_optional_arg()]),
+            ("m", vec![brace_arg(), adjacent_optional_arg()]),
+        ]);
+
+        let parsed = parse_std(r"\item [a]", &st, Recovery::Strict);
+        let item = root_child(&parsed, 0);
+        assert_eq!(item.span().range(), 0..9);
+        assert_eq!(content_of(item, 0)[0].chars(), Some("a"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        let parsed = parse_std(r"\m{x} [a]", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..5);
+        assert!(!m.arguments().unwrap().get(1).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some(" [a]"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        let parsed = parse_std(r"\m{x}[a]", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..8);
+        assert_eq!(content_of(m, 1)[0].chars(), Some("a"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn adjacent_mandatory_after_whitespace_is_missing_and_nothing_is_consumed() {
+        // The mandatory counterpart: whitespace before `{b}` makes the argument
+        // missing — diagnosed, absent, `{b}` re-parsed as a sibling group; strict
+        // aborts.
+        let st = state_with(&[("m", vec![adjacent_brace_arg(), adjacent_brace_arg()])]);
+
+        let parsed = parse_std(r"\m{a}{b}", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..8);
+        assert_eq!(content_of(m, 1)[0].chars(), Some("b"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        let parsed = parse_std(r"\m{a} {b}", &st, Recovery::Tolerant);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..5);
+        assert!(m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert!(!m.arguments().unwrap().get(1).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some(" "));
+        assert!(root_child(&parsed, 2).is_group());
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert!(diagnostic.message().to_string().contains("missing mandatory argument"));
+        // Reported where the argument should have begun: right after `{a}`.
+        assert_eq!(diagnostic.span().range(), 5..5);
+
+        let source: Arc<Source> = Arc::new(Source::new(r"\m{a} {b}"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
+        assert!(err.to_string().contains("missing mandatory argument"));
+    }
+
+    #[test]
+    fn adjacent_mandatory_fallback_expression_must_be_adjacent_too() {
+        // Adjacency governs the argument whatever its form: `\m{a}b` takes `b` through
+        // the expression fallback, `\m{a} b` and a comment in between do not.
+        let st = state_with(&[("m", vec![brace_arg(), adjacent_brace_arg()])]);
+
+        let parsed = parse_std(r"\m{a}bc", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..6);
+        assert_eq!(content_of(m, 1)[0].chars(), Some("b"));
+        assert_eq!(root_child(&parsed, 1).chars(), Some("c"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        let parsed = parse_std(r"\m{a} bc", &st, Recovery::Tolerant);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..5);
+        assert!(!m.arguments().unwrap().get(1).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some(" bc"));
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+
+        let parsed = parse_std("\\m{a}%c\nb", &st, Recovery::Tolerant);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.span().range(), 0..5);
+        assert!(!m.arguments().unwrap().get(1).unwrap().is_provided());
+        assert!(root_child(&parsed, 1).is_comment());
+        assert_eq!(root_child(&parsed, 2).chars(), Some("b"));
+        assert_eq!(parsed.result.diagnostics.len(), 1);
     }
 
     #[test]

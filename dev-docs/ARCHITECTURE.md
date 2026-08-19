@@ -881,7 +881,11 @@ returns (nodes, StopCause) — the caller interprets the ending.
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,
   verbatim), `EnvironmentBodyParser`, `ExpressionParser` — the parity survey and its
   per-parser decisions: [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers]. (No
-  `CommentParser`: whole-comment tokens made it vestigial.)
+  `CommentParser`: whole-comment tokens made it vestigial.) An argument parser owns
+  its region's leading whitespace and comments (the shared `scan_argument_noise`
+  step), which is what lets the group parsers' `require_adjacent()` opt-in decline
+  that scan — pylatexenc's `allow_pre_space=False` as a parser property, never a
+  state delta ([§dd-dr:argument-adjacency]).
 
 Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:parse-context],
 [§dd-dr:no-context-source] (no source handle; spans and positions come from the reader),
@@ -892,7 +896,8 @@ Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:p
 [§dd-dr:brace-protection-limits], [§dd-dr:temporary-group-rules],
 [§dd-dr:parse-scoped], [§dd-dr:descent-guard] (the `parse_construct` funnel, the
 guard, the boxed pass-through delta), [§dd-dr:emptiness-surface],
-[§dd-dr:parity-gap-list], [§dd-dr:parity-parsers], [§dd-dr:expression-fallback].
+[§dd-dr:parity-gap-list], [§dd-dr:parity-parsers], [§dd-dr:expression-fallback],
+[§dd-dr:argument-adjacency].
 
 ## Engine and sessions [§dd-arch:engine]
 

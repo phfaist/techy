@@ -56,8 +56,8 @@
 //! abnormal endings of sub-parses travel as data ([`StopCause`]).
 
 pub use crate::constructs::{
-    parse_declared_arguments, read_rigid_name_group, scan_argument_noise, stage_pre_space,
-    verbatim_state_delta, ArgumentNoise, AttachedSourceOutcome, CharsGroupArgumentParser,
+    parse_declared_arguments, peek_adjacent_argument, read_rigid_name_group,
+    scan_argument_noise, stage_pre_space, verbatim_state_delta, ArgumentNoise, AttachedSourceOutcome, CharsGroupArgumentParser,
     ChildStateSpec, CommandResolutionFailed, ConstructParser, ConstructParserResult,
     DescentLimitApproaching, DescentLimitExceeded,
     EmbellishmentsArgumentParser, EnvironmentBeginSyntaxData, EnvironmentBody,
