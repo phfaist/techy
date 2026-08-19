@@ -1,32 +1,28 @@
-//! The machinery hub: the [`Lang`] contract and parsing state, the token layer, and
-//! the parse engine.
+//! The machinery hub: the [`Lang`] contract and parsing state, and the parse engine.
 //!
-//! The hub is deliberately **flat**. State, tokens, and the engine form one mutually
-//! recursive cluster — token rules live in the parsing state, the state is derived
-//! through the engine's session, the engine drives readers over rules — so the hub
-//! keeps the whole [`Language::parse()`](Language::parse) → [`ParseResult`] flow on
-//! one page:
+//! The hub is deliberately **flat**. State and the engine form one mutually recursive
+//! cluster — the state carries what the engine's next step needs, the state is derived
+//! through the engine's session, and readers and parsers run over both — so the hub keeps
+//! the whole [`Language::parse()`](Language::parse) → [`ParseResult`] flow on one page:
 //!
 //! - **Language contract and state** — [`Lang`] (the compile-time customization
 //!   bundle) and its [`LangFeatures`] feature-presence declarations,
-//!   [`ParsingState`] and its reified [`ParsingStateDelta`]s, [`StateData`],
-//!   [`TokenRulesOverrides`], the [`NodeExtTypes`] ext bundle, and the
-//!   [`TrivialLang`] test lang.
-//! - **Tokens** — a language's tokenization declared as one type ([`Tokenization`],
-//!   the standard [`StdTokenization`]) with its two projections, the opaque
-//!   [`Token`] and [`StreamPosition`]; the standard [`StdToken`] and
-//!   [`StdStreamPosition`]; the parser-facing [`TokenKind`] view; data-driven
-//!   [`TokenRules`]; the [`TokenReader`] trait and standard reader
-//!   ([`StdTokenReader`]); specials scanning ([`SpecialsMatch`], [`TriggerChars`]);
-//!   and the token error family.
+//!   [`ParsingState`] and its reified [`ParsingStateDelta`]s (which carry the token
+//!   layer's [`TokenRulesOverrides`](token::TokenRulesOverrides)), [`StateData`], the
+//!   [`NodeExtTypes`] ext bundle, and the [`TrivialLang`] test lang.
 //! - **Engine** — the [`Language`] runtime bundle and its `parse()` entry,
 //!   [`ParserSession`], the [`ParseDriver`] customization point ([`StdParseDriver`]),
 //!   [`ParseResult`], the live parse-frame stack ([`Frame`], [`FrameTitle`],
 //!   [`FrameRole`]), and the parsing-depth limiter ([`DescentGuard`],
 //!   [`StdDescentGuard`] with its [`StdDescentGuardInit`] configuration).
 //!
-//! Three submodules hold the subsets with clear boundaries:
+//! Four submodules hold the subsets with clear boundaries:
 //!
+//! - [`token`] — the tokenization library: a language's tokenization declared as one
+//!   type, the token and stream-position types it names, the
+//!   [`TokenReader`](token::TokenReader) trait and the standard reader, the
+//!   [`TokenRules`](token::TokenRules) data with its overrides and derived caches, and
+//!   the token errors.
 //! - [`specs`] — author-side: defining callables and organizing definitions
 //!   (callable specs, providers/packages/scopes, command resolution).
 //! - [`constructs`] — the construct-parsing library (the [`ConstructParser`]
@@ -43,6 +39,7 @@
 pub mod constructs;
 pub mod node;
 pub mod specs;
+pub mod token;
 
 pub use crate::engine::{
     CommandResolver, DescentGuard, DescentRefusal, DescentWarning, Frame, FrameTitle,
@@ -51,21 +48,9 @@ pub use crate::engine::{
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{
-    AllLangFeatures, ClosedVocabulary, CommandOverrides,
-    CommentOverrides, DeriveError,
-    FeatureAbsent, FeaturePresence, FeaturePresent, FinalizeError,
-    ForbiddenCharsOverrides, GroupOverrides, InvocationSyntax, Lang, LangFeatures,
-    LangHasCommands, LangHasComments, LangHasForbiddenChars, LangHasGroups,
-    LangHasParagraphs, LangHasScopes, LangHasSpecials, LangHasWhitespace, NodeExtTypes,
-    NoLangFeatures, ParagraphOverrides, ParsingState, ParsingStateDelta,
-    ParsingStateStack, SpecialsOverrides, StateData, TokenRulesOverrides, TrivialLang,
-    WhitespaceOverrides,
-};
-pub use crate::token::{
-    skip_whitespace, CommandRule, CommandRules, CommentRule, CommentRules,
-    EndOfStreamAfterEscape, ForbiddenChar, ForbiddenCharsRules, GroupRule, GroupRules,
-    ParagraphRules, PrefixEntry, PrefixTable, SpecialsMatch, SpecialsRules,
-    SpecialsScanError, StdStreamPosition, StdToken, StdTokenReader, StdTokenization,
-    StreamPosition, Token, TokenEdge, TokenError, TokenErrorKind, TokenKind, TokenReader,
-    TokenRecovery, TokenResult, TokenRules, Tokenization, TriggerChars, WhitespaceRules,
+    AllLangFeatures, ClosedVocabulary, DeriveError, FeatureAbsent, FeaturePresence,
+    FeaturePresent, FinalizeError, InvocationSyntax, Lang, LangFeatures, LangHasCommands,
+    LangHasComments, LangHasForbiddenChars, LangHasGroups, LangHasParagraphs,
+    LangHasScopes, LangHasSpecials, LangHasWhitespace, NodeExtTypes, NoLangFeatures,
+    ParsingState, ParsingStateDelta, ParsingStateStack, StateData, TrivialLang,
 };
