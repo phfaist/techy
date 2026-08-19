@@ -4,16 +4,18 @@
 //! `StdTokenReader` follows pylatexenc's proven `LatexTokenReader` protocol: `peek` parses
 //! the token at the current position without advancing; `move_to` repositions at a named
 //! edge of a token; `move_to_position` repositions at a position the reader handed out
-//! earlier; `next` = peek + move past the token. The scanning core is decomposed into
-//! private `detect_*`/`read_*` methods, each driven by one feature block of the
-//! [`TokenRules`] — except specials recognition, which is delegated to
-//! [`Lang::scan_specials`] (gated by the state's cached
-//! [`TriggerChars`](super::TriggerChars) filter).
+//! earlier; `next` = peek + move past the token. The scanning core,
+//! [`StdTokenReader::scan_std_token_at`], is composed of the scan helpers of
+//! [`super::scan`] — one free function per construct, each driven by one feature block of
+//! the [`TokenRules`](super::TokenRules) — except specials recognition, which
+//! [`scan_specials_trigger`] delegates to [`Lang::scan_specials`] (gated by the state's
+//! cached [`TriggerChars`](super::TriggerChars) filter).
 //!
 //! The whitespace primitive [`skip_whitespace`] implements the multi-newline rule in one
 //! place for pre-space, command post-space, and comment post-space alike: when
-//! paragraph-break detection ([`TokenRules::paragraphs_enabled`]) is on, skipped
-//! whitespace never consumes a
+//! paragraph-break detection
+//! ([`TokenRules::paragraphs_enabled`](super::TokenRules::paragraphs_enabled)) is on,
+//! skipped whitespace never consumes a
 //! newline belonging to a `\n\s*\n` sequence — such a sequence always surfaces as a
 //! [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
 
@@ -26,13 +28,11 @@ use crate::constructs::ImplementationError;
 use crate::source::{Source, SourceOrigin, SourcePos, SourceSpan, Span};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 
-use super::error::{
-    EndOfStreamAfterEscape, ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery,
-    TokenResult,
+use super::error::{ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery, TokenResult};
+use super::scan::{
+    command_rule_at, scan_command, scan_comment, scan_group_delimiter, scan_paragraph_break,
+    scan_specials_trigger, skip_whitespace, GroupDelimiterMatch,
 };
-use super::rules::{CommandRule, TokenRules};
-use super::scan::skip_whitespace;
-use super::specials::SpecialsScanError;
 use super::token::{StdToken, StdTokenKindData, TokenKind};
 use super::tokenization::{StreamPosition, Token, Tokenization};
 
@@ -500,7 +500,8 @@ pub trait TokenReader<'s, L: Lang> {
 }
 
 /// Standard reader over in-memory content, driven by the parsing state: the
-/// [`TokenRules`] data (plus derived caches) and the `Lang::scan_specials` hook.
+/// [`TokenRules`](super::TokenRules) data (plus derived caches) and the
+/// `Lang::scan_specials` hook.
 ///
 /// The reader holds only the content borrow and a position; all tokenization behavior
 /// comes from the state passed to [`peek`](TokenReader::peek) — which is what lets the
@@ -634,7 +635,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// 1. a paragraph break ([`scan_paragraph_break`]), which wins over everything, the
     ///    end of the content included;
     /// 2. the close delimiter the state expects
-    ///    ([`TokenRules::expecting_group_close`]);
+    ///    ([`TokenRules::expecting_group_close`](super::TokenRules::expecting_group_close));
     /// 3. the longest group delimiter of the state's
     ///    [`PrefixTable`](super::PrefixTable) — steps 2 and 3 are
     ///    [`scan_group_delimiter`], and both come before commands, so that a delimiter
@@ -642,7 +643,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// 4. a command ([`command_rule_at`], then [`scan_command`]);
     /// 5. a comment ([`scan_comment`]);
     /// 6. a specials trigger ([`scan_specials_trigger`]);
-    /// 7. a forbidden character ([`TokenRules::forbidden_chars`]), reported as the
+    /// 7. a forbidden character
+    ///    ([`TokenRules::forbidden_chars`](super::TokenRules::forbidden_chars)), reported as the
     ///    failure below;
     /// 8. otherwise a single content character — a
     ///    [`Char`](TokenKind::Char) token.
@@ -671,11 +673,13 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// cannot name; a caller that cannot describe a recovery answers `None`.
     ///
     /// Two conditions are reported with such a recovery, when `recovery_for` offers one:
-    /// [`EndOfStreamAfterEscape`] (an escape character stands as the last character of
+    /// [`EndOfStreamAfterEscape`](super::EndOfStreamAfterEscape) (an escape character
+    /// stands as the last character of
     /// the content) and [`ForbiddenChar`] (step 7). Both placeholders cover the
     /// offending character as a [`Char`](TokenKind::Char) token and resume past it. The
     /// other failures never carry a recovery: a [`Lang::scan_specials`] failure
-    /// ([`SpecialsScanError`] — the hook cannot say how to carry on) and an
+    /// ([`SpecialsScanError`](super::SpecialsScanError) — the hook cannot say how to
+    /// carry on) and an
     /// implementation error (an invalid `start`, or a match end or error span from that
     /// hook that the [`SpecialsMatch`](super::SpecialsMatch) documentation rules out).
     pub fn scan_std_token_at<L>(
@@ -717,8 +721,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 
         // skip_whitespace stops right before the first newline of a paragraph break, so a
         // break (which trumps everything, including end-of-stream) is detectable here.
-        if let Some(token) = self.detect_paragraph_break(ws_end, pre_space, rules) {
-            return Ok(token);
+        if let Some(span) = scan_paragraph_break(s, ws_end, rules) {
+            return Ok(StdToken::paragraph_break(span, pre_space));
         }
 
         let pos = ws_end;
@@ -729,54 +733,65 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         // Group delimiters come before commands so that escape-char-led delimiters like
         // `\(` win over command interpretation (as in pylatexenc, where math delimiters
         // are checked first).
-        if let Some(token) = self.detect_group_delimiter(pos, pre_space, state) {
-            return Ok(token);
-        }
-
-        let c = s[pos..].chars().next().expect("pos < len checked above");
-
-        if <L::Features as LangFeatures>::Commands::PRESENT && rules.commands_enabled() {
-            if let Some(rule) = rules.command_rules().iter().find(|r| c == r.escape_char) {
-                return self.read_command(pos, pre_space, rules, rule, recovery_for);
+        match scan_group_delimiter(s, pos, state) {
+            Some(GroupDelimiterMatch::Open { span, rule }) => {
+                return Ok(StdToken::group_open(rule.clone(), span, pre_space));
             }
+            // The match carries the rule of a close too; the token drops it, since the
+            // parser inside the group knows which close it was waiting for.
+            Some(GroupDelimiterMatch::Close { span, .. }) => {
+                return Ok(StdToken::group_close(span, pre_space));
+            }
+            None => {}
         }
 
-        if let Some(token) = self.read_comment(pos, pre_space, rules) {
-            return Ok(token);
-        }
-
-        if <L::Features as LangFeatures>::Specials::PRESENT
-            && state.trigger_chars().is_some_and(|trigger_chars| trigger_chars.may_start(c))
-        {
-            // A scan failure is unrecoverable here: the hook reports a condition and a
-            // byte range, and knows nothing about this reader's tokens or positions, so
-            // it cannot describe how to carry on ([`SpecialsScanError`]). The reader
-            // qualifies the range with its own source and attaches no recovery.
-            let scanned = L::scan_specials(state, s, pos)
-                .map_err(|error| self.lift_specials_scan_error(error, pos))?;
-            if let Some(m) = scanned {
-                // A malformed `end` from the hook would yield a zero-width token (the
-                // dispatch loop would never advance) or a span that panics when
-                // sliced. The hook is outer-layer code, so the contract is validated,
-                // not debug-asserted ([§dd-dr:panic-policy]); no recovery — an
-                // implementation bug aborts even under tolerant recovery.
-                if !(m.end > pos && m.end <= s.len() && s.is_char_boundary(m.end)) {
-                    return Err(TokenError::new(
-                        TokenErrorKind::Custom(Box::new(ImplementationError::new(
-                            format!(
-                                "Lang::scan_specials returned an invalid match end \
-                                 {} for a match at {} (content length {})",
-                                m.end,
-                                pos,
-                                s.len()
-                            ),
-                        ))),
-                        SourceSpan::new(self.source, Span::empty(pos)),
-                        None,
-                    ));
+        if let Some(rule) = command_rule_at(s, pos, rules) {
+            return match scan_command(s, pos, rules, rule) {
+                Ok(m) => {
+                    Ok(StdToken::command(m.escape_char, m.span, pre_space, m.post_space))
                 }
-                // The name is the matched text (the `SpecialsMatch` contract): the
-                // token records only the span, and the reader slices it on demand.
+                Err(condition) => {
+                    // Recovery: a `Char` placeholder covering the dangling escape byte
+                    // itself (the escape character is the content's last character, so
+                    // the span ends at `s.len()`), so the byte stays in the tree — it
+                    // joins the pending chars run and the tolerant parse keeps the
+                    // partition invariant (decided July 2026, Action 02; supersedes the
+                    // empty `EndOfStream` placeholder, which dropped the byte from the
+                    // AST).
+                    let span = Span::new(pos, s.len());
+                    let placeholder =
+                        StdToken::char(condition.escape_char, span, pre_space);
+                    Err(TokenError::new(
+                        TokenErrorKind::EndOfStreamAfterEscape(condition),
+                        SourceSpan::new(self.source, span),
+                        recovery_for(placeholder, span.end()),
+                    ))
+                }
+            };
+        }
+
+        if let Some(m) = scan_comment(s, pos, rules) {
+            return Ok(StdToken::comment(m.start, m.span, pre_space, m.post_space));
+        }
+
+        match scan_specials_trigger(s, pos, state) {
+            // A scan failure is unrecoverable here: the hook reported a condition and a
+            // byte range, and knows nothing about this reader's tokens or positions, so
+            // it cannot describe how to carry on
+            // ([`SpecialsScanError`](super::SpecialsScanError)). The reader qualifies the
+            // range with its own source and attaches no recovery. The same goes for a
+            // hook answer the helper rejected as an implementation error.
+            Err(error) => {
+                return Err(TokenError::new(
+                    error.kind,
+                    SourceSpan::new(self.source, error.span),
+                    None,
+                ));
+            }
+            // The name is the matched text (what the
+            // [`SpecialsMatch`](super::SpecialsMatch) documentation states): the token
+            // records only the span, and the reader slices it on demand.
+            Ok(Some(m)) => {
                 return Ok(StdToken::specials(
                     m.callable_type,
                     m.spec,
@@ -784,7 +799,10 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                     pre_space,
                 ));
             }
+            Ok(None) => {}
         }
+
+        let c = s[pos..].chars().next().expect("pos < len checked above");
 
         if <L::Features as LangFeatures>::ForbiddenChars::PRESENT
             && rules.forbidden_chars().contains(c)
@@ -799,233 +817,6 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         }
 
         Ok(StdToken::char(c, Span::new(pos, pos + c.len_utf8()), pre_space))
-    }
-
-    /// Turn a `Lang::scan_specials` failure into a token error qualified by this
-    /// reader's source, with no recovery (the hook cannot describe one).
-    ///
-    /// The hook is outer-layer code, so its span is *validated*, not trusted: a span
-    /// out of the content's bounds or cutting a character would make `SourceSpan::new`
-    /// assert. Such a span is itself a contract violation, reported the way every other
-    /// extension-contract violation in this reader is — an unrecoverable implementation
-    /// error, anchored where the scan was asked for ([§dd-dr:panic-policy]).
-    fn lift_specials_scan_error<L>(
-        &self,
-        error: SpecialsScanError,
-        pos: usize,
-    ) -> TokenError<L>
-    where
-        L: Lang<SourceOrigin = O>,
-    {
-        let span = error.span;
-        let valid = span.end() <= self.content.len()
-            && self.content.is_char_boundary(span.start())
-            && self.content.is_char_boundary(span.end());
-        if !valid {
-            return TokenError::new(
-                TokenErrorKind::Custom(Box::new(ImplementationError::new(format!(
-                    "Lang::scan_specials reported an error at an invalid span {}..{} \
-                     for a scan at {} (content length {})",
-                    span.start(),
-                    span.end(),
-                    pos,
-                    self.content.len()
-                )))),
-                SourceSpan::new(self.source, Span::empty(self.nearest_valid_offset(pos))),
-                None,
-            );
-        }
-        TokenError::new(error.kind, SourceSpan::new(self.source, span), None)
-    }
-
-    /// A `ParagraphBreak` token if a `\n\s*\n` whitespace sequence starts at `pos` (which
-    /// `skip_whitespace` guarantees whenever it stopped at a consumable-whitespace
-    /// newline). The token spans from the first through the last newline of the run;
-    /// whitespace after the last newline is left for the next token's pre-space.
-    /// Requires the paragraphs *and* whitespace features, each declared present and
-    /// enabled at runtime: a language that declares either absent never yields a break.
-    fn detect_paragraph_break<L>(
-        &self,
-        pos: usize,
-        pre_space: Span,
-        rules: &TokenRules<L>,
-    ) -> Option<StdToken<L>>
-    where
-        L: Lang<SourceOrigin = O>,
-    {
-        if !(<L::Features as LangFeatures>::Paragraphs::PRESENT
-            && <L::Features as LangFeatures>::Whitespace::PRESENT
-            && rules.paragraphs_enabled()
-            && rules.whitespace_enabled())
-        {
-            return None;
-        }
-        let ws_chars = rules.whitespace_chars();
-        if !self.content[pos..].starts_with('\n') || !ws_chars.contains('\n') {
-            return None;
-        }
-        let mut newlines = 0usize;
-        let mut end = pos;
-        let mut last_nl_end = pos;
-        for c in self.content[pos..].chars() {
-            if !ws_chars.contains(c) {
-                break;
-            }
-            end += c.len_utf8();
-            if c == '\n' {
-                newlines += 1;
-                last_nl_end = end;
-            }
-        }
-        if newlines < 2 {
-            return None; // lone newline: consumable whitespace, not a break
-        }
-        Some(StdToken::paragraph_break(Span::new(pos, last_nl_end), pre_space))
-    }
-
-    /// A `GroupOpen`/`GroupClose` token at `pos`, if a delimiter matches. The close
-    /// delimiter expected per `rules.expecting_group_close()` takes precedence; otherwise
-    /// the longest table match wins, read as an opener when the string is ambiguous.
-    fn detect_group_delimiter<L>(
-        &self,
-        pos: usize,
-        pre_space: Span,
-        state: &ParsingState<L>,
-    ) -> Option<StdToken<L>>
-    where
-        L: Lang<SourceOrigin = O>,
-    {
-        let rules = state.rules();
-        let rest = &self.content[pos..];
-
-        if let Some(expected) = rules.expecting_group_close() {
-            if !expected.close.is_empty() && rest.starts_with(expected.close.as_str()) {
-                let span = Span::new(pos, pos + expected.close.len());
-                return Some(StdToken::group_close(span, pre_space));
-            }
-        }
-
-        // `None` when the language declares the groups feature absent — no table
-        // exists, and no delimiter can match.
-        let entry = state.prefix_table()?.match_at(rest)?;
-        let span = Span::new(pos, pos + entry.delim().len());
-        Some(match (entry.open(), entry.close()) {
-            (Some(rule), _) => StdToken::group_open(rule.clone(), span, pre_space),
-            (None, Some(_)) => StdToken::group_close(span, pre_space),
-            (None, None) => unreachable!("prefix table entries always carry a direction"),
-        })
-    }
-
-    /// Read a command token at `pos` (the escape character's position). The name is a
-    /// greedy run of the rule's name characters, or a single character if the first one
-    /// is not a name character. Multi-character names consume their following whitespace
-    /// as post-space — syntactic whitespace, never crossing a paragraph break (enforced
-    /// by [`skip_whitespace`] itself).
-    fn read_command<L>(
-        &self,
-        pos: usize,
-        pre_space: Span,
-        rules: &TokenRules<L>,
-        rule: &CommandRule,
-        recovery_for: impl FnOnce(StdToken<L>, usize) -> Option<TokenRecovery<L>>,
-    ) -> TokenResult<L, StdToken<L>>
-    where
-        L: Lang<SourceOrigin = O>,
-    {
-        let s = self.content;
-        let name_start = pos + rule.escape_char.len_utf8();
-
-        if name_start >= s.len() {
-            // Recovery: a `Char` placeholder covering the dangling escape byte itself
-            // (`name_start` == `s.len()` here), so the byte stays in the tree — it
-            // joins the pending chars run and the tolerant parse keeps the partition
-            // invariant (decided July 2026, Action 02; supersedes the empty
-            // `EndOfStream` placeholder, which dropped the byte from the AST).
-            let span = Span::new(pos, name_start);
-            let placeholder = StdToken::char(rule.escape_char, span, pre_space);
-            return Err(TokenError::new(
-                TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
-                    rule.escape_char,
-                )),
-                SourceSpan::new(self.source, span),
-                recovery_for(placeholder, span.end()),
-            ));
-        }
-
-        let first = s[name_start..].chars().next().expect("name_start < len checked above");
-        let mut name_end = name_start + first.len_utf8();
-        let is_named = rule.name_chars.contains(first);
-        if is_named {
-            for c in s[name_end..].chars() {
-                if !rule.name_chars.contains(c) {
-                    break;
-                }
-                name_end += c.len_utf8();
-            }
-        }
-
-        // Only multi-character (name-chars) commands swallow their post-space; `\&` and
-        // friends do not (pylatexenc behavior).
-        let post_space = if is_named {
-            Span::new(name_end, skip_whitespace(s, name_end, rules))
-        } else {
-            Span::empty(name_end)
-        };
-
-        // The name is what lies between the escape character and the post-space; the
-        // token records the spans and the reader slices its content on demand.
-        Ok(StdToken::command(
-            rule.escape_char,
-            Span::new(pos, post_space.end()),
-            pre_space,
-            post_space,
-        ))
-    }
-
-    /// A whole-comment token at `pos`, if a comment-start delimiter matches
-    /// (longest-first across the rules). The content runs to the end of the line; the
-    /// terminating newline plus following indentation is the token's post-space — unless
-    /// that whitespace forms a paragraph break, in which case the comment takes no
-    /// post-space and the break surfaces as its own token. Returns `None` when the
-    /// language declares the comments feature absent (such a language stores no
-    /// comment rules data at all).
-    fn read_comment<L>(
-        &self,
-        pos: usize,
-        pre_space: Span,
-        rules: &TokenRules<L>,
-    ) -> Option<StdToken<L>>
-    where
-        L: Lang<SourceOrigin = O>,
-    {
-        if !<L::Features as LangFeatures>::Comments::PRESENT || !rules.comments_enabled() {
-            return None;
-        }
-        let s = self.content;
-        let rest = &s[pos..];
-        let start = rules
-            .comment_rules()
-            .iter()
-            .map(|r| r.start.as_str())
-            .filter(|d| !d.is_empty() && rest.starts_with(d))
-            .max_by_key(|d| d.len())?;
-
-        let content_start = pos + start.len();
-        // '\n' is the sole line terminator — '\r' gets no special treatment anywhere in
-        // the tokenizer (feeding text-mode-normalized content is the embedder's job;
-        // Action-02 follow-up, July 2026).
-        let content_end = match s[content_start..].find('\n') {
-            Some(i) => content_start + i,
-            None => s.len(),
-        };
-        let post_space = Span::new(content_end, skip_whitespace(s, content_end, rules));
-
-        Some(StdToken::comment(
-            Span::new(pos, content_start),
-            Span::new(pos, post_space.end()),
-            pre_space,
-            post_space,
-        ))
     }
 }
 
@@ -1113,9 +904,9 @@ mod tests {
     use crate::spec::CallableSpec;
     use crate::state::StateData;
     use crate::token::{
-        CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
-        ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, TriggerChars,
-        WhitespaceRules,
+        CommandRule, CommandRules, CommentRule, CommentRules, EndOfStreamAfterEscape,
+        ForbiddenCharsRules, GroupRule, GroupRules, ParagraphRules, SpecialsMatch,
+        SpecialsRules, SpecialsScanError, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::sync::Arc;
