@@ -14,9 +14,11 @@
 - Better tokens — deferred follow-ups (the token/reader port; plan and stage log in
   dev-docs/bettertokens/):
 
-  - Gap-free chars-run contract: relax it for a reader that serves one parse from
+  - ~~Gap-free chars-run contract: relax it for a reader that serves one parse from
     several sources — flush the run when the source changes, or let a reader declare
-    that it may skip bytes.  Only needed once such a reader exists.
+    that it may skip bytes.~~  **DONE**: a language declares whether its parse trees are
+    span-tiled (`Lang::OBEYS_SPAN_TILING`), and the parsers of one that does not obey
+    span tiling assume nothing about where tokens come from ([§dd-dr:span-tiling]).
   - `LatexlikeDriver::with_token_reader(...)`: a knob for installing a custom reader
     *instance* in the preset family.  Partly answered: a latexlike language now
     declares its reader as `Lang::Tokenization` ([§dd-dr:tokenization]), so only a

@@ -4,12 +4,12 @@ Plan: `dev-docs/spantiling/PLAN.md`. Protocol: PLAN §8. Every subagent runs on 
 
 | Stage | Branch | Base | Worktree | Status |
 |---|---|---|---|---|
-| 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | reviewed |
-| 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | implemented |
-| 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | reviewed |
-| 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | implemented |
-| 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | implemented |
-| 5 record | `st-5-record` | `main` (after all) | `.claude/worktrees/st-5-record` | planned |
+| 1 contract surface | `st-1-contract` | `main` | `.claude/worktrees/st-1-contract` | merged |
+| 2 parsers | `st-2-parsers` | `st-1-contract` | `.claude/worktrees/st-2-parsers` | merged |
+| 3a scripted reader | `st-3a-scripted` | `st-1-contract` | `.claude/worktrees/st-3a-scripted` | merged |
+| 4 consumers | `st-4-consumers` | `st-1-contract` | `.claude/worktrees/st-4-consumers` | merged |
+| 3b tests | `st-3b-tests` | `main` (after 2, 3a) | `.claude/worktrees/st-3b-tests` | merged |
+| 5 record | `st-5-record` | `main` (after all) | `.claude/worktrees/st-5-record` | reviewed |
 
 ## Stage 1 — contract surface
 
@@ -1300,6 +1300,147 @@ span_tiling` filter matches 28 — it also catches the Stage 2 tests whose names
    test is `#[ignore]`d.
 
 ## Stage 5 — record
+
+Status: **implemented** (branch `st-5-record`, worktree `.claude/worktrees/st-5-record`,
+base `main` at `4f45340`).
+
+Documentation only — no source file was touched.
+
+### Files changed
+
+- **`dev-docs/DESIGN_RATIONALE.md`**
+  - New entry **`[§dd-dr:span-tiling]`** — "Span tiling is a declared property of the
+    language; parsers assume nothing otherwise" — in the *Nodes and the syntax tree*
+    topic, directly after [§dd-dr:span-invariants] (the entry it qualifies) and before
+    [§dd-dr:node-id-provenance]. It records: the decision and why it is a per-language
+    declaration; the definition by pointer to the const's rustdoc, with its three
+    components named and "one span per node" excluded; the const itself (associated
+    const, default `true`, "obeys" = a fact, not a knob; not a `LangFeatures` member,
+    not a marker type); the two regimes; the required, undefaulted
+    `TokenReader::source_span_describing` with its no-assumptions contract, its
+    recommended shape and the single dispatch point
+    (`ParseContext::source_span_within`); the seam analysis (the chars-run check is a
+    clause-2/7 check and stays in both regimes, clause 7 writes down where consecutive
+    tokens meet, the two sides of a seam are one position value, runs may cross a seam,
+    hence owned content); the node-data rule (single-token facts `Spanned` iff the fact
+    lies in the node's own source, multi-token content and pre-staging payloads owned
+    under `false`, the environment name exact through `NameGroup::name_text`); the
+    consumers rule (content from node data, coordinate accessors answer coordinates,
+    recompose "as stored", `validate_tree` unchanged and satisfied, the byte accounting
+    confined to the test-only span-tiling law); the scripted multi-source test reader as
+    the enforcement and test tool (canonical seam positions, `within` answering by the
+    end position's source); the accepted costs (owned multi-token content, no zero-copy
+    for it, two public-API breaks under the soft freeze); the seven rejected
+    alternatives; the deferred items, including the `FrameTitle` span-quoting under
+    `false` (recorded, not fixed); and the revisit condition.
+  - Dated amendment paragraphs (history preserved, labels untouched) on
+    **[§dd-dr:span-invariants]** (the five invariants are the tiled statement; items 1
+    and 3 record owned text and item 5's accounting does not apply under `false`),
+    **[§dd-dr:token-opacity]** (the motivating expanding-reader case is now supported),
+    **[§dd-dr:stream-position]** (clause 7 and what positions mean at a seam),
+    **[§dd-dr:token-contract-hardening]** (the contract gained clauses 7 and 8, the
+    *Seams* section, and `source_span_describing` beside item 4's family),
+    **[§dd-dr:input-attachment]** ("every sibling run stays single-source" is a
+    statement about a language that obeys span tiling) and **[§dd-dr:tree-validation]**
+    (the oracle's gate, and the rename).
+  - **[§dd-dr:superseded-names]** gains the three superseded phrases with their
+    replacements, and the note that no mode name is coined for the other regime.
+  - Wording sweep: every "partition invariant" (7 sites) and "parse-law"/"parse-tree
+    law" (11 sites) rewritten to the span-tiling vocabulary; the only remaining
+    occurrences are the ones that *name* the superseded phrase.
+- **`dev-docs/ARCHITECTURE.md`**
+  - New section **`## Span tiling [§dd-arch:span-tiling]`**, between *Node trees* and
+    *Construct parsers*: the declaration and the definition by pointer to the const
+    doc; the two regimes with their consequences; the dispatch point; the consumers
+    rule of the plan's §1.6; the reader-contract half (clauses 7 and 8, seams); the
+    all-trees law versus the test-only span-tiling law, and the scripted reader; the
+    vocabulary, with no name coined for the second regime; and the decisions line
+    ([§dd-dr:span-tiling], [§dd-dr:span-invariants], [§dd-dr:tree-validation]).
+  - Pointers into it from [§dd-arch:token] (after the contract summary),
+    [§dd-arch:nodes] (the whitespace-and-span-invariants bullet, whose tiling clause is
+    now stated as conditional, plus the recomposition-levels and read-surface bullets),
+    [§dd-arch:constructs] (after the node-data rule) and [§dd-arch:naming] (the
+    vocabulary lives in one place).
+  - Wording sweep: "partition invariant" (1) and "parse-law" (3) gone.
+- **`TODO_Big.md`** — the "Gap-free chars-run contract" item under *Better tokens* is
+  struck through and marked **DONE**, pointing at [§dd-dr:span-tiling].
+
+### Grep gates
+
+```
+$ grep -n "§dd-dr:span-tiling]" dev-docs/ARCHITECTURE.md
+705:Decisions behind this section: [§dd-dr:span-tiling]; the invariants it qualifies —
+
+$ python3 -c "<every §dd-dr heading label vs ARCHITECTURE>"
+215 heading labels; 0 missing from ARCHITECTURE
+
+$ grep -rn "partition invariant\|parse-tree law\|in-order, gap-free" --include='*.md' --include='*.rs' .
+  (excluding target/, dev-docs/archive/, dev-docs/bettertokens/, dev-docs/spantiling/)
+techy/src/token/reader.rs:2664   — pre-existing test comment, see the open question below
+dev-docs/DESIGN_RATIONALE.md:2867, 6726, 6729 — the sites that *name* the superseded
+                                 phrases (the [§dd-dr:tree-validation] amendment and the
+                                 [§dd-dr:superseded-names] bullet)
+```
+
+### Gate results (verbatim, run from the worktree)
+
+```
+### rm -rf target/doc && cargo docs --all-features
+ Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
+   Compiling techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
+ Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.93s
+   Generated /Users/philippe/projects/techy/.claude/worktrees/st-5-record/target/doc/techy/index.html and 1 other file
+
+### cargo test --workspace
+test result: ok. 1102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 21.63s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Same counts as `main` at `4f45340` — nothing in the crate depends on these files.
+`cargo docs --all-features` emits no warnings.
+
+### Deviations
+
+1. **The `Status:` line carries no date.** The stage brief asked for
+   `Status: DECIDED (user, 2026-08-19)`; `Documentation_Structure.md` and
+   [§dd-dr:self-meta] both rule that status lines carry who/context and **never** dates
+   (dates belong only inside explicitly recorded reversal or amendment notes). The entry
+   reads `Status: DECIDED (user, span-tiling design session)`, matching the
+   [§dd-dr:token-contract-hardening] precedent; the six amendment notes carry the date.
+2. **The ARCHITECTURE subsection is a top-level `##` section**, not a `###` inside
+   [§dd-arch:nodes]. The file has no `###` level anywhere, and each `##` section ends
+   with its own "Decisions behind this section" list; a `###` would have split that
+   list. The property is also cross-cutting (tokens, parsers, nodes, consumers), so it
+   sits between *Node trees* and *Construct parsers* with pointers from all three.
+3. **The `[§dd-dr:tree-validation]` entry was amended too** (not in the brief's list):
+   it named the oracle "the parse-tree law" three times, which the naming register
+   supersedes, so the rename needed a recorded reason.
+
+### Open questions for the user
+
+1. **One superseded phrase survives in a source file**: `techy/src/token/reader.rs:2664`,
+   a test comment reading "the tolerant parse keeps the partition invariant". Stage 4
+   left it (its file belonged to Stages 1 and 3a) and this stage may not touch source
+   files. It is a one-word comment fix whenever a source-touching change passes through
+   that file. The same sentence in [§dd-dr:token-contract-hardening] item 2 *was* swept.
+2. **The `FrameTitle` defect stays recorded, not fixed** (carried from Stage 2's open
+   question 1): under `OBEYS_SPAN_TILING = false` a traceback frame's title can quote
+   text that was never read, because it renders a multi-token span. The record names
+   both affected variants and the two feeding sites, and says the repair changes the
+   public `FrameTitle`.
+3. **`TODO_Big.md`'s remaining "Better tokens" items** were left as they stand; only the
+   chars-run item is this project's. The item just below it
+   (`LatexlikeDriver::with_token_reader`) is also PLAN §10 item 4, still deferred.
 
 ## Orchestrator log
 
