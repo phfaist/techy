@@ -376,7 +376,7 @@ fn an_input_reference_that_is_not_plain_characters_is_not_read() {
     // reference here is silent.
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert!(
-        input.slots().is_none_or(|slots| slots.is_empty()),
+        input.slots().expect("a callable node").is_empty(),
         "no source is attached when the reference cannot be read"
     );
 }

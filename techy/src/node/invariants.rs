@@ -596,7 +596,7 @@ pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
         return;
     }
     for (i, data) in tree.nodes().iter().enumerate() {
-        check_parse_law_node(tree, i, data);
+        check_span_tiling_node(tree, i, data);
     }
 }
 
@@ -613,7 +613,7 @@ pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
 /// inference: the excluded regions are invisible to the parent's accounting,
 /// so the remaining children must be contiguous across them.
 #[cfg(test)]
-fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &NodeData<L>) {
+fn check_span_tiling_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &NodeData<L>) {
     let span = data.span.range();
     let source = data.span.source();
 

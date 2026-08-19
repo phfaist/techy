@@ -492,43 +492,64 @@ fn a_chars_run_across_a_hole_in_one_source_is_one_owned_node() {
 fn an_unconsumed_stop_token_at_a_seam_is_peeked_again_where_it_stands() {
     // `A[0..2]` = `"ab"`, `B[0..2]` = `"cd"`, stopping at `B`'s first token without
     // consuming it: contract clauses 2 and 7 hold through the seam, so the caller peeks
-    // the very token the condition matched, at the very position the run ended at.
+    // the very token the condition matched, at the very position the run ended at. The
+    // reader assertions run inside the parse (the reader is gone once the tree is
+    // frozen); the tree is finished so the flushed run can be read back.
     let a = source("ab");
     let b = source("cd");
-    let state = script_state::<RelaxedLang>();
-    let segments: [Segment<'_>; 2] = [(&a, 0..2), (&b, 0..2)];
-    let mut reader = ScriptedReader::<RelaxedLang>::new(&segments, &state);
-    let mut session = ParserSession::new();
-    let driver = StdParseDriver::new(Recovery::Strict, ());
     let stops_at_c = |token: &_, tokens: &dyn TokenReader<'_, RelaxedLang>| {
         Ok(matches!(tokens.token_kind(token), TokenKind::Char('c')))
     };
-    let mut cx = ParseContext::new(&mut reader, Arc::clone(&state), &mut session, &driver);
+    let state = script_state::<RelaxedLang>();
+    let (result, stop_span) = with_scripted_parse::<RelaxedLang, SourceSpan<Option<String>>>(
+        &state,
+        &[(&a, 0..2), (&b, 0..2)],
+        Recovery::Strict,
+        |cx| {
+            let begin = cx.tokens.position_here();
+            let mut parser = NodesParser::new(StopSpec::at_token(
+                TokenStopKind::Predicate(&stops_at_c),
+                false,
+            ));
+            let (outcome, _) = parser.parse(cx)?;
 
-    let mut parser =
-        NodesParser::new(StopSpec::at_token(TokenStopKind::Predicate(&stops_at_c), false));
-    let (outcome, _) = parser.parse(&mut cx).expect("the parse runs");
+            let StopCause::TokenCondition { span, after } = &outcome.stop else {
+                panic!("expected a token-condition stop, got {:?}", outcome.stop);
+            };
+            let (span, after) = (span.clone(), *after);
 
-    let StopCause::TokenCondition { span, after } = &outcome.stop else {
-        panic!("expected a token-condition stop, got {:?}", outcome.stop);
-    };
-    assert!(Arc::ptr_eq(span.source(), &b));
-    assert_eq!(span.range(), 0..1);
+            // The stream stands at the un-consumed token, which is the place the run
+            // ended at, and peeking there reproduces that very token.
+            let here = cx.tokens.position_here();
+            let again = cx.tokens.peek(&cx.state).expect("the token is peekable again");
+            assert!(matches!(cx.tokens.token_kind(&again), TokenKind::Char('c')));
+            assert_eq!(cx.tokens.position_at(&again, TokenEdge::StartBeforePreSpace), here);
+            // Nothing of it was staged as content: its pre-space is empty, and its own
+            // bytes are still ahead of the stream.
+            assert_eq!(
+                cx.tokens
+                    .source_span_between(&again, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
+                    .content(),
+                ""
+            );
+            assert_eq!(cx.tokens.position_at(&again, TokenEdge::EndPastPostSpace), after);
 
-    // The stream stands at the un-consumed token, which is the place the run ended at.
-    let here = cx.tokens.position_here();
-    let again = cx.tokens.peek(&cx.state).expect("the token is peekable again");
-    assert!(matches!(cx.tokens.token_kind(&again), TokenKind::Char('c')));
-    assert_eq!(cx.tokens.position_at(&again, TokenEdge::StartBeforePreSpace), here);
-    // Nothing of it was staged as content: its pre-space is empty, and its own bytes
-    // are still ahead of the stream.
-    assert_eq!(
-        cx.tokens
-            .source_span_between(&again, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
-            .content(),
-        ""
-    );
-    assert_eq!(cx.tokens.position_at(&again, TokenEdge::EndPastPostSpace), *after);
+            let root_span = cx.source_span_within(&begin, &here)?;
+            Ok((outcome.nodes, root_span, span))
+        },
+    )
+    .expect("the parse runs");
+
+    // The matched token's span lies in the source it came from …
+    assert!(Arc::ptr_eq(stop_span.source(), &b));
+    assert_eq!(stop_span.range(), 0..1);
+    // … and the run flushed at the stop owns the text it read in the other one.
+    let parsed = Parsed { result, stop: StopCause::EndOfInput };
+    let roots = parsed.roots();
+    assert_eq!(roots.len(), 1);
+    assert_owned_chars(&roots[0], "ab");
+    assert!(Arc::ptr_eq(roots[0].span().source(), &a));
+    assert_eq!(roots[0].span().range(), 0..2);
 }
 
 // --- T6: backtracking across a seam ----------------------------------------------------
@@ -671,6 +692,7 @@ fn a_comment_and_a_paragraph_break_in_another_source_become_nodes() {
     // The run after it never crossed a seam, but the language's declaration is what
     // decides the recording, not the run's luck.
     assert_owned_chars(&roots[3], "b");
+    assert!(Arc::ptr_eq(roots[3].span().source(), &b));
     assert_eq!(roots[3].span().range(), 7..8);
     assert_eq!(recompose(&parsed), "a%note\n\nb");
 
@@ -782,21 +804,18 @@ where
     }))
 }
 
-#[test]
-fn verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read() {
-    // `A[0..1]` = `"{"`, `B[0..2]` = `"ab"`, `A[4..7]` = `"  }"`: the raw content
-    // begins exactly at the seam into `B` and ends with the whitespace that arrives as
-    // the terminator's pre-space — content, by the raw-content loop's rule. The
-    // described span (`B[0..2]` = `"ab"`) therefore does not hold the content's text
-    // (`"ab  "`), which is why the text decides both what is recorded and whether there
-    // is anything to record at all.
-    let a = source("{zzz  }");
-    let b = source("ab");
+/// Drive one [`VerbatimArgumentParser`] over the scripted stream of `segments` under
+/// the raw-content seed, stage the argument's nodes under a root `List` spanning
+/// `root_span`, freeze and check (T10 again).
+fn run_verbatim_argument(
+    segments: &[Segment<'_>],
+    recovery: Recovery,
+    root_span: SourceSpan<Option<String>>,
+) -> ParseResult<RelaxedLang> {
     let state = raw_script_state::<RelaxedLang>();
-    let segments: [Segment<'_>; 3] = [(&a, 0..1), (&b, 0..2), (&a, 4..7)];
-    let mut reader = ScriptedReader::<RelaxedLang>::new(&segments, &state);
+    let mut reader = ScriptedReader::<RelaxedLang>::new(segments, &state);
     let mut session = ParserSession::new();
-    let driver = StdParseDriver::new(Recovery::Strict, ());
+    let driver = StdParseDriver::new(recovery, ());
 
     let spec = ArgumentSpec::new(VerbatimArgumentParser::new(GT_BRACE), "verb");
     let nodes = {
@@ -808,15 +827,31 @@ fn verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read() {
             .nodes
     };
 
-    let root_span = SourceSpan::new(&a, 0..7);
-    let kind = NodeKind::list();
     let root = session
         .builder
-        .add(kind, root_span, Arc::clone(&state), nodes, (), ())
+        .add(NodeKind::list(), root_span, Arc::clone(&state), nodes, (), ())
         .expect("stage the root list");
     let result = session.finish(root).expect("freeze the tree");
     crate::node::validate_tree(&result.tree).expect("the all-trees law holds");
     crate::node::check_tree_invariants(&result.tree);
+    result
+}
+
+#[test]
+fn verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read() {
+    // `A[0..1]` = `"{"`, `B[0..2]` = `"ab"`, `A[4..7]` = `"  }"`: the raw content
+    // begins exactly at the seam into `B` and ends with the whitespace that arrives as
+    // the terminator's pre-space — content, by the raw-content loop's rule. The
+    // described span (`B[0..2]` = `"ab"`) therefore does not hold the content's text
+    // (`"ab  "`), which is why the text decides both what is recorded and whether there
+    // is anything to record at all.
+    let a = source("{zzz  }");
+    let b = source("ab");
+    let result = run_verbatim_argument(
+        &[(&a, 0..1), (&b, 0..2), (&a, 4..7)],
+        Recovery::Strict,
+        SourceSpan::new(&a, 0..7),
+    );
 
     let group = result.tree.root().child(0).expect("the verbatim group");
     assert_eq!(group.group_delimiters(), Some(("{", "}")));
@@ -831,4 +866,36 @@ fn verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read() {
     assert!(Arc::ptr_eq(content[0].span().source(), &b));
     assert_eq!(content[0].span().range(), 0..2);
     assert_eq!(content[0].span().content(), "ab");
+}
+
+#[test]
+fn verbatim_content_running_to_end_of_stream_keeps_the_whitespace_before_it() {
+    // The twin arm of the raw-content loop: the region ends at end of stream instead of
+    // at a terminator, and the end-of-stream token's pre-space is content by the same
+    // rule. `A[0..1]` = `"{"`, `B[0..2]` = `"ab"`, `A[4..6]` = `"  "` — the input's
+    // trailing whitespace, which only the last segment may carry. No terminator was
+    // consumed, so the group records an empty close and the parse diagnoses (tolerant).
+    let a = source("{zzz  ");
+    let b = source("ab");
+    let result = run_verbatim_argument(
+        &[(&a, 0..1), (&b, 0..2), (&a, 4..6)],
+        Recovery::Tolerant,
+        SourceSpan::new(&a, 0..6),
+    );
+
+    assert_eq!(result.diagnostics.len(), 1);
+    let report = result.diagnostics.render_all();
+    assert!(report.contains("missing closing delimiter"), "unexpected report:\n{report}");
+
+    let group = result.tree.root().child(0).expect("the verbatim group");
+    // The never-found close is the empty-close convention, not a delimiter.
+    assert_eq!(group.group_delimiters(), Some(("{", "")));
+    assert!(Arc::ptr_eq(group.span().source(), &a));
+    assert_eq!(group.span().range(), 0..6);
+
+    let content: Vec<_> = group.children().iter().collect();
+    assert_eq!(content.len(), 1);
+    assert_owned_chars(&content[0], "ab  ");
+    assert!(Arc::ptr_eq(content[0].span().source(), &b));
+    assert_eq!(content[0].span().range(), 0..2);
 }

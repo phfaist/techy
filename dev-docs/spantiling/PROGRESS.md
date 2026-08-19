@@ -1087,9 +1087,11 @@ Status: **implemented** (branch `st-3b-tests`, worktree `.claude/worktrees/st-3b
 base `main` = `4f45340`; commits `c512e65`, `7686985`, `e476621`, `287dfa4`, `d6a3f6c`,
 plus this file's).
 
-Tests only, plus one docs/comments sweep (below). **No production code changed**: nothing
-in the stage exposed a defect, and the preset instantiated over a non-standard
-tokenization with no adjustment at all — which is R7's proof.
+Tests, plus comment-level changes only. **No production behavior changed**: nothing in
+the stage exposed a defect, and the preset instantiated over a non-standard tokenization
+with no adjustment at all — which is R7's proof. The non-test edits are the superseded-name
+sweep, the rename of the `cfg(test)` byte-accounting helper, and one corrected comment
+(all listed below).
 
 ### Files changed
 
@@ -1112,7 +1114,15 @@ tokenization with no adjustment at all — which is R7's proof.
   tokenization alone (`ScriptedTokenization` instead of `StdTokenization`).
 - **`techy/src/constructs/mod.rs`, `techy/src/latexlike/mod.rs`** — the two
   `#[cfg(test)] mod` declarations.
-- The wording sweep (separate commit `d6a3f6c`, comments and docs only):
+- **`techy/src/node/invariants.rs`** — the private `cfg(test)` `check_parse_law_node`
+  renamed to `check_span_tiling_node` (`:599`, `:616`), finishing the superseded-name
+  sweep in code as well as in prose.
+- **`techy/src/latexlike/input.rs:355`** — the reference-read comment corrected: the
+  `None` arm is reached not only for an absent argument but also, under
+  `OBEYS_SPAN_TILING = false`, for a *provided* argument whose content is not plain
+  characters, where nothing is resolved, attached **or diagnosed**. Comment only; the
+  behavior question is open question 2.
+- The wording sweep (commit `d6a3f6c`, comments and docs only):
   `techy/src/node/mod.rs` (64, 71, 2169), `techy/src/node/arguments.rs` (343),
   `techy/src/node/builder.rs` (655), `techy/src/token/reader.rs` (2664) — the last
   "parse-law"/"parse law" and "partition invariant" occurrences in source, each rewritten
@@ -1134,16 +1144,24 @@ tokenization with no adjustment at all — which is R7's proof.
 | T4 (name) | `an_environment_name_read_across_a_seam_resolves_the_environment` — `\begin{` in A, `itemize` in B, `}x\end{itemize}` in A → the lookup resolves (no diagnostics), `name() == "itemize"`, body `x`, re-emits `\begin{itemize}x\end{itemize}` | `latexlike/span_tiling_tests.rs:212` |
 | T4 (`\input`) | `an_input_reference_read_across_seams_resolves` — `\input{` in A, `chap.tex` in B, `}` in A → the argument's content is `Owned("chap.tex")` and the resolver finds it (a source is attached), which is only possible because `\input` reads the reference off node data | `latexlike/span_tiling_tests.rs:306` |
 | T4 (`\input`) | `an_input_reference_that_is_not_plain_characters_is_not_read` — `\input{{chap.tex}}` → the documented `None` answer: the content is a group, nothing is resolved, nothing is attached, and nothing is diagnosed | `latexlike/span_tiling_tests.rs:354` |
-| T5 | `an_unconsumed_stop_token_at_a_seam_is_peeked_again_where_it_stands` — `A="ab"`, `B="cd"`, stop on `B`'s first token with `consume = false` → the run flushes `Owned("ab")`, the stop span is `B[0..1]`, and re-peeking yields that very token, with empty pre-space, at the position the stream stands at (clauses 2/7 through the seam) | `constructs/span_tiling_tests.rs:492` |
-| T6 | `an_optional_argument_probe_matches_across_a_seam` — `\cmd` in A, `[x]z` in B → the option group parses, content `Owned("x")` | `constructs/span_tiling_tests.rs:555` |
-| T6 | `an_optional_argument_probe_that_fails_rewinds_across_a_seam` — `\cmd%c` in A, `y` in B: the probe reads A's comment as noise, sees B's `y`, and rewinds **back across the seam into A** (clause 3); the comment is peekable again exactly where it was | `constructs/span_tiling_tests.rs:599` |
-| T7 | `a_comment_and_a_paragraph_break_in_another_source_become_nodes` — `A="a"`, `B="%note\n\nb"` → four nodes: `Owned("a")`, a comment whose three sub-spans stay `Spanned` (the token lies wholly in the node's own source), the paragraph-break node `Spanned("\n\n")` (its span *is* the fact's span), `Owned("b")`; re-emits the input | `constructs/span_tiling_tests.rs:635` |
+| T5 | `an_unconsumed_stop_token_at_a_seam_is_peeked_again_where_it_stands` — `A="ab"`, `B="cd"`, stop on `B`'s first token with `consume = false`. The reader assertions run inside the parse: re-peeking yields that very token, with empty pre-space, at the position the stream stands at (clauses 2/7 through the seam), and its `EndPastPostSpace` edge is the cause's `after`. The stop span is `B[0..1]`; the tree is then finished through the harness, so the run flushed at the stop reads back as `Owned("ab")` @ `A[0..2]` — oracles included | `constructs/span_tiling_tests.rs:492` |
+| T6 | `an_optional_argument_probe_matches_across_a_seam` — `\cmd` in A, `[x]z` in B → the option group parses, content `Owned("x")` | `constructs/span_tiling_tests.rs:576` |
+| T6 | `an_optional_argument_probe_that_fails_rewinds_across_a_seam` — `\cmd%c` in A, `y` in B: the probe reads A's comment as noise, sees B's `y`, and rewinds **back across the seam into A** (clause 3); the comment is peekable again exactly where it was. Builds no tree (see below) | `constructs/span_tiling_tests.rs:620` |
+| T7 | `a_comment_and_a_paragraph_break_in_another_source_become_nodes` — `A="a"`, `B="%note\n\nb"` → four nodes: `Owned("a")`, a comment whose three sub-spans stay `Spanned` (the token lies wholly in the node's own source), the paragraph-break node `Spanned("\n\n")` (its span *is* the fact's span), `Owned("b")`; re-emits the input | `constructs/span_tiling_tests.rs:656` |
 | T8 | `a_macro_post_space_is_recorded_as_text_where_the_language_does_not_obey_tiling` — `y` in B, `\foo z` in A → `Macro { escape_char: '\\', post_space: Owned(" ") }`, node span `A[0..5]`, re-emits `y\foo z` | `latexlike/span_tiling_tests.rs:250` |
-| T9 | `a_token_not_starting_where_the_stream_stood_is_an_implementation_error` — `ScriptedReader::broken_at_seams` under **both** `RelaxedLang` and `TiledScriptedLang` → the clause-7 message ("is not the position the stream stood at when the token was peeked … violates the `TokenReader` contract") | `constructs/span_tiling_tests.rs:704` |
-| T10 | folded into both harnesses — every tree here goes through `validate_tree` and then `check_tree_invariants`, which for these languages runs the all-trees law and stops. T7 carries the explicit note that its root children do not even share a source, which the span-tiling law's byte accounting forbids: if the gate were removed, T7 would panic | `constructs/span_tiling_tests.rs:254` and `:819`, `latexlike/span_tiling_tests.rs:99` |
-| T11 | `a_diagnostic_in_a_synthesized_source_renders_the_provenance_chain` — `A="x"` then a `Source::synthesized("{y", "macro expansion", A[1..10])`; the group opened in the expansion is never closed, and the tolerant parse's rendered report carries `synthesized from @ (line 1, col 2) (macro expansion)` | `constructs/span_tiling_tests.rs:726` |
+| T9 | `a_token_not_starting_where_the_stream_stood_is_an_implementation_error` — `ScriptedReader::broken_at_seams` under **both** `RelaxedLang` and `TiledScriptedLang` → the clause-7 message ("is not the position the stream stood at when the token was peeked … violates the `TokenReader` contract"). Builds no tree (see below) | `constructs/span_tiling_tests.rs:726` |
+| T10 | folded into both harnesses — every tree here goes through `validate_tree` and then `check_tree_invariants`, which for these languages runs the all-trees law and stops. T7 carries the explicit note that its root children do not even share a source, which the span-tiling law's byte accounting forbids: if the gate were removed, T7 would panic | `constructs/span_tiling_tests.rs:254` and `:836`, `latexlike/span_tiling_tests.rs:99` |
+| T11 | `a_diagnostic_in_a_synthesized_source_renders_the_provenance_chain` — `A="x"` then a `Source::synthesized("{y", "macro expansion", A[1..10])`; the group opened in the expansion is never closed, and the tolerant parse's rendered report carries `synthesized from @ (line 1, col 2) (macro expansion)` | `constructs/span_tiling_tests.rs:748` |
 | T12 | `recomposing_a_run_across_a_seam_emits_the_text_as_stored` — T1's tree re-emits `"axyz b"` | `constructs/span_tiling_tests.rs:374` |
-| T13 | `verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read` — `A[0..1]="{"`, `B[0..2]="ab"`, `A[4..7]="  }"`: the raw content begins exactly at the seam, and the whitespace before the terminator arrives as its **pre-space** — content by the raw-content loop's rule. Staged `Owned("ab  ")` while the described span is `B[0..2]` = `"ab"`: text and span genuinely disagree, which is what `raw_content_text` exists for | `constructs/span_tiling_tests.rs:786` |
+| T13 | `verbatim_content_starting_at_a_seam_is_staged_as_the_text_it_read` — `A[0..1]="{"`, `B[0..2]="ab"`, `A[4..7]="  }"`: the raw content begins exactly at the seam, and the whitespace before the terminator arrives as its **pre-space** — content by the raw-content loop's rule. Staged `Owned("ab  ")` while the described span is `B[0..2]` = `"ab"`: text and span genuinely disagree, which is what `raw_content_text` exists for | `constructs/span_tiling_tests.rs:841` |
+| T13 (twin) | `verbatim_content_running_to_end_of_stream_keeps_the_whitespace_before_it` — the raw-content loop's *other* pre-space arm (`verbatim_parser.rs:251`): `A[0..1]="{"`, `B[0..2]="ab"`, `A[4..6]="  "`, the region ending at end of stream instead of at a terminator. Same `Owned("ab  ")`, the never-found close recorded by the empty-close convention, `UnterminatedVerbatim` diagnosed under tolerant recovery | `constructs/span_tiling_tests.rs:872` |
+
+Every test above finishes a tree and runs both oracles on it, with **two exceptions**
+that deliberately have nothing to freeze: the failing-probe half of T6 (the argument is
+absent, so the probed noise nodes are never claimed — what the test is about is where the
+reader ends up, not what was staged) and T9 (the parse aborts before any node is staged).
+The three tiled counter-tests (T1, T1b, T3) likewise end in an error rather than a tree,
+by construction.
 
 ### Decisions taken
 
@@ -1187,9 +1205,9 @@ tokenization" did not materialize.
 
 ```
 ### cargo build
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.62s
 ### cargo test --workspace
-test result: ok. 1121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+test result: ok. 1122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -1198,37 +1216,36 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.20s
+test result: ok. 86 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.14s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ### cargo test --workspace --all-features
-test result: ok. 1160 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.52s
+test result: ok. 1161 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.70s
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.59s
+test result: ok. 87 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.25s
 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ### cargo clippy --workspace --all-targets -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.17s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.45s
 ### cargo clippy --workspace --all-targets --all-features -- -D warnings
     Checking techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.20s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.13s
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.51s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.63s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-3b-tests/target/doc/techy/index.html and 1 other file
 ```
 
-The baseline on `main` is 1093 / 1132 lib tests; Stage 3b adds 28 (22 core + 6 preset) and
-changes no existing test. The last gate run above is from before the wording sweep
-(`d6a3f6c`), which is comments and docs only; `cargo test --workspace` and
-`cargo clippy --workspace --all-targets --all-features -- -D warnings` were re-run after it
-with the same results.
+The base `4f45340` has 1102 / 1141 lib tests and the branch has 1122 / 1161: Stage 3b
+adds **20** (14 core + 6 preset) and changes no existing test. (The `cargo test --lib
+span_tiling` filter matches 28 — it also catches the Stage 2 tests whose names contain
+"span tiling".)
 
 ### Deviations from §5
 
@@ -1261,25 +1278,26 @@ with the same results.
 
 ### Open questions for the user
 
-1. **The verbatim recipe's terminator pre-space is unreachable through a scanning
-   reader.** `read_raw_content` treats the terminator's pre-space as content
-   (`push_pre_space_text`, `verbatim_parser.rs:240`), but `verbatim_state_delta` disables
-   whitespace, so `StdTokenReader` never gives a terminator any pre-space: under a
-   scanning reader the arm is dead code. It is live for a reader that does not re-tokenize
-   under the recipe state — the scripted one (T13), and a token-list or expanding reader
-   in general — which is why it is right to keep. Flagged so the Stage 5 record can say so
-   rather than leaving it looking accidental. No change proposed.
+1. **The verbatim recipe's pre-space arms are unreachable through a scanning reader.**
+   `read_raw_content` treats as content both the terminator's pre-space
+   (`verbatim_parser.rs:240`) and the end-of-stream token's (`:251`), but
+   `verbatim_state_delta` disables whitespace, so `StdTokenReader` gives neither token any
+   pre-space: under a scanning reader both arms are dead code. They are live for a reader
+   that does not re-tokenize under the recipe state — the scripted one, and a token-list
+   or expanding reader in general — which is why they are right to keep. Both are now
+   covered (T13 and its twin). Flagged so the Stage 5 record can say so rather than
+   leaving them looking accidental. No change proposed.
 2. **`\input` with a non-chars reference is silent under `OBEYS_SPAN_TILING = false`.**
    `argument_text` answers `None` for content that is not plain characters, and the call
-   site's comment reads "Absent argument: the argument parser already diagnosed it"
-   (`latexlike/input.rs:355`) — which is accurate for an absent argument and inaccurate
-   for a *provided* one whose content is a group (`\input{{chap.tex}}`): nothing
-   diagnosed it, and nothing is attached. Under a tiled language the same input takes the
+   site (`latexlike/input.rs:355`) then resolves, attaches and diagnoses nothing — for a
+   *provided* argument whose content is a group (`\input{{chap.tex}}`) as much as for an
+   absent one. Under a tiled language the same input takes the
    span route and diagnoses an unresolvable reference. Pinned as the documented answer by
-   `an_input_reference_that_is_not_plain_characters_is_not_read`; whether the `None`
-   branch should diagnose something is a design decision, not a Stage 3b fix.
-3. **No production defect was found.** Nothing in T1–T13 needed a production change, and
-   no test is `#[ignore]`d.
+   `an_input_reference_that_is_not_plain_characters_is_not_read`, and the comment now
+   states today's behavior precisely (see "Files changed"); whether the `None` branch
+   should diagnose something is a design decision, not a Stage 3b fix.
+3. **No production defect was found.** Nothing in T1–T13 needed a behavior change, and no
+   test is `#[ignore]`d.
 
 ## Stage 5 — record
 

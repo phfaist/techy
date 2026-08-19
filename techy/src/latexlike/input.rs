@@ -352,7 +352,13 @@ where
                     &mut *parser,
                 )?
             }
-            // Absent argument: the argument parser already diagnosed it.
+            // No reference to resolve. For an absent argument, the argument parser
+            // already diagnosed it. Under `OBEYS_SPAN_TILING = false` this arm is
+            // also reached for a *provided* argument whose content is not plain
+            // characters (a group, a callable): `argument_text` has no single text
+            // to read off such node data, so nothing is resolved, nothing is
+            // attached and nothing is diagnosed. The tiled route reads the
+            // argument's extent out of the source instead, and has no such case.
             None => None,
         };
 
