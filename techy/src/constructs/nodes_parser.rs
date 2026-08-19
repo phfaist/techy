@@ -992,7 +992,46 @@ where
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<Box<ParsingStateDelta<L>>>)> {
+        // Where the stream stood at the head of the previous iteration — the one piece of
+        // loop state the termination guard below needs.
+        let mut last_position: Option<StreamPosition<L>> = None;
         loop {
+            // Termination guard, one position compare per iteration. Every arm that
+            // continues the loop consumes its token (or descends into a parser that
+            // consumes it), so an iteration that continues must leave the stream at a
+            // different position than it started at — `TokenReader` contract clause 9:
+            // every token other than `EndOfStream` advances the stream position. A source
+            // that serves a token whose two ends are the same position breaks that, and
+            // the loop would re-read it forever (clauses 1, 2 and 7 oblige the reader to
+            // return the same token again at the same position under the same state), so
+            // report the violation as an implementation error — an abort under any
+            // recovery policy, never a hang. A sub-parser descent that consumed nothing
+            // and moved nothing is caught by the same compare, which is intended: it is
+            // the same non-terminating loop.
+            //
+            // The check runs before the peek, which keeps it independent of the recovery
+            // arm below: that arm has its own guard on `TokenRecovery::resume` (the arm
+            // consumes no token, so only the resume position can move the stream), and it
+            // moves the stream *after* this compare — so a recovered iteration reaches the
+            // next head at its resume position, which its own guard already proved
+            // different from the position recorded here. Stream positions compare only for
+            // equality, so the check is "different", not "greater"; an empty-span token is
+            // not the case being caught — a reader may serve one, provided its two ends
+            // are distinct positions.
+            let position = cx.tokens.position_here();
+            if last_position.as_ref() == Some(&position) {
+                return Err(cx.implementation_error(
+                    alloc::format!(
+                        "the token source made no progress: the token read at {position:?} \
+                         was consumed but the stream position is unchanged \
+                         (token-source contract violation: every token other than \
+                         EndOfStream must advance the stream position)"
+                    ),
+                    cx.here(),
+                ));
+            }
+            last_position = Some(position);
+
             // Read one token. On a tokenizer error: strict mode aborts, tolerant mode
             // records the diagnostic and adopts the error's recovery — the placeholder
             // token below, with the reader repositioned to the explicit resume position
@@ -2685,6 +2724,111 @@ mod tests {
             Some('#')
         );
         assert_eq!(err.span().range(), 0..1);
+    }
+
+    /// A token source that violates `TokenReader` contract clause 9: every `peek` serves
+    /// a `Char` token whose two ends are the same stream position, so consuming it leaves
+    /// the stream where it was and the content loop reads the same token again.
+    struct StuckTokenReader<'s> {
+        inner: StdTokenReader<'s>,
+    }
+
+    impl<'s> StuckTokenReader<'s> {
+        fn inner(&self) -> &dyn TokenReader<'s, TestLang> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, TestLang> {
+            &mut self.inner
+        }
+    }
+
+    impl<'s> TokenReader<'s, TestLang> for StuckTokenReader<'s> {
+        fn peek(
+            &mut self,
+            _state: &Arc<ParsingState<TestLang>>,
+        ) -> TokenResult<TestLang, StdToken<TestLang>> {
+            let pos = self.inner().position_here().offset();
+            // Empty span, empty pre-space: every edge of this token sits at `pos`, so
+            // `position_at(&tok, EndPastPostSpace) == position_at(&tok, StartBeforePreSpace)`.
+            Ok(StdToken::char('x', Span::empty(pos), Span::empty(pos)))
+        }
+
+        fn move_to(&mut self, tok: &StdToken<TestLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn token_kind<'t>(&self, tok: &'t StdToken<TestLang>) -> TokenKind<'t, TestLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &StdToken<TestLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &StdToken<TestLang>, edge: TokenEdge) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
+        }
+
+        fn source_span_describing(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> SourceSpan {
+            self.inner().source_span_describing(begin, end)
+        }
+    }
+
+    /// Without the loop's termination guard this parse never ends: the token is consumed
+    /// every iteration and the stream never moves. The guard reports the violation as an
+    /// implementation error, which aborts under any recovery policy — tolerant included.
+    #[test]
+    fn a_token_that_does_not_advance_the_stream_is_an_implementation_error() {
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+        let mut reader = StuckTokenReader { inner: StdTokenReader::new(&source) };
+        let error = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            .expect_err("a token that does not advance the stream must abort the parse");
+        let detail = error
+            .data()
+            .downcast_ref::<crate::constructs::ImplementationError>()
+            .expect("an ImplementationError condition")
+            .detail
+            .to_string();
+        assert!(
+            detail.contains("the token source made no progress")
+                && detail.contains("must advance the stream position"),
+            "unexpected detail: {detail}"
+        );
+        assert_eq!(error.span().range(), 0..0);
     }
 
     // --- TokenErrorKind::Custom ([§dd-dr:errors]: one extension mechanism serves both layers) --------

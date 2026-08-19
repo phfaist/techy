@@ -6081,6 +6081,38 @@ kind), so callers can tell "your document is broken" from "your `Lang`/reader is
 Today both surface as `ParseError` (here: the token error's kind and span); revisit if
 more contract guards accumulate.
 
+#### Every consumed token must move the stream; the sibling loop enforces it [§dd-dr:token-progress-guard]
+
+Status: DECIDED (user, downstream bug report).
+
+`TokenReader` contract clause 9 states that every token but the terminal `EndOfStream`
+advances the stream — `position_at(&tok, EndPastPostSpace) != position_at(&tok,
+StartBeforePreSpace)` — and the standard sibling loop (`NodesParser::parse`) enforces it
+with one position compare at the head of each iteration: an iteration that continued
+without moving the stream is an `ImplementationError`, aborting under any recovery policy.
+The decisive reason is that clauses 1, 2 and 7 make a same-position token *unparseable*
+rather than merely odd: the reader owes the same token again at the same position under
+the same state, so every arm that consumes it returns to where it started and the loop
+never ends. Position inequality is therefore exactly the hang condition, and it is also
+the only comparison stream positions admit ([§dd-dr:stream-position]). The guard is the
+whole-token analogue of the recovery arm's resume check ([§dd-dr:resume-pos-contract]),
+which stays where it is: that arm consumes no token, so only `resume` can move its stream,
+and it reports the token error rather than a contract violation. A sub-parser descent that
+consumed and changed nothing trips the same compare, which is the same non-terminating
+loop and equally a bug.
+
+Rejected alternatives: a byte-*width* check (an empty span is legitimate — a reader may
+serve a synthesized delimiter with no bytes behind it, and it must mint distinct positions
+for that token's two ends anyway, since clauses 1–3 require un-consuming and re-peeking it
+to work — and a zero-width span is not what hangs the loop); distinguishing reader-served
+tokens from scanned ones (`StdTokenReader` cannot produce the case at all, its scan hooks
+rejecting zero-width specials matches, and a contract that holds for one token source
+holds for all); a guard in every bounded token loop (the verbatim parser, embellishments,
+the tack-on argument scan — over-engineering: those loops are bounded and rest on the
+documented clause, like the rest of the machinery).
+
+Revisit if: a loop other than the sibling loop is shown to spin in practice.
+
 #### Structured diagnostics: condition payloads, not prose [§dd-dr:structured-diagnostics]
 
 Status: DECIDED (user + design sessions; supersedes the "grow `ParseErrorKind` variants"

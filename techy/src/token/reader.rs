@@ -215,6 +215,23 @@ impl StdStreamPosition {
 ///    Under `OBEYS_SPAN_TILING = false` none of this is promised, and the reader answers
 ///    [`source_span_describing`](TokenReader::source_span_describing) for the spans of
 ///    multi-token constructs.
+/// 9. **Every token advances the stream:** for every token but the terminal
+///    [`EndOfStream`](TokenKind::EndOfStream), `position_at(&tok, EndPastPostSpace) !=
+///    position_at(&tok, StartBeforePreSpace)`. This follows from clauses 1, 2 and 7: a
+///    token whose two ends are the same position is served again by the next `peek` at
+///    the position its consumer moved to, under the same state, without end. What the
+///    clause rules out is the equality of the two positions, not an *empty span* — a
+///    reader may serve a token with no bytes behind it, a synthesized delimiter for
+///    instance, provided it mints two distinct position values for the token's two
+///    ends. Positions are the language's own type and compare for equality only, so
+///    any two values the reader tells apart will do; clauses 1–3 require them of such
+///    a reader anyway, since `move_to(&tok, StartBeforePreSpace)` followed by a fresh
+///    `peek` must return that same token — which a reader that stands still and tracks
+///    progress in hidden state cannot deliver. The standard nodes parser enforces the
+///    clause: a token it consumed that left the stream position unchanged is reported
+///    as an implementation error, which aborts the parse under any recovery policy
+///    instead of looping. The same enforcement covers the recovery path through the
+///    [`TokenRecovery::resume` contract](super::TokenRecovery#contract-resume-must-move-the-stream).
 ///
 /// At the end of the stream `peek` returns the terminal, idempotent
 /// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); the reader
