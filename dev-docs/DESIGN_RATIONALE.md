@@ -3656,6 +3656,71 @@ vocabulary) and the interim `ConcatParts` — the payload is `ConcatPieces`.
 Revisit if: a real consumer's piece type cannot satisfy `Clone` — the per-gap
 `sep` duplication is the one place the monoid demands it.
 
+#### Post-processing a recompose fold: the children op and `ConcatPieces::map` [§dd-dr:recompose-concat-map]
+
+Status: DECIDED (user, downstream-renderer session).
+
+Two additions close one gap. The region-op family ([§dd-dr:recompose-machinery])
+was callable-only — arguments, slots, body — so there was no op for a plain
+node's children, and a `Concat` instruction is opaque to the recomposer that
+returned it: a recomposer could not post-process the fold of a group's children.
+A downstream text renderer handling math groups (`$…$` parses as a `Group`)
+therefore hand-folded the children, silently bypassing the wrapping contract —
+its own wrapper's overrides never reached those children.
+
+- **`RecomposeContext::recompose_children(node, include_attached, include_hidden,
+  state, recomposer)`** — the op-family mirror of `restage_children`, with the
+  same no-kind-restriction behavior (any node; no children in scope composes the
+  empty piece, no new error variant). The two flags carry the `ConcatPieces`
+  scope semantics verbatim, keeping one child-scope vocabulary across the
+  instruction and the ops ([§dd-dr:slot-roles]).
+- **`ConcatPieces::map(f)`** — instruction-level post-processing: the driver
+  assembles `head + child₁ + sep + … + childₙ + tail` and applies `f` to that
+  whole piece before handing it to the parent fold. This is the
+  **wrap-transparent** route, and the decisive reason to have it: the children
+  still lower against the outermost recomposer, so a wrapped recomposer can
+  post-process a fold without stealing the descent. Two `map` calls compose in
+  registration order (first registered runs first).
+- **The self-passing caveat is inherent and now documented**: every region op
+  folds against the recomposer the caller hands in, so a wrapped recomposer that
+  passes `self` bypasses its wrappers for exactly that region. This predates
+  these additions; the rule for consumers is "post-process with `map`, pass an
+  op a recomposer deliberately".
+
+Rejected alternatives:
+
+- **Publishing `into_parts`** so a recomposer could disassemble its own `Concat`:
+  freezes instruction internals as API ([§dd-dr:embedding-feedback-policy]), and
+  is useless alone — the role scoping lives in the crate-internal
+  `scoped_children` ([§dd-dr:visit-engine]), so a consumer could not reproduce
+  the lowering it just disassembled.
+- **Passing the fold root as an extra `recompose_node` argument** (so a node
+  handler could call back into "the outermost recomposer"): unconstructible, and
+  not merely a borrow-checker artifact. The driver holds exactly one `&mut` to
+  the outermost recomposer and would have to pass it as both receiver and
+  argument — two simultaneous exclusive borrows of one object — because this is
+  genuine re-entrancy: the outermost's `recompose_node` frame is live on the
+  stack when the inner call would re-enter it. This is the classic open-recursion
+  problem that object-oriented virtual dispatch solves by late-binding `self`;
+  Rust's answer here is to **reify the recursive call as a returned instruction**
+  that the driver executes between frames, when it legitimately holds the borrow
+  again — which is exactly what `Concat` (and now its `map`) is.
+  `RefCell` would convert the compile error into a guaranteed runtime panic on
+  the re-entrant call; `&self` receivers would force interior mutability on every
+  stateful recomposer.
+
+Accepted costs: `map`'s function is `'static` and infallible (a fallible
+post-processor records its failure in the recomposer and answers
+`Recomposer::Error` from the next callback — the `ComposePiece::append`
+precedent); `ConcatPieces` loses its derived `Debug` (a manual impl renders the
+function as `map: Some(..)`/`None`) and can no longer be `Clone`, which drops the
+derived `Clone` on `Recompose` with it (nothing used it — the driver consumes an
+instruction exactly once).
+
+Revisit if: a consumer needs a fallible or borrowing post-processor, or a second
+site wants the assembled-piece hook for something other than a `Concat`.
+
+
 #### `techy::visit`: one shared traversal engine for walk and recompose [§dd-dr:visit-engine]
 
 Status: DECIDED (user, API-review recompose session; realizes the read-only walker

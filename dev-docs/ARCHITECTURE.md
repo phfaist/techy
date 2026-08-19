@@ -634,7 +634,13 @@ an in-crate test utility ([§dd-arch:span-tiling], [§dd-dr:tree-validation]).
   restage→recompose pipeline, not a mechanism); `Concat`'s default scope skips
   `Attached` AND `Hidden` slot children (the one role-sensitive site) with
   explicit widening opt-ins; `RecomposeError` and the `RecomposeContext` op
-  roster mirror the restage family ([§dd-dr:recompose-machinery]). The substrate
+  roster mirror the restage family — `recompose_children` (any node's children,
+  with the same scope flags) beside the argument/slot/body ops
+  ([§dd-dr:recompose-machinery]). Post-processing a fold without leaving the
+  wrapping contract is `ConcatPieces::map`: the driver applies it to the
+  assembled piece after the children lowered against the outermost recomposer,
+  whereas the region ops are self-passing and fold against the recomposer handed
+  in ([§dd-dr:recompose-concat-map]). The substrate
   is recorded trigger spelling — the `Lang::InvocationSyntax` payload on
   `CallableData` ([§dd-dr:invocation-syntax]); core's span-tiling checker is
   payload-blind, the latexlike checker layers the payload pins. Source
@@ -668,7 +674,8 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 [§dd-dr:read-api], [§dd-dr:node-summary], [§dd-dr:tree-validation]; the
 transformation topic ([§dd-dr:transform]): [§dd-dr:node-annotations],
 [§dd-dr:tree-tags], [§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:restage-ops],
-[§dd-dr:recompose], [§dd-dr:recompose-machinery], [§dd-dr:visit-engine],
+[§dd-dr:recompose], [§dd-dr:recompose-machinery], [§dd-dr:recompose-concat-map],
+[§dd-dr:visit-engine],
 [§dd-dr:slot-roles], [§dd-dr:input-attachment], [§dd-dr:tree-navigation],
 [§dd-dr:invocation-syntax], [§dd-dr:extract-annotations].
 
