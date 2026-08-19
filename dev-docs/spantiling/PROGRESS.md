@@ -1301,7 +1301,7 @@ span_tiling` filter matches 28 — it also catches the Stage 2 tests whose names
 
 ## Stage 5 — record
 
-Status: **reviewed**, rebased onto `main` at `514154f` (branch `st-5-record`, worktree
+Status: **reviewed (mergeable)**, rebased onto `main` at `514154f` (branch `st-5-record`, worktree
 `.claude/worktrees/st-5-record`). Review **PASS** with four required fixes and nine
 precision items, all applied (see *Review fixes* below). After Stage 3b merged, the two
 test claims were made factual and Stage 3b's findings were folded into the entry (see
@@ -1321,33 +1321,42 @@ Documentation only — no source file was touched.
     const, default `true`, "obeys" = a fact, not a knob; not a `LangFeatures` member,
     not a marker type); the two regimes; the required, undefaulted
     `TokenReader::source_span_describing` with its no-assumptions contract, its
-    recommended shape and the single dispatch point
-    (`ParseContext::source_span_within`); the seam analysis (the chars-run check is a
+    recommended shape and the public dispatch point (`ParseContext::source_span_within`,
+    with the private `invocation_span_within` as its mirror); the seam analysis (the chars-run check is a
     clause-2/7 check and stays in both regimes, clause 7 writes down where consecutive
     tokens meet, the two sides of a seam are one position value, runs may cross a seam,
-    hence owned content); the node-data rule (single-token facts `Spanned` iff the fact
-    lies in the node's own source, multi-token content and pre-staging payloads owned
-    under `false`, the environment name exact through `NameGroup::name_text`); the
-    consumers rule (content from node data, coordinate accessors answer coordinates,
-    recompose "as stored", `validate_tree` unchanged and satisfied, the byte accounting
-    confined to the test-only span-tiling law); the scripted multi-source test reader as
-    the enforcement and test tool (canonical seam positions, `within` answering by the
-    end position's source); the accepted costs (owned multi-token content, no zero-copy
-    for it, two public-API breaks under the soft freeze); the seven rejected
-    alternatives; the deferred items, including the `FrameTitle` span-quoting under
-    `false` (recorded, not fixed); and the revisit condition.
-  - Dated amendment paragraphs (history preserved, labels untouched) on
-    **[§dd-dr:span-invariants]** (the five invariants are the tiled statement; items 1
-    and 3 record owned text and item 5's accounting does not apply under `false`),
+    hence owned content); the node-data rule, in general form (single-token facts
+    `Spanned` iff the fact lies in the node's own source; no multi-token `Chars` node
+    records `Spanned` content, recovery and marker nodes included; the pre-staged
+    callable post-space owned because the payload predates the node's span; the
+    environment name exact through `NameGroup::name_text`); the consumers rule (content
+    from node data, coordinate accessors answer coordinates, recompose "as stored",
+    `validate_tree` unchanged and satisfied, the byte accounting confined to the
+    test-only span-tiling law, and `extract`'s answers holding after three doc claims
+    were narrowed); the scripted multi-source test reader as the enforcement and test
+    tool, with the tests that make the claim (canonical seam positions, `within`
+    answering by the end position's source), R7's proof, and the two deliberately kept
+    arms no scanning reader reaches; the accepted costs (owned multi-token content, no
+    zero-copy for it, two public-API breaks under the soft freeze); the seven rejected
+    alternatives; the deferred items, including the `FrameTitle` span-quoting and the
+    silent `\input` reference under `false` (both recorded, not fixed); and the revisit
+    condition.
+  - Amendment paragraphs, undated per the documented rule (history preserved, labels
+    untouched) on **[§dd-dr:span-invariants]** (the five invariants are the tiled
+    statement; item 1's chars runs record owned text, item 3's post-space is owned
+    because its payload predates the node's span, and item 5's accounting does not apply
+    under `false`),
     **[§dd-dr:token-opacity]** (the motivating expanding-reader case is now supported),
     **[§dd-dr:stream-position]** (clause 7 and what positions mean at a seam),
     **[§dd-dr:token-contract-hardening]** (the contract gained clauses 7 and 8, the
-    *Seams* section, and `source_span_describing` beside item 4's family),
+    *Seams* section with its four further reader rules, and `source_span_describing`
+    beside item 4's family),
     **[§dd-dr:input-attachment]** ("every sibling run stays single-source" is a
     statement about a language that obeys span tiling) and **[§dd-dr:tree-validation]**
     (the oracle's gate, and the rename).
   - **[§dd-dr:superseded-names]** gains the three superseded phrases with their
-    replacements, and the note that no mode name is coined for the other regime.
+    replacements, the renamed in-crate helper (`check_span_tiling_node`), and the note
+    that no mode name is coined for the other regime.
   - Wording sweep: every "partition invariant" (8 sites, [§dd-dr:span-invariants]'s
     item 5 among them) and every "parse-law"/"parse-tree law" (12 sites) rewritten to
     the span-tiling vocabulary; the only remaining occurrences are the two that *name*
@@ -1357,8 +1366,10 @@ Documentation only — no source file was touched.
     *Construct parsers*: the declaration and the definition by pointer to the const
     doc; the two regimes with their consequences; the dispatch point; the consumers
     rule of the plan's §1.6; the reader-contract half (clauses 7 and 8, seams); the
-    all-trees law versus the test-only span-tiling law, and the scripted reader; the
-    vocabulary, with no name coined for the second regime; and the decisions line
+    all-trees law versus the test-only span-tiling law, and the scripted reader (with
+    the clause that a family member over that tokenization instantiates the preset
+    unchanged); the vocabulary, with no name coined for the second regime; and the
+    decisions line
     ([§dd-dr:span-tiling], [§dd-dr:span-invariants], [§dd-dr:tree-validation]).
   - Pointers into it from [§dd-arch:token] (after the contract summary),
     [§dd-arch:nodes] (the whitespace-and-span-invariants bullet, whose tiling clause is
@@ -1367,7 +1378,9 @@ Documentation only — no source file was touched.
     vocabulary lives in one place).
   - Wording sweep: "partition invariant" (1) and "parse-law" (3) gone.
 - **`TODO_Big.md`** — the "Gap-free chars-run contract" item under *Better tokens* is
-  struck through and marked **DONE**, pointing at [§dd-dr:span-tiling].
+  struck through and marked **DONE**, pointing at [§dd-dr:span-tiling]; a new *Span
+  tiling* item carries the two deliberately unfixed things (the `FrameTitle` quoting, and
+  the silent `\input` reference marked user-decision-pending).
 
 ### Grep gates
 
@@ -1406,7 +1419,7 @@ names, and it stays as written.
 ### rm -rf target/doc && cargo docs --all-features
  Documenting techy-derive v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy-derive)
  Documenting techy v0.1.0 (/Users/philippe/projects/techy/.claude/worktrees/st-5-record/techy)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.89s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.65s
    Generated /Users/philippe/projects/techy/.claude/worktrees/st-5-record/target/doc/techy/index.html and 1 other file
 
 ### cargo test --workspace
@@ -1447,7 +1460,8 @@ row; 1, 2, 3a, 3b, 4 = merged, 5 = reviewed). The entry then changed in four pla
    end-of-stream pre-space arms (the recipe state turns whitespace off, so a re-tokenizing
    reader never produces that pre-space) and `comment_node_kind`'s owned arm (it needs a
    comment token with edges in two sources). Both are right for a reader that splices
-   mid-stream, and both are covered only through the scripted reader.
+   mid-stream; the verbatim arms are covered through the scripted reader (T13 and its
+   twin), while the comment arm is covered by no in-crate reader at all.
 4. **The `\input` question is recorded as a user decision**, in the entry's deferred
    paragraph and as its own `TODO_Big.md` bullet: under `false` a *provided* reference
    argument that is not plain characters (`\input{{chap.tex}}`) resolves, attaches and
@@ -1510,7 +1524,8 @@ Precision:
    [§dd-dr:self-meta] both rule that status lines carry who/context and **never** dates
    (dates belong only inside explicitly recorded reversal or amendment notes). The entry
    reads `Status: DECIDED (user, span-tiling design session)`, matching the
-   [§dd-dr:token-contract-hardening] precedent; the six amendment notes carry the date.
+   [§dd-dr:token-contract-hardening] precedent, and the six amendment notes are undated
+   in the same style (review precision item 5).
 2. **The ARCHITECTURE subsection is a top-level `##` section**, not a `###` inside
    [§dd-arch:nodes]. The file has no `###` level anywhere, and each `##` section ends
    with its own "Decisions behind this section" list; a `###` would have split that

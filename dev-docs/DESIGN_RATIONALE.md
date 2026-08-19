@@ -2548,9 +2548,10 @@ type (breaking, and nothing needs the property at the type level).
 
 The two regimes:
 
-- `true` — every language of this crate, the preset included: behavior unchanged, byte for
-  byte. The machinery enforces the property (a token stream that breaks it is reported as an
-  implementation error) and every span-based accessor answers exactly.
+- `true` — every shipped language (the preset included; the in-crate test languages that
+  declare `false` are the exception): behavior unchanged, byte for byte. The machinery
+  enforces the property (a token stream that breaks it is reported as an implementation
+  error) and every span-based accessor answers exactly.
 - `false` — the parsers make **no** assumption about where tokens come from: not the source,
   not the reading order, not the absence of gaps.
 
@@ -2637,12 +2638,13 @@ parses through the generic driver, specs, syntax record, oracle and source recom
 they stand.
 
 Two arms of the crate are right for a reader of this class and reachable by no scanning
-reader, so they are covered only through the scripted one, and are recorded here rather than
-left looking accidental: the verbatim recipe treats the terminator's and the end-of-stream
-token's pre-space as content, which a reader re-tokenizing under the recipe state can never
-produce (that state turns whitespace off), and `comment_node_kind`'s owned arm needs a
-comment token with edges in two sources, which no reader that scans a token inside one
-segment produces. Both are kept deliberately: a reader that splices mid-stream reaches them.
+reader, and are recorded here rather than left looking accidental. The verbatim recipe
+treats the terminator's and the end-of-stream token's pre-space as content, which a reader
+re-tokenizing under the recipe state can never produce (that state turns whitespace off);
+the scripted reader covers both. `comment_node_kind`'s owned arm needs a comment token with
+edges in two sources, which no reader that scans a token inside one segment produces — no
+in-crate reader covers it. Both arms are kept deliberately: a reader that splices mid-stream
+reaches them.
 
 Costs accepted: under `false` a parse owns its multi-token content (chars runs, verbatim
 bodies, environment names) and the pre-staged callable post-space — one allocation per such
