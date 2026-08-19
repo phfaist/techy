@@ -1558,8 +1558,8 @@ Precision:
 ## Stage 6 — invalid reference argument
 
 Status: **implemented** (branch `st-6-input-ref`, worktree
-`.claude/worktrees/st-6-input-ref`, base `main` = `dd02ef3`; commits `f92a590`,
-`6e85c13`, plus this file). Stage 3b's open question 2 answered by the user; the stage
+`.claude/worktrees/st-6-input-ref`, base `main` = `dd02ef3`; commits `f92a590`
+(code and tests), `6e85c13` (docs and record), `5d05bcf` (wording), plus this file). Stage 3b's open question 2 answered by the user; the stage
 implements the answer.
 
 ### The ruling (user)
