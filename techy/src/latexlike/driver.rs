@@ -420,10 +420,10 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     fn observe_parse_start(
         &self,
         source: &Arc<Source<LLL::SourceOrigin>>,
-        seed: &Arc<ParsingState<LLL>>,
+        initial_state: &Arc<ParsingState<LLL>>,
         diagnostics: &mut crate::error::Diagnostics<LLL::SourceOrigin>,
     ) {
-        LLL::check_parse_start(source, seed, diagnostics);
+        LLL::check_parse_start(source, initial_state, diagnostics);
     }
 
     /// Resolve a command token under the language's

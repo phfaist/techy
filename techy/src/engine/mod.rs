@@ -8,9 +8,10 @@
 //! *behavior* — the [`Recovery`] policy included, moved off the session in 7.2 — lives
 //! on the language's [`ParseDriver`] (see its docs for the placement doctrine).
 //!
-//! The [`Language<L>`] runtime bundle is the long-lived counterpart: seed
-//! state, driver instance, and source resolver, with the [`parse()`](Language::parse)
-//! convenience entry driving reader → root content loop → root list → `finish()`.
+//! The [`Language<L>`] runtime bundle is the long-lived counterpart: initial
+//! state and driver instance, with the [`parse()`](Language::parse) shorthand and the
+//! configurable [`parse_setup()`](Language::parse_setup) → [`ParseSetup::parse`]
+//! entry driving reader → root parser → `finish()`.
 //! `ParseResult` deliberately carries no `'env` lifetime and no `Language` reference: nodes are self-contained, results outlive their bundle.
 
 mod descent_guard;

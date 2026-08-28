@@ -424,9 +424,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// session is created and before any token is read — the layering-correct
     /// moment for registration-sanity diagnostics (the sink is live, and the
     /// initial state's [`TokenRules`](crate::token::TokenRules) — escape characters
-    /// included — are known, which no registration-time layer can see). `seed` is
-    /// the state **this parse** starts from: the language's initial state, or the
-    /// one [`ParseSetup::with_initial_state`](crate::engine::ParseSetup::with_initial_state)
+    /// included — are known, which no registration-time layer can see).
+    /// `initial_state` is the state **this parse** starts from: the language's
+    /// initial state, or the one
+    /// [`ParseSetup::with_initial_state`](crate::engine::ParseSetup::with_initial_state)
     /// put in its place. May record
     /// **warnings/notes** into `diagnostics`; it cannot alter the parse. The
     /// default does nothing.
@@ -443,10 +444,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     fn observe_parse_start(
         &self,
         source: &Arc<Source<L::SourceOrigin>>,
-        seed: &Arc<ParsingState<L>>,
+        initial_state: &Arc<ParsingState<L>>,
         diagnostics: &mut Diagnostics<L::SourceOrigin>,
     ) {
-        let _ = (source, seed, diagnostics);
+        let _ = (source, initial_state, diagnostics);
     }
 
     /// Lower one **context-dependent** transition event to an ordinary state-delta

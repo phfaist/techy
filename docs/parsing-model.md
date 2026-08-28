@@ -61,7 +61,8 @@ it — and freezes the session into a
 The result holds no reference to the `Language`; results outlive their
 bundle. The exact sequence is documented on
 [`ParseSetup::parse`](crate::core::ParseSetup::parse); how a stray `}` at the
-top level is diagnosed and skipped, on `RootNodesParser`.
+top level is diagnosed and skipped, on
+[`RootNodesParser`](crate::core::constructs::RootNodesParser).
 
 "Staging" is the parse-side word for node creation: a construct parser
 stages a node into the session through

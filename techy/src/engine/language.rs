@@ -250,6 +250,7 @@ impl<L: Lang> fmt::Debug for Language<L> {
 /// [`Language::parse`] over a pre-minted source. What lives here is what varies
 /// per parse; what holds across parses — the driver, the language's initial state,
 /// the descent-guard configuration — lives on the [`Language`].
+#[must_use = "a `ParseSetup` does nothing until `parse()` runs it"]
 pub struct ParseSetup<'l, 'p, L: Lang> {
     language: &'l Language<L>,
     source: Arc<Source<L::SourceOrigin>>,
@@ -1292,8 +1293,12 @@ mod tests {
         }
     }
 
+    /// Tolerant, so that a factory failure's abort is visibly policy-independent;
+    /// `fail` makes the factory refuse to build its parser.
     #[derive(Debug, Clone, Copy)]
-    struct RootDriver;
+    struct RootDriver {
+        fail: bool,
+    }
 
     /// The scaffolding root parser: one content run, wrapped twice.
     struct WrappedRoot;
@@ -1326,20 +1331,31 @@ mod tests {
     }
 
     impl ParseDriver<RootLang> for RootDriver {
+        fn recovery(&self) -> Recovery {
+            Recovery::Tolerant
+        }
         fn make_root_parser<'p>(
             &'p self,
         ) -> Result<
             alloc::boxed::Box<dyn ConstructParser<RootLang, Output = crate::node::BuildId> + 'p>,
             ParseError,
         > {
+            if self.fail {
+                return Err(ParseError::new(
+                    ImplementationError::new("no root parser available"),
+                    SourceSpan::new(&Arc::new(Source::new("")), 0..0),
+                ));
+            }
             Ok(alloc::boxed::Box::new(WrappedRoot))
         }
     }
 
     #[test]
     fn the_drivers_root_parser_factory_shapes_every_parse_of_the_language() {
-        let language: Language<RootLang> =
-            Language::new(RootDriver, ParsingState::lang_initial().expect("seed state"));
+        let language: Language<RootLang> = Language::new(
+            RootDriver { fail: false },
+            ParsingState::lang_initial().expect("seed state"),
+        );
         let result = language.parse("a {b}").unwrap();
         check_tree_invariants(&result.tree);
         // Root `List` → inner `List` → the content.
@@ -1358,6 +1374,26 @@ mod tests {
             .unwrap();
         assert_eq!(chars_root.runs, 1);
         assert_eq!(result.tree.root().chars(), Some("a {b}"));
+    }
+
+    #[test]
+    fn a_root_parser_factory_failure_aborts_under_any_policy() {
+        // The driver is tolerant, yet "could not build the parser" is an abort (the
+        // hook fallibility contract) — and a per-parse root parser bypasses the
+        // failing factory altogether.
+        let language: Language<RootLang> = Language::new(
+            RootDriver { fail: true },
+            ParsingState::lang_initial().expect("seed state"),
+        );
+        let err = language.parse("a").unwrap_err();
+        assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
+        let mut chars_root = CharsRoot { runs: 0 };
+        let result = language
+            .parse_setup(Source::new("a"))
+            .with_root_parser(&mut chars_root)
+            .parse()
+            .unwrap();
+        assert_eq!(result.tree.root().chars(), Some("a"));
     }
 
     // --- observe_parse_start sees the parse's initial state ----------------------------
@@ -1400,13 +1436,13 @@ mod tests {
         fn observe_parse_start(
             &self,
             source: &Arc<Source>,
-            seed: &Arc<ParsingState<StartLang>>,
+            initial_state: &Arc<ParsingState<StartLang>>,
             diagnostics: &mut crate::error::Diagnostics,
         ) {
             diagnostics.push(crate::error::Diagnostic::note(
                 ImplementationError::new(alloc::format!(
                     "comments_enabled={}",
-                    seed.rules().comments_enabled()
+                    initial_state.rules().comments_enabled()
                 )),
                 SourceSpan::entire(source),
             ));

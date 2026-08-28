@@ -5339,7 +5339,8 @@ Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
   no resolution is attempted.
 - **`Language` collapses**: `with_resolver`, `resolver()`, and
   `Language::resolve_source` leave — completing [§dd-dr:language-init]'s expected
-  surface (`new(driver, initial_state)` + `parse` + `parse_source` + accessors).
+  surface (`new(driver, initial_state)` + `parse` + `parse_source` + accessors; since
+  revised — [§dd-dr:parse-setup]: `parse_setup` replaces `parse_source`).
 - **Door signature details**: the parser parameter is `&mut P where P:
   ConstructParser<L, Output = NodesOutcome<L>> + ?Sized` — the ruled return plus
   the local stray-close recovery require the nodes-run outcome vocabulary. The

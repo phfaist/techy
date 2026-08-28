@@ -48,7 +48,8 @@ Two entry points:
   driver supplies by default). `language.parse(text)` is exactly
   `language.parse_setup(Source::new(text)).parse()`.
 
-Both return `Result`: `Ok` is a [`ParseResult`](crate::core::ParseResult) —
+Either spelling ends in a `parse()` returning `Result`: `Ok` is a
+[`ParseResult`](crate::core::ParseResult) —
 the parsed [`tree`](crate::core::ParseResult) plus the
 [`diagnostics`](crate::core::ParseResult) recorded along the way — and `Err`
 is a [`ParseError`](crate::error::ParseError), meaning the parse aborted. A

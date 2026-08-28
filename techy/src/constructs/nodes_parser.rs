@@ -375,10 +375,10 @@ impl<L: Lang> Default for StopSpec<'_, L> {
 /// diagnosis of [`StopCause::UnexpectedGroupClose`] (defined here, next to the stop
 /// cause that announces the situation, so custom root drivers reuse it). Inside a group the enclosing [`GroupParser`](super::GroupParser) claims the token
 /// instead ([`UnclosedGroup`](super::UnclosedGroup) covers *that* family) — this condition is for the
-/// outermost level, where nobody claims it: the core
-/// [`Language::parse`](crate::engine::Language::parse) drive loop reports it through
-/// the recovery entry point, consumes the token, and resumes (strict parses abort; the
-/// skipped bytes are the accepted tolerant byte-accounting break).
+/// outermost level, where nobody claims it: the standard root parser
+/// ([`RootNodesParser`](super::RootNodesParser)) reports it through
+/// the recovery entry point, consumes the token, stages it as a `Chars` node, and
+/// resumes (strict parses abort).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
