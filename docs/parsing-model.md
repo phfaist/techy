@@ -29,9 +29,10 @@ language's **driver** — its
 [`ParseDriver`](crate::core::ParseDriver) instance, the value that carries
 all parse-time behavior (recovery policy, command resolution, the parse-time
 hooks). Calling [`parse()`](crate::core::Language::parse) (or
-[`parse_source`](crate::core::Language::parse_source), the same entry for a
-pre-minted [`Source`](crate::source::Source)) sets up three transient
-objects and runs the parse to completion:
+[`parse_setup(source).parse()`](crate::core::ParseSetup::parse), the same
+entry for a pre-minted [`Source`](crate::source::Source), with this one
+parse's initial state and root parser replaceable first) sets up three
+transient objects and runs the parse to completion:
 
 - a **token reader** — the one the driver's
   [`make_token_reader`](crate::core::ParseDriver::make_token_reader) hook
@@ -52,13 +53,15 @@ objects and runs the parse to completion:
   — the single value handed to every construct parser, bundling the token
   reader, the current parsing state, the session, and the driver.
 
-The entry point then drives the **root content loop** over the whole source,
-stages a root `List` node spanning it, and freezes the session into a
+The entry point then runs the **root parser** — by default
+[`RootNodesParser`](crate::core::constructs::RootNodesParser), which drives
+the content loop over the whole source and stages a root `List` node spanning
+it — and freezes the session into a
 [`ParseResult`](crate::core::ParseResult) — the tree plus the diagnostics.
 The result holds no reference to the `Language`; results outlive their
-bundle. The exact sequence, including how a stray `}` at the top level is
-diagnosed and skipped, is documented on
-[`Language::parse_source`](crate::core::Language::parse_source).
+bundle. The exact sequence is documented on
+[`ParseSetup::parse`](crate::core::ParseSetup::parse); how a stray `}` at the
+top level is diagnosed and skipped, on `RootNodesParser`.
 
 "Staging" is the parse-side word for node creation: a construct parser
 stages a node into the session through

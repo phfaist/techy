@@ -12,17 +12,16 @@ use core::fmt;
 
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 
 use crate::constructs::{
-    ChildStateSpec, FromInvocation, ImplementationError, ParseContext, StopCause, StopSpec, StrayGroupClose,
+    ConstructParser, FromInvocation, ImplementationError, ParseContext,
 };
 use crate::error::{Diagnostics, ParseError};
-use crate::node::NodeKind;
+use crate::node::BuildId;
 use super::descent_guard::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use super::driver::ParseDriver;
 use crate::source::{Source, SourceSpan};
-use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
+use crate::state::{Lang, ParsingState};
 
 use super::{ParseResult, ParserSession};
 
@@ -53,6 +52,11 @@ use super::{ParseResult, ParserSession};
 /// assert_eq!(result.tree.root().chars(), None); // the root is a List
 /// ```
 ///
+/// **Entry points**: [`parse`](Language::parse) is the everyday shorthand;
+/// [`parse_setup`](Language::parse_setup) returns a [`ParseSetup`] for a pre-minted
+/// source, on which this one parse's initial state and root parser can be replaced
+/// before [`ParseSetup::parse`] runs it.
+///
 /// **The advanced path** (driving construct parsers directly under this language's
 /// defaults) composes from the accessors — a [`ParserSession`] is `Language`-independent
 /// scratch, created directly:
@@ -76,7 +80,7 @@ pub struct Language<L: Lang> {
     /// The configuration for the per-parse [`StdDescentGuard`] (the parsing-depth
     /// limiter): defaulted in [`new`](Language::new), set with
     /// [`with_descent_guard_init`](Language::with_descent_guard_init), consumed by
-    /// [`parse_source`](Language::parse_source) to create each parse's guard.
+    /// [`ParseSetup::parse`] to create each parse's guard.
     descent_guard_init: StdDescentGuardInit,
 }
 
@@ -129,10 +133,11 @@ impl<L: Lang> Language<L> {
         &self.driver
     }
 
-    /// Parse `content` as an anonymous in-memory [`Source`]. For a pre-minted source
-    /// carrying origin or provenance (a file, a
-    /// [`resolve_source_reference`](crate::source::resolve_source_reference) result),
-    /// use [`parse_source`](Language::parse_source).
+    /// Parse `content` as an anonymous in-memory [`Source`] under this language's
+    /// defaults — the everyday shorthand for
+    /// `parse_setup(Source::new(content)).parse()` (see
+    /// [`parse_setup`](Language::parse_setup) for the configurable form and
+    /// [`ParseSetup::parse`] for what a parse does).
     ///
     /// Each call mints a **fresh source identity** ([`Source::new`]), and
     /// [`SourceSpan`]/[`SourcePos`](crate::source::SourcePos) equality compares the
@@ -140,8 +145,12 @@ impl<L: Lang> Language<L> {
     /// compare equal, even over byte-identical text (the comparison answers
     /// `false`, it does not fail). To correlate positions across parses
     /// (re-parsing an edited document, diffing two attempts), hold one
-    /// `Arc<Source>` and call [`parse_source`](Language::parse_source) with the
-    /// same handle each time.
+    /// `Arc<Source>` and pass the same handle to
+    /// [`parse_setup`](Language::parse_setup) each time.
+    ///
+    /// `Err` is the strict-mode abort (or an implementation-contract violation, which
+    /// aborts under any policy); `Ok` carries the tree plus any tolerantly recorded
+    /// diagnostics.
     pub fn parse(
         &self,
         content: impl Into<String>,
@@ -149,136 +158,48 @@ impl<L: Lang> Language<L> {
     where
         L::InvocationSyntax: FromInvocation<L>,
     {
-        self.parse_source(Arc::new(Source::new(content)))
+        self.parse_setup(Source::new(content)).parse()
     }
 
-    /// Parse `source` under this language's defaults: tokenize with the seed state's
-    /// rules, drive the root content loop (through the driver's construct provision,
-    /// like every descent), stage the root `List` over the whole source, and freeze
-    /// the session into a [`ParseResult`].
+    /// Set up a parse of `source` — the configurable entry point. `source` is a
+    /// pre-minted [`Source`], by value or as an already-shared `Arc<Source>`: one
+    /// carrying an origin label (a file name for diagnostics) or provenance (a
+    /// [`resolve_source_reference`](crate::source::resolve_source_reference)
+    /// result), or simply one handle held across parses so that their positions
+    /// compare equal (see [`parse`](Language::parse)).
     ///
-    /// **Recovery** follows the driver's policy. A stray group close at the root —
-    /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recovery
-    /// entry point; tolerant parses consume the delimiter, stage it as a `Chars` node
-    /// (the markup-in-chars recovery artifact: the root span partition holds across the
-    /// skip, so recovered parse trees keep the parse-tree byte accounting), and
-    /// resume; strict parses abort. Diagnosis and resume both run under the state the content loop had
-    /// reached at the close (the segment's exit state,
-    /// [`NodesOutcome::state`](crate::constructs::NodesOutcome::state)): the reported
-    /// delimiter is the one the loop's tokenization matched, and sibling-level state
-    /// changes from before the skip — a `\newcommand`-style definition, a group-rule
-    /// change — stay in effect across it, exactly as if the close had not been there.
+    /// The returned [`ParseSetup`] starts from this language's defaults — the
+    /// [`initial_state`](Language::initial_state) and the driver's root parser
+    /// ([`ParseDriver::make_root_parser`](crate::engine::ParseDriver::make_root_parser))
+    /// — which its `with_*` methods replace for this one parse;
+    /// [`ParseSetup::parse`] runs it:
     ///
-    /// `Err` is the strict-mode abort (or an implementation-contract violation, which
-    /// aborts under any policy); `Ok` carries the tree plus any tolerantly recorded
-    /// diagnostics.
-    pub fn parse_source(
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use techy::core::{Language, ParsingState, StdParseDriver, TrivialLang};
+    /// # use techy::error::Recovery;
+    /// # use techy::source::Source;
+    /// # #[derive(Debug, Clone, Copy)]
+    /// # struct MyLang;
+    /// # impl TrivialLang for MyLang {}
+    /// # let language: Language<MyLang> = Language::new(
+    /// #     StdParseDriver::new(Recovery::Tolerant, ()),
+    /// #     ParsingState::lang_initial().expect("seed state"),
+    /// # );
+    /// let source = Arc::new(Source::new("hello"));
+    /// let result = language.parse_setup(Arc::clone(&source)).parse().unwrap();
+    /// assert!(Arc::ptr_eq(result.tree.root().span().source(), &source));
+    /// ```
+    pub fn parse_setup<'p>(
         &self,
-        source: Arc<Source<L::SourceOrigin>>,
-    ) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>>
-    where
-        L::InvocationSyntax: FromInvocation<L>,
-    {
-        let mut reader = self.driver.make_token_reader(&source);
-        let mut session = ParserSession::new();
-        // Seed the diagnostics sink's retention cap from the driver
-        // (`ParseDriver::diagnostics_limit`); `None` keeps the default cap.
-        if let Some(limit) = self.driver.diagnostics_limit() {
-            session.diagnostics = Diagnostics::with_limit(limit);
+        source: impl Into<Arc<Source<L::SourceOrigin>>>,
+    ) -> ParseSetup<'_, 'p, L> {
+        ParseSetup {
+            language: self,
+            source: source.into(),
+            initial_state: Arc::clone(&self.initial_state),
+            root_parser: None,
         }
-        // The descent guard is created eagerly, here at true parse entry on the
-        // parsing thread — a stack-measuring guard anchors its reference
-        // measurement before any descent runs.
-        session.install_descent_guard(StdDescentGuard::init(&self.descent_guard_init));
-        let mut nodes = Vec::new();
-        let seed = Arc::clone(&self.initial_state);
-        // Parse-initialization observation (registration-sanity diagnostics): once
-        // per root parse, before any token is read.
-        self.driver.observe_parse_start(&source, &seed, &mut session.diagnostics);
-        let mut cx = ParseContext::new(
-            &mut *reader,
-            Arc::clone(&seed),
-            &mut session,
-            &self.driver);
-        loop {
-            // The root descent routes through the driver's factory like every other
-            // descent site (Phase 7.2 uniform-routing contract). A pass-through delta
-            // has no applicable target at the root and is discarded.
-            let (outcome, _delta) = cx.parse_nodes(
-                Arc::clone(&cx.state),
-                StopSpec::none(),
-                ChildStateSpec::inherit(),
-            )?;
-            nodes.extend(outcome.nodes);
-            // Thread the segment's exit state: the root context's ambient state
-            // advances with the content, so the recover funnel below and any resume
-            // run under the state the loop actually reached — resuming from the seed
-            // would roll back sibling after-effects (`\newcommand` definitions) across
-            // a tolerant skip.
-            cx.state = outcome.state;
-            match outcome.stop {
-                StopCause::EndOfInput => break,
-                StopCause::UnexpectedGroupClose { span, after } => {
-                    // Impossible under a language that declares groups absent: a
-                    // group close cannot be tokenized, so reaching this arm means the
-                    // token source violated its contract (`TokenReader` docs) — an
-                    // implementation bug aborts under any policy, never a panic.
-                    if !<L::Features as LangFeatures>::Groups::PRESENT {
-                        return Err(cx.implementation_error(
-                            "a stray group close surfaced at the root although the \
-                             language declares the groups feature absent \
-                             (token-source contract violation)",
-                            span,
-                        ));
-                    }
-                    // Diagnose-and-skip at the root (DESIGN_RATIONALE.md [§dd-dr:errors]): the
-                    // loop left the close unconsumed at `span.start`, and the span is
-                    // the delimiter exactly as matched (`StopCause`'s contract) —
-                    // sliced, not re-peeked: a re-read under any state but the loop's
-                    // own could tokenize different bytes.
-                    let delim = span.content().to_string();
-                    cx.recover(StrayGroupClose { delim }, span.clone())?;
-                    cx.tokens.move_to_position(&after);
-                    // Stage the consumed delimiter as a chars node (the
-                    // markup-in-chars recovery artifact; 7.9): the root partition
-                    // stays exact across the skip.
-                    let id = cx.stage_node(
-                            NodeKind::chars(span.span()),
-                            span.clone(),
-                            Arc::clone(&cx.state),
-                            Vec::new(),
-                        )
-                        .map_err(|error| cx.staging_error(error, span))?;
-                    nodes.push(id);
-                }
-                StopCause::TokenCondition { span, .. } => {
-                    return Err(cx.implementation_error(
-                        "the root content loop stopped on a token condition none was \
-                         set (nodes-parser contract violation)",
-                        span,
-                    ));
-                }
-                StopCause::NodeCondition => {
-                    return Err(cx.implementation_error(
-                        "the root content loop stopped on a node condition none was \
-                         set (nodes-parser contract violation)",
-                        cx.here(),
-                    ));
-                }
-            }
-        }
-        let root = cx
-            .stage_node(NodeKind::list(), SourceSpan::entire(&source), seed, nodes)
-            .map_err(|error| {
-                let at = SourceSpan::at(&SourceSpan::entire(&source).start_pos());
-                cx.staging_error(error, at)
-            })?;
-        session.finish(root).map_err(|error| {
-            ParseError::new(
-                ImplementationError::new(error.to_string()),
-                SourceSpan::entire(&source),
-            )
-        })
     }
 }
 
@@ -297,11 +218,170 @@ impl<L: Lang> fmt::Debug for Language<L> {
     }
 }
 
+/// One parse being set up: the source plus this parse's deviations from its
+/// [`Language`]'s defaults. Created by [`Language::parse_setup`], configured with the
+/// `with_*` methods, run with [`parse`](ParseSetup::parse) — which consumes the
+/// setup (one setup, one parse):
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use techy::core::{Language, ParsingState, StdParseDriver, TrivialLang};
+/// # use techy::error::Recovery;
+/// # use techy::source::Source;
+/// # #[derive(Debug, Clone, Copy)]
+/// # struct MyLang;
+/// # impl TrivialLang for MyLang {}
+/// # let language: Language<MyLang> = Language::new(
+/// #     StdParseDriver::new(Recovery::Tolerant, ()),
+/// #     ParsingState::lang_initial().expect("seed state"),
+/// # );
+/// // Re-parse a fragment under exactly the state some parsed node recorded.
+/// let first = language.parse("hello").unwrap();
+/// let node_state = Arc::clone(first.tree.root().parsing_state());
+/// let again = language
+///     .parse_setup(Source::new("world"))
+///     .with_initial_state(Arc::clone(&node_state))
+///     .parse()
+///     .unwrap();
+/// assert!(Arc::ptr_eq(again.tree.root().parsing_state(), &node_state));
+/// ```
+///
+/// Without any `with_*` call, `parse_setup(source).parse()` is exactly
+/// [`Language::parse`] over a pre-minted source. What lives here is what varies
+/// per parse; what holds across parses — the driver, the language's initial state,
+/// the descent-guard configuration — lives on the [`Language`].
+pub struct ParseSetup<'l, 'p, L: Lang> {
+    language: &'l Language<L>,
+    source: Arc<Source<L::SourceOrigin>>,
+    /// The state the parse starts from — the language's initial state unless
+    /// [`with_initial_state`](ParseSetup::with_initial_state) replaced it.
+    initial_state: Arc<ParsingState<L>>,
+    /// The root parser for this parse; `None` = the driver's
+    /// [`make_root_parser`](ParseDriver::make_root_parser), consulted at parse time.
+    root_parser: Option<&'p mut dyn ConstructParser<L, Output = BuildId>>,
+}
+
+impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
+    /// Start this parse from `state` instead of the language's
+    /// [`initial_state`](Language::initial_state). Any state handle serves — the
+    /// language's seed with a delta applied
+    /// (`language.initial_state().derived(&delta)?`, the one derivation path), or
+    /// the state some parsed node recorded
+    /// ([`parsing_state`](crate::node::NodeRef::parsing_state)), to parse a
+    /// fragment under exactly the conditions that node was parsed under. A shared
+    /// `Arc` is used by identity: the root node records this very state, and the
+    /// driver's [`observe_parse_start`](ParseDriver::observe_parse_start) sees it as
+    /// the parse's initial state.
+    pub fn with_initial_state(mut self, state: impl Into<Arc<ParsingState<L>>>) -> Self {
+        self.initial_state = state.into();
+        self
+    }
+
+    /// Run `parser` as this parse's **root parser** — the parser the entry point
+    /// runs directly, at the root of the descent hierarchy — instead of the one the
+    /// driver's [`make_root_parser`](ParseDriver::make_root_parser) supplies. This is
+    /// the one-parse way to a different root shape (wrapping an auxiliary source's
+    /// content in scaffolding of your own, staging a different root node); a
+    /// language whose parses always need one overrides the factory instead. The
+    /// parser is borrowed for the parse's extent and is yours again afterwards, so a
+    /// root parser may collect data to read back after the parse. Its contract —
+    /// run at the top, not as a descent; its output is the tree's root — is
+    /// documented on [`RootNodesParser`](crate::constructs::RootNodesParser).
+    pub fn with_root_parser<'q>(
+        self,
+        parser: &'q mut dyn ConstructParser<L, Output = BuildId>,
+    ) -> ParseSetup<'l, 'q, L> {
+        ParseSetup {
+            language: self.language,
+            source: self.source,
+            initial_state: self.initial_state,
+            root_parser: Some(parser),
+        }
+    }
+
+    /// Run the parse: tokenize with the driver's reader over the source, create the
+    /// session (its diagnostics cap from
+    /// [`diagnostics_limit`](ParseDriver::diagnostics_limit), its descent guard from
+    /// the language's configuration), fire the driver's once-per-parse
+    /// [`observe_parse_start`](ParseDriver::observe_parse_start) with the parse's
+    /// initial state, run the root parser directly over a [`ParseContext`] at that
+    /// state (at the top, not as a descent — see [`RootNodesParser`](crate::constructs::RootNodesParser)), and freeze
+    /// the session around the root it returns into a [`ParseResult`].
+    ///
+    /// Under the standard root parser, a stray group close at the root is
+    /// diagnosed as [`StrayGroupClose`](crate::constructs::StrayGroupClose) through the recovery entry point —
+    /// tolerant parses consume it, stage it as a `Chars` node, and resume; strict
+    /// parses abort — as documented on [`RootNodesParser`](crate::constructs::RootNodesParser).
+    ///
+    /// `Err` is the strict-mode abort (or an implementation-contract violation, which
+    /// aborts under any policy — a root parser's factory failing to build its parser
+    /// included); `Ok` carries the tree plus any tolerantly recorded diagnostics.
+    pub fn parse(self) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
+        let ParseSetup { language, source, initial_state, root_parser } = self;
+        let driver = &language.driver;
+        let mut reader = driver.make_token_reader(&source);
+        let mut session = ParserSession::new();
+        // Seed the diagnostics sink's retention cap from the driver
+        // (`ParseDriver::diagnostics_limit`); `None` keeps the default cap.
+        if let Some(limit) = driver.diagnostics_limit() {
+            session.diagnostics = Diagnostics::with_limit(limit);
+        }
+        // The descent guard is created eagerly, here at true parse entry on the
+        // parsing thread — a stack-measuring guard anchors its reference
+        // measurement before any descent runs.
+        session.install_descent_guard(StdDescentGuard::init(&language.descent_guard_init));
+        // Parse-initialization observation (registration-sanity diagnostics): once
+        // per root parse, before any token is read, over the state this parse
+        // actually starts from.
+        driver.observe_parse_start(&source, &initial_state, &mut session.diagnostics);
+        let mut cx = ParseContext::new(&mut *reader, initial_state, &mut session, driver);
+        // The root parser runs at the top — a direct call, not `parse_construct`:
+        // no descent-guard level, no frame, no enclosing-state entry cover the root.
+        // Its pass-through delta has no target (nothing encloses the root).
+        let (root, _delta) = match root_parser {
+            Some(parser) => parser.parse(&mut cx)?,
+            None => {
+                // A factory Err aborts under any policy ("could not build the
+                // parser" — the hook fallibility contract).
+                let mut parser = driver.make_root_parser()?;
+                parser.parse(&mut cx)?
+            }
+        };
+        session.finish(root).map_err(|error| {
+            ParseError::new(
+                ImplementationError::new(error.to_string()),
+                SourceSpan::entire(&source),
+            )
+        })
+    }
+}
+
+// Manual Debug: the root parser is a `dyn` borrow without a `Debug` bound — shown
+// by presence.
+impl<L: Lang> fmt::Debug for ParseSetup<'_, '_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParseSetup")
+            .field("language", &self.language)
+            .field("source", &self.source)
+            .field("initial_state", &self.initial_state)
+            .field("custom_root_parser", &self.root_parser.is_some())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constructs::{
+        ChildStateSpec, ConstructParser, ConstructParserResult, NodesOutcome, StopCause,
+        StopSpec, StrayGroupClose,
+    };
     use crate::engine::{ParseDriver, StdParseDriver};
     use crate::error::{DiagnosticInfo, Recovery};
+    use crate::node::NodeKind;
     use crate::node::check_tree_invariants;
     use crate::scopes::{Package, ScopeOp, ScopeStack};
     use crate::source::{MapResolver, SourceProvenance};
@@ -312,6 +392,7 @@ mod tests {
     };
     use alloc::string::String;
     use alloc::vec;
+    use alloc::vec::Vec;
 
     /// The latex-ish seed rules the `DocLang`-family test languages share (groups
     /// `{`/`}` and `%` comments enabled) — generic so a sibling lang differing only
@@ -686,7 +767,7 @@ mod tests {
             other => panic!("expected Resolved provenance, got {:?}", other),
         }
 
-        let result = language.parse_source(Arc::clone(&resolved)).unwrap();
+        let result = language.parse_setup(Arc::clone(&resolved)).parse().unwrap();
         check_tree_invariants(&result.tree);
         assert_eq!(shapes(&result), ["chars(chapter )", "group"]);
         // The tree's spans reference the resolved source (provenance intact).
@@ -704,10 +785,6 @@ mod tests {
     /// error under *any* recovery policy.
     #[test]
     fn a_contract_violating_root_stop_is_an_implementation_error() {
-        use crate::constructs::{
-            ConstructParser, ConstructParserResult, ImplementationError, NodesOutcome,
-        };
-
         #[derive(Debug, Clone, Copy)]
         struct BogusLang;
         impl Lang for BogusLang {
@@ -1082,5 +1159,282 @@ mod tests {
             "diagnostic should name the 2-char delimiter, got: {}",
             diagnostic.message()
         );
+    }
+
+    // --- the parse setup: per-parse initial state and root parser ---------------------------
+
+    #[test]
+    fn parse_is_the_shorthand_of_parse_setup_over_a_fresh_source() {
+        let language = tolerant();
+        let short = language.parse("a}b {c}").unwrap();
+        let long = language.parse_setup(Source::new("a}b {c}")).parse().unwrap();
+        assert_eq!(shapes(&short), shapes(&long));
+        assert_eq!(short.diagnostics.len(), long.diagnostics.len());
+        // Each spelling minted its own source: positions do not correlate.
+        assert_ne!(short.tree.root().span(), long.tree.root().span());
+    }
+
+    #[test]
+    fn with_initial_state_starts_this_parse_from_the_given_state() {
+        // Comments disabled for one parse only, from a state derived off the
+        // language's seed: the root records that very handle, and the language's
+        // own initial state is untouched.
+        let language = strict();
+        let no_comments = Arc::new(
+            language
+                .initial_state()
+                .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+                    comments: crate::state::CommentOverrides::disable(),
+                    ..TokenRulesOverrides::default()
+                }))
+                .unwrap(),
+        );
+        let result = language
+            .parse_setup(Source::new("a%b"))
+            .with_initial_state(Arc::clone(&no_comments))
+            .parse()
+            .unwrap();
+        check_tree_invariants(&result.tree);
+        assert_eq!(shapes(&result), ["chars(a%b)"]);
+        assert!(Arc::ptr_eq(result.tree.root().parsing_state(), &no_comments));
+        assert!(language.initial_state().rules().comments_enabled());
+        // The everyday path still parses under the language's seed (a comment node).
+        assert_eq!(shapes(&language.parse("a%b").unwrap()), ["chars(a)", "other"]);
+    }
+
+    #[test]
+    fn with_initial_state_accepts_a_parsed_nodes_state_by_identity() {
+        let language = strict();
+        let first = language.parse("x").unwrap();
+        let node_state = Arc::clone(first.tree.root().parsing_state());
+        let again = language
+            .parse_setup(Source::new("y"))
+            .with_initial_state(Arc::clone(&node_state))
+            .parse()
+            .unwrap();
+        assert!(Arc::ptr_eq(again.tree.root().parsing_state(), &node_state));
+    }
+
+    /// A root parser staging the whole source as one `Chars` root — no content loop
+    /// at all — and counting how often it ran, to be read back after the parse.
+    struct CharsRoot {
+        runs: usize,
+    }
+
+    impl<L: Lang> ConstructParser<L> for CharsRoot {
+        type Output = crate::node::BuildId;
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, L>,
+        ) -> ConstructParserResult<
+            L,
+            (Self::Output, Option<alloc::boxed::Box<ParsingStateDelta<L>>>),
+        > {
+            self.runs += 1;
+            let span = SourceSpan::entire(cx.here().source());
+            let id = cx
+                .stage_node(NodeKind::chars(span.span()), span.clone(), Arc::clone(&cx.state), Vec::new())
+                .map_err(|error| cx.staging_error(error, span))?;
+            Ok((id, None))
+        }
+    }
+
+    #[test]
+    fn with_root_parser_runs_the_given_parser_at_the_root() {
+        // The borrowed parser replaces the driver's root parser for this parse, and
+        // is available again afterwards: its count reads back.
+        let language = strict();
+        let mut root = CharsRoot { runs: 0 };
+        let result = language
+            .parse_setup(Source::new("a {b}"))
+            .with_root_parser(&mut root)
+            .parse()
+            .unwrap();
+        assert_eq!(root.runs, 1);
+        assert_eq!(result.tree.root().chars(), Some("a {b}"));
+        assert_eq!(result.tree.root().span().range(), 0..5);
+        assert!(result.diagnostics.is_empty());
+        // The language's own parses are unaffected: the standard root `List`.
+        assert_eq!(shapes(&language.parse("a {b}").unwrap()), ["chars(a )", "group"]);
+    }
+
+    // --- the driver's root-parser factory ------------------------------------------------
+
+    /// `DocLang` under a driver whose root parser wraps the content in its own
+    /// scaffolding: the standard root run's nodes become the children of a `List`
+    /// nested in the root `List` (a two-level root).
+    #[derive(Debug, Clone, Copy)]
+    struct RootLang;
+    impl Lang for RootLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = RootDriver;
+
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(doc_state_data())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct RootDriver;
+
+    /// The scaffolding root parser: one content run, wrapped twice.
+    struct WrappedRoot;
+
+    impl ConstructParser<RootLang> for WrappedRoot {
+        type Output = crate::node::BuildId;
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, RootLang>,
+        ) -> ConstructParserResult<
+            RootLang,
+            (Self::Output, Option<alloc::boxed::Box<ParsingStateDelta<RootLang>>>),
+        > {
+            let state = Arc::clone(&cx.state);
+            let span = SourceSpan::entire(cx.here().source());
+            let (outcome, _) = cx.parse_nodes(
+                Arc::clone(&state),
+                StopSpec::none(),
+                ChildStateSpec::inherit(),
+            )?;
+            assert_eq!(outcome.stop, StopCause::EndOfInput);
+            let inner = cx
+                .stage_node(NodeKind::list(), span.clone(), Arc::clone(&state), outcome.nodes)
+                .map_err(|error| cx.staging_error(error, span.clone()))?;
+            let outer = cx
+                .stage_node(NodeKind::list(), span.clone(), state, vec![inner])
+                .map_err(|error| cx.staging_error(error, span))?;
+            Ok((outer, None))
+        }
+    }
+
+    impl ParseDriver<RootLang> for RootDriver {
+        fn make_root_parser<'p>(
+            &'p self,
+        ) -> Result<
+            alloc::boxed::Box<dyn ConstructParser<RootLang, Output = crate::node::BuildId> + 'p>,
+            ParseError,
+        > {
+            Ok(alloc::boxed::Box::new(WrappedRoot))
+        }
+    }
+
+    #[test]
+    fn the_drivers_root_parser_factory_shapes_every_parse_of_the_language() {
+        let language: Language<RootLang> =
+            Language::new(RootDriver, ParsingState::lang_initial().expect("seed state"));
+        let result = language.parse("a {b}").unwrap();
+        check_tree_invariants(&result.tree);
+        // Root `List` → inner `List` → the content.
+        let root = result.tree.root();
+        assert_eq!(root.child_count(), 1);
+        let inner = root.child(0).unwrap();
+        assert_eq!(inner.child_count(), 2);
+        assert_eq!(inner.child(0).unwrap().chars(), Some("a "));
+
+        // A per-parse root parser takes precedence over the factory.
+        let mut chars_root = CharsRoot { runs: 0 };
+        let result = language
+            .parse_setup(Source::new("a {b}"))
+            .with_root_parser(&mut chars_root)
+            .parse()
+            .unwrap();
+        assert_eq!(chars_root.runs, 1);
+        assert_eq!(result.tree.root().chars(), Some("a {b}"));
+    }
+
+    // --- observe_parse_start sees the parse's initial state ----------------------------
+
+    /// `DocLang` under a driver whose `observe_parse_start` records, as a note, whether
+    /// the parse's initial state has comments enabled.
+    #[derive(Debug, Clone, Copy)]
+    struct StartLang;
+    impl Lang for StartLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type Tokenization = crate::token::StdTokenization;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = StartDriver;
+
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(doc_state_data())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct StartDriver;
+
+    impl ParseDriver<StartLang> for StartDriver {
+        fn observe_parse_start(
+            &self,
+            source: &Arc<Source>,
+            seed: &Arc<ParsingState<StartLang>>,
+            diagnostics: &mut crate::error::Diagnostics,
+        ) {
+            diagnostics.push(crate::error::Diagnostic::note(
+                ImplementationError::new(alloc::format!(
+                    "comments_enabled={}",
+                    seed.rules().comments_enabled()
+                )),
+                SourceSpan::entire(source),
+            ));
+        }
+    }
+
+    #[test]
+    fn observe_parse_start_receives_the_setups_initial_state() {
+        let language: Language<StartLang> =
+            Language::new(StartDriver, ParsingState::lang_initial().expect("seed state"));
+        let no_comments = language
+            .initial_state()
+            .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+                comments: crate::state::CommentOverrides::disable(),
+                ..TokenRulesOverrides::default()
+            }))
+            .unwrap();
+        // The note's message ends with the recorded flag (the condition type's
+        // rendering prefixes it).
+        let note = |result: &ParseResult<StartLang>| -> String {
+            result.diagnostics.iter().next().unwrap().message()
+        };
+        assert!(note(&language.parse("a").unwrap()).ends_with("comments_enabled=true"));
+        let result = language
+            .parse_setup(Source::new("a"))
+            .with_initial_state(no_comments)
+            .parse()
+            .unwrap();
+        assert!(note(&result).ends_with("comments_enabled=false"));
     }
 }

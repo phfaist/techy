@@ -31,12 +31,22 @@ Two entry points:
 
 - [`parse(content)`](crate::core::Language::parse) — parse a string as an
   anonymous in-memory source; the everyday call.
-- [`parse_source(source)`](crate::core::Language::parse_source) — parse a
-  pre-minted [`Source`](crate::source::Source), when you want the source to
-  carry an origin label (a file name for diagnostics) or provenance; build it
-  with [`Source::new`](crate::source::Source::new) and
-  [`with_origin`](crate::source::Source::with_origin) and share it as
-  `Arc<Source>`.
+- [`parse_setup(source)`](crate::core::Language::parse_setup) — set up a
+  parse of a pre-minted [`Source`](crate::source::Source): one carrying an
+  origin label (a file name for diagnostics) or provenance — build it with
+  [`Source::new`](crate::source::Source::new) and
+  [`with_origin`](crate::source::Source::with_origin) — or one handle shared as
+  `Arc<Source>` across parses so that their positions compare equal. The
+  returned [`ParseSetup`](crate::core::ParseSetup) runs with
+  [`parse()`](crate::core::ParseSetup::parse); before that, two things can be
+  replaced for this one parse: the state it starts from
+  ([`with_initial_state`](crate::core::ParseSetup::with_initial_state) — for
+  example the state a parsed node recorded, to re-parse a fragment under the
+  same conditions) and the parser run at the root
+  ([`with_root_parser`](crate::core::ParseSetup::with_root_parser), replacing
+  the [`RootNodesParser`](crate::core::constructs::RootNodesParser) the
+  driver supplies by default). `language.parse(text)` is exactly
+  `language.parse_setup(Source::new(text)).parse()`.
 
 Both return `Result`: `Ok` is a [`ParseResult`](crate::core::ParseResult) —
 the parsed [`tree`](crate::core::ParseResult) plus the

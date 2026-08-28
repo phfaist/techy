@@ -113,7 +113,7 @@ positions.
 **Re-parses and span stability.** To correlate positions across parses —
 an editor re-parsing on every keystroke, a tool diffing two parse attempts
 — hold your own `Arc<Source>` and parse with
-[`parse_source`](crate::core::Language::parse_source), never
+[`parse_setup(source).parse()`](crate::core::Language::parse_setup), never
 [`parse`](crate::core::Language::parse): `parse` mints a fresh anonymous
 [`Source`](crate::source::Source) on every call, and source comparisons
 are **identity-based** ([`SourceSpan`](crate::source::SourceSpan) and

@@ -223,7 +223,7 @@ One line each; the pointer has the detail.
   source *identity* + range →
   [AI guide: pylatexenc migration](crate::guide::ai_guide_pylatexenc).
 - **`parse()` mints a fresh anonymous source per call** — positions from
-  two calls never correlate; hold `Arc<Source>` + `parse_source` →
+  two calls never correlate; hold `Arc<Source>` + `parse_setup(source).parse()` →
   [AI guide: embedding](crate::guide::ai_guide_embedding).
 - **`NodeRef` cannot be stored** — persistent handle is
   `Arc<NodeTree>` + `NodeId` →

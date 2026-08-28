@@ -26,12 +26,15 @@
 //!   lets a group class change the parsing state of its interior (a math group entering
 //!   math mode is one line: a delta with a [`mode`](crate::state::ParsingStateDelta::mode)
 //!   override);
-//! - **construct provision** — [`make_nodes_parser`](ParseDriver::make_nodes_parser),
+//! - **construct provision** — [`make_root_parser`](ParseDriver::make_root_parser),
+//!   [`make_nodes_parser`](ParseDriver::make_nodes_parser),
 //!   [`make_group_parser`](ParseDriver::make_group_parser),
 //!   [`make_invocation_parser`](ParseDriver::make_invocation_parser). Every descent
 //!   site routes through the [`ParseContext`](crate::constructs::ParseContext) wrappers
 //!   ([`parse_nodes`](crate::constructs::ParseContext::parse_nodes)/[`parse_group`](crate::constructs::ParseContext::parse_group)),
-//!   so one override applies uniformly to the whole parse.
+//!   so one override applies uniformly to the whole parse; the root parser is what
+//!   the parse entry point ([`ParseSetup::parse`](super::ParseSetup::parse)) runs
+//!   directly.
 //!
 //! The driver is bound into the bundle as [`Lang::Driver`](crate::state::Lang::Driver)
 //! and reaches parsers as [`ParseContext::driver`](crate::constructs::ParseContext::driver) — **concretely typed through `L`**,
@@ -56,7 +59,7 @@ use core::fmt;
 
 use crate::constructs::{
     ChildStateSpec, ConstructParser, ConstructParserResult, FromInvocation, GroupParser,
-    Invocation, NodesOutcome, NodesParser, StopSpec,
+    Invocation, NodesOutcome, NodesParser, RootNodesParser, StopSpec,
 };
 use crate::error::{DiagnosticData, Diagnostics, ParseError, Recovery};
 use crate::node::{BuildId, NodeKind};
@@ -129,7 +132,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     }
 
     /// The retention cap for the parse's diagnostics sink, consulted once per
-    /// parse: [`Language::parse_source`](super::Language::parse_source) seeds the
+    /// parse: [`ParseSetup::parse`](super::ParseSetup::parse) seeds the
     /// session's [`Diagnostics`] with [`Diagnostics::with_limit`] when this
     /// answers `Some(limit)`; on `None` — the default — the sink keeps the
     /// standard cap ([`Diagnostics::DEFAULT_LIMIT`]). Code driving construct
@@ -173,7 +176,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// reader of its own**.
     ///
     /// Both reader-construction sites go through this hook:
-    /// [`Language::parse_source`](super::Language::parse_source) for the root parse and
+    /// [`ParseSetup::parse`](super::ParseSetup::parse) for the root parse and
     /// [`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)
     /// for an attached (included) source. A driver that returns its own reader thereby
     /// tokenizes the whole parse its way, while the *types* involved stay fixed by the
@@ -417,11 +420,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     }
 
     /// Once-per-parse **initialization observation**: called by
-    /// [`Language::parse_source`](crate::engine::Language::parse_source) after the
+    /// [`ParseSetup::parse`](crate::engine::ParseSetup::parse) after the
     /// session is created and before any token is read — the layering-correct
     /// moment for registration-sanity diagnostics (the sink is live, and the
-    /// seed's [`TokenRules`](crate::token::TokenRules) — escape characters
-    /// included — are known, which no registration-time layer can see). May record
+    /// initial state's [`TokenRules`](crate::token::TokenRules) — escape characters
+    /// included — are known, which no registration-time layer can see). `seed` is
+    /// the state **this parse** starts from: the language's initial state, or the
+    /// one [`ParseSetup::with_initial_state`](crate::engine::ParseSetup::with_initial_state)
+    /// put in its place. May record
     /// **warnings/notes** into `diagnostics`; it cannot alter the parse. The
     /// default does nothing.
     ///
@@ -537,6 +543,40 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     }
 
     // --- construct provision -------------------------------------------------------
+
+    /// The factory producing the **root parser** for one parse — the parser the entry
+    /// point ([`ParseSetup::parse`](super::ParseSetup::parse)) runs directly, at the
+    /// root of the descent hierarchy, over the whole source: a fresh boxed parser per
+    /// parse, ownership moved to the caller. Its output is the tree's root
+    /// ([`BuildId`]), around which the entry point freezes the session.
+    ///
+    /// The default is the standard [`RootNodesParser`] — the content loop over the
+    /// whole source with stray-close recovery, staging the root `List`. Override it
+    /// when every parse of the language needs a different root shape (scaffolding of
+    /// the language's own around the content, a different root node); a single parse
+    /// that does passes its parser through
+    /// [`ParseSetup::with_root_parser`](super::ParseSetup::with_root_parser), which
+    /// takes precedence over this factory. The contract a root parser must uphold —
+    /// run at the top, not as a descent; the output is the tree's root; the
+    /// pass-through delta is discarded — is documented on [`RootNodesParser`].
+    ///
+    /// # Errors
+    ///
+    /// `Err` means **the parser could not be built** and **aborts the parse** under
+    /// any recovery policy, exactly as for
+    /// [`make_nodes_parser`](ParseDriver::make_nodes_parser). An infallible
+    /// implementation wraps its parser in `Ok(...)` and that is the only change.
+    // The boxed-parser-or-abort pair is the decided factory signature; an alias
+    // would only rename it.
+    #[allow(clippy::type_complexity)]
+    fn make_root_parser<'p>(
+        &'p self,
+    ) -> Result<Box<dyn ConstructParser<L, Output = BuildId> + 'p>, ParseError<L::SourceOrigin>>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
+        Ok(Box::new(RootNodesParser::new()))
+    }
 
     /// The factory producing the content-loop parser for one nodes descent (group
     /// interiors, environment bodies, the top-level drive) — a fresh boxed parser per

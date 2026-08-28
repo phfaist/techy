@@ -99,8 +99,8 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// `\input`-style inclusion that is the root nodes-parse shape,
     /// `&mut *cx.driver.make_nodes_parser(StopSpec::none(),
     /// ChildStateSpec::inherit())?`. The parser speaks the nodes-run vocabulary
-    /// ([`NodesOutcome`]) so this method can drive it like
-    /// [`Language::parse_source`](crate::engine::Language::parse_source) drives the
+    /// ([`NodesOutcome`]) so this method can drive it like the standard root parser
+    /// ([`RootNodesParser`](super::RootNodesParser)) drives the
     /// root loop, and it **must tolerate re-invocation**: after a recovered stop
     /// this method calls `parse` again to resume (the standard
     /// [`NodesParser`](super::NodesParser) does — its working state drains at every

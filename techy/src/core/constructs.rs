@@ -2,7 +2,9 @@
 //! against it.
 //!
 //! Every construct is parsed by a [`ConstructParser`] implementation reading tokens
-//! and staging nodes through one [`ParseContext`]: the main content loop
+//! and staging nodes through one [`ParseContext`]: the root parse
+//! ([`RootNodesParser`], the parser the entry point runs directly, above every
+//! descent), the main content loop
 //! ([`NodesParser`], with its stop conditions [`StopSpec`]/[`StopCause`]), groups
 //! ([`GroupParser`], the [`ChildStateSpec`] descent policy), callable invocations
 //! ([`StdInvocationParser`], with [`Invocation`] as the parsers' input bundle),
@@ -70,7 +72,8 @@ pub use crate::constructs::{
     MalformedEnvironmentTerminator, MarkerArgumentParser, MissingEnvironmentTerminator,
     MissingMandatoryArgument, MissingTerminatorFound, NameGroup, NoSourceResolver,
     NodesOutcome, NodesParser,
-    OptionalGroupArgumentParser, ParseContext, RepeatedTackOnField, ScopeOpFailed,
+    OptionalGroupArgumentParser, ParseContext, RepeatedTackOnField, RootNodesParser,
+    ScopeOpFailed,
     StdInvocationParser, StopCause, StopSpec, StrayGroupClose, TackOnFieldsArgumentParser,
     TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound,
     UnresolvableCommand, UnresolvableSourceReference, UnterminatedVerbatim,

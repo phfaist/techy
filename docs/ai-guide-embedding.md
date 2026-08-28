@@ -73,7 +73,7 @@ positions.
 **Re-parses and span stability.** To correlate positions across parses
 (re-parse per keystroke, diffing parse attempts): hold your own
 `Arc<Source>` and call
-[`parse_source`](crate::core::Language::parse_source), never
+[`parse_setup(source).parse()`](crate::core::Language::parse_setup), never
 [`parse`](crate::core::Language::parse) — `parse` mints a fresh anonymous
 [`Source`](crate::source::Source) per call, and source comparisons are
 **identity-based** ([`SourceSpan`](crate::source::SourceSpan) /
@@ -99,7 +99,7 @@ let language: Language<Latexlike> = Language::new(
 let source = Arc::new(Source::new("first line\nsee {here}").with_origin(
     Some("main.tex".to_string()),
 ));
-let result = language.parse_source(Arc::clone(&source)).unwrap();
+let result = language.parse_setup(Arc::clone(&source)).parse().unwrap();
 
 // Line/column through a consumer-held cache (each source indexed once, ever):
 let mut line_cols = LineIndexCache::new();
@@ -111,7 +111,7 @@ assert_eq!(
 );
 
 // A second parse of the SAME Arc<Source> yields correlating spans:
-let again = language.parse_source(Arc::clone(&source)).unwrap();
+let again = language.parse_setup(Arc::clone(&source)).parse().unwrap();
 assert_eq!(
     again.tree.root().child(1).unwrap().span(),
     node.span(),

@@ -50,7 +50,7 @@ pub use driver::{
     resolve_command_in_scopes, CommandResolution, CommandResolver, ParseDriver,
     ResolvedCallable, ScopesCommandResolver, StdParseDriver,
 };
-pub use language::Language;
+pub use language::{Language, ParseSetup};
 
 /// One live entry of the session's parse-frame stack:
 /// pushed at the descent points through
@@ -250,7 +250,7 @@ pub struct ParserSession<L: Lang> {
     state_stack: ParsingStateStack<L>,
     /// The per-parse [`StdDescentGuard`] instance, consulted by
     /// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct)
-    /// before every descent. [`Language::parse_source`] installs it eagerly at
+    /// before every descent. [`ParseSetup::parse`] installs it eagerly at
     /// parse entry (through
     /// [`install_descent_guard`](ParserSession::install_descent_guard)); a
     /// hand-built session that never installs one gets a
@@ -277,7 +277,7 @@ impl<L: Lang> ParserSession<L> {
     /// Install the parse's [`StdDescentGuard`] instance — the seam for embedders
     /// driving construct parsers over a hand-built
     /// [`ParseContext`](crate::constructs::ParseContext), where no
-    /// [`Language::parse_source`] runs to install the guard:
+    /// [`ParseSetup::parse`] runs to install the guard:
     /// create the guard with [`DescentGuard::init`] on the thread that will parse
     /// and install it before parsing starts. Without an installed guard, the first
     /// descent creates one lazily from the guard's default configuration —

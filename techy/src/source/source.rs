@@ -44,7 +44,7 @@ impl<O: SourceOrigin> Source<O> {
     /// never compare equal, even when the contents are byte-identical. Code that
     /// must correlate positions across operations holds one `Arc<Source>` and
     /// passes that same handle everywhere — parsing included:
-    /// [`Language::parse_source`](crate::engine::Language::parse_source) takes the
+    /// [`Language::parse_setup`](crate::engine::Language::parse_setup) takes the
     /// handle, while [`Language::parse`](crate::engine::Language::parse) mints a
     /// fresh source per call.
     pub fn new(content: impl Into<String>) -> Self {

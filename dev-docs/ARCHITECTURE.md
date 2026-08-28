@@ -1003,17 +1003,26 @@ seeds by identity ([§dd-dr:language-init],
 customization derives *before* construction —
 `lang_initial()?.derived(&delta)?`). The source resolver lives on the
 driver, not here ([§dd-dr:input-wiring]); the descent-guard configuration lives
-here, set with the `with_descent_guard_init` builder ([§dd-dr:descent-guard]). Entry points are two named methods —
-`parse(content)` and `parse_source(Arc<Source>)` — plus accessors for the advanced
-path; the root drive loop diagnoses stray closes through the recover funnel, stages the
-consumed delimiter as a `Chars` node, threads the loop's evolved state through
-diagnosis and resume, and finishes into a `ParseResult` that owns its tree, its
+here, set with the `with_descent_guard_init` builder ([§dd-dr:descent-guard]). Entry points
+([§dd-dr:parse-setup]): `parse(content)`, the everyday shorthand, and
+`parse_setup(source) -> ParseSetup`, the configurable form — `with_initial_state`
+(any state handle, used by identity) and `with_root_parser` (a borrowed
+`ConstructParser<Output = BuildId>`) replace this one parse's defaults before
+`ParseSetup::parse` runs it; `parse(text)` ≡ `parse_setup(Source::new(text)).parse()`.
+The parse runs the **root parser** directly at the top — not as a descent: no guard
+level, no frame — by default the driver's `make_root_parser` factory answer, the
+standard `RootNodesParser` (`core::constructs`), whose content loop diagnoses stray
+closes through the recover funnel, stages the consumed delimiter as a `Chars` node,
+threads the loop's evolved state through diagnosis and resume, and stages the root
+`List`; the entry then finishes into a `ParseResult` that owns its tree, its
 diagnostics, and the session extension (`session_ext` — the read-back for
-`observe_transition` accumulation) with no `Language` reference. "Define a language once, parse many
+`observe_transition` accumulation) with no `Language` reference. Accessors serve the
+advanced path (hand-driven construct parsers). "Define a language once, parse many
 documents": `Language` owns no per-parse state ([§dd-dr:stateless-language]).
 
 Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initial
-state; the seed+packages construction path),
+state; the seed+packages construction path), [§dd-dr:parse-setup] (the per-parse
+setup: initial state and root parser; the root-parser factory),
 [§dd-dr:token-reader-hook] (`make_token_reader`: the defaulted per-instance override
 for a custom reader), [§dd-dr:tokenization] (the language-side declaration it defaults
 to),

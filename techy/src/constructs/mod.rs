@@ -1,7 +1,8 @@
 //! Construct parsers: the parsing layer of the S1 core.
 //!
 //! [`ConstructParser`] is the single most important trait in the system: every construct —
-//! the main content loop ([`NodesParser`]), groups ([`GroupParser`]), callable invocations
+//! the root parse ([`RootNodesParser`], the parser the entry point runs directly), the
+//! main content loop ([`NodesParser`]), groups ([`GroupParser`]), callable invocations
 //! ([`StdInvocationParser`], behind the
 //! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) factory),
 //! arguments (the standard [`ArgumentParser`](crate::spec::ArgumentParser)
@@ -47,6 +48,7 @@ mod environment_parser;
 mod group_parser;
 mod invocation_parser;
 mod nodes_parser;
+mod root_parser;
 #[cfg(test)]
 mod span_tiling_tests;
 mod tack_on_parser;
@@ -81,6 +83,7 @@ pub use nodes_parser::{
     StopCause, StopSpec, StrayGroupClose, TokenStopCondition, TokenStopKind,
     UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
+pub use root_parser::RootNodesParser;
 pub use verbatim_parser::{
     verbatim_state_delta, ExpectedVerbatimDelimiter, UnterminatedVerbatim,
     VerbatimArgumentParser, VerbatimBodyParser, VerbatimBodyTerminator,
@@ -1060,9 +1063,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// or skip the offending token), then call `parse_nodes` again. There is no resume
     /// method on [`NodesParser`]; resumption is *re-invocation* — each call builds a
     /// fresh parser from the factory with its own per-run `stop`/`child_states` — and
-    /// the caller bridges the runs. The canonical bridge is the root drive loop
-    /// ([`Language::parse_source`](crate::engine::Language::parse_source)), which
-    /// diagnoses a stray group close, skips it, and re-enters. The bridge has three
+    /// the caller bridges the runs. The canonical bridge is the root parser
+    /// ([`RootNodesParser`]), which diagnoses a stray group close, skips it, and
+    /// re-enters. The bridge has three
     /// obligations:
     ///
     /// - **Resume under [`NodesOutcome::state`], never under this context's restored

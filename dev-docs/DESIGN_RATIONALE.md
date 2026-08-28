@@ -5412,7 +5412,9 @@ per-parse state ([§dd-dr:stateless-language]).
   pre-minted source (origin/provenance intact — the `resolve_source_reference` round
   trip feeds
   it). A conversion enum whose only job is overloading buys one method name at the
-  price of a public type; named methods are self-documenting.
+  price of a public type; named methods are self-documenting. *(Since revised —
+  [§dd-dr:parse-setup]: `parse_source` is `parse_setup(source).parse()`, the
+  configurable form.)*
 - **Construction seeds from `Lang::initial_state_data()` and customizes by deriving**:
   `new(driver)` + fallible `with_seed_delta(delta) -> Result<_, DeriveError<L>>` (the
   sanctioned seed-customization path — runs `finalize_transition`, so language
@@ -5429,7 +5431,8 @@ per-parse state ([§dd-dr:stateless-language]).
   argument-free, so a `Language::session()` would return exactly that (misleading
   discoverability sugar). `ParseResult` likewise stays borrow-free (nodes are
   self-contained; results outlive the bundle).
-- **The root drive loop promotes the rehearsed pattern** (the `nodes_parser` test
+- **The root drive loop promotes the rehearsed pattern** (now the body of
+  `RootNodesParser`, [§dd-dr:parse-setup]; the `nodes_parser` test
   `root_driver_skips_a_stray_close_and_continues`): loop `cx.parse_nodes` under
   `StopSpec::none()` (through the driver factory — the uniform-routing contract covers
   the top-level site); on `UnexpectedGroupClose` diagnose the new core
@@ -5547,7 +5550,8 @@ door, and the turbofish spelling was itself walkthrough friction), as are
 is the driver's one policy knob — it must be explicit; after the `Default for
 Language` removal no `L::Driver: Default` consumer remains — the spelling is
 `StdParseDriver::new(Recovery::Strict, ())`). The surface is
-`new(driver, initial_state)` + `parse` + `parse_source` + accessors. The
+`new(driver, initial_state)` + `parse` + `parse_source` + accessors (since revised —
+[§dd-dr:parse-setup]: `parse_setup` replaces `parse_source`). The
 packages argument takes the sealed `IntoSpecsProvider` conversion —
 `lang_initial_with_packages([minidefs::minilatex_package(), my_pkg])`, no Arc
 noise ([§dd-dr:registration-ergonomics]).
@@ -5569,6 +5573,69 @@ everyday case can trigger).
 Revisit if: a Lang emerges whose seed coherence genuinely requires a finalize-style hook
 over the package-augmented seed — then that hook becomes an explicit, documented opt-in
 on the seed-construction path, not a return to mandatory delta routing.
+
+#### The parse entry: `parse_setup` with a per-parse initial state and root parser [§dd-dr:parse-setup]
+
+Status: DECIDED (user; design session on the parse entry point).
+
+`Language::parse_source` is replaced by **`parse_setup(source: impl Into<Arc<Source>>)
+-> ParseSetup`**, a single-use per-parse setup: `with_initial_state(impl
+Into<Arc<ParsingState<L>>>)`, `with_root_parser(&mut dyn ConstructParser<L, Output =
+BuildId>)`, `parse(self)`. `Language::parse(content)` stays as the one everyday
+shorthand — exactly `parse_setup(Source::new(content)).parse()`. The former root loop
+becomes the **`RootNodesParser`** construct parser (`core::constructs`; read *root —
+nodes parser*: "root" is its place in the descent hierarchy, "nodes parser" what it
+is), supplied by the new defaulted driver factory **`ParseDriver::make_root_parser()`**
+(precedent: `make_nodes_parser`, the same boxed-or-abort signature) and overridden per
+parse by `with_root_parser`, which takes precedence. `observe_parse_start` receives the
+parse's actual initial state.
+
+Decisive points:
+- **A state, not a delta, for the per-parse start.** A delta cannot express the most
+  important per-parse case — re-parsing a fragment under the state a parsed node
+  recorded (the scope stack has no wholesale-replace op) — and a delta setter would have
+  forced a second decision (derive out of parse, silent to `observe_transition`; or in
+  session, where a failing scope op is an embedder error that the recover funnel would
+  tolerate). Every state handle already came through the one derivation path
+  (`lang_initial`/`derived`), so accepting one by identity keeps the choke point
+  airtight; a delta is applied by whoever holds the base — before the setup, or inside a
+  custom root parser.
+- **The root parser runs at the top, not as a descent**: `ParseSetup::parse` calls
+  `ConstructParser::parse` directly, not through `parse_construct` — otherwise every
+  parse would gain one descent-guard level and one enclosing-state entry, shifting the
+  stack-budget guard's numbers. The root parser's inner `cx.parse_nodes` calls still
+  route through the driver factory (uniform routing untouched).
+- **Both a driver factory and a per-parse override.** A language whose parses always
+  need a different root shape is a driver property — a per-parse knob alone would make
+  `parse()` silently wrong for it; a one-off (parsing an auxiliary source and wrapping
+  its nodes in scaffolding of the caller's) is a per-parse choice. `Output = BuildId` is
+  the required bound: the tree has one root — "different" means a different root shape,
+  never no root.
+- **A borrowed root parser, no type parameter on `ParseSetup`**: follows
+  `parse_attached_source(&mut P)`; the parser is the caller's again after the parse (a
+  root parser may collect data). Accepted cost: `ParseSetup::parse` carries
+  `L::InvocationSyntax: FromInvocation<L>` even with a custom parser (the no-override
+  branch resolves the factory at run time); no shipped `Lang` lacks it.
+- **The source is `parse_setup`'s argument**, not a `with_source` setter: a setup without
+  a source can do nothing, and the constructor asks for the real inputs
+  ([§dd-dr:language-init]); a setter would be either a second spelling of the argument
+  or a run-time error for a compile-time-preventable mistake.
+- **A shorthand, not alias proliferation**: `parse(content)` is a compact spelling of the
+  same path for the library's central operation, not a second public path in the sense
+  of [§dd-dr:public-namespace-topology]; `parse_source` is removed rather than kept as a
+  second shorthand.
+
+Rejected alternatives: `with_initial_state_delta` (above); the names
+`PrimaryNodesParser` ("primary" has no sibling vocabulary — the family is *root parser*:
+`make_root_parser`, `with_root_parser`, `RootNodesParser`) and `RootListParser` (the loop
+parses nodes; the `List` is what it stages, and a replacement staging another root is
+still a root parser); a typestate `ParseSetup<…, P>` owning the parser (drops the
+`FromInvocation` bound for custom parsers at the price of a marker type); keeping
+`parse_source` as a compatibility alias.
+
+Revisit if: a `Lang` without `FromInvocation` needs a custom root parser (typestate on
+`P`); a root parser needs construction-time inputs from the setup (the factory then
+takes them, as `make_nodes_parser` takes its stop spec).
 
 #### The descent guard: one descent entry point, a per-parse recursion limiter [§dd-dr:descent-guard]
 
@@ -5627,7 +5694,7 @@ ceremony buying nothing. Reintroduce a type knob only if a second real guard
 implementation materializes. The init *value* lives on `Language`
 (`with_descent_guard_init`), mirroring seed-state placement — configuration on
 the long-lived bundle. The
-per-parse *instance* lives on the session: `parse_source` installs it eagerly (the
+per-parse *instance* lives on the session: `ParseSetup::parse` installs it eagerly (the
 standard guard measures its stack reference point at true parse entry, on the
 parsing thread), a hand-built `ParseContext` gets a lazy `Default`-init fallback at
 the first descent, and `ParserSession::install_descent_guard` is the public seam
@@ -6494,7 +6561,7 @@ an N-byte source O(k·N), with provenance chains multiplying the rescans. The ca
 the shared `Source` is blocked dep-free (`alloc` has no `Mutex`; `OnceCell` would cost
 `Sync`). `format_position` stays as the documented one-shot convenience. The
 cap is per-parse driver policy: `ParseDriver::diagnostics_limit()` (defaulted
-`None` = `DEFAULT_LIMIT`) seeds the session's sink in `Language::parse_source`,
+`None` = `DEFAULT_LIMIT`) seeds the session's sink in `ParseSetup::parse`,
 before `observe_parse_start` so the cap governs the whole parse; hand-built
 sessions apply `with_limit` themselves through the public `diagnostics` field.
 Rejected alternatives: an unbounded default (the failure mode is silent and input-controlled), and
@@ -7226,6 +7293,13 @@ function/use* (never by frequency of use, never mirroring internal layout). Layo
 - `techy::latexlike` — unchanged; presets namespace their own conditions.
 - techy-derive emits only `::techy::__private::…` paths (serde discipline), removing
   the derive crate from all topology considerations.
+
+One canonical *path* per item does not forbid a compact **shorthand of the same path**
+for a key entry point — `Language::parse(text)` ≡
+`parse_setup(Source::new(text)).parse()` ([§dd-dr:parse-setup]) is not a second path.
+What the rule forbids is a second *path* (a re-export elsewhere, an alias module) and
+the proliferation of shorthands: one, for the library's central operation, is the
+budget.
 
 The decisive structural argument: **extract only subsets with crisp boundaries; the
 straddle families stay in the hub, uncut.** Since S1 is one mutually-recursive stratum
