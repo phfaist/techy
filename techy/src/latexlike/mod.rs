@@ -127,6 +127,7 @@ use alloc::vec::Vec;
 
 use crate::node::BodySlotExt;
 use crate::scopes::{Package, ScopeStack};
+use crate::serialize::{DeserializableValue, SerializableValue};
 use crate::state::{
     AllLangFeatures, ClosedVocabulary, FinalizeError, Lang, NodeExtTypes, ParsingState,
     StateData,
@@ -163,12 +164,15 @@ use crate::token::{
 /// registration**, never derived from delimiter spellings. Inline/display passes all
 /// three; a hypothetical `Content(BraceKind)` fails (b).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MathGroupForm {
     /// `$…$` / `\(…\)` — inline math.
+    #[serial(name = "inline")]
     #[cfg_attr(feature = "serde", serde(rename = "inline"))]
     Inline,
     /// `$$…$$` / `\[…\]` — display math.
+    #[serial(name = "display")]
     #[cfg_attr(feature = "serde", serde(rename = "display"))]
     Display,
 }
@@ -185,11 +189,13 @@ pub enum MathGroupForm {
 /// [`NodeRef::math_form`](crate::node::NodeRef::math_form).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GroupType {
     /// A plain content group (`{…}`, and the argument groups minted by argument
     /// parsers — e.g. the optional `[…]`): the interior continues in the surrounding
     /// mode.
+    #[serial(name = "content")]
     #[cfg_attr(feature = "serde", serde(rename = "content"))]
     Content,
     /// A math group (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`): the interior parses in
@@ -197,6 +203,7 @@ pub enum GroupType {
     /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)
     /// plug — form-blind: a single `Math(_)` wiring arm). The payload records the
     /// group's [`MathGroupForm`], declared where the delimiter rule is registered.
+    #[serial(name = "math")]
     #[cfg_attr(feature = "serde", serde(rename = "math"))]
     Math(MathGroupForm),
     /// A verbatim region's group: the `\verb|…|` shape staged by the `v`
@@ -205,6 +212,7 @@ pub enum GroupType {
     /// features-disabled derived state, never tokenized — so this class appears on no
     /// tokenizer-declared rule and never descends through the driver's
     /// `group_interior_delta`.
+    #[serial(name = "verbatim")]
     #[cfg_attr(feature = "serde", serde(rename = "verbatim"))]
     Verbatim,
 }
@@ -215,21 +223,25 @@ pub enum GroupType {
 /// are (via the scope stack).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CallableType {
     /// A macro invocation (`\emph{…}`). Every command token resolves as a macro —
     /// `\begin` and `\end` themselves are ordinary macro entries of the
     /// [`builtin_package`] ([`BeginSpec`]/[`EndSpec`]) whose parsers dispatch the
     /// environment shape.
+    #[serial(name = "macro")]
     #[cfg_attr(feature = "serde", serde(rename = "macro"))]
     Macro,
     /// An environment (`\begin{itemize}…\end{itemize}`): entered through
     /// [`BeginSpec`]'s composition, which resolves the *environment's* spec —
     /// normally an [`EnvironmentSpec`] — under this callable type by the name in the
     /// `\begin` name group, and stamps this type on the staged node.
+    #[serial(name = "environment")]
     #[cfg_attr(feature = "serde", serde(rename = "environment"))]
     Environment,
     /// A specials invocation: a trigger character sequence (`~`, `&`, `---`).
+    #[serial(name = "specials")]
     #[cfg_attr(feature = "serde", serde(rename = "specials"))]
     Specials,
 }
@@ -244,13 +256,16 @@ pub enum CallableType {
 /// the form is class payload, [`MathGroupForm`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Mode {
     /// Ordinary text content — the seed state's mode.
     #[default]
+    #[serial(name = "text")]
     #[cfg_attr(feature = "serde", serde(rename = "text"))]
     Text,
     /// Math content (inside `$…$`, `$$…$$`, `\(…\)`, `\[…\]`).
+    #[serial(name = "math")]
     #[cfg_attr(feature = "serde", serde(rename = "math"))]
     Math,
 }
@@ -268,6 +283,7 @@ pub enum Mode {
 /// out-of-parse [`derived()`](ParsingState::derived) call) is a loud error.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Event {
     /// **Exit the math context** (context-dependent): restore the innermost
@@ -283,6 +299,7 @@ pub enum Event {
     /// [`exit_math_context_delta`]; deliberately **not**
     /// "restore text mode": the target is whatever the enclosing context is, never
     /// an invented mode value.
+    #[serial(name = "exit-math-context")]
     #[cfg_attr(feature = "serde", serde(rename = "exit-math-context"))]
     ExitMathContext,
 }

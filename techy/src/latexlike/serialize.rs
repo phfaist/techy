@@ -1,12 +1,16 @@
 //! The preset's serialization support (see [`techy::serialize`](crate::serialize)):
-//! [`Latexlike`] is a [`SerializableLang`]; the preset's vocabulary types
-//! ([`CallableType`], [`GroupType`], [`MathGroupForm`], [`Mode`], [`Event`]), its
-//! slot ext ([`BodyMarker`]), and its invocation-syntax payload
+//! [`Latexlike`] is a [`SerializableLang`]; the preset's own value types
+//! ([`CallableType`](super::CallableType), [`GroupType`](super::GroupType),
+//! [`MathGroupForm`](super::MathGroupForm), [`Mode`](super::Mode),
+//! [`Event`](super::Event)) derive
+//! their conversions to and from serialized values ([`SerializableValue`] /
+//! [`DeserializableValue`]) on their definitions, each wire name written beside the
+//! variant it names; its slot ext ([`BodyMarker`]) and its invocation-syntax payload
 //! ([`InvocationSyntaxData`], [`StdEnvironmentSyntax`], [`StdEnvironmentSideSyntax`])
-//! convert to and from serialized values ([`SerializableValue`] /
-//! [`DeserializableValue`], implemented for every language, so a family member
-//! ([`LatexlikeLang`]) reusing the types gets the conversions); the preset's callable
-//! spec types serialize as objects; and [`register`] prepares a reading session.
+//! convert through hand-written impls over structs of the serialized layout (below).
+//! Every conversion is implemented for every language, so a family member
+//! ([`LatexlikeLang`]) reusing the types gets it. The preset's callable spec types
+//! serialize as objects, and [`register`] prepares a reading session.
 //!
 //! **How the spec types serialize.** A spec whose data has no serialized form (its
 //! argument parsers, its body behavior) — [`MacroSpec`], [`SpecialsSpec`],
@@ -111,185 +115,30 @@ use crate::state::Lang;
 use crate::token::GroupRule;
 
 use super::{
-    builtin_package, input_macro_spec, BeginSpec, BodyMarker, CallableType, EndSpec,
-    EnvironmentSpec, Event, GroupType, InputMacroSpec, InvocationSyntaxData, Latexlike,
-    LatexlikeLang, MacroSpec, MathGroupForm, Mode, ParagraphBreakSpec, SpecialsSpec,
-    StdEnvironmentSideSyntax, StdEnvironmentSyntax,
+    builtin_package, input_macro_spec, BeginSpec, BodyMarker, EndSpec, EnvironmentSpec,
+    InputMacroSpec, InvocationSyntaxData, Latexlike, LatexlikeLang, MacroSpec,
+    ParagraphBreakSpec, SpecialsSpec, StdEnvironmentSideSyntax, StdEnvironmentSyntax,
 };
 
 // --- the language opts in --------------------------------------------------------------
 
 /// The preset supports serialization: every type it supplies to the parse has its
-/// value conversions (below, and the crate's for `()` and `Option<String>`).
+/// value conversions — derived on the preset's own value types, written by hand below
+/// for the slot ext and the invocation syntax, and the crate's for `()` and
+/// `Option<String>`.
 impl SerializableLang for Latexlike {}
 
-// --- the vocabulary types ---------------------------------------------------------------
+// --- wire names -------------------------------------------------------------------------
 
-/// The serialized names of the vocabulary values (not yet frozen; see the module docs).
-/// The parity of these strings with the serde renames on the enums (under the
-/// `serde` feature) is pinned by a test.
+/// The serialized names of the invocation syntax forms (not yet frozen; see the module
+/// docs). The preset's own value types carry their wire names on their definitions
+/// (`#[serial(name = "…")]` beside the serde rename of the same variant); a test under
+/// the `serde` feature pins that the two agree.
 mod names {
-    pub(super) const MACRO: &str = "macro";
-    pub(super) const ENVIRONMENT: &str = "environment";
-    pub(super) const SPECIALS: &str = "specials";
-    pub(super) const CALLABLE_TYPES: &[&str] = &[MACRO, ENVIRONMENT, SPECIALS];
-
-    pub(super) const CONTENT: &str = "content";
-    pub(super) const MATH: &str = "math";
-    pub(super) const VERBATIM: &str = "verbatim";
-    pub(super) const GROUP_TYPES: &[&str] = &[CONTENT, MATH, VERBATIM];
-
-    pub(super) const INLINE: &str = "inline";
-    pub(super) const DISPLAY: &str = "display";
-    pub(super) const MATH_GROUP_FORMS: &[&str] = &[INLINE, DISPLAY];
-
-    pub(super) const TEXT: &str = "text";
-    pub(super) const MODES: &[&str] = &[TEXT, MATH];
-
-    pub(super) const EXIT_MATH_CONTEXT: &str = "exit-math-context";
-    pub(super) const EVENTS: &[&str] = &[EXIT_MATH_CONTEXT];
-
     pub(super) const MACRO_SYNTAX: &str = "macro";
     pub(super) const ENVIRONMENT_SYNTAX: &str = "environment";
     pub(super) const SPECIALS_SYNTAX: &str = "specials";
     pub(super) const INVOCATION_SYNTAXES: &[&str] = &[MACRO_SYNTAX, ENVIRONMENT_SYNTAX, SPECIALS_SYNTAX];
-}
-
-/// A callable type is `"macro"`, `"environment"`, or `"specials"`.
-impl<L: Lang> SerializableValue<L> for CallableType {
-    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(SerialValue::Str(String::from(match self {
-            CallableType::Macro => names::MACRO,
-            CallableType::Environment => names::ENVIRONMENT,
-            CallableType::Specials => names::SPECIALS,
-        })))
-    }
-}
-
-impl<L: Lang> DeserializableValue<L> for CallableType {
-    fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where
-        L: SerializableLang,
-    {
-        let (name, payload) = read_variant(value, "CallableType", names::CALLABLE_TYPES)?;
-        expect_unit_variant(name, payload)?;
-        Ok(match name {
-            names::MACRO => CallableType::Macro,
-            names::ENVIRONMENT => CallableType::Environment,
-            _ => CallableType::Specials,
-        })
-    }
-}
-
-/// A math group form is `"inline"` or `"display"`.
-impl<L: Lang> SerializableValue<L> for MathGroupForm {
-    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(SerialValue::Str(String::from(match self {
-            MathGroupForm::Inline => names::INLINE,
-            MathGroupForm::Display => names::DISPLAY,
-        })))
-    }
-}
-
-impl<L: Lang> DeserializableValue<L> for MathGroupForm {
-    fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where
-        L: SerializableLang,
-    {
-        let (name, payload) = read_variant(value, "MathGroupForm", names::MATH_GROUP_FORMS)?;
-        expect_unit_variant(name, payload)?;
-        Ok(if name == names::INLINE { MathGroupForm::Inline } else { MathGroupForm::Display })
-    }
-}
-
-/// A group type is `"content"`, `{"math": <form>}`, or `"verbatim"`.
-impl<L: Lang> SerializableValue<L> for GroupType {
-    fn serialize_value(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(match self {
-            GroupType::Content => SerialValue::Str(String::from(names::CONTENT)),
-            GroupType::Math(form) => data_variant(names::MATH, form.serialize_value(cx)?),
-            GroupType::Verbatim => SerialValue::Str(String::from(names::VERBATIM)),
-        })
-    }
-}
-
-impl<L: Lang> DeserializableValue<L> for GroupType {
-    fn deserialize_value(value: &SerialValue, cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where
-        L: SerializableLang,
-    {
-        let (name, payload) = read_variant(value, "GroupType", names::GROUP_TYPES)?;
-        Ok(match name {
-            names::MATH => {
-                let form = expect_data_variant(names::MATH, payload)?;
-                GroupType::Math(MathGroupForm::deserialize_value(form, cx)?)
-            }
-            names::CONTENT => {
-                expect_unit_variant(names::CONTENT, payload)?;
-                GroupType::Content
-            }
-            _ => {
-                expect_unit_variant(names::VERBATIM, payload)?;
-                GroupType::Verbatim
-            }
-        })
-    }
-}
-
-/// A mode is `"text"` or `"math"`.
-impl<L: Lang> SerializableValue<L> for Mode {
-    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(SerialValue::Str(String::from(match self {
-            Mode::Text => names::TEXT,
-            Mode::Math => names::MATH,
-        })))
-    }
-}
-
-impl<L: Lang> DeserializableValue<L> for Mode {
-    fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where
-        L: SerializableLang,
-    {
-        let (name, payload) = read_variant(value, "Mode", names::MODES)?;
-        expect_unit_variant(name, payload)?;
-        Ok(if name == names::TEXT { Mode::Text } else { Mode::Math })
-    }
-}
-
-/// An event is `"exit-math-context"`.
-impl<L: Lang> SerializableValue<L> for Event {
-    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where
-        L: SerializableLang,
-    {
-        Ok(SerialValue::Str(String::from(match self {
-            Event::ExitMathContext => names::EXIT_MATH_CONTEXT,
-        })))
-    }
-}
-
-impl<L: Lang> DeserializableValue<L> for Event {
-    fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where
-        L: SerializableLang,
-    {
-        let (_, payload) = read_variant(value, "Event", names::EVENTS)?;
-        expect_unit_variant(names::EXIT_MATH_CONTEXT, payload)?;
-        Ok(Event::ExitMathContext)
-    }
 }
 
 // --- the slot ext -----------------------------------------------------------------------
