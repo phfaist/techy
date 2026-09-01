@@ -516,7 +516,14 @@ Example (entry 0):
 
 A language declares itself serializable (`SerializableLang`) by supplying value
 conversions for every type it hands the parse; those values render verbatim inside the
-core structures above:
+core structures above. A conversion is either derived
+(`#[derive(SerializableValue, DeserializableValue)]`: the wire names are the
+`#[serial(name = "…")]` attributes on the fields and variants, and the shapes are the
+standard ones of §2 — a struct as a map in declaration order with an absent `Option`
+field omitted, a unit variant as its name string, a variant with data as a one-entry
+map) or hand-written when the wire layout differs from the Rust layout; the preset's
+five value types below are derived, its `InvocationSyntaxData` and `BodyMarker`
+hand-written over derived mirror structs.
 
 | Slot | latexlike value | Rendering |
 |---|---|---|

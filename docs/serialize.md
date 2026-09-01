@@ -135,7 +135,10 @@ rules that bind a stream (one stream per session, absorb before append,
 profiles, JSON Lines) are its [Streams](crate::serialize#streams) section, and
 everything else — the value model and its rendering, each table's layout,
 sources kept outside the stream, custom tables and annotation types, how a
-language or framework opts in, every error — follows on the same page.
+language or framework opts in (its own value types derive their conversions with
+[`SerializableValue`](derive@crate::serialize::SerializableValue) /
+[`DeserializableValue`](derive@crate::serialize::DeserializableValue)), every
+error — follows on the same page.
 
 Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
 the other chapters on extending and embedding techy.

@@ -190,9 +190,19 @@ Owed: (a) an empty `impl SerializableLang for MyLang {}` — its bounds require
 [`DeserializableValue`](crate::serialize::DeserializableValue) on every type the
 language supplies (`ModeId`, `CallableTypeId`, `GroupTypeId`, `Event`,
 `StateExt`, `SessionExt`, `SourceOrigin`, node/argument/slot exts,
-`InvocationSyntax`); the crate implements both for `()`, `bool`, integers,
-`String`, `Option<T>`, `Vec<T>`, `SourceSpan` (a language on the defaults, like
-[`TrivialLang`](crate::core::TrivialLang), needs nothing more); (b)
+`InvocationSyntax`); the crate implements both for `()`, `bool`, `char`, integers,
+`String`, `Option<T>`, `Vec<T>`, `SourceSpan`, and `SerialValue` itself (a language on
+the defaults, like [`TrivialLang`](crate::core::TrivialLang), needs nothing more); a
+value type of your own **derives** both —
+`#[derive(SerializableValue, DeserializableValue)]` with `#[serial(name = "…")]` on
+every field and variant (the derives: [`SerializableValue`](derive@crate::serialize::SerializableValue),
+[`DeserializableValue`](derive@crate::serialize::DeserializableValue); fields convert
+through their own impls with the context, an absent `Option` field is an omitted key,
+reads are strict; the impl is for every language, so a type holding a `SourceSpan` —
+tied to the language's `SourceOrigin` — or another language-tied field adds
+`#[serial(lang = MyLang)]` on the type to get the impl for that language alone) — or
+implements them by hand when its wire layout differs from its Rust layout (then
+derive a mirror struct of the wire layout and convert through it); (b)
 [`SerializableObject`](crate::serialize::SerializableObject) impls for your
 spec/provider types (`impl<L> SerializableObject<L> for MySpec {}` for
 non-participants; a parser-holding spec delegates to its provenance stamp); (c)
@@ -205,11 +215,13 @@ self-contained forms; (d) a `register(&mut session)` helper that calls
 (e) packages built with [`Package::new_shared`](crate::core::specs::Package::new_shared)
 so specs get their [`SpecProvenance`](crate::core::specs::SpecProvenance) stamp
 ([`provenance_for`](crate::core::specs::Package::provenance_for), a
-`with_provenance`-style setter on your spec types); (f) under feature `serde`,
-`#[derive(Serialize, Deserialize)]` + explicit `#[serde(rename = …)]` on your
-vocabulary types (for the bridge; `#[serde(skip_serializing_if = "Option::is_none")]`
-+ `#[serde(default)]` on `Option` fields so an absent value is an omitted key).
-Wire identifiers you mint (`myfw.<kind>`) are yours to keep stable.
+`with_provenance`-style setter on your spec types); (f) only for a payload that is
+already a serde type, under feature `serde`: `#[derive(Serialize, Deserialize)]` +
+explicit `#[serde(rename = …)]` + `#[serde(deny_unknown_fields)]`, with
+`#[serde(skip_serializing_if = "Option::is_none")]` + `#[serde(default)]` on `Option`
+fields, converted through the bridge (`to_value` / `from_value`) — the derives of (a)
+need none of these attributes. Wire identifiers you choose (`myfw.<kind>`) are yours
+to keep stable.
 
 ```rust
 use std::sync::Arc;
@@ -227,24 +239,15 @@ struct MyLang;
 impl TrivialLang for MyLang {}
 impl SerializableLang for MyLang {}                       // (a): the defaults suffice
 
-// A value type of your own (an ext, say): its two conversions, for every language.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Flavor { Plain, Fancy }
-impl<L: techy::core::Lang> SerializableValue<L> for Flavor {
-    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
-    where L: SerializableLang {
-        Ok(SerialValue::Str(match self { Flavor::Plain => "plain", Flavor::Fancy => "fancy" }.into()))
-    }
-}
-impl<L: techy::core::Lang> DeserializableValue<L> for Flavor {
-    fn deserialize_value(value: &SerialValue, _cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
-    where L: SerializableLang {
-        match value {
-            SerialValue::Str(s) if s == "plain" => Ok(Flavor::Plain),
-            SerialValue::Str(s) if s == "fancy" => Ok(Flavor::Fancy),
-            _ => Err(DeserializeError::failed("a flavor is \"plain\" or \"fancy\"")),
-        }
-    }
+// A value type of your own (an ext, say): its two conversions, for every language,
+// derived — its form is `"plain"` / `"fancy"`, the `serial` names, never the Rust
+// identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, SerializableValue, DeserializableValue)]
+enum Flavor {
+    #[serial(name = "plain")]
+    Plain,
+    #[serial(name = "fancy")]
+    Fancy,
 }
 
 // (b)+(e): a parser-holding spec — identity through its stamp; unstamped = write error.
@@ -322,7 +325,8 @@ indices are valid positions there once rebuilt with `position`.)
    recipes) as user data; `register` (preset or your own) exactly once;
    `push_segment` in stream order; read via `parse_result` / `tree` /
    `standard_tables()` positions; translate `main` with `handle.position`.
-3. Own types: value traits on every lang type; `SerializableObject` on every
+3. Own types: value traits on every lang type (derived for plain data, with a
+   `serial` name on every field and variant); `SerializableObject` on every
    spec/provider (empty impl to opt out); `DeserializableObject` + a `register`
    helper for self-contained forms; `Package::new_shared` for stamped specs;
    annotation types registered on both sides.

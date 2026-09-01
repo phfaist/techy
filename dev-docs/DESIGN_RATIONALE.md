@@ -6723,7 +6723,9 @@ supertraits are inexpressible; no data layout changes with presence); cargo-gate
 trait surfaces (additivity violation); closure-pair registries (`ser_fn`/`de_fn`) as
 the public registration API; write-side resolvers (a compile-time closed type set —
 a downcast list in disguise); a public `ToSerialValue` derive for implementer payloads
-(the serde bridge serves that; the internal derive stays for core wire structs).
+(the internal derive stays for core wire structs; implementer payloads derive the
+capability traits themselves — [§dd-dr:serialize-value-derive], which reversed the
+earlier bridge-only route).
 
 Revisit if: a concrete need for write-side dispatch by something other than the
 object's own type appears (the reader-entry design keeps a write resolver chain purely
@@ -6769,8 +6771,10 @@ render identically exactly when they are equal (golden files, content-addressed 
 dedup). Nesting is bounded (`MAX_NESTING_DEPTH` = 64, enforced at every read rim and
 on the writer). The `serde` cargo feature gates **rendering only**: the value model,
 the engine, and the capability traits are dependency-free plain Rust; core wire
-structs convert through an internal derive, implementer payloads through the serde
-bridge (`to_value`/`from_value`); an absent `Option` field is an omitted key in both.
+structs convert through an internal derive, implementer payloads through the public
+`SerializableValue`/`DeserializableValue` derives ([§dd-dr:serialize-value-derive]) or,
+for serde types, through the serde bridge (`to_value`/`from_value`); an absent
+`Option` field is an omitted key in all three.
 
 Rejected alternatives: floats and sized ints in the value (collapse in the rendering
 → unequal values with identical bytes); a `$$` escape for user `$`-keys (a typed error
@@ -6805,6 +6809,85 @@ field (deferred: the caller's obligation, narrowed by the profile).
 
 Revisit if: a use case needs enforced stream identity or a reader for older layout
 versions (a version bump then comes with a read-old/convert/refuse policy).
+
+#### Deriving the value capability traits; implementer payloads no longer route through the serde bridge [§dd-dr:serialize-value-derive]
+
+Status: DECIDED (user-led design session, prompted by the FLM rewrite's request to reuse
+the crate-internal wire-struct derives).
+
+`#[derive(SerializableValue, DeserializableValue)]` — re-exported from `techy::serialize`
+next to the traits, the `techy::error` convention for derives — generates
+`impl<L: Lang> SerializableValue<L> for T` / `DeserializableValue<L>` for a named-field
+struct or an enum of unit, newtype, and struct variants, every field and variant carrying
+a mandatory `#[serial(name = "…")]` (wire names are chosen deliberately, never taken from
+Rust identifiers). Fields convert through their own capability impls with the context
+threaded through; the wire shape is the one the crate's own wire structs and the serde
+bridge produce (a map in declaration order with an absent `Option` field omitted; a unit
+variant as its name string; a data variant as a one-entry map); reads are strict. The
+generated impl is for every `L: Lang`, so every field type must convert for every
+language; a field whose conversion exists for one language only — a `SourceSpan<O>`,
+whose impl is for the languages with `SourceOrigin = O`, or a type of the language's own
+implemented for that language alone — needs the type-level `#[serial(lang = MyLang)]`,
+which generates the impl for that one language instead (a span field then interns its
+source through the context, as a hand-written impl would). A live type whose wire layout
+differs from its Rust layout converts through a derived mirror struct, a part converted
+elsewhere carried as a verbatim `SerialValue` field — the pattern of the preset's `Wire*`
+structs. The internal `ToSerialValue`/`FromSerialValue` pair stays crate-private and
+unchanged.
+
+Two additive, defaulted hooks carry the absent-field rule on the public traits:
+`SerializableValue::is_absent_field` (default `false`) and
+`DeserializableValue::deserialize_field` (default: a missing key is `MissingField`),
+overridden only by `Option<T>` (absent when `None`; a missing key or a `null` reads as
+`None`). A derive sees tokens, not types, so "is this value absent as a field?" is the
+type's decision, by trait dispatch — the mechanism the internal pair already uses. Only
+structures written by name consult the hook; the slots the engine fills with a language's
+value keep writing their key, a `None` there still `null` — the omitted-key/`null`
+distinction of [§dd-dr:serial-value-model] is unchanged. A type overriding one hook
+overrides both.
+
+Reversal note: [§dd-dr:serialize-capability-traits] and [§dd-dr:serial-value-model]
+routed implementer payloads through the serde bridge and rejected a public derive.
+Reversed (user ruling, 2026-09-01) for three reasons. (1) The bridge is behind the `serde`
+cargo feature, so the only cheap route to meeting `SerializableLang`'s obligations was
+gated while the capability traits are advertised as unconditional: the crate gave itself
+a dependency-free derive and withheld it from languages bound by the same additivity
+story. (2) The serde route enforces none of the wire discipline — wire names default to
+Rust identifiers, unknown keys are ignored unless `deny_unknown_fields` (which the guide
+did not mention) — whereas the derive has the compiler enforce hand-chosen names, strict
+reads, and the absent-field rule with no per-field attribute. (3) A target framework
+reported the friction: the signal the soft freeze ([§dd-dr:stability-rubric]) waits for.
+
+Rejected alternatives: exposing the internal `ToSerialValue`/`FromSerialValue` pair with
+its derive (a second, near-synonymous public trait pair beside
+`SerializableValue`/`DeserializableValue`, plus `to_value` beside `to_serial_value` —
+competing sibling names in one scope, [§dd-arch:naming] principles 3–4; and the two
+capability impls would still be hand-written, a blanket impl overlapping the crate's own
+impls of both pairs); keeping the bridge as the only route (the three reasons above);
+syntactic detection of `Option` fields in the derive (breaks on type aliases and
+qualified paths); a per-field `#[serial(optional)]` attribute (forgetting it silently
+changes the shape and nothing checks it — the serde route's weakness, reproduced);
+per-field `where FieldTy: SerializableValue<L>` bounds on the generated impl (a
+language-tied field type would compile without any attribute, but a recursive shape
+hits trait-solver overflow with a confusing error and no way out — serde bounds type
+parameters, not fields, for the same reason; the explicit `#[serial(lang = …)]` has a
+one-line documented fix as its failure mode instead); re-exporting the
+traits through `__private` for the generated code (a `#[doc(hidden)]` import path to a
+public trait makes cargo-semver-checks treat it as sealed; the generated code names
+`Lang` and the three capability traits by their canonical public paths and everything
+else through `__private`).
+
+Accepted costs: two defaulted methods on public traits (small, permanent; a downstream
+type with its own notion of absence overrides both); three ways for a language author to
+produce a value — the derive for plain data, a hand-written impl when the wire layout
+differs from the live layout, the bridge under the feature for payloads that are serde
+types already (the guide states this choice rule); `char` and verbatim `SerialValue`
+join the crate's value impls so a derived structure can hold an escape character and a
+part converted elsewhere.
+
+Revisit if: a downstream byte-string field needs a value-trait counterpart of the wire
+layer's `SerialBytes`, or a language needs a derived type generic over its `Lang`
+(the derives reject generics; a generic mirror is hand-written today).
 
 ## Dependencies [§dd-dr:dependencies]
 
@@ -7118,7 +7201,10 @@ re-opens a settled argument:
   pair is serialize/deserialize; `register_all()`/write-side registration and
   `SerializableObjects` as a `LangFeature` — objects self-describe, the lang gate is
   `SerializableLang` ([§dd-dr:serialize-capability-traits]); a public `ToSerialValue`
-  derive — the serde bridge ([§dd-dr:serial-value-model]).
+  derive — the public derives implement the capability traits
+  `SerializableValue`/`DeserializableValue` themselves, and
+  `ToSerialValue`/`FromSerialValue` stay the crate-private wire-struct pair
+  ([§dd-dr:serialize-value-derive]).
 - From the token-layer redesign ([§dd-dr:token-opacity], [§dd-dr:stream-position],
   [§dd-dr:no-context-source]): `Token<'s, L>` as a struct with a lifetime — the token
   type is `StdToken<L>`, opaque and lifetime-free, and `Token` now names the type

@@ -1139,6 +1139,13 @@ object without registration) with the opt-in `DeserializableObject` read through
 identifier-keyed readers and prefix resolvers; and `SerializableValue` /
 `DeserializableValue` for embedded values, required of every type a language supplies
 by the item-less `SerializableLang` bound ([§dd-dr:serialize-capability-traits]).
+A language's own value types derive the value pair —
+`#[derive(SerializableValue, DeserializableValue)]`, a mandatory wire name on every
+field and variant, an absent `Option` field omitted through two defaulted hooks on the
+traits (`is_absent_field` / `deserialize_field`), the impl for every `L: Lang` or, with
+`#[serial(lang = …)]`, for one language (a span field is tied to that language's
+origin type), a mirror struct when the wire layout differs from the live one
+([§dd-dr:serialize-value-derive]).
 Interning by `Arc` identity writes each shared object once, so sharing survives; specs
 and providers travel **by identity** (a `Weak` provenance stamp handed out by
 `Package::new_shared`, resolved in the reader's `KnownProviders`) or in a
@@ -1152,7 +1159,8 @@ validation of untrusted input; the developer description of the serialized form 
 
 Decisions behind this section (full topic: [§dd-dr:serialization]):
 [§dd-dr:serialize-capability-traits], [§dd-dr:instance-not-lookup],
-[§dd-dr:serial-value-model], [§dd-dr:serialize-sessions-segments].
+[§dd-dr:serial-value-model], [§dd-dr:serialize-sessions-segments],
+[§dd-dr:serialize-value-derive].
 
 # Generics strategy [§dd-arch:generics]
 

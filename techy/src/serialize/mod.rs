@@ -251,9 +251,16 @@
 //! only (its [`Output`](DeserializableObject::Output) is the type itself for a
 //! self-contained form, or an `Arc<dyn …>` for an object resolved in the reading
 //! environment). For values: [`SerializableValue`] and [`DeserializableValue`],
-//! implemented by the owner of each value type — the crate covers `()`, `bool`, the
-//! integers, `String`, `Option<T>`, `Vec<T>`, and spans; a language covers its own
-//! vocabulary and ext types. All four are usable only for a language that declares
+//! implemented by the owner of each value type — the crate covers `()`, `bool`,
+//! `char`, the integers, `String`, `Option<T>`, `Vec<T>`, spans, and [`SerialValue`]
+//! itself; a language covers its own value and ext types, normally by deriving both
+//! traits ([`SerializableValue`](derive@SerializableValue) /
+//! [`DeserializableValue`](derive@DeserializableValue): every field and variant names
+//! its wire key, an absent `Option` field is an omitted key, reads are strict; the impl
+//! is for every language unless the type names one with `#[serial(lang = …)]`, which a
+//! span field needs) and by hand where a type's wire layout differs from its Rust
+//! layout (then through a derived mirror struct of the wire layout). All four are
+//! usable only for a language that declares
 //! itself serializable by implementing [`SerializableLang`] — a trait with no items,
 //! whose bounds require the two value traits of every type the language supplies to
 //! the parse — since the methods receive a [`SerializeContext`] or a
@@ -390,7 +397,9 @@
 //! rendering for non-human-readable formats — plus the *bridge*, `to_value` /
 //! `from_value`, which converts any type implementing serde's traits to and from a
 //! `SerialValue`, enforcing the value model's rules ([`SerialValueError`]: no
-//! floating-point numbers, no integers outside `i64`, string map keys, no `$`-keys),
+//! floating-point numbers, no integers outside `i64`, string map keys, no `$`-keys) —
+//! the route for a payload that is a serde type already (a language's own value types
+//! derive the capability traits instead, without the feature) —
 //! and the `serial_bytes` helper module, which marks a byte-string field of a serde
 //! type for it. Positions defined with [`serial_index!`] gain serde impls under the
 //! feature. Trees with a plain-data annotation type can be registered through the
@@ -439,7 +448,9 @@
 //! - **The value model:** [`SerialValue`], [`SerialEntry`], [`TableId`],
 //!   [`SerialIndex`], [`serial_index!`].
 //! - **The capability traits:** [`SerializableObject`], [`DeserializableObject`],
-//!   [`SerializableValue`], [`DeserializableValue`], [`SerializableLang`].
+//!   [`SerializableValue`], [`DeserializableValue`], [`SerializableLang`]; the derives
+//!   [`SerializableValue`](derive@SerializableValue) and
+//!   [`DeserializableValue`](derive@DeserializableValue).
 //! - **The engine:** [`SerdeSession`], [`SerializeContext`], [`DeserializeContext`],
 //!   [`ObjectSerdeDriver`], [`TableHandle`], [`Segment`], [`SegmentMeta`],
 //!   [`SegmentTable`], [`DispatchingSerdeDriver`], [`ObjectReader`],
