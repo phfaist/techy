@@ -150,7 +150,10 @@ pub fn derive_to_diagnostic_value(input: TokenStream) -> TokenStream {
 /// field or variant without one is a compile error. Wire names are part of what a
 /// program writes and later reads back, possibly across versions of the program: they
 /// are chosen deliberately and never taken from Rust identifiers, which are renamed
-/// freely. The only attribute the type itself may carry is `lang`, below.
+/// freely. The only `serial` attribute the type itself may carry is `lang`, below; it
+/// must name a language that implements `SerializableLang` (the context types in the
+/// generated signatures require it — otherwise the derive fails with an unsatisfied
+/// bound).
 ///
 /// **The language.** Without a type-level attribute the impl is for every language
 /// (`impl<L: Lang> SerializableValue<L> for T`), so every field type must implement

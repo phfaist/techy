@@ -6810,7 +6810,7 @@ field (deferred: the caller's obligation, narrowed by the profile).
 Revisit if: a use case needs enforced stream identity or a reader for older layout
 versions (a version bump then comes with a read-old/convert/refuse policy).
 
-#### Deriving the value capability traits; implementer payloads no longer route through the serde bridge [§dd-dr:serialize-value-derive]
+#### Deriving the value capability traits; the serde bridge is for payloads that are serde types [§dd-dr:serialize-value-derive]
 
 Status: DECIDED (user-led design session, prompted by the FLM rewrite's request to reuse
 the crate-internal wire-struct derives).

@@ -173,7 +173,10 @@ pub trait SerializableValue<L: Lang> {
     /// …) always write their key, and a `None` there is written as `null`. A type that
     /// overrides this method also overrides
     /// [`DeserializableValue::deserialize_field`], so that the omitted key reads back.
-    fn is_absent_field(&self) -> bool {
+    fn is_absent_field(&self) -> bool
+    where
+        L: SerializableLang,
+    {
         false
     }
 }
@@ -403,7 +406,10 @@ impl<L: Lang, T: SerializableValue<L>> SerializableValue<L> for Option<T> {
         }
     }
 
-    fn is_absent_field(&self) -> bool {
+    fn is_absent_field(&self) -> bool
+    where
+        L: SerializableLang,
+    {
         self.is_none()
     }
 }

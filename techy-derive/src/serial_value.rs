@@ -48,7 +48,7 @@ const NO_GENERICS_REASON: &str = "wire structs are concrete: a language-dependen
                                   carried as an already-encoded `SerialValue` field";
 
 /// What a `serial` attribute on the derived type itself may carry.
-pub(crate) enum TypeAttributes {
+pub(crate) enum TypeAttributePolicy {
     /// Nothing: every type-level `serial` attribute is an error — the internal wire
     /// derives, where `#[serial(name = "…")]` goes on fields and variants only.
     Rejected,
@@ -61,7 +61,7 @@ pub(crate) enum TypeAttributes {
 pub(crate) struct ParsedType {
     pub(crate) model: Model,
     /// The language named by `#[serial(lang = …)]`: only under
-    /// [`TypeAttributes::Lang`], and only when the attribute is given.
+    /// [`TypeAttributePolicy::Lang`], and only when the attribute is given.
     pub(crate) lang: Option<Type>,
 }
 
@@ -73,11 +73,11 @@ pub(crate) fn parse_model(
     input: &DeriveInput,
     derive_name: &str,
     generics_reason: &str,
-    type_attributes: TypeAttributes,
+    type_attributes: TypeAttributePolicy,
 ) -> syn::Result<ParsedType> {
     crate::ensure_no_generics(&input.generics, derive_name, generics_reason)?;
     let lang = match type_attributes {
-        TypeAttributes::Rejected => {
+        TypeAttributePolicy::Rejected => {
             if let Some(attr) = input.attrs.iter().find(|attr| attr.path().is_ident("serial")) {
                 return Err(syn::Error::new_spanned(
                     attr,
@@ -87,7 +87,7 @@ pub(crate) fn parse_model(
             }
             None
         }
-        TypeAttributes::Lang => type_lang(&input.attrs)?,
+        TypeAttributePolicy::Lang => type_lang(&input.attrs)?,
     };
     let model = match &input.data {
         Data::Struct(data) => match &data.fields {
@@ -242,7 +242,7 @@ fn check_distinct<'a>(names: impl Iterator<Item = &'a LitStr>, what: &str) -> sy
 
 pub(crate) fn expand_to(input: DeriveInput) -> syn::Result<TokenStream> {
     let ParsedType { model, .. } =
-        parse_model(&input, "ToSerialValue", NO_GENERICS_REASON, TypeAttributes::Rejected)?;
+        parse_model(&input, "ToSerialValue", NO_GENERICS_REASON, TypeAttributePolicy::Rejected)?;
     let name = &input.ident;
     let body = match &model {
         Model::Struct(fields) => {
@@ -320,7 +320,7 @@ fn write_fields(fields: &[NamedField], access: impl Fn(&Ident) -> TokenStream) -
 
 pub(crate) fn expand_from(input: DeriveInput) -> syn::Result<TokenStream> {
     let ParsedType { model, .. } =
-        parse_model(&input, "FromSerialValue", NO_GENERICS_REASON, TypeAttributes::Rejected)?;
+        parse_model(&input, "FromSerialValue", NO_GENERICS_REASON, TypeAttributePolicy::Rejected)?;
     let name = &input.ident;
     let type_name = name.to_string();
     let body = match &model {

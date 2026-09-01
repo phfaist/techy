@@ -330,5 +330,6 @@ indices are valid positions there once rebuilt with `position`.)
    spec/provider (empty impl to opt out); `DeserializableObject` + a `register`
    helper for self-contained forms; `Package::new_shared` for stamped specs;
    annotation types registered on both sides.
-4. Never: `$` map keys, floats, spans in ext/annotation values, positions
-   across sessions, pushing while entries are pending, mixing streams.
+4. Never: `$` map keys, floats, node-relative text spans (`TextContent::Spanned`)
+   in ext/annotation values (a `SourceSpan`, which names its source, is fine),
+   positions across sessions, pushing while entries are pending, mixing streams.

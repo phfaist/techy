@@ -23,7 +23,7 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{DeriveInput, Ident};
 
-use crate::serial_value::{parse_model, Model, NamedField, ParsedType, TypeAttributes, VariantKind};
+use crate::serial_value::{parse_model, Model, NamedField, ParsedType, TypeAttributePolicy, VariantKind};
 
 const NO_GENERICS_REASON: &str = "a derived type is concrete; a value whose type depends on the \
                                   language is held as an already converted `SerialValue`, or the \
@@ -70,7 +70,7 @@ fn field_local(ident: &Ident) -> Ident {
 
 pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<TokenStream> {
     let ParsedType { model, lang } =
-        parse_model(&input, "SerializableValue", NO_GENERICS_REASON, TypeAttributes::Lang)?;
+        parse_model(&input, "SerializableValue", NO_GENERICS_REASON, TypeAttributePolicy::Lang)?;
     let ImplLang { generics, lang, where_clause } = ImplLang::of(lang.as_ref());
     let name = &input.ident;
     let body = match &model {
@@ -179,7 +179,7 @@ fn write_fields(
 
 pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<TokenStream> {
     let ParsedType { model, lang } =
-        parse_model(&input, "DeserializableValue", NO_GENERICS_REASON, TypeAttributes::Lang)?;
+        parse_model(&input, "DeserializableValue", NO_GENERICS_REASON, TypeAttributePolicy::Lang)?;
     let ImplLang { generics, lang, where_clause } = ImplLang::of(lang.as_ref());
     let name = &input.ident;
     let type_name = name.to_string();

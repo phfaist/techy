@@ -236,7 +236,9 @@ pub mod __private {
     // public trait makes cargo-semver-checks treat the trait as sealed (reported as
     // "newly sealed" against the baseline, and its later changes then checked under
     // a sealed trait's weaker rules); the generated code names them by their
-    // canonical public paths instead.
+    // canonical public paths instead. `DiagnosticInfo` / `ToDiagnosticValue` above
+    // predate this finding and are already counted as sealed on the baseline; routing
+    // the condition derives through `::techy::error::…` is a follow-up (TODO_Big.md).
     pub use crate::serialize::wire::{
         data_variant, expect_data_variant, expect_unit_variant, read_variant, unit_variant,
         unknown_variant, FieldReader, FieldWriter,

@@ -522,8 +522,8 @@ core structures above. A conversion is either derived
 standard ones of §2 — a struct as a map in declaration order with an absent `Option`
 field omitted, a unit variant as its name string, a variant with data as a one-entry
 map) or hand-written when the wire layout differs from the Rust layout; the preset's
-five value types below are derived, its `InvocationSyntaxData` and `BodyMarker`
-hand-written over derived mirror structs.
+five value types below are derived, its invocation syntax types and `BodyMarker`
+hand-written over mirror structs (which use the crate-internal wire derive).
 
 | Slot | latexlike value | Rendering |
 |---|---|---|
