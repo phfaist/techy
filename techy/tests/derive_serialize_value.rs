@@ -6,8 +6,14 @@
 //! surface a downstream language crate uses. Covered: the serialized form (wire names
 //! in declaration order, an absent `Option` field left out), the round trip through
 //! real contexts, reading `None` back from an omitted key and from `null`, the
-//! strict-read failures with their typed errors, and — with the `serde` feature — the
-//! identity of the shapes with the serde bridge's.
+//! strict-read failures with their typed errors, a language-tied type
+//! (`#[serial(lang = …)]`) whose spans intern their source through the context, and —
+//! with the `serde` feature — the identity of the shapes with the serde bridge's.
+//!
+//! Without a type-level attribute a derived impl is for every language, so every field
+//! type must convert for every language; a field whose conversion is tied to one
+//! language (a span's is, through the language's `SourceOrigin`) needs the language
+//! named on the type with `#[serial(lang = …)]`.
 
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +25,7 @@ use techy::serialize::{
     SerialValueError, SerializableLang, SerializableObject, SerializableValue, SerializeContext,
     SerializeError, StandardTableInterning, StandardTableReading,
 };
+use techy::source::{Source, SourceSpan};
 
 // --- the language ---------------------------------------------------------------------
 
@@ -199,6 +206,9 @@ impl CallableSpec<MyLang> for Placeholder {}
 struct Pass<T> {
     /// The value's serialized form, as the writer produced it.
     written: SerialValue,
+    /// How many entries the writer's sources table received (the sources the value's
+    /// spans interned).
+    sources_written: usize,
     /// The reader's result for the carrier's entry.
     read: Result<T, DeserializeError>,
 }
@@ -211,9 +221,12 @@ where
     T: DeserializableValue<MyLang> + Send + Sync + 'static + std::fmt::Debug,
 {
     let mut writer = SerdeSession::<MyLang>::new();
+    let sources = writer.standard_tables().expect("standard tables").sources.id();
     let position = writer.intern_spec(&spec).expect("the carrier writes");
     let written = written_by().expect("the carrier recorded what it wrote");
     let segment = writer.take_segment();
+    let sources_written =
+        segment.tables().iter().find(|table| table.id() == sources).map_or(0, |table| table.entries().len());
 
     let received: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
     let mut reader = SerdeSession::<MyLang>::new();
@@ -234,7 +247,7 @@ where
             received.lock().unwrap().take().expect("the reader handed the value out")
         }),
     };
-    Pass { written, read }
+    Pass { written, sources_written, read }
 }
 
 /// Write `value` and read it back through the engine.
@@ -377,6 +390,46 @@ fn a_value_of_the_wrong_kind_is_refused_by_the_field_type() {
 struct Escape {
     #[serial(name = "c")]
     c: char,
+}
+
+// --- a language-tied type: spans through the context --------------------------------------
+
+/// A span converts for the languages whose `SourceOrigin` is its origin type —
+/// `MyLang`'s, as `TrivialLang`'s, is `Option<String>` — so a type holding spans names
+/// its language: the impl is for `MyLang` only, and the spans intern their source
+/// through the context.
+#[derive(SerializableValue, DeserializableValue, Debug, Clone)]
+#[serial(lang = MyLang)]
+struct Located {
+    #[serial(name = "first")]
+    head: SourceSpan<Option<String>>,
+    #[serial(name = "second")]
+    tail: SourceSpan<Option<String>>,
+    #[serial(name = "label")]
+    label: String,
+}
+
+/// Two spans into one source: the source is interned once, and the read side rebuilds
+/// it once, shared by both spans, with the byte ranges preserved.
+#[test]
+fn a_language_tied_type_carries_spans_that_intern_their_source() {
+    let source = Arc::new(Source::new("hello world"));
+    let value = Located {
+        head: SourceSpan::new(&source, 0..5),
+        tail: SourceSpan::new(&source, 6..11),
+        label: s("greeting"),
+    };
+    let pass = round_trip(value);
+    assert_eq!(pass.sources_written, 1, "one source, interned once for both spans");
+    assert_eq!(keys_of(&pass.written), ["first", "second", "label"]);
+    let back = pass.read.expect("the located value reads back");
+    assert_eq!((back.head.start(), back.head.end()), (0, 5));
+    assert_eq!((back.tail.start(), back.tail.end()), (6, 11));
+    assert!(Arc::ptr_eq(back.head.source(), back.tail.source()), "one rebuilt source, shared by both spans");
+    assert!(!Arc::ptr_eq(back.head.source(), &source), "rebuilt, not the writer's instance");
+    assert_eq!(back.head.source().content(), "hello world");
+    assert_eq!(back.head.content(), "hello");
+    assert_eq!(back.label, "greeting");
 }
 
 // --- the serde bridge ---------------------------------------------------------------------

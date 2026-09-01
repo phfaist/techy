@@ -47,28 +47,58 @@ pub(crate) enum VariantKind {
 const NO_GENERICS_REASON: &str = "wire structs are concrete: a language-dependent part is \
                                   carried as an already-encoded `SerialValue` field";
 
+/// What a `serial` attribute on the derived type itself may carry.
+pub(crate) enum TypeAttributes {
+    /// Nothing: every type-level `serial` attribute is an error — the internal wire
+    /// derives, where `#[serial(name = "…")]` goes on fields and variants only.
+    Rejected,
+    /// `#[serial(lang = …)]`, naming the one language the generated impl is for — the
+    /// public value derives.
+    Lang,
+}
+
+/// The parsed derived type: its wire model and the type-level attribute, if any.
+pub(crate) struct ParsedType {
+    pub(crate) model: Model,
+    /// The language named by `#[serial(lang = …)]`: only under
+    /// [`TypeAttributes::Lang`], and only when the attribute is given.
+    pub(crate) lang: Option<Type>,
+}
+
 /// Parses the derived type into its wire model, checking the attribute grammar and
-/// the supported shapes; `derive_name` names the derive in the error messages.
-pub(crate) fn parse_model(input: &DeriveInput, derive_name: &str) -> syn::Result<Model> {
-    crate::ensure_no_generics(&input.generics, derive_name, NO_GENERICS_REASON)?;
-    if let Some(attr) = input.attrs.iter().find(|attr| attr.path().is_ident("serial")) {
-        return Err(syn::Error::new_spanned(
-            attr,
-            format!("#[derive({derive_name})] takes no `serial` attribute on the type itself; \
-                     `#[serial(name = \"…\")]` goes on every field and variant"),
-        ));
-    }
-    match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => {
-                let fields = parse_named_fields(named, derive_name)?;
-                Ok(Model::Struct(fields))
+/// the supported shapes; `derive_name` names the derive in the error messages,
+/// `generics_reason` completes the rejection of a generic type, and `type_attributes`
+/// says what the type itself may carry.
+pub(crate) fn parse_model(
+    input: &DeriveInput,
+    derive_name: &str,
+    generics_reason: &str,
+    type_attributes: TypeAttributes,
+) -> syn::Result<ParsedType> {
+    crate::ensure_no_generics(&input.generics, derive_name, generics_reason)?;
+    let lang = match type_attributes {
+        TypeAttributes::Rejected => {
+            if let Some(attr) = input.attrs.iter().find(|attr| attr.path().is_ident("serial")) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!("#[derive({derive_name})] takes no `serial` attribute on the type itself; \
+                             `#[serial(name = \"…\")]` goes on every field and variant"),
+                ));
             }
-            Fields::Unnamed(_) | Fields::Unit => Err(syn::Error::new(
-                input.ident.span(),
-                format!("#[derive({derive_name})] supports structs with named fields only \
-                         (each field carries its wire name)"),
-            )),
+            None
+        }
+        TypeAttributes::Lang => type_lang(&input.attrs)?,
+    };
+    let model = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => Model::Struct(parse_named_fields(named, derive_name)?),
+            Fields::Unnamed(_) | Fields::Unit => {
+                return Err(syn::Error::new(
+                    input.ident.span(),
+                    format!("#[derive({derive_name})] supports structs with named fields only \
+                             (each field carries its wire name)"),
+                ))
+            }
         },
         Data::Enum(data) => {
             if data.variants.is_empty() {
@@ -106,13 +136,43 @@ pub(crate) fn parse_model(input: &DeriveInput, derive_name: &str) -> syn::Result
                 variants.push(Variant { ident: variant.ident.clone(), name, kind });
             }
             check_distinct(variants.iter().map(|v| &v.name), "variant")?;
-            Ok(Model::Enum(variants))
+            Model::Enum(variants)
         }
-        Data::Union(data) => Err(syn::Error::new(
-            data.union_token.span,
-            format!("#[derive({derive_name})] supports structs and enums only"),
-        )),
+        Data::Union(data) => {
+            return Err(syn::Error::new(
+                data.union_token.span,
+                format!("#[derive({derive_name})] supports structs and enums only"),
+            ))
+        }
+    };
+    Ok(ParsedType { model, lang })
+}
+
+/// The optional `#[serial(lang = …)]` on the type: the one language the generated
+/// impl is for. Any other type-level `serial` key is an error.
+fn type_lang(attrs: &[syn::Attribute]) -> syn::Result<Option<Type>> {
+    let mut lang: Option<Type> = None;
+    for attr in attrs {
+        if !attr.path().is_ident("serial") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("lang") {
+                if lang.is_some() {
+                    return Err(meta.error("duplicate `lang`"));
+                }
+                lang = Some(meta.value()?.parse()?);
+                Ok(())
+            } else if meta.path.is_ident("name") {
+                Err(meta.error(
+                    "`name` goes on fields and variants; the type-level attribute takes `lang = …` only",
+                ))
+            } else {
+                Err(meta.error("unknown `serial` key on the type; expected `lang`"))
+            }
+        })?;
     }
+    Ok(lang)
 }
 
 fn parse_named_fields(named: &syn::FieldsNamed, derive_name: &str) -> syn::Result<Vec<NamedField>> {
@@ -181,7 +241,8 @@ fn check_distinct<'a>(names: impl Iterator<Item = &'a LitStr>, what: &str) -> sy
 // --- ToSerialValue --------------------------------------------------------------------------
 
 pub(crate) fn expand_to(input: DeriveInput) -> syn::Result<TokenStream> {
-    let model = parse_model(&input, "ToSerialValue")?;
+    let ParsedType { model, .. } =
+        parse_model(&input, "ToSerialValue", NO_GENERICS_REASON, TypeAttributes::Rejected)?;
     let name = &input.ident;
     let body = match &model {
         Model::Struct(fields) => {
@@ -258,7 +319,8 @@ fn write_fields(fields: &[NamedField], access: impl Fn(&Ident) -> TokenStream) -
 // --- FromSerialValue ------------------------------------------------------------------------
 
 pub(crate) fn expand_from(input: DeriveInput) -> syn::Result<TokenStream> {
-    let model = parse_model(&input, "FromSerialValue")?;
+    let ParsedType { model, .. } =
+        parse_model(&input, "FromSerialValue", NO_GENERICS_REASON, TypeAttributes::Rejected)?;
     let name = &input.ident;
     let type_name = name.to_string();
     let body = match &model {
@@ -345,5 +407,41 @@ fn read_fields(fields: &[NamedField], what: &str, constructor: TokenStream) -> T
         let __reader = crate::serialize::wire::FieldReader::new(__value, #what, __FIELDS)?;
         #(#reads)*
         ::core::result::Result::Ok(#constructor { #(#inits)* })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::{parse_quote, DeriveInput};
+
+    use super::{expand_from, expand_to};
+
+    /// The internal derives take no attribute on the type at all — the public derives'
+    /// `lang` included.
+    #[test]
+    fn the_internal_derives_refuse_every_type_level_attribute() {
+        let inputs: [DeriveInput; 2] = [
+            parse_quote! {
+                #[serial(lang = L)]
+                struct S {
+                    #[serial(name = "a")]
+                    a: u32,
+                }
+            },
+            parse_quote! {
+                #[serial(name = "s")]
+                struct S {
+                    #[serial(name = "a")]
+                    a: u32,
+                }
+            },
+        ];
+        for input in inputs {
+            let to = expand_to(input.clone()).expect_err("ToSerialValue accepts");
+            let from = expand_from(input).expect_err("FromSerialValue accepts");
+            for error in [to, from] {
+                assert!(error.to_string().contains("takes no `serial` attribute on the type itself"), "{error}");
+            }
+        }
     }
 }

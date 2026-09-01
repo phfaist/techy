@@ -2,20 +2,24 @@
 //! pair, expanded inside the crate itself (the generated code names `::techy::…`,
 //! which `extern crate self as techy` resolves here): round trips of a struct with
 //! every supported field kind and of an enum with every variant kind, the omission of
-//! absent fields, the strict-read failures, and — with the `serde` feature — the
-//! identity of the shapes with the serde bridge's. The rejections of unsupported
-//! shapes are tested in techy-derive; a consumer crate's use is the integration test
-//! `tests/derive_serialize_value.rs`.
+//! absent fields, the strict-read failures, the context reaching the fields (spans in a
+//! type that names its language with `#[serial(lang = …)]` intern their source), and —
+//! with the `serde` feature — the identity of the shapes with the serde bridge's. The
+//! rejections of unsupported shapes are tested in techy-derive; a consumer crate's use
+//! is the integration test `tests/derive_serialize_value.rs`.
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
+use crate::source::{Source, SourceSpan};
 use crate::state::TrivialLang;
 
 use super::{
-    DeserializableValue, DeserializeContext, DeserializeError, SerdeSession, SerialValue,
-    SerialValueError, SerializableLang, SerializableValue, SerializeContext,
+    register_core_readers, DeserializableValue, DeserializeContext, DeserializeError,
+    SerdeSession, SerialValue, SerialValueError, SerializableLang, SerializableValue,
+    SerializeContext,
 };
 
 // --- a lang and its contexts ------------------------------------------------------------
@@ -275,6 +279,16 @@ fn a_variant_with_the_wrong_payload_shape_is_refused() {
         read_error::<Kind>(&SerialValue::Str(s("named"))),
         SerialValueError::TypeMismatch { found: "str", .. }
     ));
+    // A struct variant whose payload is not a map.
+    assert!(matches!(
+        read_error::<Kind>(&map([("sized", SerialValue::Int(3))])),
+        SerialValueError::TypeMismatch { found: "int", .. }
+    ));
+    // A newtype payload of the wrong kind: the payload type's own error.
+    assert!(matches!(
+        read_error::<Kind>(&map([("named", SerialValue::Int(1))])),
+        SerialValueError::TypeMismatch { found: "int", .. }
+    ));
     // Neither a string nor a one-entry map.
     assert!(matches!(
         read_error::<Kind>(&SerialValue::List(Vec::new())),
@@ -297,11 +311,136 @@ fn a_value_of_the_wrong_kind_is_refused_by_the_field_type() {
     assert!(matches!(read_error::<Inner>(&value), SerialValueError::IntegerOutOfRange { target: "u32", .. }));
 }
 
+// --- the context, observed ----------------------------------------------------------------
+//
+// A span's conversion exists for the languages whose `SourceOrigin` is the span's
+// origin type, so a type holding one names its language with `#[serial(lang = …)]`;
+// its spans then intern their source through the context — the observable use of the
+// context a derived impl passes along, as a struct field, a newtype payload, and a
+// struct-variant field.
+
+/// Spans as a struct field and, through `Place`, as a newtype payload and a
+/// struct-variant field.
+#[derive(SerializableValue, DeserializableValue, Debug, Clone)]
+#[serial(lang = DerivingLang)]
+struct Located {
+    #[serial(name = "at")]
+    at: SourceSpan<Option<String>>,
+    #[serial(name = "place")]
+    place: Place,
+}
+
+#[derive(SerializableValue, DeserializableValue, Debug, Clone)]
+#[serial(lang = DerivingLang)]
+enum Place {
+    #[serial(name = "point")]
+    Point(SourceSpan<Option<String>>),
+    #[serial(name = "range")]
+    Range {
+        #[serial(name = "from")]
+        from: SourceSpan<Option<String>>,
+        #[serial(name = "to")]
+        to: Option<SourceSpan<Option<String>>>,
+    },
+}
+
+/// Serialize `value` with a session holding the standard tables, then read it back in
+/// a second session that absorbed the emitted segment: the serialized form, the number
+/// of entries the sources table received, and the rebuilt value.
+fn through_sessions<T>(value: &T) -> (SerialValue, usize, T)
+where
+    T: SerializableValue<DerivingLang> + DeserializableValue<DerivingLang>,
+{
+    let mut writer = SerdeSession::<DerivingLang>::new();
+    let sources = writer.standard_tables().expect("standard tables").sources.id();
+    let written = {
+        let mut guard = StdDescentGuard::init(&StdDescentGuardInit::default());
+        let mut cx = SerializeContext::new(&mut writer, &mut guard);
+        value.serialize_value(&mut cx).expect("serializes")
+    };
+    let segment = writer.take_segment();
+    let source_entries = segment
+        .tables()
+        .iter()
+        .find(|table| table.id() == sources)
+        .map_or(0, |table| table.entries().len());
+
+    let mut reader = SerdeSession::<DerivingLang>::new();
+    register_core_readers(&mut reader).expect("core readers register");
+    reader.push_segment(segment).expect("the segment reads");
+    let back = {
+        let mut guard = StdDescentGuard::init(&StdDescentGuardInit::default());
+        let mut cx = DeserializeContext::new(&mut reader, &mut guard, None);
+        T::deserialize_value(&written, &mut cx).expect("reads back")
+    };
+    (written, source_entries, back)
+}
+
+/// The spans of a language-tied type intern their source through the context: one
+/// source entry for every span into it, and one shared rebuilt source on the read side.
+#[test]
+fn a_language_tied_type_passes_the_context_to_its_spans() {
+    let source = Arc::new(Source::new("hello world"));
+    let hello = SourceSpan::new(&source, 0..5);
+    let world = SourceSpan::new(&source, 6..11);
+
+    let value = Located { at: hello.clone(), place: Place::Range { from: world.clone(), to: Some(hello.clone()) } };
+    let (written, source_entries, back) = through_sessions(&value);
+    assert_eq!(source_entries, 1, "one source, interned once for three spans");
+    match &written {
+        SerialValue::Map(entries) => {
+            assert_eq!(entries[0].0, "at");
+            assert!(matches!(entries[0].1, SerialValue::Map(_)), "a span is a map: {:?}", entries[0].1);
+            assert_eq!(entries[1].0, "place");
+        }
+        other => panic!("a map, not {other:?}"),
+    }
+    assert_eq!(back.at.range(), 0..5);
+    assert_eq!(back.at.source().content(), "hello world");
+    assert!(!Arc::ptr_eq(back.at.source(), &source), "a rebuilt source, not the writer's");
+    match &back.place {
+        Place::Range { from, to } => {
+            let to = to.as_ref().expect("the present span");
+            assert_eq!(from.range(), 6..11);
+            assert_eq!(to.range(), 0..5);
+            assert!(Arc::ptr_eq(from.source(), back.at.source()), "one rebuilt source, shared");
+            assert!(Arc::ptr_eq(to.source(), back.at.source()));
+        }
+        other => panic!("the range, not {other:?}"),
+    }
+
+    // The newtype payload, and an absent optional span.
+    let point = Located { at: hello.clone(), place: Place::Point(world.clone()) };
+    let (_, source_entries, back) = through_sessions(&point);
+    assert_eq!(source_entries, 1);
+    match &back.place {
+        Place::Point(span) => {
+            assert_eq!(span.range(), 6..11);
+            assert!(Arc::ptr_eq(span.source(), back.at.source()));
+        }
+        other => panic!("the point, not {other:?}"),
+    }
+    let open = Located { at: hello, place: Place::Range { from: world, to: None } };
+    let (written, _, back) = through_sessions(&open);
+    match &written {
+        SerialValue::Map(entries) => match &entries[1].1 {
+            SerialValue::Map(range) => match &range[0].1 {
+                SerialValue::Map(fields) => assert_eq!(fields.len(), 1, "`to` is left out: {fields:?}"),
+                other => panic!("the range's fields, not {other:?}"),
+            },
+            other => panic!("the range, not {other:?}"),
+        },
+        other => panic!("a map, not {other:?}"),
+    }
+    assert!(matches!(back.place, Place::Range { to: None, .. }));
+}
+
 // --- the serde bridge ---------------------------------------------------------------------
 
 /// The shapes are the ones the serde bridge produces for the corresponding serde
 /// shapes (identical rendering across mechanisms — the canonical-form discipline,
-/// [§dd-dr:serial-value-model]).
+/// [§dd-dr:serial-value-model]): the enum alone, and the whole struct, including a
+/// `Some(None)` written as `null` and a verbatim `SerialValue` field.
 #[cfg(feature = "serde")]
 #[test]
 fn shapes_agree_with_the_bridge() {
@@ -329,14 +468,61 @@ fn shapes_agree_with_the_bridge() {
             h: Option<u16>,
         },
     }
-    let via_bridge = crate::serialize::to_value(&Vec::from([
-        BridgeKind::Plain,
-        BridgeKind::Named(s("n")),
-        BridgeKind::Wrapped(BridgeInner { id: 2, note: None }),
-        BridgeKind::Sized { w: 3, h: None },
-        BridgeKind::Sized { w: 3, h: Some(4) },
-    ]))
-    .unwrap();
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct BridgeAll {
+        flag: bool,
+        small: i8,
+        wide: u64,
+        count: usize,
+        escape: char,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        maybe: Option<u32>,
+        items: Vec<i64>,
+        ext: SerialValue,
+        inner: BridgeInner,
+        kinds: Vec<BridgeKind>,
+        #[serde(rename = "nested-option", skip_serializing_if = "Option::is_none", default)]
+        nested_option: Option<Option<bool>>,
+    }
+
+    fn bridge_kinds() -> Vec<BridgeKind> {
+        Vec::from([
+            BridgeKind::Plain,
+            BridgeKind::Named(s("n")),
+            BridgeKind::Wrapped(BridgeInner { id: 2, note: None }),
+            BridgeKind::Sized { w: 3, h: None },
+            BridgeKind::Sized { w: 3, h: Some(4) },
+        ])
+    }
+    fn bridge_all(nested_option: Option<Option<bool>>) -> BridgeAll {
+        BridgeAll {
+            flag: true,
+            small: -3,
+            wide: 1 << 40,
+            count: 7,
+            escape: '\\',
+            text: s("hello"),
+            maybe: None,
+            items: Vec::from([1, -2, 3]),
+            ext: map([("k", SerialValue::Bool(false))]),
+            inner: BridgeInner { id: 1, note: Some(s("x")) },
+            kinds: bridge_kinds(),
+            nested_option,
+        }
+    }
+
+    let via_bridge = crate::serialize::to_value(&bridge_kinds()).unwrap();
     assert_eq!(via_bridge, sample_kinds_value());
     assert_eq!(via_bridge, serialize(&sample().kinds));
+
+    let via_bridge = crate::serialize::to_value(&bridge_all(Some(Some(false)))).unwrap();
+    assert_eq!(via_bridge, sample_value());
+    assert_eq!(via_bridge, serialize(&sample()));
+
+    let mut some_none = sample();
+    some_none.nested_option = Some(None);
+    let via_bridge = crate::serialize::to_value(&bridge_all(Some(None))).unwrap();
+    assert_eq!(via_bridge, serialize(&some_none));
 }

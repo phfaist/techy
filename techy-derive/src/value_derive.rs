@@ -3,33 +3,79 @@
 //! techy's value capability traits for a plain-data struct or enum, with the
 //! serialization context passed to every field's own conversion. The type model and
 //! the attribute grammar are those of the internal wire derives
-//! ([`parse_model`](crate::serial_value::parse_model)); only the generated code
-//! differs — every field converts through its own `SerializableValue<L>` /
-//! `DeserializableValue<L>` impl with the context, and the generated impl is for every
-//! `L: Lang`.
+//! ([`parse_model`](crate::serial_value::parse_model)), plus the type-level
+//! `#[serial(lang = …)]`; only the generated code differs — every field converts
+//! through its own `SerializableValue<L>` / `DeserializableValue<L>` impl with the
+//! context, and the generated impl is for every `L: Lang`, or for the one language
+//! `lang` names.
 //!
 //! Generated code names the capability traits and the language bound by their
 //! canonical public paths (`::techy::serialize::…`, `::techy::core::Lang`) — a
 //! `#[doc(hidden)]` import path to a public trait makes semver tooling report the
 //! trait as sealed — and everything else (contexts, errors, the value type, the field
 //! and variant helpers) through `::techy::__private::…`. The impl's type parameter is
-//! `__L`, a name no user type shadows.
+//! `__L` and its locals are `__`-prefixed: names user code is not expected to use; the
+//! fields of a struct variant are bound to `__field_<name>` locals, never to their own
+//! names, so a field called `__cx` or `__writer` cannot shadow the generated locals.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{DeriveInput, Ident};
 
-use crate::serial_value::{parse_model, Model, NamedField, VariantKind};
+use crate::serial_value::{parse_model, Model, NamedField, ParsedType, TypeAttributes, VariantKind};
+
+const NO_GENERICS_REASON: &str = "a derived type is concrete; a value whose type depends on the \
+                                  language is held as an already converted `SerialValue`, or the \
+                                  language is named with `#[serial(lang = …)]`";
+
+/// The language the generated impl is for: every language — a type parameter `__L`
+/// bounded by `Lang`, the method bounded by `SerializableLang` as the trait's is — or
+/// the one named by `#[serial(lang = …)]`: a concrete impl whose method carries no
+/// bound of its own (an impl method may carry fewer bounds than the trait's, and the
+/// context type in its signature already requires the language to be a
+/// `SerializableLang`).
+struct ImplLang {
+    /// The impl's generic parameter list: `<__L: Lang>`, or nothing.
+    generics: TokenStream,
+    /// The language type in the trait and the context types: `__L`, or the named type.
+    lang: TokenStream,
+    /// The method's `where` clause: `where __L: SerializableLang`, or nothing.
+    where_clause: TokenStream,
+}
+
+impl ImplLang {
+    fn of(lang: Option<&syn::Type>) -> ImplLang {
+        match lang {
+            Some(ty) => ImplLang {
+                generics: TokenStream::new(),
+                lang: quote! { #ty },
+                where_clause: TokenStream::new(),
+            },
+            None => ImplLang {
+                generics: quote! { <__L: ::techy::core::Lang> },
+                lang: quote! { __L },
+                where_clause: quote! { where __L: ::techy::serialize::SerializableLang },
+            },
+        }
+    }
+}
+
+/// The local a struct-variant field is bound to (and a struct field is read into).
+fn field_local(ident: &Ident) -> Ident {
+    format_ident!("__field_{}", ident)
+}
 
 // --- SerializableValue ------------------------------------------------------------------
 
 pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<TokenStream> {
-    let model = parse_model(&input, "SerializableValue")?;
+    let ParsedType { model, lang } =
+        parse_model(&input, "SerializableValue", NO_GENERICS_REASON, TypeAttributes::Lang)?;
+    let ImplLang { generics, lang, where_clause } = ImplLang::of(lang.as_ref());
     let name = &input.ident;
     let body = match &model {
         Model::Struct(fields) => {
-            let write = write_fields(fields, |field| quote! { &self.#field });
+            let write = write_fields(fields, &lang, |field| quote! { &self.#field });
             quote! {
                 #write
                 ::core::result::Result::Ok(__writer.finish())
@@ -47,7 +93,7 @@ pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<Token
                     },
                     VariantKind::Newtype(ty) => {
                         let convert = quote_spanned! {ty.span()=>
-                            <#ty as ::techy::serialize::SerializableValue<__L>>::serialize_value(
+                            <#ty as ::techy::serialize::SerializableValue<#lang>>::serialize_value(
                                 __payload,
                                 __cx,
                             )?
@@ -59,10 +105,17 @@ pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<Token
                         }
                     }
                     VariantKind::Struct(fields) => {
-                        let idents = fields.iter().map(|f| &f.ident);
-                        let write = write_fields(fields, |field| quote! { #field });
+                        let bindings = fields.iter().map(|field| {
+                            let ident = &field.ident;
+                            let local = field_local(ident);
+                            quote! { #ident: #local }
+                        });
+                        let write = write_fields(fields, &lang, |field| {
+                            let local = field_local(field);
+                            quote! { #local }
+                        });
                         quote! {
-                            Self::#ident { #(#idents),* } => {
+                            Self::#ident { #(#bindings),* } => {
                                 #write
                                 ::core::result::Result::Ok(
                                     ::techy::__private::data_variant(#wire, __writer.finish()),
@@ -77,16 +130,18 @@ pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<Token
     };
     Ok(quote! {
         #[automatically_derived]
-        impl<__L: ::techy::core::Lang> ::techy::serialize::SerializableValue<__L> for #name {
+        impl #generics ::techy::serialize::SerializableValue<#lang> for #name {
+            // A `__field_` local of a field whose own name starts with `_` is not
+            // snake case.
+            #[allow(non_snake_case)]
             fn serialize_value(
                 &self,
-                __cx: &mut ::techy::__private::SerializeContext<'_, __L>,
+                __cx: &mut ::techy::__private::SerializeContext<'_, #lang>,
             ) -> ::core::result::Result<
                 ::techy::__private::SerialValue,
                 ::techy::__private::SerializeError,
             >
-            where
-                __L: ::techy::serialize::SerializableLang,
+            #where_clause
             {
                 #body
             }
@@ -95,17 +150,23 @@ pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<Token
 }
 
 /// The statements declaring `__writer` and writing the named fields into it through
-/// their `SerializableValue<__L>` impls with the context (the caller finishes the
+/// their `SerializableValue<lang>` impls with the context (the caller finishes the
 /// writer — the `?`s propagate to the generated method directly, whose error type is
 /// the helper's); `access` produces the expression yielding `&FieldType` for a field
-/// ident.
-fn write_fields(fields: &[NamedField], access: impl Fn(&Ident) -> TokenStream) -> TokenStream {
+/// ident. The explicit type arguments of the call put an unsatisfied-bound error at
+/// the field type.
+fn write_fields(
+    fields: &[NamedField],
+    lang: &TokenStream,
+    access: impl Fn(&Ident) -> TokenStream,
+) -> TokenStream {
     let len = fields.len();
     let writes = fields.iter().map(|field| {
         let wire = &field.name;
+        let ty = &field.ty;
         let value = access(&field.ident);
         quote_spanned! {field.ty.span()=>
-            __writer.value_field(#wire, #value, __cx)?;
+            __writer.value_field::<#lang, #ty>(#wire, #value, __cx)?;
         }
     });
     quote! {
@@ -117,11 +178,13 @@ fn write_fields(fields: &[NamedField], access: impl Fn(&Ident) -> TokenStream) -
 // --- DeserializableValue ----------------------------------------------------------------
 
 pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<TokenStream> {
-    let model = parse_model(&input, "DeserializableValue")?;
+    let ParsedType { model, lang } =
+        parse_model(&input, "DeserializableValue", NO_GENERICS_REASON, TypeAttributes::Lang)?;
+    let ImplLang { generics, lang, where_clause } = ImplLang::of(lang.as_ref());
     let name = &input.ident;
     let type_name = name.to_string();
     let body = match &model {
-        Model::Struct(fields) => read_fields(fields, &type_name, quote! { #name }),
+        Model::Struct(fields) => read_fields(fields, &lang, &type_name, quote! { #name }),
         Model::Enum(variants) => {
             let names = variants.iter().map(|v| &v.name);
             let arms = variants.iter().map(|variant| {
@@ -136,7 +199,7 @@ pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<Tok
                     },
                     VariantKind::Newtype(ty) => {
                         let convert = quote_spanned! {ty.span()=>
-                            <#ty as ::techy::serialize::DeserializableValue<__L>>::deserialize_value(
+                            <#ty as ::techy::serialize::DeserializableValue<#lang>>::deserialize_value(
                                 __data,
                                 __cx,
                             )?
@@ -150,7 +213,7 @@ pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<Tok
                     }
                     VariantKind::Struct(fields) => {
                         let what = format!("{type_name}::{ident}");
-                        let read = read_fields(fields, &what, quote! { Self::#ident });
+                        let read = read_fields(fields, &lang, &what, quote! { Self::#ident });
                         quote! {
                             #wire => {
                                 let __value = ::techy::__private::expect_data_variant(#wire, __payload)?;
@@ -175,13 +238,15 @@ pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<Tok
     };
     Ok(quote! {
         #[automatically_derived]
-        impl<__L: ::techy::core::Lang> ::techy::serialize::DeserializableValue<__L> for #name {
+        impl #generics ::techy::serialize::DeserializableValue<#lang> for #name {
+            // A `__field_` local of a field whose own name starts with `_` is not
+            // snake case.
+            #[allow(non_snake_case)]
             fn deserialize_value(
                 __value: &::techy::__private::SerialValue,
-                __cx: &mut ::techy::__private::DeserializeContext<'_, __L>,
+                __cx: &mut ::techy::__private::DeserializeContext<'_, #lang>,
             ) -> ::core::result::Result<Self, ::techy::__private::DeserializeError>
-            where
-                __L: ::techy::serialize::SerializableLang,
+            #where_clause
             {
                 #body
             }
@@ -190,17 +255,23 @@ pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<Tok
 }
 
 /// Reads named fields from `__value` through a `FieldReader` and their
-/// `DeserializableValue<__L>` impls with the context, and builds `constructor { … }`;
-/// `what` names the type (or variant) in the shape error.
-fn read_fields(fields: &[NamedField], what: &str, constructor: TokenStream) -> TokenStream {
+/// `DeserializableValue<lang>` impls with the context, and builds `constructor { … }`;
+/// `what` names the type (or variant) in the shape error. The explicit type arguments
+/// of the call put an unsatisfied-bound error at the field type.
+fn read_fields(
+    fields: &[NamedField],
+    lang: &TokenStream,
+    what: &str,
+    constructor: TokenStream,
+) -> TokenStream {
     let names = fields.iter().map(|f| &f.name);
     let reads = fields.iter().map(|field| {
         let ident = &field.ident;
         let wire = &field.name;
         let ty = &field.ty;
-        let local = format_ident!("__field_{}", ident);
+        let local = field_local(ident);
         let read = quote_spanned! {field.ty.span()=>
-            let #local: #ty = __reader.value_field(#wire, __cx)?;
+            let #local: #ty = __reader.value_field::<#lang, #ty>(#wire, __cx)?;
         };
         (read, quote! { #ident: #local, })
     });
@@ -216,8 +287,9 @@ fn read_fields(fields: &[NamedField], what: &str, constructor: TokenStream) -> T
 // --- the rejections ---------------------------------------------------------------------
 
 /// The shapes and attribute mistakes the derives refuse, each with an error at the
-/// offending item. The accepted shapes are exercised inside techy (its in-crate derive
-/// tests) and from a consumer crate (its integration tests).
+/// offending item, and the shape of the accepted expansions. The generated code itself
+/// is compiled and run inside techy (its in-crate derive tests) and from a consumer
+/// crate (its integration tests).
 #[cfg(test)]
 mod tests {
     use syn::{parse_quote, DeriveInput};
@@ -297,6 +369,8 @@ mod tests {
         assert_eq!(message, "the wire name must not be empty");
     }
 
+    /// A generic type is refused with the public derives' own reason, which names the
+    /// two ways out.
     #[test]
     fn a_generic_type_is_refused() {
         let message = rejection(parse_quote! {
@@ -306,6 +380,9 @@ mod tests {
             }
         });
         assert!(message.contains("does not support generic types"), "{message}");
+        assert!(message.contains("a derived type is concrete"), "{message}");
+        assert!(message.contains("`#[serial(lang = …)]`"), "{message}");
+        assert!(!message.contains("wire structs"), "{message}");
         let message = rejection(parse_quote! {
             struct S where u32: Copy {
                 #[serial(name = "a")]
@@ -350,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn a_serial_attribute_on_the_type_is_refused() {
+    fn a_name_on_the_type_is_refused_pointing_at_lang() {
         let message = rejection(parse_quote! {
             #[serial(name = "s")]
             struct S {
@@ -358,7 +435,63 @@ mod tests {
                 a: u32,
             }
         });
-        assert!(message.contains("takes no `serial` attribute on the type itself"), "{message}");
+        assert_eq!(
+            message,
+            "`name` goes on fields and variants; the type-level attribute takes `lang = …` only"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_on_the_type_is_refused() {
+        let message = rejection(parse_quote! {
+            #[serial(rename = "s")]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
+        assert_eq!(message, "unknown `serial` key on the type; expected `lang`");
+    }
+
+    #[test]
+    fn a_second_lang_is_refused() {
+        let message = rejection(parse_quote! {
+            #[serial(lang = A)]
+            #[serial(lang = B)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
+        assert_eq!(message, "duplicate `lang`");
+        let message = rejection(parse_quote! {
+            #[serial(lang = A, lang = B)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
+        assert_eq!(message, "duplicate `lang`");
+    }
+
+    #[test]
+    fn a_lang_without_a_type_is_refused() {
+        let message = rejection(parse_quote! {
+            #[serial(lang)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
+        assert!(message.contains("expected `=`"), "{message}");
+        let message = rejection(parse_quote! {
+            #[serial(lang = 3)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
+        assert!(message.contains("expected"), "{message}");
     }
 
     #[test]
@@ -388,7 +521,8 @@ mod tests {
 
     /// The accepted shapes expand (the generated code is compiled by techy's own
     /// tests); the expansion names the traits by their public paths and the helpers
-    /// through `__private`, never `crate::`.
+    /// through `__private`, never `crate::`; without `lang`, the impl is for `__L`, and
+    /// a struct variant's fields are bound to `__field_` locals.
     #[test]
     fn accepted_shapes_expand_with_the_public_paths() {
         let input: DeriveInput = parse_quote! {
@@ -409,13 +543,41 @@ mod tests {
         let ser = expand_serializable_value(input.clone()).expect("expands").to_string();
         let de = expand_deserializable_value(input).expect("expands").to_string();
         for code in [&ser, &de] {
-            assert!(code.contains(":: techy :: core :: Lang"), "{code}");
-            assert!(code.contains(":: techy :: serialize :: SerializableLang"), "{code}");
+            assert!(code.contains("impl < __L : :: techy :: core :: Lang >"), "{code}");
+            assert!(code.contains("where __L : :: techy :: serialize :: SerializableLang"), "{code}");
             assert!(code.contains(":: techy :: __private ::"), "{code}");
             assert!(!code.contains("crate ::"), "{code}");
         }
         assert!(ser.contains(":: techy :: serialize :: SerializableValue < __L >"), "{ser}");
+        assert!(ser.contains("Self :: Many { a : __field_a , b : __field_b }"), "{ser}");
+        assert!(ser.contains("value_field :: < __L , u32 >"), "{ser}");
         assert!(de.contains(":: techy :: serialize :: DeserializableValue < __L >"), "{de}");
         assert!(de.contains("\"E::Many\""), "{de}");
+    }
+
+    /// With `#[serial(lang = …)]` the impl is for that language alone: no type
+    /// parameter, no `where` clause, the named type in the trait, the contexts, and
+    /// the field calls.
+    #[test]
+    fn a_named_language_gives_a_concrete_impl() {
+        let input: DeriveInput = parse_quote! {
+            #[serial(lang = my::Lang)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        };
+        let ser = expand_serializable_value(input.clone()).expect("expands").to_string();
+        let de = expand_deserializable_value(input).expect("expands").to_string();
+        assert!(ser.contains("impl :: techy :: serialize :: SerializableValue < my :: Lang > for S"), "{ser}");
+        assert!(ser.contains("SerializeContext < '_ , my :: Lang >"), "{ser}");
+        assert!(ser.contains("value_field :: < my :: Lang , u32 >"), "{ser}");
+        assert!(de.contains("impl :: techy :: serialize :: DeserializableValue < my :: Lang > for S"), "{de}");
+        assert!(de.contains("DeserializeContext < '_ , my :: Lang >"), "{de}");
+        assert!(de.contains("value_field :: < my :: Lang , u32 >"), "{de}");
+        for code in [&ser, &de] {
+            assert!(!code.contains("__L"), "{code}");
+            assert!(!code.contains("where"), "{code}");
+        }
     }
 }
