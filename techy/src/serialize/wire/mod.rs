@@ -6,8 +6,10 @@
 //! [`SerialValue`], unconditionally (without the `serde`
 //! cargo feature, which gates only the serde bridge for implementer payloads).
 //!
-//! Crate-private throughout. A wire struct derives both traits and gives every field
-//! and variant an explicit wire name:
+//! Crate-private throughout (the field and variant helpers at the end are additionally
+//! reachable by the code the public `SerializableValue` / `DeserializableValue`
+//! derives generate, through `techy::__private`). A wire struct derives both traits
+//! and gives every field and variant an explicit wire name:
 //!
 //! ```ignore
 //! #[derive(ToSerialValue, FromSerialValue)]
@@ -304,15 +306,22 @@ pub fn index_from_serial_value(value: &SerialValue) -> Result<(TableId, u32), Se
 }
 
 // --- support for the derived code -----------------------------------------------------
+//
+// The items below are `pub` for the expansions of the public `SerializableValue` /
+// `DeserializableValue` derives (reached through `techy::__private`, which is how the
+// generated code in a downstream crate names them); they are not public API. The
+// context-taking field conversions those derives call are in `object.rs`.
 
 /// Collects a struct's fields into its map, in call order, leaving absent fields out.
-/// Used by the derived `to_serial_value`.
-pub(crate) struct FieldWriter {
+/// Used by the derived conversions (`to_serial_value`, `serialize_value`). Not public
+/// API.
+pub struct FieldWriter {
     entries: Vec<(String, SerialValue)>,
 }
 
 impl FieldWriter {
-    pub(crate) fn with_capacity(fields: usize) -> FieldWriter {
+    /// A writer for a structure of `fields` fields.
+    pub fn with_capacity(fields: usize) -> FieldWriter {
         FieldWriter { entries: Vec::with_capacity(fields) }
     }
 
@@ -325,24 +334,36 @@ impl FieldWriter {
         if value.is_absent_field() {
             return Ok(());
         }
-        self.entries.push((String::from(name), value.to_serial_value()?));
+        self.push(name, value.to_serial_value()?);
         Ok(())
     }
 
-    pub(crate) fn finish(self) -> SerialValue {
+    /// Append the field `name` with its already converted value.
+    pub(crate) fn push(&mut self, name: &'static str, value: SerialValue) {
+        self.entries.push((String::from(name), value));
+    }
+
+    /// The finished map.
+    pub fn finish(self) -> SerialValue {
         SerialValue::Map(self.entries)
     }
 }
 
 /// A struct's field map, validated up front: the value is a map, every key is one of
-/// the declared `fields`, and no key repeats. Used by the derived `from_serial_value`.
-pub(crate) struct FieldReader<'a> {
+/// the declared `fields`, and no key repeats. Used by the derived conversions
+/// (`from_serial_value`, `deserialize_value`). Not public API.
+pub struct FieldReader<'a> {
     entries: &'a [(String, SerialValue)],
 }
 
 impl<'a> FieldReader<'a> {
-    /// `what` names the type (or variant) for the error message.
-    pub(crate) fn new(
+    /// Validate `value` as the field map of the structure `what` (the type or variant
+    /// name, for the error message) with the declared `fields`.
+    ///
+    /// # Errors
+    ///
+    /// `value` is not a map, or a key is unknown or repeated.
+    pub fn new(
         value: &'a SerialValue,
         what: &'static str,
         fields: &'static [&'static str],
@@ -372,24 +393,33 @@ impl<'a> FieldReader<'a> {
 
     /// Read the field `name` (a declared one), missing keys handled by the type.
     pub(crate) fn field<T: FromSerialValue>(&self, name: &'static str) -> Result<T, SerialValueError> {
-        let found = self.entries.iter().find(|(key, _)| key == name).map(|(_, value)| value);
-        T::from_serial_field(name, found)
+        T::from_serial_field(name, self.get(name))
+    }
+
+    /// The value of the field `name`, when its key is present.
+    pub(crate) fn get(&self, name: &str) -> Option<&'a SerialValue> {
+        self.entries.iter().find(|(key, _)| key == name).map(|(_, value)| value)
     }
 }
 
-/// The wire form of a unit variant.
-pub(crate) fn unit_variant(name: &'static str) -> SerialValue {
+/// The wire form of a unit variant. Not public API.
+pub fn unit_variant(name: &'static str) -> SerialValue {
     SerialValue::Str(String::from(name))
 }
 
-/// The wire form of a variant with data.
-pub(crate) fn data_variant(name: &'static str, data: SerialValue) -> SerialValue {
+/// The wire form of a variant with data. Not public API.
+pub fn data_variant(name: &'static str, data: SerialValue) -> SerialValue {
     SerialValue::Map(Vec::from([(String::from(name), data)]))
 }
 
 /// Split an enum value into its variant name and payload, checking the name is one of
-/// `variants`; `what` names the enum for the error message.
-pub(crate) fn read_variant<'a>(
+/// `variants`; `what` names the enum for the error message. Not public API.
+///
+/// # Errors
+///
+/// `value` is neither a string nor a one-entry map, or the name is not among
+/// `variants`.
+pub fn read_variant<'a>(
     value: &'a SerialValue,
     what: &'static str,
     variants: &'static [&'static str],
@@ -418,13 +448,18 @@ fn enum_mismatch(what: &'static str, found: &SerialValue) -> SerialValueError {
     }
 }
 
-/// The error for a variant name not among `variants`.
-pub(crate) fn unknown_variant(name: &str, variants: &'static [&'static str]) -> SerialValueError {
+/// The error for a variant name not among `variants`. Not public API.
+pub fn unknown_variant(name: &str, variants: &'static [&'static str]) -> SerialValueError {
     SerialValueError::UnknownVariant { name: String::from(name), expected: variants }
 }
 
-/// A unit variant carries no data; `name` is the variant name that was read.
-pub(crate) fn expect_unit_variant(name: &str, payload: Option<&SerialValue>) -> Result<(), SerialValueError> {
+/// A unit variant carries no data; `name` is the variant name that was read. Not
+/// public API.
+///
+/// # Errors
+///
+/// A payload is present.
+pub fn expect_unit_variant(name: &str, payload: Option<&SerialValue>) -> Result<(), SerialValueError> {
     match payload {
         None => Ok(()),
         Some(_) => Err(SerialValueError::TypeMismatch {
@@ -434,8 +469,12 @@ pub(crate) fn expect_unit_variant(name: &str, payload: Option<&SerialValue>) -> 
     }
 }
 
-/// A variant with data comes with its payload.
-pub(crate) fn expect_data_variant<'a>(
+/// A variant with data comes with its payload. Not public API.
+///
+/// # Errors
+///
+/// The payload is missing (the variant was written as a bare string).
+pub fn expect_data_variant<'a>(
     name: &'static str,
     payload: Option<&'a SerialValue>,
 ) -> Result<&'a SerialValue, SerialValueError> {

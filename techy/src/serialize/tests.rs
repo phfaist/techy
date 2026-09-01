@@ -398,3 +398,96 @@ fn a_segment_value_nesting_too_deep_is_refused_before_it_is_walked() {
     let message = alloc::string::ToString::to_string(&SerialValueError::NestingTooDeep { limit: 64 });
     assert_eq!(message, "the value nests deeper than 64 levels of lists and maps");
 }
+
+// --- the field hooks of the value traits ----------------------------------------------
+//
+// `is_absent_field` / `deserialize_field`: what the `SerializableValue` /
+// `DeserializableValue` derives rely on for a field of a derived structure — an
+// `Option` that is `None` is an omitted key, read back from a missing key or a `null`;
+// every other type always writes its key and requires it when reading.
+
+/// `Option` is absent as a field when `None`, and only then; as a bare value it is
+/// still `null`.
+#[test]
+fn option_is_absent_as_a_field_and_null_as_a_value() {
+    use super::wire::FieldWriter;
+    use super::{DeserializableValue, SerializableValue};
+
+    with_serialize_context(|cx| {
+        let none: Option<u32> = None;
+        assert!(SerializableValue::<OptedInLang>::is_absent_field(&none));
+        assert!(!SerializableValue::<OptedInLang>::is_absent_field(&Some(1u32)));
+        assert!(!SerializableValue::<OptedInLang>::is_absent_field(&7u32));
+        assert!(!SerializableValue::<OptedInLang>::is_absent_field(&String::from("x")));
+        assert!(!SerializableValue::<OptedInLang>::is_absent_field(&SerialValue::Null));
+        assert_eq!(none.serialize_value(cx).unwrap(), SerialValue::Null);
+
+        // Through the field writer: the absent field's key is left out, the others
+        // follow in call order.
+        let mut writer = FieldWriter::with_capacity(4);
+        writer.value_field("a", &none, cx).unwrap();
+        writer.value_field("b", &Some(2u32), cx).unwrap();
+        writer.value_field("c", &3u32, cx).unwrap();
+        writer.value_field("d", &SerialValue::Null, cx).unwrap();
+        assert_eq!(
+            writer.finish(),
+            SerialValue::Map(Vec::from([
+                (String::from("b"), SerialValue::Int(2)),
+                (String::from("c"), SerialValue::Int(3)),
+                (String::from("d"), SerialValue::Null),
+            ]))
+        );
+    });
+
+    // `char` and `SerialValue` (added for derived structures): their forms.
+    with_serialize_context(|cx| {
+        assert_eq!('\\'.serialize_value(cx).unwrap(), SerialValue::Str(String::from("\\")));
+        let verbatim = SerialValue::List(Vec::from([SerialValue::Int(1)]));
+        assert_eq!(verbatim.serialize_value(cx).unwrap(), verbatim);
+    });
+    with_deserialize_context(|cx| {
+        assert_eq!(char::deserialize_value(&SerialValue::Str(String::from("é")), cx).unwrap(), 'é');
+        assert!(char::deserialize_value(&SerialValue::Str(String::from("ab")), cx).is_err());
+        assert!(char::deserialize_value(&SerialValue::Str(String::new()), cx).is_err());
+        assert!(char::deserialize_value(&SerialValue::Int(97), cx).is_err());
+        let verbatim = SerialValue::Map(Vec::from([(String::from("k"), SerialValue::Bool(true))]));
+        assert_eq!(SerialValue::deserialize_value(&verbatim, cx).unwrap(), verbatim);
+    });
+}
+
+/// Reading a field by name: a missing key is `None` for an `Option` and a
+/// `MissingField` error naming the key for anything else; a `null` reads as `None`.
+#[test]
+fn field_reads_handle_a_missing_key_by_type() {
+    use super::wire::FieldReader;
+    use super::SerialValueError;
+
+    with_deserialize_context(|cx| {
+        let map = SerialValue::Map(Vec::from([
+            (String::from("b"), SerialValue::Int(2)),
+            (String::from("n"), SerialValue::Null),
+        ]));
+        let reader = FieldReader::new(&map, "Sample", &["a", "b", "c", "n"]).unwrap();
+
+        assert_eq!(reader.value_field::<OptedInLang, Option<u32>>("a", cx).unwrap(), None);
+        assert_eq!(reader.value_field::<OptedInLang, Option<u32>>("n", cx).unwrap(), None);
+        assert_eq!(reader.value_field::<OptedInLang, Option<u32>>("b", cx).unwrap(), Some(2));
+        assert_eq!(reader.value_field::<OptedInLang, u32>("b", cx).unwrap(), 2);
+        assert_eq!(reader.value_field::<OptedInLang, SerialValue>("n", cx).unwrap(), SerialValue::Null);
+
+        match reader.value_field::<OptedInLang, u32>("c", cx) {
+            Err(DeserializeError::Value(SerialValueError::MissingField { name })) => assert_eq!(name, "c"),
+            other => panic!("expected MissingField, got {other:?}"),
+        }
+        match reader.value_field::<OptedInLang, SerialValue>("c", cx) {
+            Err(DeserializeError::Value(SerialValueError::MissingField { name })) => assert_eq!(name, "c"),
+            other => panic!("expected MissingField for a verbatim value too, got {other:?}"),
+        }
+        // A present key with a value of the wrong kind is that type's own error, not a
+        // missing-field error.
+        assert!(matches!(
+            reader.value_field::<OptedInLang, u32>("n", cx),
+            Err(DeserializeError::Value(SerialValueError::TypeMismatch { .. }))
+        ));
+    });
+}

@@ -215,17 +215,33 @@ pub mod guide {
 /// Support module for generated code only — `techy-derive`'s derives and the
 /// `serial_index!` macro: everything the generated code references — `alloc` paths
 /// spelled so they resolve from both `std` and `no_std` consumer crates, the
-/// diagnostics items the derives implement/construct, and the serialization
-/// conversion traits and helpers a typed table position implements. The derives and
-/// the macro emit only `::techy::__private::…` / `$crate::__private::…` paths (the
-/// serde discipline), so the public topology never constrains, and is never
-/// constrained by, generated output. Not public API.
+/// diagnostics items the derives implement/construct, the serialization capability
+/// traits the value derives implement with the contexts, errors, and field/variant
+/// helpers their bodies use, and the wire conversion traits and helpers a typed table
+/// position implements. The derives and the macro emit only `::techy::__private::…` /
+/// `$crate::__private::…` paths (the serde discipline), so the public topology never
+/// constrains, and is never constrained by, generated output. Not public API.
 #[doc(hidden)]
 pub mod __private {
     pub use alloc::string::String;
     pub use alloc::vec::Vec;
 
     pub use crate::error::{DiagnosticInfo, DiagnosticValue, ToDiagnosticValue};
+
+    // The `SerializableValue` / `DeserializableValue` derives' expansions: the
+    // contexts, errors, and value type of the method signatures, and the
+    // field/variant helpers the generated bodies call. The traits themselves
+    // (`SerializableValue`, `DeserializableValue`, `SerializableLang`, `Lang`) are
+    // deliberately NOT re-exported here: a `#[doc(hidden)]` import path to a public
+    // trait makes cargo-semver-checks report the trait as sealed; the generated code
+    // names them by their canonical public paths instead.
+    pub use crate::serialize::wire::{
+        data_variant, expect_data_variant, expect_unit_variant, read_variant, unit_variant,
+        unknown_variant, FieldReader, FieldWriter,
+    };
+    pub use crate::serialize::{
+        DeserializeContext, DeserializeError, SerialValue, SerializeContext, SerializeError,
+    };
 
     // The `serial_index!` macro's expansion: the wire conversion traits it implements
     // and the helpers it calls; with the `serde` feature, serde itself (a downstream

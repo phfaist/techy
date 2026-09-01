@@ -12,6 +12,7 @@ use crate::state::{Lang, NodeExtTypes};
 use super::engine::{DeserializeContext, SerializeContext};
 use super::error::{DeserializeError, SerialValueError, SerializeError};
 use super::value::{SerialEntry, SerialValue};
+use super::wire::{FieldReader, FieldWriter};
 
 /// A language that supports serialization. Implementing this trait for a [`Lang`]
 /// is what makes serialization and deserialization available for that language: a
@@ -159,6 +160,20 @@ pub trait SerializableValue<L: Lang> {
     fn serialize_value(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
     where
         L: SerializableLang;
+
+    /// Whether this value, as a field of a structure whose fields are written by name
+    /// (a type with `#[derive(SerializableValue)]`), is left out of the structure's map
+    /// entirely — no key at all, rather than a key with a `null` value. The default is
+    /// `false`; `Option<T>` is absent when it is `None`.
+    ///
+    /// Only such structures consult this method. The slots the crate's own
+    /// serialization fills with a language's value (a state's ext, a source's origin,
+    /// …) always write their key, and a `None` there is written as `null`. A type that
+    /// overrides this method also overrides
+    /// [`DeserializableValue::deserialize_field`], so that the omitted key reads back.
+    fn is_absent_field(&self) -> bool {
+        false
+    }
 }
 
 /// The read side of the serialization capability for *values*: rebuilding a value
@@ -178,6 +193,31 @@ pub trait DeserializableValue<L: Lang>: Sized {
     ) -> Result<Self, DeserializeError>
     where
         L: SerializableLang;
+
+    /// Rebuild this value as the field `name` of a structure whose fields are read by
+    /// name (a type with `#[derive(DeserializableValue)]`): `value` is the field's
+    /// value, or `None` when the key is missing from the map. The default requires
+    /// the key and reads its value with [`deserialize_value`](Self::deserialize_value);
+    /// `Option<T>` reads a missing key as `None`. The counterpart of
+    /// [`SerializableValue::is_absent_field`]: a type overriding one overrides both.
+    ///
+    /// # Errors
+    ///
+    /// The key is missing and required ([`SerialValueError::MissingField`]), or the
+    /// value is not of the expected kind or shape.
+    fn deserialize_field(
+        name: &'static str,
+        value: Option<&SerialValue>,
+        cx: &mut DeserializeContext<'_, L>,
+    ) -> Result<Self, DeserializeError>
+    where
+        L: SerializableLang,
+    {
+        match value {
+            Some(value) => Self::deserialize_value(value, cx),
+            None => Err(DeserializeError::Value(SerialValueError::MissingField { name })),
+        }
+    }
 }
 
 // --- core value impls -----------------------------------------------------------------
@@ -286,6 +326,39 @@ macro_rules! int_value_impls {
 }
 int_value_impls!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
 
+/// A `char` is a one-character [`Str`](SerialValue::Str).
+impl<L: Lang> SerializableValue<L> for char {
+    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
+    where
+        L: SerializableLang,
+    {
+        Ok(SerialValue::Str(String::from(*self)))
+    }
+}
+
+/// A `char` is a one-character [`Str`](SerialValue::Str); any other value, including a
+/// string of any other length, is an error.
+impl<L: Lang> DeserializableValue<L> for char {
+    fn deserialize_value(
+        value: &SerialValue,
+        _cx: &mut DeserializeContext<'_, L>,
+    ) -> Result<Self, DeserializeError>
+    where
+        L: SerializableLang,
+    {
+        match value {
+            SerialValue::Str(s) => {
+                let mut chars = s.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => Ok(c),
+                    _ => Err(value_mismatch("a one-character string", value)),
+                }
+            }
+            other => Err(value_mismatch("a one-character string", other)),
+        }
+    }
+}
+
 /// A `String` is a [`Str`](SerialValue::Str).
 impl<L: Lang> SerializableValue<L> for String {
     fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
@@ -315,7 +388,8 @@ impl<L: Lang> DeserializableValue<L> for String {
 /// `None` is [`Null`](SerialValue::Null); `Some(value)` is the value's own form. (So
 /// `Some(())` and `None` have the same form and read back as `None`; the same holds
 /// for a `Some(None)`.) This is what serializes the default source origin,
-/// `Option<String>`.
+/// `Option<String>`. As a field of a structure whose fields are written by name, a
+/// `None` is absent: the key is left out ([`is_absent_field`](SerializableValue::is_absent_field)).
 impl<L: Lang, T: SerializableValue<L>> SerializableValue<L> for Option<T> {
     fn serialize_value(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
     where
@@ -326,9 +400,15 @@ impl<L: Lang, T: SerializableValue<L>> SerializableValue<L> for Option<T> {
             None => Ok(SerialValue::Null),
         }
     }
+
+    fn is_absent_field(&self) -> bool {
+        self.is_none()
+    }
 }
 
-/// [`Null`](SerialValue::Null) is `None`; any other value is read as `T`.
+/// [`Null`](SerialValue::Null) is `None`; any other value is read as `T`. As a field
+/// of a structure whose fields are read by name, a missing key is `None` too
+/// ([`deserialize_field`](DeserializableValue::deserialize_field)).
 impl<L: Lang, T: DeserializableValue<L>> DeserializableValue<L> for Option<T> {
     fn deserialize_value(
         value: &SerialValue,
@@ -340,6 +420,20 @@ impl<L: Lang, T: DeserializableValue<L>> DeserializableValue<L> for Option<T> {
         match value {
             SerialValue::Null => Ok(None),
             other => T::deserialize_value(other, cx).map(Some),
+        }
+    }
+
+    fn deserialize_field(
+        _name: &'static str,
+        value: Option<&SerialValue>,
+        cx: &mut DeserializeContext<'_, L>,
+    ) -> Result<Self, DeserializeError>
+    where
+        L: SerializableLang,
+    {
+        match value {
+            Some(value) => Self::deserialize_value(value, cx),
+            None => Ok(None),
         }
     }
 }
@@ -371,5 +465,76 @@ impl<L: Lang, T: DeserializableValue<L>> DeserializableValue<L> for Vec<T> {
             SerialValue::List(items) => items.iter().map(|item| T::deserialize_value(item, cx)).collect(),
             other => Err(value_mismatch("a list", other)),
         }
+    }
+}
+
+/// A [`SerialValue`] is itself a value, carried as it is: how a structure holds a part
+/// that was converted elsewhere (a field a language's own conversion produced, kept
+/// in a structure that converts the rest).
+impl<L: Lang> SerializableValue<L> for SerialValue {
+    fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
+    where
+        L: SerializableLang,
+    {
+        Ok(self.clone())
+    }
+}
+
+/// A [`SerialValue`] is read as it is, whatever its kind.
+impl<L: Lang> DeserializableValue<L> for SerialValue {
+    fn deserialize_value(
+        value: &SerialValue,
+        _cx: &mut DeserializeContext<'_, L>,
+    ) -> Result<Self, DeserializeError>
+    where
+        L: SerializableLang,
+    {
+        Ok(value.clone())
+    }
+}
+
+// --- support for the derived code -----------------------------------------------------
+//
+// The field-by-name writer and reader of the wire layer, extended with the
+// context-taking conversions the `SerializableValue` / `DeserializableValue` derives
+// generate calls to. Reached through `techy::__private`; not public API.
+
+impl FieldWriter {
+    /// Append the field `name`, converted through [`SerializableValue`] with `cx`,
+    /// unless the value is absent ([`SerializableValue::is_absent_field`]). Used by
+    /// the derived `serialize_value`; not public API.
+    ///
+    /// # Errors
+    ///
+    /// The value's own conversion error.
+    pub fn value_field<L: SerializableLang, T: SerializableValue<L> + ?Sized>(
+        &mut self,
+        name: &'static str,
+        value: &T,
+        cx: &mut SerializeContext<'_, L>,
+    ) -> Result<(), SerializeError> {
+        if value.is_absent_field() {
+            return Ok(());
+        }
+        self.push(name, value.serialize_value(cx)?);
+        Ok(())
+    }
+}
+
+impl FieldReader<'_> {
+    /// Read the field `name` (a declared one) through [`DeserializableValue`] with
+    /// `cx`, a missing key handled by the type
+    /// ([`DeserializableValue::deserialize_field`]). Used by the derived
+    /// `deserialize_value`; not public API.
+    ///
+    /// # Errors
+    ///
+    /// The key is missing and the type requires it, or the value's own read error.
+    pub fn value_field<L: SerializableLang, T: DeserializableValue<L>>(
+        &self,
+        name: &'static str,
+        cx: &mut DeserializeContext<'_, L>,
+    ) -> Result<T, DeserializeError> {
+        T::deserialize_field(name, self.get(name), cx)
     }
 }
