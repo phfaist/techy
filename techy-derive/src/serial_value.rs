@@ -1,7 +1,9 @@
 //! Expansion of the internal `#[derive(ToSerialValue)]` / `#[derive(FromSerialValue)]`
 //! pair (see the macro docs in lib.rs): conversions between techy's crate-private wire
 //! structs and `SerialValue`. Generated code refers to `crate::serialize::…` — the
-//! derives are expanded inside techy only.
+//! derives are expanded inside techy only. The type model and the attribute grammar
+//! ([`Model`], [`parse_model`]) are shared with the public value derives
+//! (`value_derive.rs`), which generate different code from the same model.
 //!
 //! Wire shape (identical to what techy's serde bridge produces for the same shapes):
 //! a struct → a map from each field's wire name to the field's value, in declaration
@@ -17,25 +19,26 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, Ident, LitStr, Type};
 
-/// The wire model of the derived type, shared by both directions.
-enum Model {
+/// The wire model of the derived type, shared by both directions and by the public
+/// value derives.
+pub(crate) enum Model {
     Struct(Vec<NamedField>),
     Enum(Vec<Variant>),
 }
 
-struct NamedField {
-    ident: Ident,
-    name: LitStr,
-    ty: Type,
+pub(crate) struct NamedField {
+    pub(crate) ident: Ident,
+    pub(crate) name: LitStr,
+    pub(crate) ty: Type,
 }
 
-struct Variant {
-    ident: Ident,
-    name: LitStr,
-    kind: VariantKind,
+pub(crate) struct Variant {
+    pub(crate) ident: Ident,
+    pub(crate) name: LitStr,
+    pub(crate) kind: VariantKind,
 }
 
-enum VariantKind {
+pub(crate) enum VariantKind {
     Unit,
     Newtype(Type),
     Struct(Vec<NamedField>),
@@ -44,7 +47,9 @@ enum VariantKind {
 const NO_GENERICS_REASON: &str = "wire structs are concrete: a language-dependent part is \
                                   carried as an already-encoded `SerialValue` field";
 
-fn parse_model(input: &DeriveInput, derive_name: &str) -> syn::Result<Model> {
+/// Parses the derived type into its wire model, checking the attribute grammar and
+/// the supported shapes; `derive_name` names the derive in the error messages.
+pub(crate) fn parse_model(input: &DeriveInput, derive_name: &str) -> syn::Result<Model> {
     crate::ensure_no_generics(&input.generics, derive_name, NO_GENERICS_REASON)?;
     if let Some(attr) = input.attrs.iter().find(|attr| attr.path().is_ident("serial")) {
         return Err(syn::Error::new_spanned(

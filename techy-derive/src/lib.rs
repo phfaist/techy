@@ -1,8 +1,11 @@
-//! Derive macros for techy's structured diagnostic conditions.
+//! Derive macros for techy: the declaration of structured diagnostic conditions, and
+//! the serialization of a language's own value types.
 //!
-//! This is the build-time companion crate of `techy`. `techy` re-exports both derives
-//! from `techy::error`, next to the traits they implement — depend on `techy` and use
-//! the re-exports rather than depending on this crate directly.
+//! This is the build-time companion crate of `techy`. `techy` re-exports every public
+//! derive next to the trait it implements — depend on `techy` and use the re-exports
+//! rather than depending on this crate directly.
+//!
+//! From `techy::error`:
 //!
 //! - [`DiagnosticInfo`](macro@DiagnosticInfo) — on a condition data struct: generates
 //!   the `DiagnosticInfo` impl (`IDENTIFIER`, `serializable_data()`), optionally a
@@ -10,12 +13,22 @@
 //! - [`ToDiagnosticValue`](macro@ToDiagnosticValue) — on a field-less payload enum:
 //!   serializes as the kebab-cased variant name.
 //!
-//! The crate also carries techy-internal derives (`ToSerialValue` / `FromSerialValue`,
+//! From `techy::serialize`:
+//!
+//! - [`SerializableValue`](macro@SerializableValue) /
+//!   [`DeserializableValue`](macro@DeserializableValue) — on a plain-data struct or
+//!   enum whose every field and variant carries `#[serial(name = "…")]`: the two value
+//!   conversion impls (`SerializableValue<L>` / `DeserializableValue<L>`), for every
+//!   language, each field converting through its own impl with the serialization
+//!   context.
+//!
+//! The crate also carries a techy-internal pair (`ToSerialValue` / `FromSerialValue`,
 //! hidden) whose generated code compiles only inside techy itself.
 
 mod diagnostic_info;
 mod serial_value;
 mod to_value;
+mod value_derive;
 
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
@@ -80,6 +93,108 @@ pub fn derive_diagnostic_info(input: TokenStream) -> TokenStream {
 pub fn derive_to_diagnostic_value(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     to_value::expand(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Derives `techy::serialize::SerializableValue` for a plain-data struct or enum: the
+/// write side of the value conversion, for every language.
+///
+/// ```ignore
+/// use techy::serialize::{DeserializableValue, SerializableValue};
+/// use techy::source::SourceSpan;
+///
+/// #[derive(SerializableValue, DeserializableValue)]
+/// struct Placement {
+///     #[serial(name = "span")]
+///     span: SourceSpan,          // converts through its own impl, with the context
+///     #[serial(name = "kind")]
+///     kind: Kind,
+///     #[serial(name = "note")]
+///     note: Option<String>,      // left out of the map when `None`
+/// }
+///
+/// #[derive(SerializableValue, DeserializableValue)]
+/// enum Kind {
+///     #[serial(name = "plain")]
+///     Plain,
+///     #[serial(name = "named")]
+///     Named(String),
+///     #[serial(name = "sized")]
+///     Sized {
+///         #[serial(name = "width")]
+///         width: u32,
+///     },
+/// }
+/// ```
+///
+/// Generated: `impl<L: Lang> SerializableValue<L> for Placement`, whose
+/// `serialize_value` converts every field through the field type's own
+/// `SerializableValue<L>` impl, passing the serialization context along (so a
+/// `SourceSpan` field interns its source, exactly as a hand-written impl would), and
+/// assembles the serialized form:
+///
+/// - a struct is a map from each field's wire name to the field's value, in
+///   declaration order; a field whose value is absent (an `Option` that is `None`) is
+///   left out of the map — no key, rather than a key with `null`;
+/// - a unit enum variant is the string of its wire name (`"plain"`); a newtype
+///   variant is a one-entry map from the wire name to the payload's value
+///   (`{"named": "x"}`); a variant with named fields is a one-entry map from the
+///   wire name to the field map (`{"sized": {"width": 3}}`).
+///
+/// This is the serialized form techy's own structures use, and the one the `serde`
+/// bridge produces for the corresponding serde shapes (with `rename`,
+/// `skip_serializing_if = "Option::is_none"`, `default`, and
+/// `deny_unknown_fields`).
+///
+/// **Wire names.** Every field and every variant carries `#[serial(name = "…")]`; a
+/// field or variant without one is a compile error. Wire names are part of what a
+/// program writes and later reads back, possibly across versions of the program: they
+/// are chosen deliberately and never taken from Rust identifiers, which are renamed
+/// freely. The type itself carries no `serial` attribute.
+///
+/// **Supported shapes.** Structs with named fields; enums with at least one variant,
+/// each a unit variant, a newtype variant (one unnamed field), or a variant with named
+/// fields. No generic types: the generated impl is for every language already, and a
+/// language-dependent part is a field of a type that converts for every language, or
+/// an already converted `SerialValue`. Every field type must implement
+/// `SerializableValue<L>` for every `L: Lang` — as the crate's own impls (`bool`, the
+/// integers, `char`, `String`, `Option<T>`, `Vec<T>`, `SerialValue`, `SourceSpan`)
+/// and every derived type do; a field type without the impl is a compile error at the
+/// field.
+///
+/// **When to write the impl by hand.** When the serialized form must differ from the
+/// type's own layout — a value computed from the type, a field holding a shared
+/// handle, a form kept stable across a change of the type — write `serialize_value`
+/// by hand; where useful, convert through a separate struct that has the serialized
+/// layout and derives this trait.
+#[proc_macro_derive(SerializableValue, attributes(serial))]
+pub fn derive_serializable_value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    value_derive::expand_serializable_value(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Derives `techy::serialize::DeserializableValue` for a plain-data struct or enum —
+/// the read direction of [`SerializableValue`](macro@SerializableValue): the same
+/// attributes and shapes, reading the serialized form that derive writes.
+///
+/// Generated: `impl<L: Lang> DeserializableValue<L> for T`, whose `deserialize_value`
+/// reads every field through the field type's own `DeserializableValue<L>` impl with
+/// the deserialization context. Reads are strict — the value is untrusted input, and
+/// every mismatch is an error (a `SerialValueError` inside the returned
+/// `DeserializeError`), never a panic: a key that is not a declared field, a repeated
+/// key, a missing key of a required field, a variant name that is not declared, a unit
+/// variant carrying data or a data variant without any, and a value of the wrong kind
+/// for a field. An `Option` field reads a missing key, and a `null`, as `None`.
+///
+/// Every field type must implement `DeserializableValue<L>` for every `L: Lang`; a
+/// field type without the impl is a compile error at the field.
+#[proc_macro_derive(DeserializableValue, attributes(serial))]
+pub fn derive_deserializable_value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    value_derive::expand_deserializable_value(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

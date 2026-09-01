@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Derive macros for techy's structured diagnostic conditions"
+description = "Derive macros for techy: structured diagnostic conditions and serializable value types"
 license.workspace = true
 repository.workspace = true
 
 # Build-time companion crate of `techy` (DESIGN_RATIONALE.md [§dd-dr:errors]): the derives are
-# re-exported from `techy::error`, next to the traits they implement. Publish this crate
-# before `techy` (techy depends on it by version).
+# re-exported from `techy::error` and `techy::serialize`, next to the traits they implement.
+# Publish this crate before `techy` (techy depends on it by version).
 
 [lints]
 workspace = true

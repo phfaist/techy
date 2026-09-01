@@ -505,6 +505,9 @@ pub use object::{
     DeserializableObject, DeserializableValue, SerializableLang, SerializableObject,
     SerializableValue,
 };
+// The value derives, next to the traits they implement (the `techy::error` convention
+// for the condition derives); a trait and a derive macro share a name.
+pub use techy_derive::{DeserializableValue, SerializableValue};
 pub use value::{SerialEntry, SerialIndex, SerialValue, TableId};
 
 // Shared bodies of the crate's own spec serialization, for the preset's impls.
@@ -522,6 +525,8 @@ pub use bridge::{from_value, serial_bytes, to_value};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod derive_tests;
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests;
 
