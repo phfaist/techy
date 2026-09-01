@@ -141,13 +141,15 @@ pub trait DeserializableObject<L: SerializableLang>: Sized {
 /// table of their own.
 ///
 /// Implemented by the owner of the type, for every language: the crate implements it
-/// for `()`, `bool`, the integer types, `String`, `Option<T>` and `Vec<T>` (over an
-/// implementing `T`) — the types a language built on the crate's defaults supplies;
-/// a language implements it for its own vocabulary and ext types (typically as
-/// `impl<L: Lang> SerializableValue<L> for MyMode`, so that any language reusing the
-/// type gets the conversion). [`SerializableLang`] requires it of every type the
-/// language supplies to the parse. The method is available only when the language is
-/// a [`SerializableLang`], like [`SerializableObject::serialize_object`].
+/// for `()`, `bool`, `char`, the integer types, `String`, `Option<T>` and `Vec<T>`
+/// (over an implementing `T`), and for [`SerialValue`] itself (carried as it is) —
+/// the types a language built on the crate's defaults supplies, and what a structure
+/// of such fields is made of; a language implements it for its own value and ext
+/// types (typically as `impl<L: Lang> SerializableValue<L> for MyMode`, so that any
+/// language reusing the type gets the conversion — or derives it with
+/// `#[derive(SerializableValue)]`). [`SerializableLang`] requires it of every type the
+/// language supplies to the parse. The methods are available only when the language
+/// is a [`SerializableLang`], like [`SerializableObject::serialize_object`].
 pub trait SerializableValue<L: Lang> {
     /// Produce this value's serialized form. `cx` gives the call access to the state
     /// of the serialization in progress — a value that refers to a table object

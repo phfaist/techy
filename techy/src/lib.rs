@@ -232,9 +232,11 @@ pub mod __private {
     // contexts, errors, and value type of the method signatures, and the
     // field/variant helpers the generated bodies call. The traits themselves
     // (`SerializableValue`, `DeserializableValue`, `SerializableLang`, `Lang`) are
-    // deliberately NOT re-exported here: a `#[doc(hidden)]` import path to a public
-    // trait makes cargo-semver-checks report the trait as sealed; the generated code
-    // names them by their canonical public paths instead.
+    // deliberately NOT re-exported here: adding a `#[doc(hidden)]` import path to a
+    // public trait makes cargo-semver-checks treat the trait as sealed (reported as
+    // "newly sealed" against the baseline, and its later changes then checked under
+    // a sealed trait's weaker rules); the generated code names them by their
+    // canonical public paths instead.
     pub use crate::serialize::wire::{
         data_variant, expect_data_variant, expect_unit_variant, read_variant, unit_variant,
         unknown_variant, FieldReader, FieldWriter,

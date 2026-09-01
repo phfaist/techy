@@ -491,3 +491,57 @@ fn field_reads_handle_a_missing_key_by_type() {
         ));
     });
 }
+
+/// Two levels of `Option`: an `Option<Option<T>>` field is omitted when `None` and
+/// written as `null` when `Some(None)` — reading back as `None`, the documented loss;
+/// an `Option<SerialValue>` holding a `Null` is not absent. And an error inside a
+/// field's conversion propagates out of `value_field`, leaving no entry behind.
+#[test]
+fn field_hooks_at_two_levels_and_error_propagation() {
+    use super::wire::{FieldReader, FieldWriter};
+    use super::{SerialValueError, SerializableValue};
+
+    with_serialize_context(|cx| {
+        let outer_none: Option<Option<u32>> = None;
+        let some_none: Option<Option<u32>> = Some(None);
+        let some_some: Option<Option<u32>> = Some(Some(5));
+        let some_null: Option<SerialValue> = Some(SerialValue::Null);
+        assert!(SerializableValue::<OptedInLang>::is_absent_field(&outer_none));
+        assert!(!SerializableValue::<OptedInLang>::is_absent_field(&some_none));
+        assert!(!SerializableValue::<OptedInLang>::is_absent_field(&some_null));
+
+        let mut writer = FieldWriter::with_capacity(4);
+        writer.value_field("a", &outer_none, cx).unwrap();
+        writer.value_field("b", &some_none, cx).unwrap();
+        writer.value_field("c", &some_some, cx).unwrap();
+        writer.value_field("d", &some_null, cx).unwrap();
+        assert_eq!(
+            writer.finish(),
+            SerialValue::Map(Vec::from([
+                (String::from("b"), SerialValue::Null),
+                (String::from("c"), SerialValue::Int(5)),
+                (String::from("d"), SerialValue::Null),
+            ]))
+        );
+
+        let mut writer = FieldWriter::with_capacity(2);
+        writer.value_field("ok", &1u32, cx).unwrap();
+        assert!(matches!(
+            writer.value_field("big", &u64::MAX, cx),
+            Err(SerializeError::Value(SerialValueError::IntegerOutOfRange { .. }))
+        ));
+        assert_eq!(writer.finish(), SerialValue::Map(Vec::from([(String::from("ok"), SerialValue::Int(1))])));
+    });
+
+    with_deserialize_context(|cx| {
+        let map = SerialValue::Map(Vec::from([
+            (String::from("b"), SerialValue::Null),
+            (String::from("c"), SerialValue::Int(5)),
+        ]));
+        let reader = FieldReader::new(&map, "Sample", &["a", "b", "c"]).unwrap();
+        assert_eq!(reader.value_field::<OptedInLang, Option<Option<u32>>>("a", cx).unwrap(), None);
+        assert_eq!(reader.value_field::<OptedInLang, Option<Option<u32>>>("b", cx).unwrap(), None);
+        assert_eq!(reader.value_field::<OptedInLang, Option<Option<u32>>>("c", cx).unwrap(), Some(Some(5)));
+        assert_eq!(reader.value_field::<OptedInLang, Option<SerialValue>>("b", cx).unwrap(), None);
+    });
+}
