@@ -6848,15 +6848,22 @@ overrides both.
 
 Reversal note: [§dd-dr:serialize-capability-traits] and [§dd-dr:serial-value-model]
 routed implementer payloads through the serde bridge and rejected a public derive.
-Reversed (user ruling, 2026-09-01) for three reasons. (1) The bridge is behind the `serde`
-cargo feature, so the only cheap route to meeting `SerializableLang`'s obligations was
-gated while the capability traits are advertised as unconditional: the crate gave itself
-a dependency-free derive and withheld it from languages bound by the same additivity
-story. (2) The serde route enforces none of the wire discipline — wire names default to
-Rust identifiers, unknown keys are ignored unless `deny_unknown_fields` (which the guide
-did not mention) — whereas the derive has the compiler enforce hand-chosen names, strict
-reads, and the absent-field rule with no per-field attribute. (3) A target framework
-reported the friction: the signal the soft freeze ([§dd-dr:stability-rubric]) waits for.
+Reversed (user ruling, 2026-09-01): the bridge produces the same shapes (the crate's own
+tests pin that), but it is gated and cannot impose the wire discipline. (1) It is behind
+the `serde` cargo feature while the capability traits are advertised as unconditional —
+the crate kept a dependency-free derive for itself and withheld it from languages under
+the same additivity rule. (2) Strictness and wire names are opt-in with serde
+(`deny_unknown_fields` per type, `skip_serializing_if` per `Option` field, `rename` per
+field and variant; a forgotten one silently changes the shape or fixes a Rust identifier
+as a stable wire name) and by construction with the derive (strict reads, a mandatory
+`#[serial(name)]`). (3) A kind mismatch through the bridge is `SerialValueError::Custom`
+with a message only; the derive yields the typed `TypeMismatch` (missing, unknown, and
+repeated keys and unknown variants are typed on both routes). (4) The bridge, like the
+internal pair, is context-free: a value that needs the session (a span interning its
+source) was hand-written under the bridge route; the derive threads the context through
+every field, leaving only bespoke policies (a part shared by identity, a lookup by
+stable name) to hand-written impls. A target framework reported this friction — the
+signal the soft freeze ([§dd-dr:stability-rubric]) waits for.
 
 Rejected alternatives: exposing the internal `ToSerialValue`/`FromSerialValue` pair with
 its derive (a second, near-synonymous public trait pair beside
