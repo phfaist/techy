@@ -22,14 +22,6 @@ CLAUDE/AI AGENTS ARE ONLY ALLOWED TO EDIT THE SECTION BELOW MARKED
 
 ## More targeted items
 
-- Route the condition derives' trait references (`DiagnosticInfo`, `ToDiagnosticValue`)
-  through `::techy::error::…` instead of `::techy::__private`: a `#[doc(hidden)]` import
-  path to a public trait makes cargo-semver-checks count the trait as sealed, so changes
-  to those two traits are checked under a sealed trait's weaker rules today (found while
-  adding the value derives, which already name their traits by the canonical paths).
-  Also deferred from the value derives: span/trybuild assertions for the derive error
-  locations; a value-trait counterpart of the wire layer's `SerialBytes`.
-
 - Have driver/lang be able to specify what expression parser to use when we ask
   for mandatory args?  E.g. mandatory arg, embellishment arg, + other places we
   seek an expression? Study this possibility.  ### still up-to-date?
@@ -50,6 +42,15 @@ CLAUDE/AI AGENTS ARE ONLY ALLOWED TO EDIT THE SECTION BELOW MARKED
   pylatexenc's `allow_pre_space=False` specs). `latexlike::argument_specs` has no
   code for it (pylatexenc's codes don't either); programmatic wiring, or decide a
   code then.
+
+- Route the condition derives' trait references (`DiagnosticInfo`, `ToDiagnosticValue`)
+  through `::techy::error::…` instead of `::techy::__private`: a `#[doc(hidden)]` import
+  path to a public trait makes cargo-semver-checks count the trait as sealed, so changes
+  to those two traits are checked under a sealed trait's weaker rules today (found while
+  adding the value derives, which already name their traits by the canonical paths).
+  Also deferred from the value derives ([§dd-dr:serialize-value-derive]): span/trybuild
+  assertions for the derive error locations; a value-trait counterpart of the wire
+  layer's `SerialBytes`.
 
 
 ## Smaller todo
