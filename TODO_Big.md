@@ -52,16 +52,6 @@ CLAUDE/AI AGENTS ARE ONLY ALLOWED TO EDIT THE SECTION BELOW MARKED
   assertions for the derive error locations; a value-trait counterpart of the wire
   layer's `SerialBytes`.
 
-- flm-rs request, held: a public "plain text of a parsed argument" helper for
-  construct parsers *mid-parse* (today the private `argument_text`/`argument_span` in
-  `latexlike/input.rs`). The finished-tree reader already exists —
-  `techy::extract::content_as_chars` over `NodeRef`s — but a construct parser holds
-  staged nodes (`BuildId` + the builder's staged view), not `NodeRef`s, so the parse-time
-  read is a separate walk. Decide: a staged-view twin in `core::constructs` (ParseContext
-  method; name must not carry `\input` vocabulary), or one reader generic over both
-  views. Semantics differ today: `content_as_chars` skips comments and flattens groups,
-  the `\input` reader diagnoses both ([§dd-dr:span-tiling] amendment).
-
 
 ## Smaller todo
 

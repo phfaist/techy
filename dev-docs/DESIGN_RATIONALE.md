@@ -5419,6 +5419,15 @@ Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
   is a missing mandatory argument (pylatexenc's chars-group parser requires the
   braces as well; the former fallback read one token, never TeX's space-terminated
   file name).
+- **No public parse-time "argument as text" reader** (flm-rs asked for the `\input`
+  spec's private reader, since `extract::content_as_chars` takes finished-tree
+  `NodeRef`s and a construct parser holds staged nodes): declined (user). How an
+  argument's nodes read as text is a per-construct interpretation — a `%` comment
+  skipped or diagnosed, a nested group flattened or refused, whitespace kept or
+  trimmed. `content_as_chars` picks pylatexenc's answers for finished trees, the
+  `\input` reader picks stricter ones, and a consumer's spec picks its own; a staged-view
+  reader in core would freeze one answer as the default. The walk itself is short
+  (chars payloads off the staged view, concatenated); the decisions are the consumer's.
 
 Rejected alternatives: resolver as a per-parse argument (re-litigates the ruled
 direction, and the construct parser mid-descent holds only `cx`);
