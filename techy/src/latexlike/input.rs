@@ -52,8 +52,8 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constructs::{
-    parse_declared_arguments, ChildStateSpec, ConstructParser, ConstructParserResult,
-    GroupArgumentParser, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
+    parse_declared_arguments, CharsGroupArgumentParser, ChildStateSpec, ConstructParser,
+    ConstructParserResult, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
     ParseContext, StopSpec,
 };
 use crate::node::{
@@ -101,22 +101,26 @@ use super::{Latexlike, LatexlikeLang};
 ///
 /// # The reference argument carries plain text
 ///
-/// The argument's content must be plain characters. The reference is read off the
-/// staged argument's own node data — the character payloads of its content nodes,
-/// concatenated as read — and that text is what drives resolution. Content that is
-/// anything else carries no such text: a protective group (`\input{{chap.tex}}`), a
-/// callable, a comment inside the braces raise
+/// The argument is a chars-group
+/// ([`CharsGroupArgumentParser`](crate::constructs::CharsGroupArgumentParser),
+/// pylatexenc's chars-name argument): a mandatory `{…}` group whose contents read as
+/// plain characters. Commands and specials are off inside the braces — a file name is
+/// a name, not markup — so `\input{my_file.tex}` keeps its underscore and
+/// `\input{\jobname.tex}` asks the resolver for the literal `"\jobname.tex"`.
+/// Comments and nested groups stay recognized (pylatexenc's defaults). There is no
+/// single-token fallback: `\input a` reports a missing mandatory argument.
+///
+/// The reference is read off the staged argument's own node data — the character
+/// payloads of its content nodes, concatenated as read — and that text is what drives
+/// resolution. Content that is anything else carries no such text: a protective group
+/// (`\input{{chap.tex}}`) or a comment inside the braces raises
 /// [`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument)
 /// at the argument's span, and nothing is resolved or attached. Characters are taken as
 /// written, with no trimming: whitespace inside the braces is part of the reference
 /// (`\input{ chap.tex }` resolves `" chap.tex "`), so tolerating padding is the
 /// resolver's choice.
 ///
-/// What counts is the staged *nodes*, not the source text. An unresolvable command
-/// inside the delimiters therefore does not raise the condition: the content run
-/// recovers it as characters, and the recovered text becomes the reference the resolver
-/// is asked for (`\input{\undefined.tex}` asks for `"\undefined.tex"`, after the
-/// unresolvable-command condition). Conversely, a driver configured with
+/// What counts is the staged *nodes*, not the source text: a driver configured with
 /// [`ParagraphBreakStyle::Specials`](super::ParagraphBreakStyle::Specials) stages a
 /// paragraph break as a callable node, so a blank line inside the argument raises the
 /// condition, where the default whitespace-characters shape would not.
@@ -242,7 +246,7 @@ where
 {
     InputMacroSpec {
         arguments: vec![Arc::new(ArgumentSpec::new(
-            Arc::new(GroupArgumentParser::new(LLL::GroupTypeId::content_group())),
+            Arc::new(CharsGroupArgumentParser::new(LLL::GroupTypeId::content_group())),
             "reference",
         ))],
         persist_state,
@@ -565,12 +569,13 @@ mod tests {
     use super::super::test_support::root_shapes;
     use super::super::{
         check_latexlike_tree_invariants, BodyMarker, CallableType, GroupType, Latexlike,
-        LatexlikeDriver, MacroSpec,
+        LatexlikeDriver, MacroSpec, SpecialsSpec,
     };
     use super::*;
     use crate::constructs::{
-        InvalidReferenceReason, InvalidSourceReferenceArgument, NoSourceResolver, StrayGroupClose,
-        UnresolvableCommand, UnresolvableSourceReference,
+        GroupArgumentParser, InvalidReferenceReason, InvalidSourceReferenceArgument,
+        MissingMandatoryArgument, NoSourceResolver, StrayGroupClose, UnresolvableCommand,
+        UnresolvableSourceReference,
     };
     use crate::engine::Language;
     use crate::error::{DiagnosticInfo, Recovery};
@@ -827,26 +832,12 @@ mod tests {
     }
 
     #[test]
-    fn a_comment_or_a_callable_in_the_reference_argument_is_diagnosed_too() {
-        // The same condition for the other two ways an argument's content stops being
-        // plain characters: a comment node, and a callable node.
+    fn a_comment_in_the_reference_argument_is_diagnosed_too() {
+        // The same condition for the other way an argument's content stops being
+        // plain characters under the chars-group: a comment node (comments stay
+        // recognized inside the braces, pylatexenc's default).
         let language = language(Recovery::Tolerant, &[("chap.tex", "included")]);
         let result = language.parse("\\input{chap%c\n.tex}").unwrap();
-        check_latexlike_tree_invariants(&result.tree);
-        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
-        assert_eq!(
-            result.diagnostics.iter().next().unwrap().identifier(),
-            InvalidSourceReferenceArgument::IDENTIFIER
-        );
-
-        let mut macros = Package::new("macros");
-        macros.insert(CallableType::Macro, "x", MacroSpec::new(vec![]));
-        let language = language_with_packages(
-            Recovery::Tolerant,
-            &[("chap.tex", "included")],
-            [input_package(), macros],
-        );
-        let result = language.parse(r"\input{\x}").unwrap();
         check_latexlike_tree_invariants(&result.tree);
         assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
         assert_eq!(
@@ -857,31 +848,42 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolvable_command_in_the_argument_is_recovered_as_reference_characters() {
-        // The condition fires on callable *nodes*, and an unresolvable command never
-        // stages one: the content run recovers it as characters, so the recovered text
-        // is the reference the resolver is asked for.
-        let language = language(Recovery::Tolerant, &[("chap.tex", "included")]);
-        let result = language.parse(r"\input{\undefined.tex}").unwrap();
-        check_latexlike_tree_invariants(&result.tree);
-
-        let identifiers: Vec<_> =
-            result.diagnostics.iter().map(|d| d.identifier()).collect();
-        assert_eq!(
-            identifiers,
-            [UnresolvableCommand::IDENTIFIER, UnresolvableSourceReference::IDENTIFIER],
-            "{:?}",
-            result.diagnostics
+    fn commands_and_specials_in_the_argument_read_as_characters() {
+        // The chars-group argument: a file name is a name, not markup. Commands and
+        // specials inside the braces read as plain characters — no callable node is
+        // staged and no unresolvable-command condition fires — and the literal text
+        // is the reference the resolver is asked for. pylatexenc's own example: the
+        // underscore in `\input{my_file.tex}` must stay part of the name.
+        let mut defs = Package::new("defs");
+        defs.insert(CallableType::Macro, "x", MacroSpec::new(vec![]));
+        defs.insert_specials(CallableType::Specials, "_", SpecialsSpec::new(vec![]));
+        let language = language_with_packages(
+            Recovery::Strict,
+            &[
+                ("my_file.tex", "underscore"),
+                (r"\x.tex", "defined command"),
+                (r"\undefined.tex", "unknown command"),
+            ],
+            [input_package(), defs],
         );
-        let condition = result
-            .diagnostics
-            .iter()
-            .nth(1)
-            .unwrap()
-            .data()
-            .downcast_ref::<UnresolvableSourceReference>()
-            .unwrap();
-        assert_eq!(condition.reference, r"\undefined.tex");
+        for (source, expected) in [
+            (r"\input{my_file.tex}", "underscore"),
+            (r"\input{\x.tex}", "defined command"),
+            (r"\input{\undefined.tex}", "unknown command"),
+        ] {
+            let result = language.parse(source).unwrap();
+            check_latexlike_tree_invariants(&result.tree);
+            assert!(result.diagnostics.is_empty(), "{source}: {:?}", result.diagnostics);
+            let input = result.tree.root().child(0).unwrap();
+            assert_eq!(
+                input.slot_content_nodes_named("attached").unwrap().source_text(),
+                Some(expected),
+                "{source}"
+            );
+        }
+        // The same definitions are live outside the braces: there `_` is a specials.
+        let result = language.parse("a_b").unwrap();
+        assert!(result.tree.root().child(1).unwrap().is_callable());
     }
 
     #[test]
@@ -1012,17 +1014,18 @@ mod tests {
     }
 
     #[test]
-    fn the_reference_argument_accepts_the_expression_fallback() {
-        // `\input a` — the `{` argument code's single-expression fallback: the
-        // one-char reference "a".
-        let language = language(Recovery::Strict, &[("a", "ok")]);
+    fn a_bare_reference_argument_is_a_missing_mandatory_argument() {
+        // `\input a` — the chars-group has no single-token fallback (pylatexenc's
+        // chars-group parser requires the braces as well): the argument is reported
+        // missing, nothing is resolved, and `a` parses on as ordinary text.
+        let language = language(Recovery::Tolerant, &[("a", "ok")]);
         let result = language.parse(r"\input a").unwrap();
         check_latexlike_tree_invariants(&result.tree);
+        let identifiers: Vec<_> = result.diagnostics.iter().map(|d| d.identifier()).collect();
+        assert_eq!(identifiers, [MissingMandatoryArgument::IDENTIFIER], "{:?}", result.diagnostics);
         let input = result.tree.root().child(0).unwrap();
-        assert_eq!(
-            input.slot_content_nodes_named("attached").unwrap().source_text(),
-            Some("ok")
-        );
+        assert!(input.slots().unwrap().is_empty());
+        assert_eq!(root_shapes(&result), ["Macro(input)", "chars(a)"]);
     }
 
     #[test]

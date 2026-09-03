@@ -344,7 +344,10 @@ The `\input` definition itself is the opt-in
 content is parsed at the invocation point into the same tree, and the two
 mandatory constructor choices — whether state changes made inside the
 included file persist past the `\input`, and how the attached content is
-marked — are documented on the item.
+marked — are documented on the item. The file-name argument is a chars-group
+([`CharsGroupArgumentParser`](crate::core::constructs::CharsGroupArgumentParser)):
+its contents read as plain characters, so `\input{my_file.tex}` keeps its
+underscore and a command inside the braces is part of the name, not markup.
 
 A resolver that hands over only part of what it read — a file minus a leading
 front-matter block the resolver consumed itself, say — keeps line numbers true

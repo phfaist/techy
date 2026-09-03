@@ -2759,10 +2759,10 @@ holding anything else (a protective group `\input{{chap.tex}}`, a callable, a co
 raises the condition `InvalidSourceReferenceArgument`
 (`core.sources.invalid-reference-argument`; payload: the closed `InvalidReferenceReason`,
 today `NotPlainCharacters` alone) through the recovery policy at the argument's span, with
-nothing resolved and nothing attached. What counts is the staged nodes: an unresolvable
-command inside the delimiters is recovered as characters and its text becomes the
-reference, while a paragraph break staged as a callable node (the preset's
-`ParagraphBreakStyle::Specials`) raises the condition. A staged record that does not
+nothing resolved and nothing attached. What counts is the staged nodes: under the
+chars-group argument ([§dd-dr:input-wiring]) a command or specials inside the delimiters
+reads as characters and its text becomes the reference, while a paragraph break staged
+as a callable node (the preset's `ParagraphBreakStyle::Specials`) raises the condition. A staged record that does not
 resolve is an implementation error, never this condition — a document is not blamed for a
 machinery bug. Two consequences, both independent of the declaration: the
 reference is read off the staged argument's **node data** under either regime, so the two
@@ -5407,6 +5407,18 @@ Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
   text → `attach_source_reference` → `Attached` slot — so `\input[options]{file}`
   / `\input*{f1,f2,f3}` variants are easy custom-spec work (the form-specific
   parts stay in the spec).
+- **The reference argument is a chars-group** (`CharsGroupArgumentParser`,
+  pylatexenc's `_arg_charsname`/`LatexCharsGroupParser`; comments and nested groups
+  on, its defaults): a file name is a name, not markup — `\input{my_file.tex}` must
+  keep its underscore, and `\input{\jobname.tex}` reads as the literal text. The
+  spec first shipped with the general `GroupArgumentParser`, which turned an
+  underscore or tilde inside the braces into a specials node and a command into a
+  callable node, all diagnosed as "not plain characters" (user ruling: an oversight,
+  corrected). Not a fully verbatim read: `%` still opens a comment inside the braces,
+  as in LaTeX and pylatexenc, and is diagnosed. No single-token fallback — `\input a`
+  is a missing mandatory argument (pylatexenc's chars-group parser requires the
+  braces as well; the former fallback read one token, never TeX's space-terminated
+  file name).
 
 Rejected alternatives: resolver as a per-parse argument (re-litigates the ruled
 direction, and the construct parser mid-descent holds only `cx`);
