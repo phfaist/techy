@@ -3346,6 +3346,14 @@ The exact types of the restage driver:
   `restage_children`, `restage_argument[_named]` (unknown name = `Err` — the
   named-accessor doctrine transfers), `restage_slot`,
   `restage_invocation(node, arguments, slots, annotation)`, raw `builder()`.
+- **No span-overriding `restage_node`** (flm-rs asked for one, to re-source every use
+  of a definition template onto a synthesized per-use source): declined (user) as not
+  techy's job. A chars node's text is a byte range into the node's *own* source, and so
+  are the preset's invocation-syntax spellings in the node ext; a span swapped onto
+  another source silently re-resolves those ranges there, and core cannot repair an ext
+  it cannot read. A framework that re-sources subtrees owns that materialization —
+  clone with owned payloads and mint its own spans, or keep the template-instance
+  record beside the span rather than in it.
 - **Region-edit policy: no silent repair.** A drop that empties a region restages
   as provided-with-empty-region (absent ≠ empty is parser semantics; true absence
   is the explicit `absent(spec)`); a dropped `InChildrenOf` content parent is

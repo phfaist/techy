@@ -57,14 +57,6 @@ CLAUDE/AI AGENTS ARE ONLY ALLOWED TO EDIT THE SECTION BELOW MARKED
   only, so its home is `core::constructs` (ParseContext methods?), not the preset, and
   its name must not carry `\input` vocabulary ("reference"). Needs a naming decision.
 
-- flm-rs request, held: a `restage_node` variant taking a replacement span (definition
-  templates re-sourced onto a synthesized source). Open question first: chars nodes carry
-  `TextContent::Spanned` byte ranges into the node's *own* source, and the preset's
-  invocation-syntax ext does too; a span onto another source silently re-resolves them
-  there. Core could re-anchor the chars payload to `Owned`, but the ext is Lang-owned and
-  opaque. Settle the contract (caller guarantees residency vs. the variant converts chars
-  payloads) with flm's answer on how their `add`-based workaround handles it today.
-
 
 ## Smaller todo
 
