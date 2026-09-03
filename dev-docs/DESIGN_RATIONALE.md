@@ -357,6 +357,16 @@ Status: DECIDED (user; settled before any consumer existed).
   while `Source.content` is a `String`; switching that private field to `Arc<str>` later
   would remove it without touching this contract.) Rejected alternatives: a documented
   fresh-`Source`-per-resolve contract (an implicit rule a cache silently violates).
+- **Optional line/column number offsets on `ResolvedContent`**
+  (`with_line_number_offset`/`with_column_number_offset`, public `Option` fields),
+  forwarded into the minted `Source`; unset keeps the source's default. A resolver may
+  hand over a suffix of what it read — an embedder that consumes a file's front-matter
+  block before parsing (flm-rs) — and only it knows how many lines it removed; without
+  the fields it pads with blank lines, which keeps line numbers true and byte offsets
+  false. The fields reuse the `Source` offset mechanism rather than adding a coordinate
+  system. Accepted cost: byte offsets and spans stay relative to the content handed
+  over — techy parses a source whole, and a sub-range parse of a larger source was not
+  added for this.
 - **`Send + Sync` supertraits**, matching every other stored extension trait: resolvers
   live in the long-lived shareable language bundle, and `resolve(&self)` means caching
   needs interior mutability — the bounds pick the thread-safe form (locks/atomics, not
@@ -3322,11 +3332,17 @@ The exact types of the restage driver:
   through typed; `Clone where E: Clone` keeps the uniform-Clone principle
   conditionally. Fixed `Arc<dyn Error>` boxing rejected (loses typing for nothing);
   infallible visitors rejected (panic policy).
-- **Bundles are opaque but constructible**: `RestagedArgument::provided(spec,
+- **Bundles are opaque but constructible and readable**: `RestagedArgument::provided(spec,
   nodes, content, ext)` / `::absent(spec)`; `RestagedSlot::new(name, role, nodes,
   content, ext)`. The constructor IS the general take-both form — staged nodes plus
   the `ContentNodes` designation, the same field vocabulary the
-  `ParsedArgument`/`ParsedSlot` records carry. Ops: `restage_subtree`,
+  `ParsedArgument`/`ParsedSlot` records carry. The accessors (`spec`/`nodes`/
+  `content`/`ext`, `name`/`role`) expose every part a constructor takes, so a pass
+  rebuilds a bundle it was handed with one part changed (prepending a node to a slot
+  region — flm-rs's block structuring). A dedicated prepend helper was rejected:
+  prepending is not one operation (an in-region content range shifts differently for
+  a content node than for a noise node, and an `InChildrenOf` designation cannot be
+  prepended to at bundle level). Ops: `restage_subtree`,
   `restage_children`, `restage_argument[_named]` (unknown name = `Err` — the
   named-accessor doctrine transfers), `restage_slot`,
   `restage_invocation(node, arguments, slots, annotation)`, raw `builder()`.
@@ -6747,6 +6763,14 @@ without the token — the `\today` case — so re-running it, even after verifyi
 write time, validates today's answer, not read-time validity. `Weak` because a strong
 back-reference would close an ownership cycle with the package's spec `Arc`s; a stamp
 is process-local and never wire material.
+
+The stamp is readable through the `dyn CallableSpec<L>` a node holds:
+`CallableSpec::provenance()` is a defaulted trait method (`None`), overridden by every
+shipped spec type; the former inherent getters of the same name are gone (one canonical
+path). A framework reading a spec's origin off a parsed node (flm-rs) needed a per-type
+downcast before. Serialization by identity does not go through it — each type's
+`SerializableObject` impl reads its own stamp — so the method is a reading accessor, not
+a hook.
 
 Rejected alternatives: symbolic re-query through the rehydrated scope stack;
 enumeration-based reverse maps over `iter_symbols` (enumeration is not a lookup

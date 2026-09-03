@@ -93,11 +93,6 @@ impl<LLL: LatexlikeLang> MacroSpec<LLL> {
         self
     }
 
-    /// Where this spec is defined, if it was stamped.
-    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
-        self.provenance.as_ref()
-    }
-
     /// Give the macro an **after-effect**: a parsing-state change every invocation
     /// leaves behind for the content that *follows* it — its later siblings, to the
     /// end of the enclosing group or document — the way a definition macro
@@ -125,6 +120,10 @@ impl<LLL: LatexlikeLang> MacroSpec<LLL> {
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
+    }
+
+    fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
     }
 
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
@@ -238,11 +237,6 @@ impl<LLL: LatexlikeLang> SpecialsSpec<LLL> {
         self.provenance = Some(provenance);
         self
     }
-
-    /// Where this spec is defined, if it was stamped.
-    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
-        self.provenance.as_ref()
-    }
 }
 
 // The `SerializableObject` impl (identity through the provenance stamp) lives in
@@ -251,6 +245,10 @@ impl<LLL: LatexlikeLang> SpecialsSpec<LLL> {
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for SpecialsSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
+    }
+
+    fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {

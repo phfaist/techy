@@ -168,8 +168,10 @@ pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
     persist_state: bool,
     /// The ext value cloned into every invocation's attached slot.
     attached_slot_ext: SlotExt<LLL>,
-    /// Where the spec was defined, when known.
-    provenance: Option<SpecProvenance<LLL>>,
+    /// Where the spec was defined, when known. `pub(super)`: the preset's wire
+    /// layer reads the stamp directly — the `CallableSpec` impl (and so its
+    /// `provenance()`) carries a bound the `SerializableObject` impl does not.
+    pub(super) provenance: Option<SpecProvenance<LLL>>,
 }
 
 impl<LLL: LatexlikeLang> InputMacroSpec<LLL> {
@@ -192,11 +194,6 @@ impl<LLL: LatexlikeLang> InputMacroSpec<LLL> {
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> InputMacroSpec<LLL> {
         self.provenance = Some(provenance);
         self
-    }
-
-    /// Where this spec is defined, if it was stamped.
-    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
-        self.provenance.as_ref()
     }
 }
 
@@ -262,6 +259,10 @@ where
     LLL: LatexlikeLang,
     ArgumentExt<LLL>: Default,
 {
+    fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
+    }
+
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
     }

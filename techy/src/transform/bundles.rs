@@ -9,8 +9,10 @@
 //! [`ContentNodes`] content designation, the record ext) in **bundle-relative
 //! staging coordinates** — node offsets count the bundle's own nodes, and
 //! `InChildrenOf` designations name staged [`BuildId`]s. Bundles are opaque but
-//! constructible: the constructors *are* the general take-both form, so a pass
-//! can hand-build what no canned op produces.
+//! constructible and readable: the constructors *are* the general take-both form,
+//! so a pass can hand-build what no canned op produces, and the accessors expose
+//! every part a constructor takes, so a pass can rebuild a bundle it was handed
+//! with one part changed (a node prepended to a slot's region, say).
 
 use core::fmt;
 
@@ -86,6 +88,20 @@ impl<L: Lang> RestagedArgument<L> {
     pub fn nodes(&self) -> &[BuildId] {
         self.provided.as_ref().map_or(&[], |region| &region.nodes)
     }
+
+    /// The content designation of the provided region, in bundle-relative staging
+    /// coordinates; `None` for an absent argument.
+    pub fn content(&self) -> Option<&ContentNodes> {
+        self.provided.as_ref().map(|region| &region.content)
+    }
+
+    /// The record ext of the provided region; `None` for an absent argument — and
+    /// for a region [`restage_argument`](super::RestageContext::restage_argument)
+    /// read off an input record that itself carried none (reproduced verbatim, see
+    /// [`provided`](RestagedArgument::provided)).
+    pub fn ext(&self) -> Option<&ArgumentExt<L>> {
+        self.provided.as_ref().and_then(|region| region.ext.as_ref())
+    }
 }
 
 impl<L: Lang> fmt::Debug for RestagedArgument<L> {
@@ -151,6 +167,16 @@ impl<L: Lang> RestagedSlot<L> {
     /// The staged region nodes.
     pub fn nodes(&self) -> &[BuildId] {
         &self.nodes
+    }
+
+    /// The content designation, in bundle-relative staging coordinates.
+    pub fn content(&self) -> &ContentNodes {
+        &self.content
+    }
+
+    /// The slot ext.
+    pub fn ext(&self) -> &SlotExt<L> {
+        &self.ext
     }
 }
 

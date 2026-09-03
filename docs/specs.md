@@ -346,6 +346,13 @@ mandatory constructor choices — whether state changes made inside the
 included file persist past the `\input`, and how the attached content is
 marked — are documented on the item.
 
+A resolver that hands over only part of what it read — a file minus a leading
+front-matter block the resolver consumed itself, say — keeps line numbers true
+to the file with
+[`ResolvedContent::with_line_number_offset`](crate::source::ResolvedContent::with_line_number_offset):
+the minted source then numbers its first line as the file does. Byte offsets and
+spans stay relative to the content handed over.
+
 ## Beyond latexlike
 
 Everything above is the latexlike path: preset spec types registered under

@@ -215,7 +215,9 @@ self-contained forms; (d) a `register(&mut session)` helper that calls
 (e) packages built with [`Package::new_shared`](crate::core::specs::Package::new_shared)
 so specs get their [`SpecProvenance`](crate::core::specs::SpecProvenance) stamp
 ([`provenance_for`](crate::core::specs::Package::provenance_for), a
-`with_provenance`-style setter on your spec types); (f) only for a payload that is
+`with_provenance`-style setter on your spec types, and a
+[`CallableSpec::provenance`](crate::core::specs::CallableSpec::provenance) override
+returning the stamp); (f) only for a payload that is
 already a serde type, under feature `serde`: `#[derive(Serialize, Deserialize)]` +
 explicit `#[serde(rename = …)]` + `#[serde(deny_unknown_fields)]`, with
 `#[serde(skip_serializing_if = "Option::is_none")]` + `#[serde(default)]` on `Option`

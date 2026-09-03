@@ -479,6 +479,8 @@ is the sanctioned downcast channel for preset finalization
   where an argument *is* a parser (`Arc<dyn ArgumentParser<L>>` plus optional name and
   per-argument state delta; [§dd-dr:argument-parser-model]). The standard delimited
   forms are shipped parser implementations parameterized by group class and rules.
+  `provenance()` (defaulted `None`) exposes the spec's `SpecProvenance` stamp through
+  the trait object, no downcast needed ([§dd-dr:instance-not-lookup]).
 - **The full-takeover escape hatch** is `make_invocation_parser`: a factory moving a
   fresh single-use construct parser to the caller, invocation facts traveling inside
   the parser instance. Overriding it is how `\verb`, tabular preambles, and FLM's rich
@@ -614,7 +616,7 @@ an in-crate test utility ([§dd-arch:span-tiling], [§dd-dr:tree-validation]).
   `Descend` always descends, role-uniformly into `Attached`/`Hidden` slot
   children; read-frozen/write-staged; annotations single-pathway with
   origin-by-convention ([§dd-dr:restage]) — over region-aware context ops,
-  constructible `RestagedArgument`/`RestagedSlot` bundles, generic
+  constructible, readable `RestagedArgument`/`RestagedSlot` bundles, generic
   `RestageError<E>`, the no-silent-repair edit policy (`ContentParentDropped`),
   narrow content-swap helpers, and the level-0 cross-tree `restage_node`
   primitive ([§dd-dr:restage-ops]). The extract producers mint output

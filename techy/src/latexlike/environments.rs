@@ -545,11 +545,6 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
         self
     }
 
-    /// Where this spec is defined, if it was stamped.
-    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
-        self.provenance.as_ref()
-    }
-
     /// The behavior driving this environment's parse.
     pub fn behavior(&self) -> &dyn EnvironmentBehavior<LLL> {
         &*self.behavior
@@ -562,6 +557,10 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for EnvironmentSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         self.behavior.arguments()
+    }
+
+    fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {
@@ -610,7 +609,10 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 /// package holds.
 pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
     end_command_name: String,
-    provenance: Option<SpecProvenance<LLL>>,
+    // `pub(super)`: the preset's wire layer reads the stamp directly — the
+    // `CallableSpec` impl (and so its `provenance()`) carries a bound the
+    // `SerializableObject` impl does not.
+    pub(super) provenance: Option<SpecProvenance<LLL>>,
     lang: PhantomData<fn() -> LLL>,
 }
 
@@ -641,11 +643,6 @@ impl<LLL: LatexlikeLang> BeginSpec<LLL> {
         self.provenance = Some(provenance);
         self
     }
-
-    /// Where this spec is defined, if it was stamped.
-    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
-        self.provenance.as_ref()
-    }
 }
 
 // The `SerializableObject`/`DeserializableObject` impls live in `super::serialize`.
@@ -658,6 +655,10 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for BeginSpec<LLL>
 where
     crate::node::SlotExt<LLL>: BodySlotExt,
 {
+    fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
+    }
+
     /// `\begin` declares nothing but reads an entire environment: bare use as a
     /// single-token expression argument is diagnosed, not dispatched — a deliberate,
     /// documented divergence from pylatexenc, which dispatches the environment as the

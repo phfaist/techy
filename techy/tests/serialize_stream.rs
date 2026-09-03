@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use techy::core::node::{display_tree, NodeTree};
-use techy::core::specs::SpecsProvider;
+use techy::core::specs::{CallableSpec, SpecsProvider};
 use techy::core::{Language, ParseResult, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::minidefs::{self, minilatex_package};

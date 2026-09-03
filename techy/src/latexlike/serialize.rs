@@ -375,7 +375,7 @@ impl<LLL: LatexlikeLang> SerializableObject<LLL> for BeginSpec<LLL> {
     where
         LLL: SerializableLang,
     {
-        if let Some(provenance) = self.provenance() {
+        if let Some(provenance) = self.provenance.as_ref() {
             return provenance.serialize_object(cx);
         }
         let wire = WireBeginSpec { end_command_name: String::from(self.end_command_name()) };
@@ -459,7 +459,7 @@ impl<LLL: LatexlikeLang> SerializableObject<LLL> for InputMacroSpec<LLL> {
     where
         LLL: SerializableLang,
     {
-        if let Some(provenance) = self.provenance() {
+        if let Some(provenance) = self.provenance.as_ref() {
             return provenance.serialize_object(cx);
         }
         let wire = WireInputMacroSpec {

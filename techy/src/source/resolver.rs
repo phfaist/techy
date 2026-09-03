@@ -156,17 +156,23 @@ impl<O: SourceOrigin> IntoSourceResolver<O, sealed::SharedDyn> for Arc<dyn Sourc
 /// composition the parser will use. Provenance is stamped **here, in core**:
 /// each call produces a fresh `Source` whose provenance records *this* `triggered_at`,
 /// which is what keeps a twice-included file's diagnostics pointing at the right
-/// include site (see the trait docs).
+/// include site (see the trait docs). The minted source carries the resolver's origin
+/// metadata and, when the resolver set them, its line/column number offsets
+/// ([`ResolvedContent::line_number_offset`]).
 pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     resolver: &R,
     reference: &str,
     triggered_at: &SourceSpan<O>,
 ) -> Result<Arc<Source<O>>, ResolveError> {
     let resolved = resolver.resolve(reference, triggered_at)?;
-    Ok(Arc::new(
-        Source::resolved(resolved.content, reference, triggered_at.clone())
-            .with_origin(resolved.origin),
-    ))
+    let source = Source::resolved(resolved.content, reference, triggered_at.clone())
+        .with_origin(resolved.origin);
+    // The source's own defaults stand wherever the resolver set no offset.
+    let line_number_offset =
+        resolved.line_number_offset.unwrap_or(source.line_number_offset());
+    let column_number_offset =
+        resolved.column_number_offset.unwrap_or(source.column_number_offset());
+    Ok(Arc::new(source.with_line_column_number_offsets(line_number_offset, column_number_offset)))
 }
 
 /// The ready-made include-cycle-plus-depth check a [`SourceResolver`] calls with `?`
@@ -235,8 +241,9 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
     Ok(())
 }
 
-/// What a [`SourceResolver`] returns: the referenced content, plus origin metadata for
-/// the [`Source`] the caller mints (see [`resolve_source_reference`]).
+/// What a [`SourceResolver`] returns: the referenced content, plus origin metadata and
+/// optional line/column number offsets for the [`Source`] the caller mints (see
+/// [`resolve_source_reference`]).
 #[derive(Debug, Clone)]
 pub struct ResolvedContent<O: SourceOrigin = Option<String>> {
     /// The resolved content.
@@ -245,17 +252,49 @@ pub struct ResolvedContent<O: SourceOrigin = Option<String>> {
     /// path the content was obtained from); `O::default()` when the resolver knows
     /// nothing more.
     pub origin: O,
+    /// The line number offset the minted source carries
+    /// ([`Source::with_line_column_number_offsets`]), or `None` to keep the source's
+    /// default. For a resolver that hands over only part of what it read — a file
+    /// whose leading front-matter block the resolver consumed itself, say — this keeps
+    /// the line numbers in diagnostics true to the file. The value is the offset
+    /// itself, not an increment: a resolver removing `n` leading lines from 1-indexed
+    /// content sets `1 + n`. Byte offsets and spans stay relative to the content handed
+    /// over; only line/column numbering shifts.
+    pub line_number_offset: Option<usize>,
+    /// The column number offset the minted source carries, or `None` to keep the
+    /// source's default (see [`line_number_offset`](ResolvedContent::line_number_offset)).
+    pub column_number_offset: Option<usize>,
 }
 
 impl<O: SourceOrigin> ResolvedContent<O> {
-    /// Resolved content with the default ("unknown") origin.
+    /// Resolved content with the default ("unknown") origin and the source's default
+    /// line/column number offsets.
     pub fn new(content: impl Into<String>) -> ResolvedContent<O> {
-        ResolvedContent { content: content.into(), origin: O::default() }
+        ResolvedContent {
+            content: content.into(),
+            origin: O::default(),
+            line_number_offset: None,
+            column_number_offset: None,
+        }
     }
 
     /// Attach origin metadata.
     pub fn with_origin(mut self, origin: O) -> ResolvedContent<O> {
         self.origin = origin;
+        self
+    }
+
+    /// Set the line number offset the minted source carries
+    /// ([`line_number_offset`](ResolvedContent::line_number_offset)).
+    pub fn with_line_number_offset(mut self, line_number_offset: usize) -> ResolvedContent<O> {
+        self.line_number_offset = Some(line_number_offset);
+        self
+    }
+
+    /// Set the column number offset the minted source carries
+    /// ([`column_number_offset`](ResolvedContent::column_number_offset)).
+    pub fn with_column_number_offset(mut self, column_number_offset: usize) -> ResolvedContent<O> {
+        self.column_number_offset = Some(column_number_offset);
         self
     }
 }
@@ -428,6 +467,9 @@ mod tests {
         // The reference is recorded in the provenance; the origin stays at its default
         // (`None`) since reference-as-origin labeling is off.
         assert_eq!(resolved.origin().label(), None);
+        // No offsets set by the resolver: the source keeps its defaults.
+        assert_eq!(resolved.line_number_offset(), 1);
+        assert_eq!(resolved.column_number_offset(), 1);
         match resolved.provenance() {
             SourceProvenance::Resolved { reference, triggered_at } => {
                 assert_eq!(reference, "chapter.tex");
@@ -464,6 +506,31 @@ mod tests {
             }
             other => panic!("expected Resolved provenance on both, got {:?}", other),
         }
+    }
+
+    /// A resolver that hands over a suffix of what it read (a front-matter block it
+    /// consumed itself) keeps line numbers true through the offset fields.
+    #[test]
+    fn resolver_offsets_reach_the_minted_source() {
+        struct FrontMatterStripper;
+        impl SourceResolver for FrontMatterStripper {
+            fn resolve(
+                &self,
+                _reference: &str,
+                _triggered_at: &SourceSpan,
+            ) -> Result<ResolvedContent, ResolveError> {
+                // Three leading lines removed from 1-indexed content: the first line
+                // handed over is line 4 of the file.
+                Ok(ResolvedContent::new("body line\nnext").with_line_number_offset(4))
+            }
+        }
+
+        let resolved =
+            resolve_source_reference(&FrontMatterStripper, "doc.tex", &trigger_span()).unwrap();
+        assert_eq!(resolved.line_number_offset(), 4);
+        assert_eq!(resolved.column_number_offset(), 1, "an unset offset keeps the default");
+        assert_eq!(resolved.line_index().line_col(0), Some((4, 1)));
+        assert_eq!(resolved.line_index().line_col(10), Some((5, 1)));
     }
 
     #[test]

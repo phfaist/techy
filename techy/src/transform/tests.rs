@@ -26,7 +26,8 @@ use crate::source::TextContent;
 use crate::state::{Lang, ParsingState};
 
 use super::{
-    Restage, RestageContext, RestageError, RestageVisitor, RestagedArgument, TreeRestager,
+    Restage, RestageContext, RestageError, RestageVisitor, RestagedArgument, RestagedSlot,
+    TreeRestager,
 };
 
 /// The suite's shorthand: a default-configured [`TreeRestager`] run (most tests
@@ -616,6 +617,71 @@ fn restage_slot_carries_name_role_and_content() {
         callable.slot_content_nodes(0).unwrap().first().unwrap().chars(),
         Some("attached")
     );
+}
+
+#[test]
+fn bundle_accessors_expose_every_constructor_part() {
+    // Read a restaged slot's parts back, rebuild it with one node prepended to its
+    // content, and re-invoke with the rebuilt bundle — the hand-rebuild route the
+    // accessors exist for.
+    use crate::node::ContentNodes;
+
+    struct PrependToAttached;
+    impl RestageVisitor<Latexlike, (), ()> for PrependToAttached {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if !node.is_callable() {
+                return Ok(Restage::Descend(()));
+            }
+            let slot = cx.restage_slot(node, 1, self)?;
+            assert_eq!(slot.role(), SlotRole::Attached);
+            assert_eq!(slot.content(), &ContentNodes::InRegion(0..1));
+            assert_eq!(slot.nodes().len(), 1);
+
+            let kind: NodeKind<Latexlike> = NodeKind::chars(TextContent::Owned("NEW".into()));
+            let span = node.span().clone();
+            let state = node.parsing_state().clone();
+            let builder = cx.builder();
+            let ext = <Latexlike as Lang>::make_node_ext(
+                &kind,
+                &span,
+                &state,
+                builder.staged_children(&[]),
+            )
+            .expect("mint node ext");
+            let fresh = builder
+                .add(kind, span, state, Vec::new(), ext, ())
+                .map_err(RestageError::<OpError>::Build)?;
+
+            // The region grows by one node at its front, so an in-region content
+            // range grows with it.
+            let content = match slot.content() {
+                ContentNodes::InRegion(range) => ContentNodes::InRegion(0..range.end + 1),
+                other => panic!("the fixture designates in-region content, got {other:?}"),
+            };
+            let mut nodes = vec![fresh];
+            nodes.extend_from_slice(slot.nodes());
+            // `SlotExt` is Lang-defined: `clone` stays right if it stops being `Copy`.
+            #[allow(clippy::clone_on_copy)]
+            let rebuilt =
+                RestagedSlot::new_unnamed(slot.role(), nodes, content, slot.ext().clone());
+            let id = cx.restage_invocation(node, vec![], vec![rebuilt], ())?;
+            Ok(Restage::Emit(vec![id]))
+        }
+    }
+
+    let input = three_slot_fixture();
+    let output = restage(&input, &mut PrependToAttached).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root();
+    let content = callable.slot_content_nodes(0).unwrap();
+    assert_eq!(content.len(), 2);
+    assert_eq!(content.get(0).unwrap().chars(), Some("NEW"));
+    assert_eq!(content.get(1).unwrap().chars(), Some("attached"));
 }
 
 #[test]

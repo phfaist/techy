@@ -189,6 +189,20 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
         }
     }
 
+    /// Where this spec is defined, if it records that: the [`SpecProvenance`] stamp a
+    /// shared [`Package`](crate::scopes::Package) hands out
+    /// ([`Package::provenance_for`](crate::scopes::Package::provenance_for)) and the
+    /// spec type stores. Reading it here — through the `Arc<dyn CallableSpec<L>>` a
+    /// node holds — needs no downcast to the concrete spec type.
+    ///
+    /// The default is `None`. A spec type that records a stamp (every shipped spec
+    /// type does, through its `with_provenance` builder) returns it from here. This
+    /// is a reading accessor only: serialization by identity reads the stamp inside
+    /// the type's own [`SerializableObject`] impl.
+    fn provenance(&self) -> Option<&SpecProvenance<L>> {
+        None
+    }
+
     /// Serialize the argument spec a parsed argument of this callable was parsed
     /// against — the [`ArgumentSpec`] `Arc` recorded on the parsed argument at
     /// position `index` (invocation order). Called by the tree serialization for each
@@ -337,7 +351,7 @@ impl<L: Lang> IntoCallableSpec<L, sealed::SharedDyn> for Arc<dyn CallableSpec<L>
 /// **Serialization.** The argument structure holds parsers, which have no serialized
 /// form, so a `StdCallableSpec` is serialized by *identity* — as a reference to the
 /// provider that defined it plus its key — which requires the spec to carry a
-/// [`SpecProvenance`] stamp in its [`provenance`](StdCallableSpec::provenance) field
+/// [`SpecProvenance`] stamp in its [`provenance`](field@StdCallableSpec::provenance) field
 /// ([`with_provenance`](StdCallableSpec::with_provenance) sets it; a shared
 /// [`Package`](crate::scopes::Package) hands the stamp out). Serializing an unstamped
 /// `StdCallableSpec` is an error naming the type. Both fields are public — the type
@@ -370,22 +384,20 @@ impl<L: Lang> StdCallableSpec<L> {
     /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
     /// package hands out ([`Package::provenance_for`](crate::scopes::Package::provenance_for))
     /// — so that the spec can be serialized by identity. Replaces a previous stamp.
+    /// Read back through [`CallableSpec::provenance`] (or the public field).
     pub fn with_provenance(mut self, provenance: SpecProvenance<L>) -> StdCallableSpec<L> {
         self.provenance = Some(provenance);
         self
-    }
-
-    /// The provenance stamp, if the spec carries one (the
-    /// [`provenance`](StdCallableSpec::provenance) field, as a getter — the method
-    /// name the preset's spec types share).
-    pub fn provenance(&self) -> Option<&SpecProvenance<L>> {
-        self.provenance.as_ref()
     }
 }
 
 impl<L: Lang> CallableSpec<L> for StdCallableSpec<L> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>] {
         &self.arguments
+    }
+
+    fn provenance(&self) -> Option<&SpecProvenance<L>> {
+        self.provenance.as_ref()
     }
 }
 
