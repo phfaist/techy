@@ -232,13 +232,10 @@ pub(crate) fn comment_node_kind<L: Lang>(
 /// [`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) or
 /// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
 /// — also owns the error's traceback: the hooks have no session access, so the
-/// in-crate consultation sites attach the live traceback to a hook-returned abort
-/// error through a crate-internal helper. Do the same at your dispatch site with
-/// `error.with_frames(cx.session.snapshot_frames())`
-/// ([`ParseError::with_frames`](crate::error::ParseError::with_frames),
-/// [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames)),
-/// guarded on `error.frames().is_empty()` — an error already carrying frames keeps
-/// them.
+/// consultation site attaches the live traceback to a hook-returned abort error
+/// through [`ParseContext::attach_hook_frames`]
+/// (`.map_err(|error| cx.attach_hook_frames(error))`), exactly as the in-crate
+/// dispatch sites do — an error already carrying frames keeps them.
 ///
 /// **Spans come from the token reader** — the context holds no source handle. A
 /// construct parser does not pair a byte range with a source itself: every
@@ -272,8 +269,9 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// [`group_interior_state`](ParseContext::group_interior_state), problem
     /// reporting via [`recover`](ParseContext::recover) /
     /// [`implementation_error`](ParseContext::implementation_error), frames via
-    /// [`with_frame`](ParseContext::with_frame). The session's node builder, memo
-    /// storage, and frame stack are internal.
+    /// [`with_frame`](ParseContext::with_frame) /
+    /// [`attach_hook_frames`](ParseContext::attach_hook_frames). The session's node
+    /// builder, memo storage, and frame stack are internal.
     pub session: &'a mut ParserSession<L>,
     /// The language's [`ParseDriver`]: recovery policy, parse-time hooks,
     /// the descent-delta channel, construct provision. **Concretely typed through
@@ -364,9 +362,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// `ExtMintFailed` — an operational failure in consumer-supplied hook code, not
     /// a contract violation — as a [`HookFailed`](crate::error::HookFailed)
     /// condition carrying the mint's `detail`, with the live traceback attached
-    /// (`error.with_frames(cx.session.snapshot_frames())` when the error carries no
-    /// frames yet). The in-crate staging callers match the variant and do exactly
-    /// that; either lift aborts the parse under any recovery policy.
+    /// ([`attach_hook_frames`](ParseContext::attach_hook_frames)). The in-crate
+    /// staging callers match the variant and do exactly that; either lift aborts
+    /// the parse under any recovery policy.
     pub fn stage_node(
         &mut self,
         kind: NodeKind<L>,
@@ -739,10 +737,19 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// Attach the live traceback to a hook-returned abort error that carries no
-    /// frames of its own — extension hooks (driver hooks, descent-state
-    /// callbacks) have no session access, so the call site is where the snapshot
-    /// exists. An error already carrying frames passes through unchanged.
-    pub(crate) fn attach_hook_frames(
+    /// frames of its own — extension hooks (driver hooks, spec factories,
+    /// descent-state callbacks) have no session access, so the call site is where
+    /// the snapshot exists. An error already carrying frames passes through
+    /// unchanged.
+    ///
+    /// The in-crate dispatch sites use this on every fallible hook they consult; a
+    /// construct parser that consults such a hook itself
+    /// ([`ParseDriver::make_nodes_parser`](crate::engine::ParseDriver::make_nodes_parser),
+    /// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser),
+    /// …) does the same at its own dispatch site:
+    /// `.map_err(|error| cx.attach_hook_frames(error))`. Only the frames are
+    /// touched: the error's condition and span are the hook's own.
+    pub fn attach_hook_frames(
         &self,
         error: ParseError<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
@@ -1986,6 +1993,38 @@ pub(crate) mod tests {
         // The strict abort snapshotted the frame while it was live.
         assert_eq!(err.frames().len(), 1);
         assert_eq!(err.frames()[0].title(), "construct frame");
+    }
+
+    #[test]
+    fn attach_hook_frames_adds_the_live_traceback_unless_present() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state();
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
+        let mut session = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Strict, ());
+        let mut cx =
+            ParseContext::new(&mut reader, st, &mut session, &driver);
+
+        let frame = || Frame {
+            title: FrameTitle::Static("hook frame"),
+            span: SourceSpan::new(&source, Span::new(0, 1)),
+        };
+        let at = SourceSpan::new(&source, Span::new(1, 2));
+
+        // A frameless hook error picks up the frames live at the dispatch site.
+        let attached = cx.with_frame(frame(), |cx| {
+            cx.attach_hook_frames(ParseError::new(TestCondition, at.clone()))
+        });
+        assert_eq!(attached.frames().len(), 1);
+        assert_eq!(attached.frames()[0].title(), "hook frame");
+        assert_eq!(attached.span().range(), 1..2, "condition and span are the hook's own");
+
+        // An error already carrying frames passes through unchanged.
+        let preexisting = ParseError::new(TestCondition, at.clone())
+            .with_frames(vec![crate::error::TraceFrame::new("preexisting", at.clone())]);
+        let kept = cx.with_frame(frame(), |cx| cx.attach_hook_frames(preexisting));
+        assert_eq!(kept.frames().len(), 1);
+        assert_eq!(kept.frames()[0].title(), "preexisting");
     }
 
     /// The `&dyn Fn` hot-path callbacks ([`TokenStopKind::Predicate`],

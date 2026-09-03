@@ -148,7 +148,9 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     /// (spec-side definition data, an embedding's runtime) is broken or
     /// unavailable — and **aborts the parse** under any recovery policy; the
     /// dispatch site attaches the live traceback when the error carries no
-    /// frames of its own. Refusing to parse *deeper* is deliberately not this
+    /// frames of its own
+    /// ([`ParseContext::attach_hook_frames`](crate::constructs::ParseContext::attach_hook_frames)).
+    /// Refusing to parse *deeper* is deliberately not this
     /// channel's business: nesting depth belongs to the descent guard
     /// ([`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), raised
     /// before any factory-built parser runs). Carry

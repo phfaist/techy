@@ -4714,7 +4714,10 @@ method, with the state now an **explicit parameter**: that is what dissolved the
 site's swap entirely (it existed only because `try_peek` read `cx.state`), and it is the
 public face of the argument-probe protocol (tolerant ⇒ `Ok(None)` without diagnosing or
 consuming; unrecoverable or strict ⇒ abort). `ParserSession::snapshot_frames` went
-public with it (custom parser code building its own `ParseError`s needs the traceback);
+public with it (custom parser code building its own `ParseError`s needs the traceback),
+and `ParseContext::attach_hook_frames` — snapshot attached to a hook-returned abort
+error unless it already carries frames — followed on flm-rs's request: every custom
+parser dispatching a fallible hook itself repeated the same guarded three lines;
 `push_frame`/`pop_frame` stay crate-private — `with_frame` remains the only stack
 mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
 unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.

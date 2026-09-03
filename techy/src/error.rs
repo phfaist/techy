@@ -813,8 +813,10 @@ impl<O: SourceOrigin> ParseError<O> {
 
     /// Attach a traceback snapshot (for the direct-abort sites, which do not pass
     /// through the recovery entry point) —
-    /// typically [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames),
-    /// its public companion for custom parser code.
+    /// typically [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames).
+    /// Inside a construct parser,
+    /// [`ParseContext::attach_hook_frames`](crate::constructs::ParseContext::attach_hook_frames)
+    /// is the one-call form for a hook-returned error.
     pub fn with_frames(mut self, frames: Vec<TraceFrame<O>>) -> ParseError<O> {
         self.frames = frames;
         self
