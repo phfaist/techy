@@ -1,18 +1,13 @@
-//! Lazy line/column analysis: the transient [`LineIndex`] view, the persistent
-//! consumer-held [`LineIndexCache`], and the [`LineColProvider`] seam the
-//! rendering entry points accept.
+//! Line and column analysis: the borrowing [`LineIndex`], the persistent
+//! [`LineIndexCache`], and the [`LineColProvider`] trait the rendering entry points
+//! accept.
 //!
-//! The parser works purely with byte offsets; line/column information is computed only on
-//! demand, for display (error messages, diagnostics). This is the standalone successor of
-//! the earlier `SourceLocationAnalyzer` (its lazy line-start extension logic is preserved;
-//! the traceback formatting moved to the `error` module).
-//!
-//! **Who computes and caches is layered** — never the `Source`: the parse computes
-//! nothing; the diagnostics renderer keeps a per-call cache; *persistence* belongs
-//! to whoever holds a [`LineIndexCache`] across renders (or parses — source content
-//! is immutable, so a cache entry never invalidates). A `Source`-owned lazy cache
-//! stays rejected dependency-free (`alloc` has no `Mutex`; `OnceCell` would cost
-//! `Sync`).
+//! Parsing works purely with byte offsets. Line and column numbers are computed only on
+//! demand, for display in error messages and diagnostics, and a [`Source`] never computes
+//! or stores them itself. Use a [`LineIndex`] for a handful of queries against one
+//! content string, and a [`LineIndexCache`] to keep the computed line information across
+//! many renders or several parses — source content is immutable, so a cache entry never
+//! becomes stale.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -23,18 +18,24 @@ use core::ops::Range;
 use super::origin::SourceOrigin;
 use super::source::Source;
 
-/// Lazily computed line-start index over a piece of source content.
+/// A lazily computed table of line starts over a piece of source content.
 ///
 /// Line starts are computed incrementally, only up to the largest byte offset queried so
-/// far — indexing a large source costs nothing until (and unless) positions near its end are
-/// actually displayed. Obtain one preconfigured with a source's line/column offsets via
-/// [`Source::line_index`](super::Source::line_index). This is the borrowing, transient
-/// view; the owning, per-source persistent form is [`LineIndexCache`].
+/// far, so indexing a large source costs nothing until positions near its end are actually
+/// displayed. [`Source::line_index`](super::Source::line_index) creates one already
+/// configured with that source's line and column number offsets.
 ///
-/// To bound memory use on huge inputs, content longer than the configured maximum scan
-/// length (default 500 000 bytes, see [`set_max_scan_len`](Self::set_max_scan_len)) is not
-/// indexed at all: [`line_col`](Self::line_col) then returns `None` and callers fall back to
-/// displaying raw byte positions.
+/// A `LineIndex` borrows the content and is meant to be used and dropped; the owning,
+/// per-source form that a consumer keeps is [`LineIndexCache`].
+///
+/// The three queries are [`line_col`](Self::line_col) for a position,
+/// [`line_of`](Self::line_of) for the containing line and its byte range, and
+/// [`line_col_span`](Self::line_col_span) for both ends of a range.
+///
+/// To bound memory use on very large inputs, content longer than the configured maximum
+/// scan length (500 000 bytes by default, see
+/// [`set_max_scan_len`](Self::set_max_scan_len)) is not indexed at all: every query then
+/// returns `None`, and callers fall back to displaying raw byte positions.
 #[derive(Debug, Clone)]
 pub struct LineIndex<'c> {
     /// The content being indexed.
@@ -54,13 +55,14 @@ pub struct LineIndex<'c> {
 
 /// Default maximum content length (in bytes) for which line information is computed
 /// (adjustable per index via [`LineIndex::set_max_scan_len`]). 500 000 bytes keeps
-/// the line-starts table bounded (≈ 100 KB for a 500 KB text of short lines) while
-/// covering ordinary documents; past it, queries answer `None` **silently** and
-/// renderers fall back to raw byte positions.
+/// the line-starts table bounded (about 100 KB for a 500 KB text of short lines) while
+/// covering ordinary documents; past it, queries answer `None` silently and renderers
+/// fall back to raw byte positions.
 const DEFAULT_MAX_SCAN_LEN: usize = 500_000;
 
 impl<'c> LineIndex<'c> {
-    /// Create a lazy line index over `content` with default line/column offsets `(1, 1)`.
+    /// Creates a line index over `content`, with the default line and column number
+    /// offsets `(1, 1)`.
     pub fn new(content: &'c str) -> Self {
         LineIndex {
             content,
@@ -72,7 +74,7 @@ impl<'c> LineIndex<'c> {
         }
     }
 
-    /// Set the line and column number offsets (see
+    /// Sets the line and column number offsets (see
     /// [`Source::with_line_column_number_offsets`](super::Source::with_line_column_number_offsets)).
     pub fn with_line_column_number_offsets(
         mut self,
@@ -84,11 +86,12 @@ impl<'c> LineIndex<'c> {
         self
     }
 
-    /// Set the maximum content length (in bytes) for which line information is computed
-    /// (default: 500 000 bytes).
+    /// Sets the maximum content length, in bytes, for which line information is computed.
+    /// The default is 500 000 bytes.
     ///
-    /// Content longer than this is not indexed and [`line_col`](Self::line_col) returns
-    /// `None` for every position.
+    /// Content longer than this is not indexed at all, and the queries return `None` for
+    /// every position. Raising the limit above the content length makes this index compute
+    /// line starts after all, on the next query.
     pub fn set_max_scan_len(&mut self, max_scan_len: usize) {
         if self.computed_end == usize::MAX && self.content.len() > self.max_scan_len {
             // Indexing was previously abandoned because the content exceeded the old limit.
@@ -144,13 +147,14 @@ impl<'c> LineIndex<'c> {
         }
     }
 
-    /// Get the (line, column) for a byte offset, using (and lazily extending) the cached
-    /// line starts. Line and column numbers include the configured offsets (added with
-    /// saturating arithmetic: an offset near `usize::MAX` yields `usize::MAX`, never an
-    /// overflow).
+    /// The line and column of a byte offset, extending the computed line starts as needed.
     ///
-    /// Returns `None` if the offset exceeds the content length, or if the content is longer
-    /// than the maximum scan length (see [`set_max_scan_len`](Self::set_max_scan_len)).
+    /// Both numbers include the configured offsets, added with saturating arithmetic: an
+    /// offset near `usize::MAX` yields `usize::MAX` rather than overflowing.
+    ///
+    /// Returns `None` if the offset is past the end of the content, or if the content is
+    /// longer than the maximum scan length (see
+    /// [`set_max_scan_len`](Self::set_max_scan_len)).
     pub fn line_col(&mut self, byte_offset: usize) -> Option<(usize, usize)> {
         let line_idx = self.line_index_of(byte_offset)?;
         let line = line_idx.saturating_add(self.line_number_offset);
@@ -158,17 +162,19 @@ impl<'c> LineIndex<'c> {
         Some((line, col))
     }
 
-    /// Get the line containing a byte offset: its line number (the
-    /// [`line_col`](Self::line_col) numbering, configured offsets included) **and**
-    /// its byte range — the caret/underline rendering path: slice the range for the
-    /// line's text, then point at the offset within it.
+    /// The line containing a byte offset: its line number and its byte range.
     ///
-    /// The range excludes the line terminator (`\n`); the last line ends at the
-    /// content end. An offset sitting *on* a `\n` (or at end of content) belongs to
+    /// This is what a renderer needs to draw a caret or an underline — slice the range out
+    /// of the content for the line's text, then point at the offset within it. The line
+    /// number uses the same numbering as [`line_col`](Self::line_col), configured offsets
+    /// included.
+    ///
+    /// The range excludes the line terminator `\n`, and the last line ends at the end of
+    /// the content. An offset sitting on a `\n`, or at the end of the content, belongs to
     /// the line it terminates, so `byte_offset` may equal the range's end.
     ///
-    /// `None` under the same conditions as [`line_col`](Self::line_col) (offset out
-    /// of bounds, or content past the scan cap).
+    /// Returns `None` under the same conditions as [`line_col`](Self::line_col): the
+    /// offset is out of bounds, or the content is past the maximum scan length.
     pub fn line_of(&mut self, byte_offset: usize) -> Option<(usize, Range<usize>)> {
         let line_idx = self.line_index_of(byte_offset)?;
         Some((
@@ -177,13 +183,15 @@ impl<'c> LineIndex<'c> {
         ))
     }
 
-    /// Get the (line, column) pair of both ends of a byte range (a `Range<usize>`
-    /// or a plain [`Span`](super::Span)): the start's position and the **exclusive**
-    /// end's position — one past the range's last byte, the
-    /// [`SourceSpan::end_pos`](super::SourceSpan::end_pos) convention.
+    /// The line and column of both ends of a byte range, which may be given as a
+    /// `Range<usize>` or as a plain [`Span`](super::Span).
     ///
-    /// `None` when either end has no answer (out of bounds, or content past the
-    /// scan cap) — never a half answer.
+    /// The second pair is the position of the range's exclusive end — one past its last
+    /// byte — following the [`SourceSpan::end_pos`](super::SourceSpan::end_pos)
+    /// convention.
+    ///
+    /// Returns `None` whenever either end has no answer (out of bounds, or content past
+    /// the maximum scan length); it never returns half an answer.
     pub fn line_col_span(
         &mut self,
         range: impl Into<Range<usize>>,
@@ -239,29 +247,30 @@ fn compute_line_starts(content: &str) -> Vec<usize> {
     line_starts
 }
 
-/// Answers line/column queries for offsets into sources — the trait the rendering
-/// entry points accept (`render_with`/`render_all_with`/
-/// [`format_position_with`](crate::error::format_position_with)/
-/// [`format_traceback_with`](crate::error::format_traceback_with); the no-argument
-/// forms are transient-cache shorthand). [`LineIndexCache`] is the shipped
-/// implementation; editor tools with their own incremental line tables — surviving
-/// per-keystroke re-parses that mint new `Source`s — implement the trait over
-/// them and plug in without recomputation.
+/// Answers line and column queries for byte offsets into sources.
 ///
-/// The trait provides line/col *answers*; whether they come from a cache, a
-/// precomputed table, or a scan is the implementation's business. Answers must
-/// follow [`LineIndex::line_col`]'s conventions (the source's configured
-/// line/column number offsets; `None` = no answer, the caller falls back to raw
-/// byte positions).
+/// This is the trait the diagnostic rendering entry points accept: `render_with`,
+/// `render_all_with`, [`format_position_with`](crate::error::format_position_with) and
+/// [`format_traceback_with`](crate::error::format_traceback_with) (their no-argument forms
+/// use a temporary cache instead).
+///
+/// [`LineIndexCache`] is the implementation this crate provides. An editor that already
+/// maintains its own incremental line table implements the trait over that table instead,
+/// and its line information then survives the re-parses that create new `Source` values on
+/// every keystroke.
+///
+/// Where an answer comes from — a cache, a precomputed table, or a fresh scan — is the
+/// implementation's business, but answers must follow the conventions of
+/// [`LineIndex::line_col`]: the source's configured line and column number offsets are
+/// included, and `None` means no answer is available.
 pub trait LineColProvider<O: SourceOrigin = Option<String>> {
-    /// The (line, column) of `byte_offset` within `source`, or `None` when no
-    /// answer is available (see the trait docs).
+    /// The line and column of `byte_offset` within `source`, or `None` when no answer is
+    /// available.
     ///
-    /// Deliberately infallible beyond its `Option`: `None` **is** the no-answer
-    /// channel — callers fall back to raw byte positions, whatever the reason no
-    /// answer exists. Embedding or binding code whose implementation fails
-    /// internally (a failure in the embedding's own line table) should report the
-    /// failure through the embedding's own channel and answer `None`.
+    /// There is deliberately no error channel besides the `Option`: `None` is the
+    /// no-answer answer, whatever the reason, and the caller falls back to displaying raw
+    /// byte positions. An implementation whose own line table fails internally reports
+    /// that failure through its own channel and returns `None` here.
     fn line_col(
         &mut self,
         source: &Arc<Source<O>>,
@@ -269,25 +278,27 @@ pub trait LineColProvider<O: SourceOrigin = Option<String>> {
     ) -> Option<(usize, usize)>;
 }
 
-/// A persistent line/column cache: **one owned line-starts table per source**,
-/// keyed by `Arc` identity — the consumer-held counterpart of the borrowing
-/// [`LineIndex`] view.
+/// A persistent line and column cache holding one owned table of line starts per source,
+/// keyed by source identity.
 ///
-/// Because source content is immutable, an entry never invalidates: a tool that
-/// keeps its own `Arc<Source>` across parse attempts (the span-stability
-/// rule) keeps its cache valid for free, and one cache threaded through many
-/// renders (`render_all_with`, repeated `render_with` calls) indexes each source
-/// once instead of once per call. Consumer-held means `&mut self` is the honest
-/// receiver; sharing across threads is the consumer's own lock (techy buys no
-/// `no_std` synchronization).
+/// This is the owning counterpart of the borrowing [`LineIndex`], and the implementation
+/// of [`LineColProvider`] this crate provides. Pass one to the `_with` rendering entry
+/// points of [`error`](crate::error) to index each source once instead of once per call.
 ///
-/// The API mirrors the [`LineIndex`] queries with the source as first argument —
-/// [`line_col`](Self::line_col), [`line_of`](Self::line_of),
-/// [`line_col_span`](Self::line_col_span) — and applies each source's own
-/// line/column number offsets. Content past the scan cap
-/// ([`set_max_scan_len`](Self::set_max_scan_len); default 500 000 bytes) is not
-/// indexed — queries answer `None` and renderers fall back to raw byte positions.
-/// Entries are found by a linear scan (a report touches few distinct sources).
+/// Because source content is immutable, an entry never becomes stale: a tool that keeps
+/// its own `Arc<Source>` across parse attempts — the span-stability rule described in
+/// [`Source::new`](super::Source::new) — keeps its cache valid for free. Since a query
+/// may build an entry, the queries take `&mut self`; sharing one cache between threads is
+/// the consumer's own concern, as this crate provides no `no_std` synchronization.
+///
+/// The queries mirror those of [`LineIndex`], with the source as first argument:
+/// [`line_col`](Self::line_col), [`line_of`](Self::line_of) and
+/// [`line_col_span`](Self::line_col_span), each applying that source's own line and column
+/// number offsets. Content longer than the maximum scan length
+/// ([`set_max_scan_len`](Self::set_max_scan_len); 500 000 bytes by default) is not
+/// indexed, and queries about it return `None`.
+///
+/// Entries are found by a linear scan, since a report touches few distinct sources.
 #[derive(Debug, Clone, Default)]
 pub struct LineIndexCache<O: SourceOrigin = Option<String>> {
     entries: Vec<CacheEntry<O>>,
@@ -303,15 +314,17 @@ struct CacheEntry<O: SourceOrigin> {
 }
 
 impl<O: SourceOrigin> LineIndexCache<O> {
-    /// An empty cache with the default scan cap.
+    /// Creates an empty cache with the default maximum scan length.
     pub fn new() -> LineIndexCache<O> {
         LineIndexCache { entries: Vec::new(), max_scan_len: None }
     }
 
-    /// Set the maximum content length (in bytes) for which line information is
-    /// computed (default: 500 000 bytes) — the [`LineIndex::set_max_scan_len`]
-    /// setting, cache-wide. A source previously skipped for exceeding the cap is
-    /// re-admitted on its next query if the raised cap allows it.
+    /// Sets the maximum content length, in bytes, for which line information is computed.
+    /// The default is 500 000 bytes.
+    ///
+    /// This is [`LineIndex::set_max_scan_len`] applied to every source in this cache. A
+    /// source previously skipped for exceeding the limit is indexed on its next query if a
+    /// raised limit now admits it.
     pub fn set_max_scan_len(&mut self, max_scan_len: usize) {
         self.max_scan_len = Some(max_scan_len);
     }
@@ -340,9 +353,10 @@ impl<O: SourceOrigin> LineIndexCache<O> {
         self.entries.len() - 1
     }
 
-    /// The (line, column) of `byte_offset` within `source` —
-    /// [`LineIndex::line_col`] against the cached table (same conventions, the
-    /// source's configured offsets included).
+    /// The line and column of `byte_offset` within `source`.
+    ///
+    /// This is [`LineIndex::line_col`] answered from the cached table, with the same
+    /// conventions and `source`'s own configured offsets.
     pub fn line_col(
         &mut self,
         source: &Arc<Source<O>>,
@@ -361,8 +375,10 @@ impl<O: SourceOrigin> LineIndexCache<O> {
         ))
     }
 
-    /// The line containing `byte_offset` within `source`: line number plus the
-    /// line's byte range — [`LineIndex::line_of`] against the cached table.
+    /// The line containing `byte_offset` within `source`: its line number and its byte
+    /// range.
+    ///
+    /// This is [`LineIndex::line_of`] answered from the cached table.
     pub fn line_of(
         &mut self,
         source: &Arc<Source<O>>,
@@ -381,8 +397,9 @@ impl<O: SourceOrigin> LineIndexCache<O> {
         ))
     }
 
-    /// The (line, column) pair of both ends of a byte range within `source` —
-    /// [`LineIndex::line_col_span`] against the cached table.
+    /// The line and column of both ends of a byte range within `source`.
+    ///
+    /// This is [`LineIndex::line_col_span`] answered from the cached table.
     pub fn line_col_span(
         &mut self,
         source: &Arc<Source<O>>,

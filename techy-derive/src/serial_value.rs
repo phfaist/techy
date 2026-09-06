@@ -10,7 +10,7 @@
 //! order, a field whose value is absent (an `Option::None`) omitted; a unit enum
 //! variant → the string of its wire name; a newtype variant → a one-entry map from the
 //! wire name to the payload; a struct variant → a one-entry map from the wire name to
-//! the field map. Every field and every variant carries a mandatory
+//! the field map. Every field and every variant needs a mandatory
 //! `#[serial(name = "…")]`; reads are strict (unknown, missing, or repeated keys and
 //! unknown variants are errors).
 
@@ -19,8 +19,8 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, Ident, LitStr, Type};
 
-/// The wire model of the derived type, shared by both directions and by the public
-/// value derives.
+/// The model of the derived type, shared by both directions and by the public value
+/// derives.
 pub(crate) enum Model {
     Struct(Vec<NamedField>),
     Enum(Vec<Variant>),
@@ -47,7 +47,7 @@ pub(crate) enum VariantKind {
 const NO_GENERICS_REASON: &str = "wire structs are concrete: a language-dependent part is \
                                   carried as an already-encoded `SerialValue` field";
 
-/// What a `serial` attribute on the derived type itself may carry.
+/// What a `serial` attribute on the derived type itself may contain.
 pub(crate) enum TypeAttributePolicy {
     /// Nothing: every type-level `serial` attribute is an error — the internal wire
     /// derives, where `#[serial(name = "…")]` goes on fields and variants only.
@@ -68,7 +68,7 @@ pub(crate) struct ParsedType {
 /// Parses the derived type into its wire model, checking the attribute grammar and
 /// the supported shapes; `derive_name` names the derive in the error messages,
 /// `generics_reason` completes the rejection of a generic type, and `type_attributes`
-/// says what the type itself may carry.
+/// says what the type itself may contain.
 pub(crate) fn parse_model(
     input: &DeriveInput,
     derive_name: &str,
@@ -148,8 +148,8 @@ pub(crate) fn parse_model(
     Ok(ParsedType { model, lang })
 }
 
-/// The optional `#[serial(lang = …)]` on the type: the one language the generated
-/// impl is for. Any other type-level `serial` key is an error.
+// The optional `#[serial(lang = …)]` on the type: the one language the generated impl is
+// for. Any other type-level `serial` key is an error.
 fn type_lang(attrs: &[syn::Attribute]) -> syn::Result<Option<Type>> {
     let mut lang: Option<Type> = None;
     for attr in attrs {
@@ -186,7 +186,7 @@ fn parse_named_fields(named: &syn::FieldsNamed, derive_name: &str) -> syn::Resul
     Ok(fields)
 }
 
-/// The mandatory `#[serial(name = "…")]` of a field or variant.
+// The mandatory `#[serial(name = "…")]` of a field or variant.
 fn wire_name(
     attrs: &[syn::Attribute],
     span: proc_macro2::Span,
@@ -298,8 +298,8 @@ pub(crate) fn expand_to(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// Writes named fields into a `FieldWriter` and finishes it; `access` produces the
-/// expression yielding `&FieldType` for a field ident.
+// Writes named fields into a `FieldWriter` and finishes it; `access` produces the
+// expression yielding `&FieldType` for a field ident.
 fn write_fields(fields: &[NamedField], access: impl Fn(&Ident) -> TokenStream) -> TokenStream {
     let len = fields.len();
     let writes = fields.iter().map(|field| {
@@ -388,8 +388,8 @@ pub(crate) fn expand_from(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// Reads named fields from `__value` through a `FieldReader` and builds `constructor
-/// { … }`; `what` names the type (or variant) in the shape error.
+// Reads named fields from `__value` through a `FieldReader` and builds
+// `constructor { … }`; `what` names the type (or variant) in the shape error.
 fn read_fields(fields: &[NamedField], what: &str, constructor: TokenStream) -> TokenStream {
     let names = fields.iter().map(|f| &f.name);
     let reads = fields.iter().map(|field| {
@@ -416,8 +416,8 @@ mod tests {
 
     use super::{expand_from, expand_to};
 
-    /// The internal derives take no attribute on the type at all — the public derives'
-    /// `lang` included.
+    // The internal derives take no attribute on the type at all — the public derives'
+    // `lang` included.
     #[test]
     fn the_internal_derives_refuse_every_type_level_attribute() {
         let inputs: [DeriveInput; 2] = [

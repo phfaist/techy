@@ -1,22 +1,23 @@
 //! Expansion of the public `#[derive(SerializableValue)]` /
 //! `#[derive(DeserializableValue)]` pair (see the macro docs in lib.rs): the impls of
-//! techy's value capability traits for a plain-data struct or enum, with the
-//! serialization context passed to every field's own conversion. The type model and
-//! the attribute grammar are those of the internal wire derives
-//! ([`parse_model`](crate::serial_value::parse_model)), plus the type-level
-//! `#[serial(lang = …)]`; only the generated code differs — every field converts
-//! through its own `SerializableValue<L>` / `DeserializableValue<L>` impl with the
-//! context, and the generated impl is for every `L: Lang`, or for the one language
-//! `lang` names.
+//! techy's value capability traits for a plain-data struct or enum.
 //!
-//! Generated code names the capability traits and the language bound by their
-//! canonical public paths (`::techy::serialize::…`, `::techy::core::Lang`) — a
-//! `#[doc(hidden)]` import path to a public trait makes semver tooling report the
-//! trait as sealed — and everything else (contexts, errors, the value type, the field
-//! and variant helpers) through `::techy::__private::…`. The impl's type parameter is
-//! `__L` and its locals are `__`-prefixed: names user code is not expected to use; the
-//! fields of a struct variant are bound to `__field_<name>` locals, never to their own
-//! names, so a field called `__cx` or `__writer` cannot shadow the generated locals.
+//! The type model and the attribute grammar are the internal wire derives'
+//! (`serial_value::parse_model`), plus the type-level `#[serial(lang = …)]`; only the
+//! generated code differs. Every field converts through its own `SerializableValue<L>` /
+//! `DeserializableValue<L>` impl with the serialization context, and the generated impl
+//! is for every `L: Lang`, or for the one language `lang` names.
+//!
+//! Generated code names the capability traits and the language bound by their canonical
+//! public paths (`::techy::serialize::…`, `::techy::core::Lang`) — a `#[doc(hidden)]`
+//! import path to a public trait makes semver tooling report the trait as sealed — and
+//! everything else (contexts, errors, the value type, the field and variant helpers)
+//! through `::techy::__private::…`.
+//!
+//! The impl's type parameter is `__L` and its locals are `__`-prefixed: names user code
+//! is not expected to use. The fields of a struct variant are bound to `__field_<name>`
+//! locals, never to their own names, so a field called `__cx` or `__writer` cannot
+//! shadow the generated locals.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
@@ -29,18 +30,17 @@ const NO_GENERICS_REASON: &str = "a derived type is concrete; a value whose type
                                   language is held as an already converted `SerialValue`, or the \
                                   language is named with `#[serial(lang = …)]`";
 
-/// The language the generated impl is for: every language — a type parameter `__L`
-/// bounded by `Lang`, the method bounded by `SerializableLang` as the trait's is — or
-/// the one named by `#[serial(lang = …)]`: a concrete impl whose method carries no
-/// bound of its own (an impl method may carry fewer bounds than the trait's, and the
-/// context type in its signature already requires the language to be a
-/// `SerializableLang`).
+// The language the generated impl is for. Either every language — a type parameter
+// `__L` bounded by `Lang`, with the method bounded by `SerializableLang` as the trait's
+// is — or the one named by `#[serial(lang = …)]`, a concrete impl whose method needs no
+// bound of its own (an impl method may state fewer bounds than the trait's, and the
+// context type in its signature already requires a `SerializableLang`).
 struct ImplLang {
-    /// The impl's generic parameter list: `<__L: Lang>`, or nothing.
+    // The impl's generic parameter list: `<__L: Lang>`, or nothing.
     generics: TokenStream,
-    /// The language type in the trait and the context types: `__L`, or the named type.
+    // The language type in the trait and the context types: `__L`, or the named type.
     lang: TokenStream,
-    /// The method's `where` clause: `where __L: SerializableLang`, or nothing.
+    // The method's `where` clause: `where __L: SerializableLang`, or nothing.
     where_clause: TokenStream,
 }
 
@@ -61,7 +61,7 @@ impl ImplLang {
     }
 }
 
-/// The local a struct-variant field is bound to (and a struct field is read into).
+// The local a struct-variant field is bound to (and a struct field is read into).
 fn field_local(ident: &Ident) -> Ident {
     format_ident!("__field_{}", ident)
 }
@@ -149,12 +149,11 @@ pub(crate) fn expand_serializable_value(input: DeriveInput) -> syn::Result<Token
     })
 }
 
-/// The statements declaring `__writer` and writing the named fields into it through
-/// their `SerializableValue<lang>` impls with the context (the caller finishes the
-/// writer — the `?`s propagate to the generated method directly, whose error type is
-/// the helper's); `access` produces the expression yielding `&FieldType` for a field
-/// ident. The explicit type arguments of the call put an unsatisfied-bound error at
-/// the field type.
+// The statements declaring `__writer` and writing the named fields into it through their
+// `SerializableValue<lang>` impls with the context; the caller finishes the writer (the
+// `?`s propagate straight to the generated method, whose error type is the helper's).
+// `access` produces the expression yielding `&FieldType` for a field ident. The explicit
+// type arguments of the call put an unsatisfied-bound error at the field type.
 fn write_fields(
     fields: &[NamedField],
     lang: &TokenStream,
@@ -254,10 +253,10 @@ pub(crate) fn expand_deserializable_value(input: DeriveInput) -> syn::Result<Tok
     })
 }
 
-/// Reads named fields from `__value` through a `FieldReader` and their
-/// `DeserializableValue<lang>` impls with the context, and builds `constructor { … }`;
-/// `what` names the type (or variant) in the shape error. The explicit type arguments
-/// of the call put an unsatisfied-bound error at the field type.
+// Reads named fields from `__value` through a `FieldReader` and their
+// `DeserializableValue<lang>` impls with the context, and builds `constructor { … }`;
+// `what` names the type (or variant) in the shape error. The explicit type arguments of
+// the call put an unsatisfied-bound error at the field type.
 fn read_fields(
     fields: &[NamedField],
     lang: &TokenStream,
@@ -286,10 +285,10 @@ fn read_fields(
 
 // --- the rejections ---------------------------------------------------------------------
 
-/// The shapes and attribute mistakes the derives refuse, each with an error at the
-/// offending item, and the shape of the accepted expansions. The generated code itself
-/// is compiled and run inside techy (its in-crate derive tests) and from a consumer
-/// crate (its integration tests).
+// The shapes and attribute mistakes the derives refuse, each with an error at the
+// offending item, and the shape of the accepted expansions. The generated code itself is
+// compiled and run inside techy (its in-crate derive tests) and from a consumer crate
+// (its integration tests).
 #[cfg(test)]
 mod tests {
     use syn::{parse_quote, DeriveInput};

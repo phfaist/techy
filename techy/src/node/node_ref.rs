@@ -1,4 +1,5 @@
-//! [`NodeRef`]: the copyable read proxy over a [`NodeTree`]'s flat storage.
+//! The read proxy over a [`NodeTree`]'s flat storage: [`NodeRef`], its
+//! [`Descendants`] iterator, and the [`NamedAccessError`] of the by-name accessors.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -18,15 +19,29 @@ use super::slice::NodeSlice;
 use super::tree::{NodeData, NodeId, NodeTree, NO_PARENT};
 use super::{NodeExt, SlotExt};
 
-/// A reference to one node of a [`NodeTree`]: `Copy`, resolves indices, and borrows the
-/// tree — the borrow checker guarantees a `NodeRef` cannot outlive the storage its index
-/// points into (indices made safe by construction).
+/// A reference to one node of a [`NodeTree`]: `Copy`, and valid for as long as it
+/// borrows the tree.
 ///
-/// Accessors return `'t`-borrowed data (borrowing the *tree*, not this transient proxy),
-/// so extracted references outlive the `NodeRef` value itself.
+/// Every read of a parsed tree goes through a `NodeRef`. One comes from
+/// [`NodeTree::root`](super::NodeTree::root), from
+/// [`NodeTree::node`](super::NodeTree::node) or
+/// [`get`](super::NodeTree::get) for a [`NodeId`], from a source-position query
+/// ([`NodeTree::node_at`](super::NodeTree::node_at)), or from another node:
+/// [`parent`](NodeRef::parent), [`child`](NodeRef::child),
+/// [`children`](NodeRef::children), and [`descendants`](NodeRef::descendants) navigate
+/// the structure, while [`kind`](NodeRef::kind), [`span`](NodeRef::span), and the
+/// kind-specific accessors below read one node.
 ///
-/// Kind-specific accessors are `Option`-returning on the wrong kind; preset-level sugar
-/// (`as_math()`-style environment/macro views) arrives with the latexlike preset.
+/// A `NodeRef` stores only a borrow of the tree and an index, so the borrow checker
+/// guarantees it cannot outlive the storage that index points into. Its accessors
+/// return data borrowed from the *tree*, not from this transient proxy, so what they
+/// return outlives the `NodeRef` value itself.
+///
+/// A kind-specific accessor answers `None` on a node of another kind. For latexlike
+/// trees the preset adds accessors in its own vocabulary to this same type —
+/// [`macro_name`](NodeRef::macro_name),
+/// [`environment_name`](NodeRef::environment_name),
+/// [`is_math_group`](NodeRef::is_math_group), and others.
 pub struct NodeRef<'t, L: Lang, A = ()> {
     tree: &'t NodeTree<L, A>,
     id: NodeId,
@@ -47,17 +62,17 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         &self.tree.nodes()[self.id.index()]
     }
 
-    /// The tree this reference points into — the anchor for tree-level operations
-    /// ([`NodeTree::node_at`](super::NodeTree::node_at),
-    /// [`annotations`](super::NodeTree::annotations), …) from a node in hand.
+    /// The tree this reference points into, for tree-level operations reached from a
+    /// node ([`NodeTree::node_at`](super::NodeTree::node_at),
+    /// [`annotations`](super::NodeTree::annotations), …).
     pub fn tree(&self) -> &'t NodeTree<L, A> {
         self.tree
     }
 
-    /// This node's parent — `None` at the root. O(1): the tree stores its parent
-    /// table (`finish()` computes it for region resolution anyway).
+    /// This node's parent, or `None` at the root. O(1) — the tree stores a parent
+    /// table.
     ///
-    /// Walking all ancestors is a one-liner, innermost first:
+    /// To visit all ancestors, innermost first:
     /// `core::iter::successors(node.parent(), |n| n.parent())`.
     pub fn parent(&self) -> Option<NodeRef<'t, L, A>> {
         let parent = self.tree.parent_table()[self.id.index()];
@@ -72,9 +87,10 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         Some(self.id.index() - parent.data().children.start as usize)
     }
 
-    /// This node's annotation (the tree's consumer-owned per-node data; see
-    /// [`NodeTree`]'s annotation notes). Annotations have no setter — trees are
-    /// frozen; a new annotation stage comes from
+    /// This node's annotation: the tree's consumer-owned per-node data (see
+    /// [`NodeTree`]'s annotation notes).
+    ///
+    /// There is no setter — trees are immutable, and a new annotation stage comes from
     /// [`NodeTree::annotate`](super::NodeTree::annotate).
     pub fn annotation(&self) -> &'t A {
         &self.tree.annotations[self.id.index()]
@@ -90,38 +106,41 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         &self.data().kind
     }
 
-    /// The uniform (tier-1) ext data.
+    /// This node's language-specific ext data ([`NodeExt`], the same type for every
+    /// node kind).
     pub fn ext(&self) -> &'t NodeExt<L> {
         &self.data().ext
     }
 
-    /// The node's provenance span (`Arc<Source>` + byte range) — where the node came
-    /// from.
+    /// Where the node came from: its provenance span, an `Arc<Source>` and a byte
+    /// range.
     ///
     /// On a tree parsed from a language that obeys span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) the span
-    /// is exactly the stretch of source the node was parsed from. For a language with
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)) the span is
+    /// exactly the stretch of source the node was parsed from. For a language with
     /// `OBEYS_SPAN_TILING = false` it is the span the token reader described for that
-    /// stretch of the stream, and for a restaged or synthesized node it is whatever
-    /// the transform recorded. What the node *says* is read from its own data, never
-    /// from the span.
+    /// stretch of the stream, and for a restaged or synthesized node it is whatever the
+    /// transform recorded. What the node *says* is read from its own data, never from
+    /// the span.
     pub fn span(&self) -> &'t SourceSpan<L::SourceOrigin> {
         &self.data().span
     }
 
-    /// The text this node's [`span`](NodeRef::span) points at — level-1 verbatim
-    /// recomposition: it never needs an external lookup and works for detached and
-    /// mixed-origin trees.
+    /// The text this node's [`span`](NodeRef::span) points at — the node's original
+    /// spelling, verbatim.
     ///
-    /// This answers the coordinates, not the node's data. The two agree on a tree
-    /// parsed from a language that obeys span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)): the span
-    /// is exactly the node's original text. For a language with
-    /// `OBEYS_SPAN_TILING = false`, and on restaged or synthesized trees, they need
-    /// not agree — what the node says is its recorded data
-    /// ([`chars`](NodeRef::chars), [`group_delimiters`](NodeRef::group_delimiters),
-    /// [`comment`](NodeRef::comment), [`callable`](NodeRef::callable)), and
-    /// re-emitting a tree's spelling is [`recompose`](crate::recompose)'s job.
+    /// It needs no external lookup and works for detached and mixed-origin trees, since
+    /// the span names its own source.
+    ///
+    /// The answer comes from the coordinates, not from the node's data. The two agree
+    /// on a tree parsed from a language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), where the
+    /// span is exactly the node's original text. For a language with
+    /// `OBEYS_SPAN_TILING = false`, and on restaged or synthesized trees, they need not
+    /// agree: what the node says is its recorded data ([`chars`](NodeRef::chars),
+    /// [`group_delimiters`](NodeRef::group_delimiters), [`comment`](NodeRef::comment),
+    /// [`callable`](NodeRef::callable)), and re-emitting the spelling of a whole tree is
+    /// what [`recompose`](crate::recompose) does.
     pub fn span_content(&self) -> &'t str {
         self.data().span.content()
     }
@@ -131,18 +150,22 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         &self.data().parsing_state
     }
 
-    /// A compact one-line description of the node — `chars(ab )`, `group(Math(Inline) $ $)`,
-    /// `Macro(emph)`, `comment( note)`, `list(3)` — the assertion/logging companion
-    /// to the verbose `Debug` rendering (promoted from the preset's test support). Groups print their class (`?` when classless) and recorded
-    /// delimiters; callables print their invocation form (`Debug`) and spelling;
-    /// chars/comments print their full logical text; lists print their child count.
+    /// A compact one-line description of the node, for assertions and log messages:
+    /// `chars(ab )`, `group(Math(Inline) $ $)`, `Macro(emph)`, `comment( note)`,
+    /// `list(3)`.
+    ///
+    /// It is the short companion of the verbose `Debug` rendering. Groups print their
+    /// class (`?` when they have none) and their recorded delimiters; callables print
+    /// their invocation form (via `Debug`) and their spelling; chars and comment nodes
+    /// print their full logical text; lists print their child count. A whole subtree is
+    /// rendered by [`display_tree`](super::display_tree).
     ///
     /// The format is human-oriented and **not a stability contract**: it may change
-    /// between releases. Within a release it is exact, and the crate's own tests
-    /// pin it — a re-implementation that must agree with this crate's renderings
-    /// (a binding porting the test suite) reproduces it verbatim. Compare trees
-    /// structurally (kinds, spans, accessors) where exactness matters beyond a
-    /// test's lifetime.
+    /// between releases. Within a release it is exact, and the crate's own tests pin
+    /// it, so a re-implementation that must agree with these renderings — a binding
+    /// porting the test suite — can reproduce it verbatim. Where exactness has to
+    /// outlast a test, compare trees structurally instead, through kinds, spans, and
+    /// accessors.
     pub fn summary(&self) -> String {
         if let Some(text) = self.chars() {
             format!("chars({text})")
@@ -186,12 +209,13 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         NodeSlice::new(self.tree, self.data().children.clone())
     }
 
-    /// The node's descendants in **document order** (preorder depth-first: each node
-    /// before its children, siblings left to right), the node itself excluded. This is
-    /// the "walk everything under here" primitive — find every `\cite`, collect every
-    /// math group — that flat storage order
-    /// ([`NodeTree::iter_storage_order`](super::NodeTree::iter_storage_order),
-    /// breadth-first) deliberately does not provide.
+    /// The node's descendants in **document order** — preorder depth-first, each node
+    /// before its children and siblings left to right — the node itself excluded.
+    ///
+    /// This is how to visit everything under a node: find every `\cite`, collect every
+    /// math group. The flat storage order
+    /// ([`NodeTree::iter_storage_order`](super::NodeTree::iter_storage_order)) is
+    /// deliberately not document order.
     pub fn descendants(&self) -> Descendants<'t, L, A> {
         let mut stack = Vec::new();
         push_children_reversed(&mut stack, self.data());
@@ -225,7 +249,8 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         matches!(self.kind(), NodeKind::List)
     }
 
-    /// A `Chars` node's logical text.
+    /// A `Chars` node's logical text — its recorded content, resolved against the
+    /// node's own source.
     pub fn chars(&self) -> Option<&'t str> {
         match self.kind() {
             NodeKind::Chars { content, .. } => Some(content.resolve(self.source())),
@@ -244,7 +269,8 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         }
     }
 
-    /// A `Group` node's full payload (delimiters, group class, ext).
+    /// A `Group` node's full payload ([`GroupData`]: the delimiters as written and
+    /// the group's class).
     pub fn group(&self) -> Option<&'t GroupData<L>> {
         match self.kind() {
             NodeKind::Group(data) => Some(data),
@@ -259,7 +285,8 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         self.group().and_then(|data| data.group_type)
     }
 
-    /// A `Group` node's delimiters, as logical text.
+    /// A `Group` node's delimiters, as logical text: the opening one and the closing
+    /// one. The closing delimiter is empty when the close was never found.
     pub fn group_delimiters(&self) -> Option<(&'t str, &'t str)> {
         self.group().map(|data| {
             (data.open.resolve(self.source()), data.close.resolve(self.source()))
@@ -292,9 +319,11 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     }
 
     /// A `Callable` node's recorded invocation-syntax payload
-    /// ([`CallableData::invocation_syntax`]) — the Lang-owned trigger-spelling
-    /// facts. Typed readers live with the payload type (the latexlike sugar's
-    /// [`post_space`](NodeRef::post_space) reads its `Macro` arm).
+    /// ([`CallableData::invocation_syntax`]): the trigger-spelling facts, in the type
+    /// the language chose.
+    ///
+    /// Typed readers for it are defined with that payload type — the preset's
+    /// [`post_space`](NodeRef::post_space), for one, reads its `Macro` arm.
     pub fn invocation_syntax(&self) -> Option<&'t L::InvocationSyntax> {
         self.callable().map(|data| &data.invocation_syntax)
     }
@@ -309,22 +338,26 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         self.callable().map(|data| &data.slots)
     }
 
-    /// The nodes of argument `i`'s region — the argument's full syntactic extent
-    /// (leading comment/whitespace noise plus the syntax-bearing nodes), in source
-    /// order. `None` for non-callables, out-of-range indices, and absent arguments
-    /// (consult [`arguments`](NodeRef::arguments) to distinguish — or use the
-    /// by-name form [`argument_nodes_named`](NodeRef::argument_nodes_named), whose
-    /// `Result` discriminates the category errors from a merely absent argument).
+    /// The nodes of argument `i`'s region, in source order: the argument's full
+    /// syntactic extent, comment and whitespace nodes included.
+    ///
+    /// `None` for a non-callable, an out-of-range index, and an argument that was not
+    /// provided. To tell those apart, read [`arguments`](NodeRef::arguments), or use
+    /// the by-name form [`argument_nodes_named`](NodeRef::argument_nodes_named), whose
+    /// `Result` separates the category errors from a merely absent argument.
     pub fn argument_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_nodes(self.callable()?.arguments.get(i)?.region.as_ref()?)
     }
 
-    /// The nodes of the region of the argument named `name` (per its
-    /// [`ArgumentSpec`](crate::spec::ArgumentSpec)) — [`argument_nodes`](NodeRef::argument_nodes)
-    /// by name, with the by-name error contract: `Err` is the category mismatch (not
-    /// a callable, or `name` is not among the spec's declared arguments — the
-    /// misspelling trap), `Ok(None)` is precisely "declared but absent", `Ok(Some)`
-    /// is present.
+    /// The nodes of the region of the argument named `name`, per its
+    /// [`ArgumentSpec`](crate::core::specs::ArgumentSpec) —
+    /// [`argument_nodes`](NodeRef::argument_nodes) by name.
+    ///
+    /// # Errors
+    ///
+    /// `Err` is a category mismatch: the node is not a callable, or `name` is not among
+    /// the spec's declared arguments (the misspelling trap). `Ok(None)` means precisely
+    /// "declared but absent", and `Ok(Some)` that the argument is present.
     pub fn argument_nodes_named(
         &self,
         name: &str,
@@ -336,23 +369,30 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         Ok(argument.region.as_ref().and_then(|region| self.region_nodes(region)))
     }
 
-    /// The content nodes of argument `i`, noise and delimiters excluded: the group's
-    /// children for `\textbf{abc}`, the single `Chars` node for `\frac 1 2` — exactly
-    /// what the argument's parser designated, no unwrap heuristics. `None` for
-    /// non-callables, out-of-range indices, and absent arguments (consult
-    /// [`arguments`](NodeRef::arguments) to distinguish — or use the by-name form
-    /// [`argument_content_nodes_named`](NodeRef::argument_content_nodes_named),
-    /// whose `Result` discriminates the category errors from a merely absent
-    /// argument).
+    /// The content nodes of argument `i`, with delimiters and comment and whitespace
+    /// nodes excluded: the group's children for `\textbf{abc}`, the single `Chars`
+    /// node for `\frac 1 2`.
+    ///
+    /// These are exactly the nodes the argument's parser designated as content; no
+    /// unwrapping is guessed here.
+    ///
+    /// `None` for a non-callable, an out-of-range index, and an argument that was not
+    /// provided. To tell those apart, read [`arguments`](NodeRef::arguments), or use
+    /// the by-name form
+    /// [`argument_content_nodes_named`](NodeRef::argument_content_nodes_named), whose
+    /// `Result` separates the category errors from a merely absent argument.
     pub fn argument_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(self.callable()?.arguments.get(i)?.region.as_ref()?)
     }
 
     /// The content nodes of the argument named `name` —
-    /// [`argument_content_nodes`](NodeRef::argument_content_nodes) by name, with
-    /// the by-name error contract of
-    /// [`argument_nodes_named`](NodeRef::argument_nodes_named): `Err` = category
-    /// mismatch, `Ok(None)` = declared but absent, `Ok(Some)` = present.
+    /// [`argument_content_nodes`](NodeRef::argument_content_nodes) by name.
+    ///
+    /// # Errors
+    ///
+    /// The contract of [`argument_nodes_named`](NodeRef::argument_nodes_named): `Err`
+    /// is a category mismatch, `Ok(None)` is declared but absent, and `Ok(Some)` is
+    /// present.
     pub fn argument_content_nodes_named(
         &self,
         name: &str,
@@ -373,40 +413,49 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     }
 
     /// The node whose child list holds slot `i`'s content — the body `List` of the
-    /// standard environment shape — when this is a callable with such a slot. `None`
-    /// when the slot's content sits directly among the callable's own children
-    /// ([`ContentNodes::InRegion`](super::ContentNodes) designations), where no such
-    /// wrapper node exists — returning the callable itself would send naive recursive
-    /// walkers into a loop. The shipped producer of that wrapperless shape is
-    /// [`input_macro_spec`](crate::latexlike::input_macro_spec)'s `attached` slot:
-    /// the included content's nodes sit directly among the `\input` callable's
-    /// children (reaching it takes a
-    /// [`SourceResolver`](crate::source::SourceResolver) on the driver). Content
-    /// access that works for *both* shapes is
-    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) / [`body`](NodeRef::body).
+    /// standard environment shape — when this is a callable with such a slot.
+    ///
+    /// `None` when the slot's content sits directly among the callable's own children
+    /// (a [`ContentNodes::InRegion`](super::ContentNodes) designation), where no
+    /// wrapper node exists; answering with the callable itself would send a naive
+    /// recursive walker into a loop. The one such shape the crate ships is the
+    /// `attached` slot of
+    /// [`input_macro_spec`](crate::latexlike::input_macro_spec), where the included
+    /// content's nodes sit directly among the `\input` callable's children (producing
+    /// them requires a [`SourceResolver`](crate::source::SourceResolver) on the
+    /// driver).
+    ///
+    /// For content access that works for *both* shapes, use
+    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) or
+    /// [`body`](NodeRef::body).
     pub fn slot_content_parent(&self, i: usize) -> Option<NodeRef<'t, L, A>> {
         let region = &self.callable()?.slots.get(i)?.region;
         let parent = region.content_parent();
         (parent != self.id).then(|| NodeRef::new(self.tree, parent))
     }
 
-    /// The content nodes of slot `i` (the body nodes, for the standard environment
-    /// shape), in source order. `None` for non-callables and out-of-range indices
-    /// (the by-name form
-    /// [`slot_content_nodes_named`](NodeRef::slot_content_nodes_named) turns those
-    /// category mismatches into errors).
+    /// The content nodes of slot `i`, in source order — the body nodes, for the
+    /// standard environment shape.
+    ///
+    /// `None` for a non-callable and for an out-of-range index; the by-name form
+    /// [`slot_content_nodes_named`](NodeRef::slot_content_nodes_named) reports those
+    /// category mismatches as errors instead.
     pub fn slot_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(&self.callable()?.slots.get(i)?.region)
     }
 
-    /// The content nodes of the slot named `name` (per its
-    /// [`ParsedSlot`](super::ParsedSlot) record) —
-    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) by name, with the
-    /// by-name error contract: `Err` is the category mismatch (not a callable, or
-    /// no slot named `name` — the misspelling trap). Unlike the argument family
-    /// there is no `Option` layer: a recorded slot always has content nodes
-    /// (possibly zero of them — an `Ok` slice may be empty), with no
-    /// "declared but absent" state.
+    /// The content nodes of the slot named `name`, per its
+    /// [`ParsedSlot`](super::ParsedSlot) record —
+    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) by name.
+    ///
+    /// Unlike the argument family there is no `Option` layer: a recorded slot always
+    /// has content nodes, possibly zero of them, so an `Ok` slice may be empty and
+    /// there is no "declared but absent" state.
+    ///
+    /// # Errors
+    ///
+    /// `Err` is a category mismatch: the node is not a callable, or it has no slot
+    /// named `name` (the misspelling trap).
     pub fn slot_content_nodes_named(
         &self,
         name: &str,
@@ -419,19 +468,21 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         Ok(NodeSlice::new(self.tree, slot.region.content_range()))
     }
 
-    /// The content nodes of the **body slot** — the *body* of environment-shaped
-    /// callables, in source order: the first slot whose ext reports
-    /// [`is_body()`](BodySlotExt::is_body) (available where the language's
-    /// [`SlotExt`](crate::state::NodeExtTypes::SlotExt) implements [`BodySlotExt`];
-    /// for no-ext languages every slot reports body, so this is the first slot).
+    /// The content nodes of the **body slot**, in source order: the body of an
+    /// environment-shaped callable.
     ///
-    /// The selection is the **ext axis alone** — deliberately no conjunction with the
-    /// slot's [`SlotRole`](super::SlotRole): a framework marking an
-    /// `Attached` or `Hidden` slot as its body must not find it silently
-    /// unlocatable here.
+    /// The body is the first slot whose ext reports
+    /// [`is_body()`](BodySlotExt::is_body). The method is available where the
+    /// language's [`SlotExt`](crate::core::NodeExtTypes::SlotExt) implements
+    /// [`BodySlotExt`]; for a language without slot exts every slot reports body, so
+    /// this is the first slot.
+    ///
+    /// The selection looks at the ext alone, and deliberately not also at the slot's
+    /// [`SlotRole`](super::SlotRole): a framework that marks an `Attached` or `Hidden`
+    /// slot as its body must not find that slot silently unreachable here.
     ///
     /// The body's wrapper node, when one exists, is
-    /// [`slot_content_parent`](NodeRef::slot_content_parent) at the same slot's index.
+    /// [`slot_content_parent`](NodeRef::slot_content_parent) at the same slot index.
     pub fn body(&self) -> Option<NodeSlice<'t, L, A>>
     where
         SlotExt<L>: BodySlotExt,
@@ -441,23 +492,24 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     }
 }
 
-/// Error of the by-name accessors ([`NodeRef::argument_nodes_named`],
-/// [`NodeRef::argument_content_nodes_named`],
-/// [`NodeRef::slot_content_nodes_named`]): a **category mismatch** — the node is
-/// not a callable, or the name matches nothing declared.
+/// A category mismatch reported by the by-name accessors: the node is not a callable,
+/// or the name matches nothing the callable declares.
 ///
-/// Deliberately an error rather than a silent `None`: for a *name*, `None` on a
-/// typo has no cheap call-site discriminator — and names, unlike indices, are
-/// exactly the access form the API recommends. `Ok(None)` stays reserved for the
-/// argument family's "declared but absent". Never a panic: this family is the
-/// non-panicking companion shape by design.
+/// Returned by [`NodeRef::argument_nodes_named`],
+/// [`NodeRef::argument_content_nodes_named`], and
+/// [`NodeRef::slot_content_nodes_named`].
+///
+/// These accessors report an error rather than answering `None`, because a `None` on a
+/// misspelled name gives the call site nothing cheap to distinguish it by, and names
+/// are the access form the API recommends. `Ok(None)` stays reserved for the argument
+/// family's "declared but absent". None of these accessors ever panics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NamedAccessError {
     /// The node is not a `Callable` — it has no arguments or slots to access.
     NotACallable,
     /// The name matches none of the callable's declared arguments (the names on
-    /// its spec's [`ArgumentSpec`](crate::spec::ArgumentSpec)s).
+    /// its spec's [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s).
     UnknownArgumentName {
         /// The unmatched name, as queried.
         name: Box<str>,

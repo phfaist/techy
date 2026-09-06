@@ -1,8 +1,14 @@
-//! Pluggable source resolution for `\input`-like external references.
+//! Pluggable resolution of `\input`-like external references to source content.
 //!
-//! Per the crate's no_std policy, no file-system-backed resolver is provided here: an
-//! embedder that wants to read files (or fetch URLs, query a database, …) implements
-//! [`SourceResolver`] on its side, where the I/O capability lives.
+//! [`SourceResolver`] is the trait an embedder implements; [`MapResolver`] is a ready-made
+//! implementation over an in-memory map, for tests and preloaded setups.
+//! [`resolve_source_reference`] is the call that runs a resolver and builds the resulting
+//! [`Source`], and [`check_include_chain`] is the usual guard against runaway include
+//! recursion.
+//!
+//! Because the crate uses only `core` and `alloc`, no file-system-backed resolver is
+//! provided here: an embedder that wants to read files, fetch URLs, or query a database
+//! implements [`SourceResolver`] on its own side, where those capabilities are available.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -14,48 +20,61 @@ use core::fmt;
 use super::origin::SourceOrigin;
 use super::source::{Source, SourceSpan};
 
-/// Resolves an external reference (e.g. a file name from an `\input`-like construct) to
-/// the referenced **content**. Resolvers are configured on the parse driver
-/// (`with_source_resolver`) and reached through its `source_resolver` accessor;
-/// `None` there — the default — is the canonical "resolves nothing" (no lookup,
-/// no I/O).
+/// Resolves an external reference — a file name from an `\input`-like construct, say — to
+/// the content it names.
 ///
-/// **The resolver returns content, not a [`Source`]**:
-/// the caller mints the `Source` — see [`resolve_source_reference`] — stamping the include-site
-/// provenance (`SourceProvenance::Resolved { reference, triggered_at }`) itself. A
-/// twice-included file thereby gets a *distinct* `Source` per include site, each
-/// recording its own trigger, so diagnostics inside either inclusion render the right
-/// include chain. Implementations are free to cache the content they fetch (content is
-/// `triggered_at`-independent and may safely be shared); they cannot corrupt
-/// provenance, which never passes through their hands.
+/// Implement this trait to give a parse access to content beyond the document it started
+/// from. A resolver is configured on the parse driver with
+/// [`with_source_resolver`](crate::core::StdParseDriver::with_source_resolver) and read
+/// back through [`ParseDriver::source_resolver`](crate::core::ParseDriver::source_resolver);
+/// a driver without one — the default — resolves nothing and performs no lookup at all.
 ///
-/// `reference` is the reference string exactly as written; the **core never interprets
-/// it** (no path semantics, no canonicalization — deliberate). `triggered_at` locates
-/// the triggering construct: context a resolver may use (e.g. resolving a relative path
-/// against the including source's origin) — that interpretation is resolver business.
+/// A resolver returns content, not a [`Source`]. The caller builds the source and stamps
+/// the provenance of *this* include site on it; [`resolve_source_reference`] is that call.
+/// A file included twice therefore gets a separate `Source` per include site, each
+/// recording its own trigger, so diagnostics inside either inclusion show the right
+/// include chain. An implementation may freely cache the content it fetches, since content
+/// does not depend on where it was requested from, and it cannot corrupt provenance
+/// because provenance never passes through it.
 ///
-/// **Recursion is the embedder's responsibility.** A resolver reachable from its own
-/// output (`a.tex → \input{a.tex}`) makes unbounded include recursion possible; the
-/// core performs no recursion checking, in line with never interpreting references.
-/// An embedder that needs a bound (a command-line driver reading real files) enforces
-/// its own include-depth limit or cycle check —
-/// [`Source::provenance_chain`] exposes every enclosing
-/// `Resolved { reference, triggered_at }` record for exactly this.
+/// `reference` is the reference string exactly as written. The parser never interprets it:
+/// no path semantics, no canonicalization. `triggered_at` locates the construct that asked
+/// for it, which a resolver may use as context — resolving a relative path against the
+/// including source's origin, for instance.
 ///
-/// **Thread safety is part of the contract** (`Send + Sync` supertraits, matching the
-/// other stored extension traits —
-/// [`CallableSpec`](crate::spec::CallableSpec)'s note applies): resolvers are stored in
-/// long-lived, shareable language bundles. `resolve` takes `&self`, so a caching
-/// implementation needs interior mutability — under this contract that means locks or
-/// atomics (`Mutex`/`RwLock`/`OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell`.
+/// # Recursion is the embedder's responsibility
 ///
-/// **Downcasting is part of the contract** (`Any` supertrait;
-/// [`CallableSpec`](crate::spec::CallableSpec)'s downcasting note applies): a consumer
-/// recovers a resolver's concrete type from the stored `Arc<dyn SourceResolver<O>>` or
-/// `&dyn SourceResolver<O>`.
+/// A resolver whose output can reach itself (`a.tex` containing `\input{a.tex}`) makes
+/// unbounded include recursion possible, and the parser performs no recursion checking,
+/// consistent with never interpreting references. An embedder that needs a bound — a
+/// command-line driver reading real files — enforces its own cycle check or depth limit.
+/// [`check_include_chain`] is the ready-made version, and
+/// [`Source::provenance_chain`] exposes every enclosing include record for a hand-written
+/// one.
+///
+/// # Thread safety and downcasting
+///
+/// The `Send + Sync` supertraits are part of the contract, because resolvers are stored in
+/// long-lived, shareable language bundles (the same reasoning as for
+/// [`CallableSpec`](crate::core::specs::CallableSpec)). Since `resolve` takes `&self`, a
+/// caching implementation needs interior mutability, and under this contract that means
+/// locks or atomics — `Mutex`, `RwLock`, `OnceLock`, or the `spin` crate on `no_std` — not
+/// `RefCell` or `Cell`.
+///
+/// The `Any` supertrait is likewise part of the contract: a consumer can recover a
+/// resolver's concrete type from the stored `Arc<dyn SourceResolver<O>>` or
+/// `&dyn SourceResolver<O>` by downcasting.
 pub trait SourceResolver<O: SourceOrigin = Option<String>>: Send + Sync + Any {
-    /// Resolve `reference` to its content (plus origin metadata for the source the
-    /// caller will mint), or explain why it cannot be resolved.
+    /// Resolves `reference` to its content, plus the origin metadata for the source the
+    /// caller will build.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ResolveError`] describing why the reference could not be resolved —
+    /// there is no such file, reading it failed, the reference is malformed. The construct
+    /// that asked for the content reports it as an
+    /// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
+    /// diagnostic.
     fn resolve(
         &self,
         reference: &str,
@@ -115,18 +134,19 @@ mod sealed {
     impl<O: SourceOrigin> Sealed<O, SharedDyn> for Arc<dyn SourceResolver<O>> {}
 }
 
-/// Sealed conversion into a shared [`SourceResolver`] — the argument contract of the
-/// shipped drivers' `with_source_resolver(…)` builders, following the crate's one
-/// Arc-removal conversion idiom: a resolver passed **by value** is shared internally
-/// (`Arc::new`), while an already-shared **`Arc<R>`** or **`Arc<dyn
-/// SourceResolver<O>>`** passes through as-is — no `Arc::new` at any call site, and
-/// no double-wrap of pre-shared resolvers.
+/// Sealed conversion into a shared [`SourceResolver`]: the argument contract of the
+/// drivers' `with_source_resolver(…)` builders.
 ///
-/// Sealed: the three impls are the whole vocabulary; downstream code implements
-/// [`SourceResolver`], never this trait. (The `M` parameter is a sealed inference
-/// marker distinguishing the three argument shapes — it never needs to be named.)
+/// A resolver passed by value is wrapped in an `Arc` internally, while an
+/// already-shared `Arc<R>` or `Arc<dyn SourceResolver<O>>` is passed through unchanged.
+/// No call site needs to write `Arc::new`, and a resolver that is already shared is not
+/// wrapped a second time.
+///
+/// The trait is sealed: these three conversions are the whole vocabulary, and downstream
+/// code implements [`SourceResolver`] instead. The `M` parameter is a sealed marker that
+/// lets type inference tell the three argument shapes apart; it never has to be named.
 pub trait IntoSourceResolver<O: SourceOrigin, M>: sealed::Sealed<O, M> {
-    /// Convert into the shared resolver handle the drivers store.
+    /// Converts into the shared resolver handle a driver stores.
     fn into_source_resolver(self) -> Arc<dyn SourceResolver<O>>;
 }
 
@@ -152,13 +172,18 @@ impl<O: SourceOrigin> IntoSourceResolver<O, sealed::SharedDyn> for Arc<dyn Sourc
     }
 }
 
-/// Resolve `reference` through `resolver` and mint the [`Source`] — the call-site
-/// composition the parser will use. Provenance is stamped **here, in core**:
-/// each call produces a fresh `Source` whose provenance records *this* `triggered_at`,
-/// which is what keeps a twice-included file's diagnostics pointing at the right
-/// include site (see the trait docs). The minted source carries the resolver's origin
-/// metadata and, when the resolver set them, its line/column number offsets
-/// ([`ResolvedContent::line_number_offset`]).
+/// Resolves `reference` through `resolver` and builds the [`Source`] for the result.
+///
+/// This is the composition a parser performs at an `\input`-like construct, and the place
+/// where provenance is stamped: every call produces a fresh `Source` recording *this*
+/// `triggered_at`, which is what keeps a twice-included file's diagnostics pointing at the
+/// right include site (see [`SourceResolver`]). The new source carries the origin metadata
+/// the resolver supplied and, where the resolver set them, its line and column number
+/// offsets ([`ResolvedContent::line_number_offset`]).
+///
+/// # Errors
+///
+/// Returns the [`ResolveError`] the resolver produced, unchanged.
 pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     resolver: &R,
     reference: &str,
@@ -175,39 +200,44 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     Ok(Arc::new(source.with_line_column_number_offsets(line_number_offset, column_number_offset)))
 }
 
-/// The ready-made include-cycle-plus-depth check a [`SourceResolver`] calls with `?`
-/// before answering an `\input`-like reference — recursion control stays **embedder
-/// policy** (the core never interprets references and performs no recursion
-/// checking; legitimate self-inclusion exists, e.g. `.dtx` self-documenting files),
-/// and this helper makes the common policy a one-liner.
+/// The ready-made include-cycle and include-depth check, called with `?` inside a
+/// [`SourceResolver`] before it answers an `\input`-like reference.
 ///
-/// The check is keyed on **origins**, not on provenance reference strings — two
-/// spellings can name one file, and the *primary* source (which has no reference)
-/// participates through the origin its creator minted. The division of labor:
+/// Bounding include recursion is the embedder's policy — the parser never interprets
+/// references and performs no recursion checking, and some self-inclusion is legitimate,
+/// as in `.dtx` self-documenting files — but the common policy is this one, so this helper
+/// makes it a one-liner.
 ///
-/// - `target_key` is the already-canonicalized key of the source *about to be
-///   included* — the resolver computes the canonical name during resolution anyway
-///   (an absolute path, a normalized URL);
-/// - `triggered_at` locates the triggering construct; the chain walked is its
-///   source's [`including_sources`](Source::including_sources) — the would-be
-///   includer and every source above it, primary included;
-/// - `origin_key` converts a chain source's origin into the same key space —
-///   a cheap conversion **when the resolver mints canonical origins** (the
-///   documented invariant this helper rests on: resolved sources must carry the
-///   canonical name as their origin, and the embedder mints the primary source
-///   with a suitable canonical origin too). A `None` key skips that chain entry
-///   (nothing comparable recorded).
-/// - `max_depth`, when `Some`, bounds the *inclusion depth* of the new source:
-///   the primary is depth 0, a source it includes is depth 1, and so on; the
-///   check fails when the new source's depth would exceed `max_depth`.
+/// The check compares source *origins*, not the reference strings recorded in provenance:
+/// two spellings can name one file, and the primary source, which has no reference at all,
+/// still takes part through the origin its creator gave it. The arguments divide the work
+/// as follows:
 ///
-/// A detected cycle and an exceeded depth produce distinct
-/// [`ResolveError`] messages. The error's `reference` field carries an origin
-/// label when one exists (the key type `K` is not required to render itself):
-/// for a cycle, the offending chain source's; for a depth overflow, the
-/// immediate includer's (the target itself has no renderable origin yet). A
-/// resolver wanting its own reference spelling maps the error before returning
-/// it.
+/// - `target_key` is the canonical key of the source about to be included; a resolver
+///   computes that canonical name — an absolute path, a normalized URL — during resolution
+///   anyway.
+/// - `triggered_at` locates the triggering construct. The chain examined is its source's
+///   [`including_sources`](Source::including_sources): the would-be includer and every
+///   source above it, up to and including the primary one.
+/// - `origin_key` converts a chain source's origin into the same key space. This is cheap
+///   *provided the resolver gives resolved sources their canonical name as their origin*,
+///   and the embedder gives the primary source a suitable canonical origin too; the whole
+///   check rests on that. Returning `None` skips that chain entry, meaning nothing
+///   comparable was recorded for it.
+/// - `max_depth`, when `Some`, bounds the inclusion depth of the new source. The primary
+///   source is depth 0, a source it includes is depth 1, and so on.
+///
+/// # Errors
+///
+/// Returns a [`ResolveError`] when the target is already on its own include chain, and a
+/// different one when including it would exceed `max_depth`; the two messages are
+/// distinct.
+///
+/// The error's [`reference`](ResolveError::reference) field carries an origin label where
+/// one exists, since the key type `K` is not required to be printable: for a cycle, the
+/// label of the offending source on the chain; for a depth overflow, that of the immediate
+/// includer, the target having no renderable origin yet. A resolver that prefers its own
+/// spelling of the reference maps the error before returning it.
 pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
     target_key: &K,
     triggered_at: &SourceSpan<O>,
@@ -241,34 +271,41 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
     Ok(())
 }
 
-/// What a [`SourceResolver`] returns: the referenced content, plus origin metadata and
-/// optional line/column number offsets for the [`Source`] the caller mints (see
-/// [`resolve_source_reference`]).
+/// What a [`SourceResolver`] returns: the referenced content, plus the origin metadata and
+/// optional line and column number offsets for the [`Source`] the caller builds from it.
+///
+/// Start from [`new`](ResolvedContent::new) and add what is known with
+/// [`with_origin`](ResolvedContent::with_origin) and the offset setters. See
+/// [`resolve_source_reference`] for how the source is built.
 #[derive(Debug, Clone)]
 pub struct ResolvedContent<O: SourceOrigin = Option<String>> {
     /// The resolved content.
     pub content: String,
-    /// Origin metadata (display metadata for diagnostics — conventionally the URL or
-    /// path the content was obtained from); `O::default()` when the resolver knows
-    /// nothing more.
+    /// Origin metadata shown in diagnostics, conventionally the URL or path the content
+    /// was obtained from; `O::default()` when the resolver knows nothing more.
     pub origin: O,
-    /// The line number offset the minted source carries
-    /// ([`Source::with_line_column_number_offsets`]), or `None` to keep the source's
-    /// default. For a resolver that hands over only part of what it read — a file
-    /// whose leading front-matter block the resolver consumed itself, say — this keeps
-    /// the line numbers in diagnostics true to the file. The value is the offset
-    /// itself, not an increment: a resolver removing `n` leading lines from 1-indexed
-    /// content sets `1 + n`. Byte offsets and spans stay relative to the content handed
-    /// over; only line/column numbering shifts.
+    /// The line number offset for the source built from this content
+    /// ([`Source::with_line_column_number_offsets`]), or `None` to keep that source's
+    /// default.
+    ///
+    /// A resolver that hands over only part of what it read — a file whose leading
+    /// front-matter block it consumed itself, say — sets this so that line numbers in
+    /// diagnostics still match the original file. The value is the offset itself, not an
+    /// increment: a resolver that removed `n` leading lines from 1-indexed content sets
+    /// `1 + n`.
+    ///
+    /// Byte offsets and spans stay relative to the content handed over; only line and
+    /// column numbering shifts.
     pub line_number_offset: Option<usize>,
-    /// The column number offset the minted source carries, or `None` to keep the
-    /// source's default (see [`line_number_offset`](ResolvedContent::line_number_offset)).
+    /// The column number offset for the source built from this content, or `None` to keep
+    /// that source's default (see
+    /// [`line_number_offset`](ResolvedContent::line_number_offset)).
     pub column_number_offset: Option<usize>,
 }
 
 impl<O: SourceOrigin> ResolvedContent<O> {
-    /// Resolved content with the default ("unknown") origin and the source's default
-    /// line/column number offsets.
+    /// Resolved content with the default ("unknown") origin and no line or column number
+    /// offsets of its own.
     pub fn new(content: impl Into<String>) -> ResolvedContent<O> {
         ResolvedContent {
             content: content.into(),
@@ -278,39 +315,39 @@ impl<O: SourceOrigin> ResolvedContent<O> {
         }
     }
 
-    /// Attach origin metadata.
+    /// Attaches origin metadata.
     pub fn with_origin(mut self, origin: O) -> ResolvedContent<O> {
         self.origin = origin;
         self
     }
 
-    /// Set the line number offset the minted source carries
-    /// ([`line_number_offset`](ResolvedContent::line_number_offset)).
+    /// Sets the [`line_number_offset`](ResolvedContent::line_number_offset).
     pub fn with_line_number_offset(mut self, line_number_offset: usize) -> ResolvedContent<O> {
         self.line_number_offset = Some(line_number_offset);
         self
     }
 
-    /// Set the column number offset the minted source carries
-    /// ([`column_number_offset`](ResolvedContent::column_number_offset)).
+    /// Sets the [`column_number_offset`](ResolvedContent::column_number_offset).
     pub fn with_column_number_offset(mut self, column_number_offset: usize) -> ResolvedContent<O> {
         self.column_number_offset = Some(column_number_offset);
         self
     }
 }
 
-/// Failure to resolve an external source reference.
+/// Failure to resolve an external source reference, returned by
+/// [`SourceResolver::resolve`].
 ///
-/// Carries human-readable strings (the primary interface — a failed `\input` renders
-/// into a diagnostic as text) plus an optional structured
-/// [`cause`](ResolveError::with_cause) exposed through
-/// [`core::error::Error::source`], so an embedder can walk the chain or downcast the
-/// underlying error (e.g. an `io::Error`'s kind).
+/// The [`reference`](ResolveError::reference) and [`message`](ResolveError::message)
+/// strings are the primary interface, because a failed `\input` is rendered into a
+/// diagnostic as text. An implementation may additionally attach the underlying error with
+/// [`with_cause`](ResolveError::with_cause); it is exposed through
+/// [`core::error::Error::source`], so an embedder can walk the error chain or downcast to
+/// inspect it — the kind of an `io::Error`, for instance.
 ///
-/// `Clone`, deliberately: **techy error types stay uniformly `Clone`** — error
-/// values travel into diagnostics, which are `Clone` throughout — and
-/// out-of-crate information (the cause, whose concrete type techy cannot clone)
-/// sits behind an `Arc`, cloned by refcount.
+/// The type is `Clone`, like every error type in this crate, because error values travel
+/// into diagnostics and those are `Clone` throughout. The attached cause comes from
+/// outside the crate and cannot be cloned by value, so it is held behind an `Arc` and
+/// cloned by reference count.
 #[derive(Debug, Clone)]
 pub struct ResolveError {
     reference: String,
@@ -319,15 +356,17 @@ pub struct ResolveError {
 }
 
 impl ResolveError {
-    /// Create a resolve error for `reference` with a human-readable cause.
+    /// Creates a resolve error for `reference`, with `message` explaining the failure in
+    /// human-readable terms.
     pub fn new(reference: impl Into<String>, message: impl Into<String>) -> Self {
         ResolveError { reference: reference.into(), message: message.into(), cause: None }
     }
 
-    /// Attach the underlying error (available via
-    /// [`Error::source`](core::error::Error::source); the `message` string stays the
-    /// rendered summary). Shared internally (`Arc`), which is what keeps the whole
-    /// error `Clone` — see the type docs.
+    /// Attaches the underlying error, which becomes available through
+    /// [`Error::source`](core::error::Error::source).
+    ///
+    /// The [`message`](ResolveError::message) string remains the rendered summary. The
+    /// cause is stored behind an `Arc`, which is what keeps this error `Clone`.
     pub fn with_cause(
         mut self,
         cause: impl core::error::Error + Send + Sync + 'static,
@@ -341,7 +380,7 @@ impl ResolveError {
         &self.reference
     }
 
-    /// Human-readable cause of the failure.
+    /// Human-readable description of the failure.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -363,15 +402,16 @@ impl core::error::Error for ResolveError {
     }
 }
 
-/// Resolver backed by an in-memory map from reference strings to content — for tests,
-/// preloaded database extracts, or any fully preloaded setup.
+/// A [`SourceResolver`] backed by an in-memory map from reference strings to content, for
+/// tests, preloaded database extracts, and other fully preloaded setups.
 ///
-/// Serves origin types constructible from the reference string (`O: From<String>`,
-/// which the default `Option<String>` satisfies); by default resolved sources carry the
-/// unlabeled `O::default()` origin, and
-/// [`with_reference_as_origin`](MapResolver::with_reference_as_origin) switches to
-/// labeling each source with its reference, making multi-file diagnostics
-/// self-describing.
+/// Fill one with [`insert`](MapResolver::insert), or build it from any iterator of
+/// `(reference, content)` pairs. It serves any origin type constructible from the
+/// reference string (`O: From<String>`, which the default `Option<String>` satisfies).
+///
+/// Resolved sources carry the unlabeled default origin;
+/// [`with_reference_as_origin`](MapResolver::with_reference_as_origin) labels each of them
+/// with its reference instead, which makes multi-file diagnostics self-describing.
 #[derive(Debug, Clone, Default)]
 pub struct MapResolver {
     contents: BTreeMap<String, String>,
@@ -379,17 +419,17 @@ pub struct MapResolver {
 }
 
 impl MapResolver {
-    /// Create an empty map resolver.
+    /// Creates an empty map resolver.
     pub fn new() -> Self {
         MapResolver::default()
     }
 
-    /// Register `content` for `reference`, replacing any previous entry.
+    /// Registers `content` for `reference`, replacing any previous entry.
     pub fn insert(&mut self, reference: impl Into<String>, content: impl Into<String>) {
         self.contents.insert(reference.into(), content.into());
     }
 
-    /// Label each resolved source's origin with its reference string.
+    /// Labels each resolved source's origin with its reference string.
     pub fn with_reference_as_origin(mut self) -> Self {
         self.reference_as_origin = true;
         self

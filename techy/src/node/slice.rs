@@ -1,25 +1,27 @@
-//! [`NodeSlice`]: a `Copy` view of a contiguous run of sibling nodes, with a covering
-//! span.
+//! Views over runs of sibling nodes: [`NodeSlice`], a `Copy` view of a contiguous run
+//! with a covering span, and its iterator [`NodeSliceIter`].
 //!
-//! Every "list of nodes" the read API hands out — a node's children, an argument's
-//! region or content nodes, a slot's content — is a contiguous run of siblings in the
-//! flat tree layout, and this is its currency: the return type of
-//! [`NodeRef::children`](super::NodeRef::children) and the region/content accessors,
-//! and of [`NodeTree::slice`](super::NodeTree::slice), the validated constructor
-//! over a bare index range.
-//! Beyond iteration it answers *where the run is in the source*
-//! ([`span`](NodeSlice::span), [`source_text`](NodeSlice::source_text)): the first
-//! node's span start to the last node's span end. On a tree parsed from a language
-//! that obeys span tiling
-//! ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) that covering
-//! span is **exact** — sibling spans of such a tree are adjacent, so it is the run's
-//! own text and nothing besides. Otherwise it is the covering span of the coordinates
-//! recorded on the nodes, which may include bytes no node of the run claims (see the
-//! two contracts). Both accessors answer only when the whole run lies within a single
-//! source (restaged trees, and parses of a language with `OBEYS_SPAN_TILING = false`,
-//! can mix sources within one run). What the nodes *say* is read from their own data,
-//! not from these coordinates. The extraction helpers ([`extract`](crate::extract))
-//! consume and produce these views.
+//! Every list of nodes the read API returns — a node's children, an argument's region
+//! or content nodes, a slot's content — is a contiguous run of siblings in the flat
+//! tree layout, and [`NodeSlice`] is that value: the return type of
+//! [`NodeRef::children`](super::NodeRef::children) and of the region and content
+//! accessors, and of [`NodeTree::slice`](super::NodeTree::slice), the validated
+//! constructor over a bare index range. The extraction helpers
+//! ([`extract`](crate::extract)) consume and produce these views.
+//!
+//! Beyond iteration, a slice answers *where the run is in the source*
+//! ([`span`](NodeSlice::span), [`source_text`](NodeSlice::source_text)): from the first
+//! node's span start to the last node's span end. On a tree parsed from a language that
+//! obeys span tiling
+//! ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)) that covering
+//! span is **exact**, because sibling spans of such a tree are adjacent: it is the
+//! run's own text and nothing besides. Otherwise it covers the coordinates recorded on
+//! the nodes and may include bytes no node of the run claims. Both accessors answer
+//! only when the whole run lies within a single source; restaged trees, and parses of a
+//! language with `OBEYS_SPAN_TILING = false`, can mix sources within one run. Their own
+//! documentation states the full contract.
+//!
+//! What the nodes *say* is read from their own data, not from these coordinates.
 
 use core::fmt;
 use core::ops::Range;
@@ -30,16 +32,19 @@ use crate::state::Lang;
 use super::node_ref::NodeRef;
 use super::tree::NodeTree;
 
-/// A contiguous run of sibling nodes of one [`NodeTree`] — the node-list view returned
-/// by [`NodeRef::children`](super::NodeRef::children) and the argument/slot content
-/// accessors — or built from a bare index range via
-/// [`NodeTree::slice`](super::NodeTree::slice) — and the input of the
-/// [`extract`](crate::extract) helpers.
+/// A contiguous run of sibling nodes of one [`NodeTree`].
 ///
-/// `Copy` like [`NodeRef`]: it stores only the tree borrow and an index range, and the
-/// borrow checker guarantees it cannot outlive the tree. Iterate it directly
-/// (`for node in slice`, via [`IntoIterator`]) or through [`iter`](NodeSlice::iter) for
-/// adaptor chains.
+/// This is the node-list view returned by
+/// [`NodeRef::children`](super::NodeRef::children) and by the argument and slot content
+/// accessors; [`NodeTree::slice`](super::NodeTree::slice) builds one from a bare index
+/// range, and the [`extract`](crate::extract) helpers take one as input.
+///
+/// `NodeSlice` is `Copy` like [`NodeRef`]: it stores only the tree borrow and an index
+/// range, and the borrow checker guarantees it cannot outlive the tree. Iterate it
+/// directly (`for node in slice`, through [`IntoIterator`]) or call
+/// [`iter`](NodeSlice::iter) for adaptor chains. Beyond iteration it answers
+/// [`span`](NodeSlice::span) and [`source_text`](NodeSlice::source_text) for the whole
+/// run.
 pub struct NodeSlice<'t, L: Lang, A = ()> {
     tree: &'t NodeTree<L, A>,
     // Stored unpacked (not `Range<u32>`) so the view stays `Copy`.
@@ -95,8 +100,9 @@ impl<'t, L: Lang, A> NodeSlice<'t, L, A> {
         NodeSliceIter { tree: self.tree, next: self.start, end: self.end }
     }
 
-    /// The run's global node-index range (the [`ChildRegion`](super::ChildRegion) /
-    /// [`NodeTree::nodes_in`](super::NodeTree::nodes_in) coordinate system).
+    /// The run's global node-index range, in the coordinate system of
+    /// [`ChildRegion`](super::ChildRegion) and
+    /// [`NodeTree::nodes_in`](super::NodeTree::nodes_in).
     pub fn range(&self) -> Range<u32> {
         self.start..self.end
     }
@@ -122,31 +128,31 @@ impl<'t, L: Lang, A> NodeSlice<'t, L, A> {
         self.iter().all(|node| alloc::sync::Arc::ptr_eq(node.span().source(), source))
     }
 
-    /// The run's covering [`SourceSpan`]: the first node's span start to the last
+    /// The run's covering [`SourceSpan`]: from the first node's span start to the last
     /// node's span end.
     ///
-    /// **Exact** on a tree parsed from a language that obeys span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)): sibling
-    /// spans of such a tree are adjacent, so the covering span is the run's own text,
-    /// not an approximation. For a language with `OBEYS_SPAN_TILING = false`, and on
-    /// restaged or synthesized trees, the answer is the covering span of the
-    /// coordinates the nodes carry — the nodes need not be adjacent, so it can
-    /// include bytes no node of the run claims. It is a provenance answer either way;
-    /// what the nodes say is read from their own data
+    /// The span is **exact** on a tree parsed from a language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), whose
+    /// sibling spans are adjacent: it is the run's own text, not an approximation. For
+    /// a language with `OBEYS_SPAN_TILING = false`, and on restaged or synthesized
+    /// trees, it covers the coordinates the nodes carry, which need not be adjacent, so
+    /// it can include bytes no node of the run claims. Either way it answers
+    /// provenance; what the nodes say is read from their own data
     /// ([`NodeRef::chars`](super::NodeRef::chars) and the delimiter and payload
     /// accessors).
     ///
-    /// Answers only when **the whole run lies within a single source**: every node
-    /// of the run — not just the endpoints — must live in one and the same `Source`
-    /// (verified across the run; O(1) on single-source trees via the flag computed
-    /// at `finish()`), with the endpoints in source order (first start ≤ last end).
-    /// `None` means there is no single-source answer: the run is empty, a node of
-    /// the run lives in a different source, or the endpoints are out of order. A
+    /// The method answers only when **the whole run lies within a single source**:
+    /// every node of the run, not just the endpoints, must belong to one and the same
+    /// `Source`, and the endpoints must be in source order (first start ≤ last end).
+    /// This is verified across the run, in O(1) on a single-source tree.
+    ///
+    /// `None` therefore means there is no single-source answer: the run is empty, one
+    /// of its nodes belongs to a different source, or the endpoints are out of order. A
     /// sibling run of a tree parsed from a language that obeys span tiling always
     /// answers; restaged and synthesized trees, and parses of a language with
-    /// `OBEYS_SPAN_TILING = false`, need not. Per-node accessors
-    /// ([`NodeRef::span`](super::NodeRef::span)) stay valid on any tree (a node's own
-    /// span is its provenance).
+    /// `OBEYS_SPAN_TILING = false`, need not. The per-node
+    /// [`NodeRef::span`](super::NodeRef::span) stays valid on any tree, since a node's
+    /// own span is its provenance.
     pub fn span(&self) -> Option<SourceSpan<L::SourceOrigin>> {
         let (first, last) = (self.first()?, self.last()?);
         let (first, last) = (first.span(), last.span());
@@ -157,11 +163,13 @@ impl<'t, L: Lang, A> NodeSlice<'t, L, A> {
     }
 
     /// The source text the run's covering [`span`](NodeSlice::span) points at —
-    /// pylatexenc's `latex_verbatim()` for a node list. Same contract as
-    /// [`span`](NodeSlice::span), exactness included: it is the run's own original
-    /// text where that span is exact, and the text under the recorded coordinates
-    /// otherwise. Answers only when the whole run lies within a single source, with
-    /// the endpoints in source order; `None` exactly when `span()` is.
+    /// pylatexenc's `latex_verbatim()` for a node list.
+    ///
+    /// The contract is that of [`span`](NodeSlice::span), exactness included: this is
+    /// the run's own original text where that span is exact, and the text under the
+    /// recorded coordinates otherwise. It answers only when the whole run lies within a
+    /// single source with the endpoints in source order, and is `None` exactly when
+    /// `span()` is.
     pub fn source_text(&self) -> Option<&'t str> {
         let (first, last) = (self.first()?, self.last()?);
         let (first, last) = (first.span(), last.span());

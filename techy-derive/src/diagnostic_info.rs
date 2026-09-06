@@ -70,8 +70,7 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// The parsed `#[diagnostic(…)]` attribute: `id` (mandatory), `message` (optional),
-/// `no_constructor` (flag).
+// The parsed `#[diagnostic(…)]` attribute on the type.
 struct DiagnosticAttrs {
     id: LitStr,
     message: Option<LitStr>,
@@ -128,8 +127,8 @@ impl DiagnosticAttrs {
     }
 }
 
-/// The serialization key of `field`: its `#[diagnostic(key = "…")]` when given, else
-/// the field name.
+// The serialization key of `field`: its `#[diagnostic(key = "…")]` when given, else the
+// field name.
 fn serialization_key(field: &Field) -> syn::Result<String> {
     let ident = field.ident.as_ref().expect("named field has an ident");
     let mut key: Option<String> = None;
@@ -160,8 +159,8 @@ fn serialization_key(field: &Field) -> syn::Result<String> {
     Ok(key.unwrap_or_else(|| ident.to_string()))
 }
 
-/// The identifier is namespaced `<crate-or-lang>.<area>.<condition>`;
-/// enforce the coarse shape, not the exact scheme.
+// The identifier is namespaced `<crate-or-lang>.<area>.<condition>`; enforce the coarse
+// shape, not the exact scheme.
 fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
     if value.is_empty()
@@ -179,11 +178,10 @@ fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-/// `impl DiagnosticInfo`: the `IDENTIFIER` const and `serializable_data()` mapping
-/// every field through `ToDiagnosticValue`, keyed by its serialization key (`keys`,
-/// one per field). Each conversion call
-/// is spanned at the field's type, so a non-serializable field type reports at its
-/// declaration.
+// `impl DiagnosticInfo`: the `IDENTIFIER` const, and `serializable_data()` mapping every
+// field through `ToDiagnosticValue` keyed by its serialization key (`keys`, one per
+// field). Each conversion call is spanned at the field's type, so a non-serializable
+// field type reports at its declaration.
 fn expand_info_impl(name: &Ident, id: &LitStr, fields: &[&Field], keys: &[String]) -> TokenStream {
     let body = if fields.is_empty() {
         quote! { ::techy::__private::DiagnosticValue::empty_map() }
@@ -217,8 +215,8 @@ fn expand_info_impl(name: &Ident, id: &LitStr, fields: &[&Field], keys: &[String
     }
 }
 
-/// `impl Display` from the message format string: `{field}` / `{field:spec}` are
-/// emitted as explicit named `write!` arguments (no positional or implicit captures).
+// `impl Display` from the message format string: `{field}` / `{field:spec}` are emitted
+// as explicit named `write!` arguments (no positional or implicit captures).
 fn expand_display_impl(
     name: &Ident,
     message: &LitStr,
@@ -261,9 +259,9 @@ fn expand_display_impl(
     })
 }
 
-/// The field names referenced by `{name}` / `{name:spec}` placeholders, in first-use
-/// order, deduplicated. `{{`/`}}` escape; positional placeholders are rejected (the
-/// message vocabulary is field names only).
+// The field names referenced by `{name}` / `{name:spec}` placeholders, in first-use
+// order, deduplicated. `{{`/`}}` escape; positional placeholders are rejected (the
+// message refers to fields by name only).
 fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
     let text = message.value();
     let err = |detail: &str| syn::Error::new(message.span(), detail);
@@ -334,8 +332,8 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
     Ok(names)
 }
 
-/// The `new()` constructor: one `impl Into<FieldType>` parameter per field, in
-/// declaration order — the companion of `#[non_exhaustive]`.
+// The `new()` constructor: one `impl Into<FieldType>` parameter per field, in
+// declaration order — the companion of `#[non_exhaustive]`.
 fn expand_constructor(name: &Ident, fields: &[&Field]) -> TokenStream {
     let params = fields.iter().map(|field| {
         let ident = field.ident.as_ref().expect("named field has an ident");

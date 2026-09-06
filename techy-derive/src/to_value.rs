@@ -57,10 +57,10 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// PascalCase → kebab-case, acronym-aware: a boundary falls before an uppercase letter
-/// that follows a lowercase letter or digit, or that starts the last capital of an
-/// uppercase run followed by a lowercase letter (`EndOfInput` → `end-of-input`,
-/// `EOFMarker` → `eof-marker`).
+// PascalCase → kebab-case, acronym-aware: a boundary falls before an uppercase letter
+// that follows a lowercase letter or digit, or that starts the last capital of an
+// uppercase run followed by a lowercase letter (`EndOfInput` → `end-of-input`,
+// `EOFMarker` → `eof-marker`).
 fn kebab_case(variant: &str) -> String {
     let chars: Vec<char> = variant.chars().collect();
     let mut out = String::with_capacity(variant.len() + 4);

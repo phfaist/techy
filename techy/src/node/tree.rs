@@ -1,5 +1,6 @@
-//! [`NodeTree`]: flat, frozen, index-based node storage over an `Arc`-shared core;
-//! [`NodeId`]/[`TreeTag`]: tagged node identity; [`NodeData`]: one stored node.
+//! The tree itself: [`NodeTree`], the flat immutable node storage over an
+//! `Arc`-shared core; [`NodeId`] and [`TreeTag`], the tagged node identity; and
+//! [`NodeData`], one stored node.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -25,21 +26,19 @@ pub(crate) fn next_tree_tag() -> TreeTag {
     TreeTag(NEXT_TREE_TAG.fetch_add(1, core::sync::atomic::Ordering::Relaxed))
 }
 
-/// The tag of one tree *layout*, stamped into every [`NodeId`] the layout mints —
-/// the tree-identity half of node identity (a newtype, so signatures cannot confuse
-/// tags with node indices).
+/// The identity of one tree *layout*, stamped into every [`NodeId`] that layout mints.
 ///
-/// Layout-preserving copies — [`clone`](Clone::clone),
-/// [`materialize`](NodeTree::materialize), [`annotate`](NodeTree::annotate) stages —
-/// share their original's tag: their ids are genuinely interchangeable (ids identify
-/// the *layout*, not the annotation stage).
+/// Layout-preserving copies share their original's tag —
+/// [`clone`](Clone::clone), [`materialize`](NodeTree::materialize), and every
+/// [`annotate`](NodeTree::annotate) stage — so their ids are interchangeable: an id
+/// identifies the layout, not the annotation stage.
 ///
-/// A tag is a **misuse detector, never an addressing mechanism**: resolving an id
-/// always goes through an explicit tree in hand ([`NodeTree::node`] /
-/// [`NodeTree::get`]); the tag only makes cross-tree misuse detectable. Accordingly,
-/// tags are minted by a process-global counter that *wraps* after 2^32 layouts — a
-/// recurring tag can only matter where a stale-id bug already exists — and they are
-/// **process-local**: never serialize a tag or treat it as wire material.
+/// A tag is a misuse detector, not an addressing mechanism. Resolving an id always
+/// goes through a tree the caller already has ([`NodeTree::node`], [`NodeTree::get`]);
+/// the tag only makes it detectable when an id from another tree is used. Tags come
+/// from a process-global counter that *wraps* after 2^32 layouts, which can only
+/// matter where a stale-id bug already exists, and they are process-local: never
+/// serialize a tag or send it over the wire.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TreeTag(u32);
 
@@ -49,18 +48,20 @@ impl fmt::Debug for TreeTag {
     }
 }
 
-/// Identity of one node of a [`NodeTree`]: the node's index in the flat layout plus
-/// the layout's [`TreeTag`] — 8 bytes, `Copy`.
+/// The identity of one node of a [`NodeTree`]: the node's index in the flat layout
+/// plus the layout's [`TreeTag`]. 8 bytes, `Copy`.
 ///
-/// The tag **participates in equality, ordering, and hashing**: ids minted by
-/// different trees are different values, so one map can key ids from several trees,
-/// and an old tree's `NodeId` stored inside a new tree's annotation is unambiguous.
-/// Ids stay meaningful only for the tree that minted them (or a layout-preserving
-/// copy — see [`TreeTag`]); resolve them through [`NodeTree::node`] (panicking,
-/// own-tree ids) or [`NodeTree::get`] (`None` for foreign ids, every build).
+/// The tag participates in equality, ordering, and hashing, so ids minted by
+/// different trees are different values: one map can key ids from several trees, and
+/// an old tree's `NodeId` stored inside a new tree's annotation is unambiguous.
 ///
-/// Bare `Range<u32>` node-index ranges (child regions, [`NodeTree::nodes_in`])
-/// carry no tag, as before.
+/// An id stays meaningful only for the tree that minted it, or a layout-preserving
+/// copy of that tree (see [`TreeTag`]). Resolve it through [`NodeTree::node`], which
+/// panics on an id from another tree, or [`NodeTree::get`], which answers `None` for
+/// one in every build.
+///
+/// Bare `Range<u32>` node-index ranges — child regions,
+/// [`NodeTree::nodes_in`] — carry no tag.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId {
     pub(crate) index: u32,
@@ -89,15 +90,16 @@ impl fmt::Debug for NodeId {
     }
 }
 
-/// One stored node: structural kind, uniform ext, provenance span, parse-time state, and
-/// the contiguous children block.
+/// One stored node: structural kind, uniform ext, provenance span, parse-time state,
+/// and the contiguous children block.
 ///
-/// Fields are crate-private; the public read surface is [`NodeRef`]. Nodes carry **no
-/// lifetime parameters** — Arc-wrapped spans, specs, and states make them self-contained,
-/// which is what lets transformed trees outlive the parse they came from.
+/// Fields are crate-private; the public read surface is [`NodeRef`]. Nodes carry no
+/// lifetime parameters — `Arc`-wrapped spans, specs, and states make them
+/// self-contained, which is what lets transformed trees outlive the parse they came
+/// from.
 ///
-/// The runtime ownership graph stays acyclic by type structure (by design): nodes reference states, specs, and sources; no runtime value references
-/// nodes back.
+/// The runtime ownership graph is acyclic by type structure: nodes reference states,
+/// specs, and sources, and no runtime value references nodes back.
 pub struct NodeData<L: Lang> {
     pub(crate) kind: NodeKind<L>,
     pub(crate) ext: NodeExt<L>,
@@ -128,37 +130,47 @@ pub(crate) struct TreeCore<L: Lang> {
 /// caps node counts below `u32::MAX`.
 pub(crate) const NO_PARENT: u32 = u32::MAX;
 
-/// A parsed document as flat, frozen, index-based node storage: nodes live in one `Vec`,
-/// a node's children occupy a contiguous index block, and the root is a node like any
-/// other (typically a `List`) at index 0.
+/// A parsed document, stored as a flat, immutable, index-based node tree.
 ///
-/// Trees are **immutable**: mutation happens only inside the builder
-/// ([`NodeTreeBuilder`](super::NodeTreeBuilder)), whose `finish()` consumes it.
-/// Transformations build *new* trees — Arc-shared sources, specs, and states make
-/// mixed-origin trees cheap.
+/// All nodes are stored in one `Vec`, a node's children occupy a contiguous index block of
+/// it, and the root is a node like any other (typically a `List`) at index 0. A parse
+/// returns its tree in [`ParseResult`](crate::core::ParseResult); building one
+/// directly goes through [`NodeTreeBuilder`](super::NodeTreeBuilder), whose `finish()`
+/// consumes the builder. A finished tree is never mutated: transformations build *new*
+/// trees, and `Arc`-shared sources, specs, and states make trees of mixed origin
+/// cheap.
 ///
-/// # Annotations: the second generic parameter
+/// Reading starts at [`root`](NodeTree::root) and proceeds through [`NodeRef`], a
+/// `Copy` proxy for one node. [`node`](NodeTree::node) and [`get`](NodeTree::get)
+/// resolve a [`NodeId`]; [`node_at`](NodeTree::node_at) and
+/// [`covering_slice`](NodeTree::covering_slice) answer source-position and source-span
+/// queries; [`descendants`](NodeTree::descendants) iterates the whole tree in document
+/// order, [`iter_storage_order`](NodeTree::iter_storage_order) in storage order. The
+/// narrative introduction is the guide's node-trees chapter
+/// ([`guide::node_trees`](crate::guide::node_trees)).
 ///
-/// `A` is the per-node **annotation** type — consumer-owned data, one value per node,
-/// uniform across kinds, chosen per processing stage (the framework-side counterpart
-/// of the lang-side [`NodeExt`]: a multi-stage pipeline types each stage's derived
-/// data, `NodeTree<L>` → `NodeTree<L, SemInfo>` → …, instead of keeping
-/// `HashMap<NodeId, T>` side tables). The parser emits `A = ()` — the default, so
-/// plain `NodeTree<L>` spellings mean the unannotated tree — and `Lang` never sees
-/// `A`.
+/// # Annotations: the second type parameter
 ///
-/// Annotation types are expected to be `Clone + Debug + Send + Sync` and deliberately
-/// never `Default` (every annotation value is supplied explicitly — by the builder's
-/// [`add`](super::NodeTreeBuilder::add), or by an [`annotate`](NodeTree::annotate)
-/// callback); the APIs state these bounds where they are used.
+/// `A` is the per-node **annotation** type: consumer-owned data, one value per node,
+/// the same type for every kind, chosen per processing stage. It is the framework-side
+/// counterpart of the language-side [`NodeExt`], and lets a multi-stage pipeline give
+/// each stage's derived data its own type — `NodeTree<L>` → `NodeTree<L, SemInfo>` →
+/// … — instead of keeping `HashMap<NodeId, T>` side tables. The parser emits `A = ()`,
+/// the default, so a plain `NodeTree<L>` spelling means the unannotated tree, and
+/// `Lang` never sees `A`.
+///
+/// Annotation types are expected to be `Clone + Debug + Send + Sync`, and deliberately
+/// never `Default`: every annotation value is supplied explicitly, by the builder's
+/// [`add`](super::NodeTreeBuilder::add) or by an [`annotate`](NodeTree::annotate)
+/// callback. The individual APIs state the bounds they need.
 ///
 /// # Layout sharing
 ///
-/// A `NodeTree` is a thin value: an `Arc`-shared frozen core (nodes, parent table,
+/// A `NodeTree` value is thin: an `Arc`-shared frozen core (nodes, parent table,
 /// [`TreeTag`]) plus this stage's annotation vector. [`annotate`](NodeTree::annotate)
-/// therefore re-annotates **zero-copy** (no node is cloned; the input tree is
-/// untouched), same-layout stages share the tag — their [`NodeId`]s are
-/// interchangeable — and `clone()` costs O(annotations).
+/// therefore re-annotates without copying — no node is cloned, and the input tree is
+/// untouched. Stages of one layout share its tag, so their [`NodeId`]s are
+/// interchangeable, and `clone()` costs O(annotations).
 pub struct NodeTree<L: Lang, A = ()> {
     pub(crate) core: Arc<TreeCore<L>>,
     pub(crate) annotations: Vec<A>,
@@ -192,14 +204,16 @@ impl<L: Lang, A> NodeTree<L, A> {
         self.node(self.make_id(0))
     }
 
-    /// The node with the given id. Use this for ids this tree minted; for ids of
-    /// unknown provenance, use the non-panicking [`get`](NodeTree::get).
+    /// The node with the given id.
+    ///
+    /// Use this for ids this tree minted; for ids of unknown provenance, use the
+    /// non-panicking companion [`get`](NodeTree::get).
     ///
     /// # Panics
     ///
-    /// Panics if `id` was not minted by this tree's layout (a foreign [`TreeTag`] —
-    /// ids are only meaningful for the tree that minted them or a layout-preserving
-    /// copy of it) or is out of range.
+    /// Panics if `id` was not minted by this tree's layout — its [`TreeTag`] is a
+    /// foreign one, and ids are meaningful only for the tree that minted them or a
+    /// layout-preserving copy of it — or if its index is out of range.
     pub fn node(&self, id: NodeId) -> NodeRef<'_, L, A> {
         // Panic here is an approved exception (indexing-style exception) per panic policy in DESIGN_RATIONALE.md .
         assert!(
@@ -212,11 +226,12 @@ impl<L: Lang, A> NodeTree<L, A> {
         NodeRef::new(self, id)
     }
 
-    /// The node with the given id, or `None` if `id` does not belong to this tree —
-    /// the non-panicking companion of [`node`](NodeTree::node), for ids of unknown
-    /// provenance. An id minted by a different tree layout is rejected by its
-    /// [`TreeTag`] in **every build** (never silently resolved to whatever node sits
-    /// at that index here).
+    /// The node with the given id, or `None` if `id` does not belong to this tree.
+    ///
+    /// This is the non-panicking companion of [`node`](NodeTree::node), for ids of
+    /// unknown provenance. An id minted by a different tree layout is rejected by its
+    /// [`TreeTag`] in **every build**; it is never silently resolved to whatever node
+    /// sits at that index here.
     pub fn get(&self, id: NodeId) -> Option<NodeRef<'_, L, A>> {
         if id.index() >= self.core.nodes.len() || id.tree_tag != self.core.tree_tag {
             return None;
@@ -224,10 +239,11 @@ impl<L: Lang, A> NodeTree<L, A> {
         Some(NodeRef::new(self, id))
     }
 
-    /// This tree's layout tag ([`TreeTag`]). Comparing it with a
-    /// [`NodeId::tree_tag`] pre-checks whether an id belongs to this tree before
-    /// calling an accessor that asserts ownership in every build
-    /// ([`node`](NodeTree::node)).
+    /// This tree's layout tag.
+    ///
+    /// Comparing it with a [`NodeId::tree_tag`] checks whether an id belongs to this
+    /// tree before calling [`node`](NodeTree::node), which asserts that ownership in
+    /// every build.
     pub fn tree_tag(&self) -> TreeTag {
         self.core.tree_tag
     }
@@ -237,9 +253,10 @@ impl<L: Lang, A> NodeTree<L, A> {
         NodeId::new(index, self.core.tree_tag)
     }
 
-    /// Every node except the root, in **document order** — sugar for
-    /// [`root().descendants()`](super::NodeRef::descendants) (preorder depth-first;
-    /// contrast [`iter_storage_order`](NodeTree::iter_storage_order)).
+    /// Every node except the root, in **document order** (preorder depth-first).
+    ///
+    /// Shorthand for [`root().descendants()`](super::NodeRef::descendants). The flat
+    /// storage order is [`iter_storage_order`](NodeTree::iter_storage_order) instead.
     pub fn descendants(&self) -> super::Descendants<'_, L, A> {
         self.root().descendants()
     }
@@ -249,26 +266,31 @@ impl<L: Lang, A> NodeTree<L, A> {
         self.core.nodes.len()
     }
 
-    /// All nodes in **storage order** (breadth-first: root first, every node's children
-    /// contiguous) — *not* document order: for `a{b}c` it yields `a`, `c`, `b`. Named
-    /// for what it is so nobody
-    /// mistakes it for a document-order walk; recurse via
-    /// [`children()`](super::NodeRef::children) for structure-aware traversal.
+    /// All nodes in **storage order**: the root first, then every node's children as a
+    /// contiguous block.
+    ///
+    /// This is *not* document order — for `a{b}c` the content nodes come out as `a`,
+    /// `c`, `b`. For document order use [`descendants`](NodeTree::descendants), or
+    /// recurse through [`children()`](super::NodeRef::children) when the traversal
+    /// needs the structure.
     pub fn iter_storage_order(&self) -> impl Iterator<Item = NodeRef<'_, L, A>> {
         (0..self.core.nodes.len() as u32).map(move |i| NodeRef::new(self, self.make_id(i)))
     }
 
-    /// The nodes of a global node-index range — a resolved
-    /// [`ChildRegion`](super::ChildRegion)'s [`children()`](super::ChildRegion::children)
-    /// or [`content_range()`](super::ChildRegion::content_range) of *this* tree — in
-    /// source order.
+    /// The nodes of a global node-index range of *this* tree, in source order.
+    ///
+    /// Such a range comes from a resolved [`ChildRegion`](super::ChildRegion) —
+    /// [`children()`](super::ChildRegion::children) or
+    /// [`content_range()`](super::ChildRegion::content_range). To obtain a
+    /// [`NodeSlice`] over a range instead, and without panicking on a bad one, use
+    /// [`slice`](NodeTree::slice).
     ///
     /// # Panics
     ///
-    /// Panics if the range does not lie within this tree's storage — like [`NodeId`]s,
-    /// ranges are only meaningful for the tree whose builder minted them. Unlike ids,
-    /// bare ranges carry no tree tag: applying an in-bounds range
-    /// from another tree silently yields this tree's nodes at those indices.
+    /// Panics if the range does not lie within this tree's storage. Like [`NodeId`]s,
+    /// ranges are meaningful only for the tree whose builder minted them; unlike ids,
+    /// bare ranges carry no tree tag, so an in-bounds range from another tree is not
+    /// detected and silently yields this tree's nodes at those indices.
     pub fn nodes_in(&self, range: Range<u32>) -> impl Iterator<Item = NodeRef<'_, L, A>> {
         assert!(
             range.start <= range.end && range.end as usize <= self.core.nodes.len(),
@@ -278,53 +300,56 @@ impl<L: Lang, A> NodeTree<L, A> {
         range.map(move |i| NodeRef::new(self, self.make_id(i)))
     }
 
-    /// The annotations, one per node, indexed by [`NodeId::index`] — **storage order**
-    /// (breadth-first, like [`iter_storage_order`](NodeTree::iter_storage_order));
-    /// also the bulk-export shape for bindings. Per-node access is
-    /// [`NodeRef::annotation`](super::NodeRef::annotation); there is no setter —
-    /// trees are frozen, re-annotation is [`annotate`](NodeTree::annotate).
+    /// The annotations, one per node, indexed by [`NodeId::index`].
+    ///
+    /// They are in **storage order**, like
+    /// [`iter_storage_order`](NodeTree::iter_storage_order); this is also the shape to
+    /// export them in bulk. Per-node access is
+    /// [`NodeRef::annotation`](super::NodeRef::annotation). There is no setter: trees
+    /// are immutable, and a new annotation stage comes from
+    /// [`annotate`](NodeTree::annotate).
     pub fn annotations(&self) -> &[A] {
         &self.annotations
     }
 
     /// A tree with the **same layout** and new annotations: `f` is called once per
-    /// node and its results become the new tree's annotation vector.
+    /// node, and its results become the new tree's annotation vector.
     ///
-    /// Zero-copy over the layout: no node is cloned and `self` is untouched — the
-    /// returned tree shares this tree's frozen core *and its [`TreeTag`]*, so
-    /// [`NodeId`]s of the two stages are interchangeable (ids identify the layout,
-    /// not the annotation stage). Only the new annotation vector is allocated.
+    /// No node is copied and `self` is untouched: the returned tree shares this tree's
+    /// frozen core *and its [`TreeTag`]*, so the [`NodeId`]s of the two stages are
+    /// interchangeable — an id identifies the layout, not the annotation stage. Only
+    /// the new annotation vector is allocated.
     ///
-    /// **The callback runs in storage order** (breadth-first — root first, then every
-    /// node's children as contiguous blocks), **not document order**: a stateful
-    /// closure must not assume it sees nodes in source order. Consumers that need a
-    /// document-order preparation pass read [`descendants`](NodeTree::descendants)
-    /// first. Each call receives the node as a [`NodeRef`], with the *current*
-    /// annotation reachable via [`annotation()`](super::NodeRef::annotation).
+    /// **The callback runs in storage order**, not document order, so a stateful
+    /// closure must not assume it sees nodes in source order; a pass that needs
+    /// document order reads [`descendants`](NodeTree::descendants) first. Each call
+    /// receives the node as a [`NodeRef`], whose
+    /// [`annotation()`](super::NodeRef::annotation) is still the *current* one.
     pub fn annotate<B>(&self, mut f: impl FnMut(NodeRef<'_, L, A>) -> B) -> NodeTree<L, B> {
         let annotations =
             (0..self.core.nodes.len() as u32).map(|i| f(self.node(self.make_id(i)))).collect();
         NodeTree { core: Arc::clone(&self.core), annotations }
     }
 
-    /// The **deepest** node whose span contains the position — half-open
-    /// containment (`start ≤ pos < end`; a node with an empty span never matches) —
-    /// or `None` when no node's span contains it.
+    /// The **deepest** node whose span contains the given source position, or `None`
+    /// when no node's span contains it.
     ///
-    /// A position inside a node's span but inside none of its children — a group's
-    /// delimiter bytes, a callable's trigger spelling — resolves to that node.
-    /// Ancestors of the answer come free via [`NodeRef::parent`].
+    /// Containment is half-open (`start ≤ pos < end`), so a node with an empty span
+    /// never matches. A position inside a node's span but inside none of its children
+    /// — a group's delimiter bytes, a callable's trigger spelling — resolves to that
+    /// node. The answer's ancestors are then reachable through [`NodeRef::parent`].
     ///
-    /// Multi-source trees are answered **per source**, on exact per-node spans only:
-    /// the lookup enters a *different-source* child only while still searching for
-    /// the query's source, never from a node that already matched. A query in the
-    /// including source therefore stops at the `\input`-like node itself (its
-    /// resolved content lives in its own source), while a query in an attached
-    /// source finds the attached content. Where a child's recorded span does not
-    /// nest in its parent's — restaged trees with rearranged spans, and parses of a
-    /// language with
-    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, whose
-    /// node spans are the ones the token reader described — this degrades to the
+    /// In a tree spanning several sources the lookup is answered **per source**, on
+    /// exact per-node spans only: it enters a child in a different source only while
+    /// still searching for the query's source, never from a node that already matched.
+    /// A query in the including source therefore stops at the `\input`-like node
+    /// itself, whose resolved content sits in its own source, while a query in an
+    /// attached source finds the attached content.
+    ///
+    /// Where a child's recorded span does not nest in its parent's — restaged trees
+    /// with rearranged spans, and parses of a language with
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`, whose
+    /// node spans are the ones the token reader described — the lookup degrades to the
     /// shallowest node whose recorded span answers.
     pub fn node_at(&self, pos: &SourcePos<L::SourceOrigin>) -> Option<NodeRef<'_, L, A>> {
         deepest_containing(self.root(), pos.source(), &|span: &SourceSpan<
@@ -332,24 +357,25 @@ impl<L: Lang, A> NodeTree<L, A> {
         >| span.span().contains(pos.pos()))
     }
 
-    /// The **minimal covering sibling run** for a span query: the shortest run of
-    /// siblings, within the deepest node list that can answer, covering every byte
-    /// of `span` — as the name says, the run may cover *more* than the query (a
-    /// query cutting into the middle of a node returns the whole node).
+    /// The **minimal covering sibling run** for a source-span query: the shortest run
+    /// of siblings, within the deepest node list that can answer, covering every byte
+    /// of `span`.
     ///
-    /// The descent mirrors [`node_at`](NodeTree::node_at) (per source, exact spans
-    /// only, half-open containment): it walks to the deepest node whose span
-    /// contains the whole query, then answers the minimal run of that node's
-    /// children covering the query. When the children cannot cover it — query bytes
-    /// in the node's own delimiters or trigger spelling, or children whose spans do
-    /// not tile the queried stretch (restaged trees, and parses of a language with
-    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`) — the
-    /// covering node itself is the answer,
-    /// as a single-node run within its parent's child list. An **empty** query span
-    /// resolves by point containment like `node_at`, to a single-node run of the
-    /// deepest containing node. `None` when no node's span contains the query.
+    /// The run may cover *more* than the query: a query cutting into the middle of a
+    /// node returns the whole node. `None` when no node's span contains the query.
     ///
-    /// A run already addressed by a node-index range (rather than a span query) is
+    /// The descent is the one of [`node_at`](NodeTree::node_at) — per source, exact
+    /// spans only, half-open containment. It reaches the deepest node whose span
+    /// contains the whole query, then answers the minimal run of that node's children
+    /// covering it. When the children cannot cover the query — query bytes in the
+    /// node's own delimiters or trigger spelling, or children whose spans do not tile
+    /// the queried stretch (restaged trees, and parses of a language with
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`) — the
+    /// covering node itself is the answer, as a single-node run within its parent's
+    /// child list. An **empty** query span resolves by point containment like
+    /// `node_at`, to a single-node run of the deepest containing node.
+    ///
+    /// A run already addressed by a node-index range, rather than by a span query, is
     /// built with [`slice`](NodeTree::slice) instead.
     pub fn covering_slice(
         &self,
@@ -371,17 +397,19 @@ impl<L: Lang, A> NodeTree<L, A> {
         Some(NodeSlice::new(self, index..index + 1))
     }
 
-    /// The [`NodeSlice`] over a node-index range of this tree's flat storage —
-    /// the validated constructor for ranges kept as bare numbers (an exported
-    /// `Range<u32>` from a [`ChildRegion`](super::ChildRegion), a range computed by
-    /// binding or persistence code). The span-addressed companion — the run
+    /// The [`NodeSlice`] over a node-index range of this tree's flat storage, or
+    /// `None` if the range is not a run of siblings.
+    ///
+    /// This is the validated constructor for ranges kept as bare numbers: a
+    /// `Range<u32>` exported from a [`ChildRegion`](super::ChildRegion), or one
+    /// computed by binding or persistence code. The span-addressed companion — the run
     /// answering a source-span query — is
     /// [`covering_slice`](NodeTree::covering_slice).
     ///
-    /// A `NodeSlice` is always a **contiguous run of sibling nodes** — every node in
-    /// the range must be a child of one and the same parent (that is what the slice's
-    /// [`span`](NodeSlice::span)/[`source_text`](NodeSlice::source_text) exactness and
-    /// the [`extract`](crate::extract) helpers rely on). This constructor answers
+    /// A `NodeSlice` is always a **contiguous run of sibling nodes**: every node in
+    /// the range must be a child of one and the same parent, which is what the exactness
+    /// of the slice's [`span`](NodeSlice::span)/[`source_text`](NodeSlice::source_text)
+    /// and the [`extract`](crate::extract) helpers rely on. This constructor answers
     /// `Some` exactly when `range` is such a run:
     ///
     /// - a range within one parent's children block (a node's children, an
@@ -420,11 +448,12 @@ impl<L: Lang, A> NodeTree<L, A> {
         (range.end <= children.end).then(|| NodeSlice::new(self, range))
     }
 
-    /// A new tree with every [`TextContent`](crate::source::TextContent) owned
-    /// (node contents, group delimiters, and callable post-spaces). Trees stay
-    /// immutable — `self` is untouched; spans, states, and specs are Arc-shared, and
-    /// the copy is **layout-preserving**: it keeps this tree's [`TreeTag`] (ids stay
-    /// interchangeable) and clones the annotations.
+    /// A new tree with every [`TextContent`](crate::source::TextContent) owned: node
+    /// contents, group delimiters, and callable post-spaces.
+    ///
+    /// `self` is untouched, as trees are immutable. Spans, states, and specs stay
+    /// `Arc`-shared, and the copy is **layout-preserving**: it keeps this tree's
+    /// [`TreeTag`], so ids remain interchangeable, and it clones the annotations.
     pub fn materialize(&self) -> NodeTree<L, A>
     where
         A: Clone,

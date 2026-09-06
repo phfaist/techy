@@ -1,37 +1,37 @@
-//! The node tree: flat, frozen, index-based AST storage.
+//! The node tree: flat, immutable, index-based storage for a parse result.
 //!
-//! - [`NodeTree`] stores all nodes of a parse in one `Vec`; a node's children occupy a
-//!   contiguous index block (`Range<u32>`). Trees are immutable — they come out of a
-//!   [`NodeTreeBuilder`] (driven by `ParserSession`) and are only read
-//!   afterwards, through [`NodeRef`] proxies. Transformations build new trees;
-//!   Arc-shared sources, specs, and states make that cheap.
-//! - [`NodeKind`] is the **closed structural core**: `Chars` / `Group` / `Callable` /
-//!   `Comment` / `List` — no `Custom` variant, no invocation-form variants ("environment"
-//!   is a preset concept). `NodeKind` is purely structural: custom per-node data rides
-//!   in the uniform [`NodeExt`] ([`NodeExtTypes`] bundle, `Lang::NodeExts`), minted
-//!   exactly once at staging by `Lang::make_node_ext`, orthogonal to structural
-//!   identity.
-//! - [`GroupData`] records a group's delimiters *on the node* (pylatexenc's
-//!   `delimiters`), alongside its optional typed class (`Lang::GroupTypeId`).
-//! - [`CallableData`] records the **invocation facts** (form, spelling, parsed
-//!   arguments/slots, post-space); shared behavior lives in the spec, context in the
-//!   recorded parsing state (the division-of-labor rule).
-//! - [`CommentData`] records a comment's start delimiter, content, and syntactic
-//!   post-space on the node (the same recorded-delimiter principle as [`GroupData`]).
-//! - **One child region per argument/slot**: a callable's children are the concatenation of one
-//!   contiguous region per *provided* argument, then one per slot — each region holding
-//!   noise (comment nodes, whitespace-only `Chars` nodes) alongside the syntax-bearing
-//!   nodes. [`ParsedArguments`]/[`ParsedSlots`] (pylatexenc's `ParsedArguments` pattern)
-//!   record each region and its parser-designated content nodes ([`ChildRegion`] —
-//!   two-phase: staged by parsers, resolved to global node-index ranges by the
-//!   builder's `finish()`), and which [`ArgumentSpec`](crate::spec::ArgumentSpec) each
-//!   was parsed against.
-//! - Node textual payloads are [`TextContent`](crate::source::TextContent) (span-backed
-//!   or owned); a span-backed payload resolves against the carrying node's own
-//!   source, `node.span().source()`
-//!   ([`TextContent::resolve`](crate::source::TextContent::resolve));
-//!   [`NodeTree::materialize`] produces an all-owned copy. Names are always
-//!   owned (identity vs. content ownership rule).
+//! A [`NodeTree`] holds every node of one parse in a single vector, and a node's
+//! children occupy a contiguous block of that vector. Trees are immutable: they come
+//! out of a [`NodeTreeBuilder`] (driven by `ParserSession`) and are only read
+//! afterwards, through the [`NodeRef`] proxies and [`NodeSlice`] views. A
+//! transformation produces a *new* tree; sources, specs, and parsing states are
+//! `Arc`-shared, so that stays cheap.
+//!
+//! [`NodeKind`] is the closed structural taxonomy — `Chars`, `Group`, `Callable`,
+//! `Comment`, `List`. It describes shape only: there is no `Custom` variant, and no
+//! variant per invocation form (a macro and an environment are both `Callable` nodes,
+//! distinguished by their recorded form). Language-specific per-node data is stored in
+//! the uniform node ext ([`NodeExt`], minted once at staging by
+//! [`Lang::make_node_ext`](crate::core::Lang::make_node_ext)) rather than in new kinds.
+//!
+//! Kinds with a payload record it on the node, so that reading a tree never needs a
+//! registry lookup: [`GroupData`] holds a group's delimiters as written and its
+//! optional class, [`CommentData`] a comment's start delimiter, text, and syntactic
+//! post-space, and [`CallableData`] everything specific to one invocation (form,
+//! spelling, spec, parsed arguments and slots).
+//!
+//! A callable's children are the concatenation of one contiguous region per *provided*
+//! argument, then one per slot; each region holds the syntax-bearing nodes together
+//! with comment and whitespace nodes. [`ParsedArguments`] and [`ParsedSlots`] record
+//! those regions ([`ChildRegion`]), the nodes each parser designated as the region's
+//! content, and the [`ArgumentSpec`](crate::core::specs::ArgumentSpec) an argument was
+//! parsed against.
+//!
+//! Textual payloads are [`TextContent`](crate::source::TextContent): span-backed when
+//! parsed — resolved against the carrying node's own source, `node.span().source()` —
+//! and owned when synthesized or normalized. [`NodeTree::materialize`] produces a copy
+//! whose payloads are all owned. Callable names are always owned, since they carry
+//! identity rather than content.
 
 mod arguments;
 mod builder;
@@ -77,7 +77,7 @@ pub(crate) use invariants::check_tree_invariants;
 use crate::state::{Lang, NodeExtTypes};
 
 /// The uniform node ext type of a language, minted by
-/// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext).
+/// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext).
 pub type NodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::NodeExt;
 /// The parsed-argument ext type of a language (attached to [`ParsedArgument`] records).
 pub type ArgumentExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ArgumentExt;

@@ -1,106 +1,136 @@
 //! # techy
 //!
-//! A fast, extensible parser toolkit for your favorite LaTeX-like language.
+//! A fast, extensible parser toolkit for LaTeX-like markup languages.
 //!
-//! Techy builds an Abstract Syntax Tree (AST) from LaTeX-like source code, allowing you to
-//! analyze, transform, or convert documents.  The parser is highly flexible and
-//! configurable; it consists of *core* modules and a *latexlike* preset, the latter
-//! recognizing behavior familiar from LaTeX.
-//!
-//! New to techy? Start with the [`guide`] — the narrative documentation; the modules
-//! below are the API reference.
-//!
-//! ## Crate dependencies, features, and panic policy
-//! 
-//! **no_std + alloc:**
-//! The crate is `no_std`-friendly: it depends on `core` and `alloc`.  Several objects
-//! are shared as `Arc`, so the target must support atomics.  Input/output (e.g., for
-//! handling `\input`, if the language declares it) is delegated via appropriate traits
-//! to be implemented by the embedder.  In particular, the
-//! crate builds for WebAssembly targets such as `wasm32-unknown-unknown`, where the host
-//! supplies all input.
-//! 
-//! **Minimal dependencies:**
-//! This crate strives to pull in an absolute minimum of runtime dependencies (currently,
-//! only `hashbrown` and the optional `serde`, see below).  Some build-time dependencies
-//! are required to implement custom derive macros.
-//!
-//! **No-panic policy:**
-//! This library never panics on document input.  A small set of public methods and functions
-//! may panic on a caller contract violation, following some rust standard patterns (e.g.
-//! unguarded index accessors) — see [`techy::guide::panics`] for a complete list of
-//! public-facing items that can panic.
-//!
-//! **Cargo features:**
-//! - `serde` (off by default) — enables the optional serialization of techy parsing results
-//!   (e.g. node trees) via [serde](https://serde.rs).  See [`techy::serialize`] and
-//!   [`techy::guide::serialize`].
-//!
-//! ## The public modules
-//!
-//! Every item has exactly one canonical public path, placed by role: data models and
-//! consumer tool libraries at the top level, the machinery in [`core`], the preset in
-//! [`latexlike`]:
-//!
-//! - [`source`] — source content, plain byte [`Span`](source::Span)s, `Arc`-based
-//!   [`SourceSpan`](source::SourceSpan)s, provenance, pluggable resolution, lazy
-//!   line/column analysis.
-//! - [`error`] — span-based structured diagnostics and the tolerant-parsing policy.
-//! - [`extract`] — content-extraction helpers over parsed node trees.
-//! - [`transform`] — tree→tree transformation: the streaming restage driver
-//!   ([`TreeRestager`](transform::TreeRestager) +
-//!   [`RestageVisitor`](transform::RestageVisitor)).
-//! - [`visit`] — read-only structural traversal:
-//!   [`TreeWalker`](visit::TreeWalker) +
-//!   [`NodeVisitor`](visit::NodeVisitor) with enter/exit and per-node flow
-//!   control.
-//! - [`recompose`] — tree→value recomposition: the meaning-free piece fold
-//!   ([`TreeRecomposer`](recompose::TreeRecomposer) +
-//!   [`Recomposer`](recompose::Recomposer));
-//!   source re-emission is the preset's
-//!   [`source_recomposer`](latexlike::source_recomposer).
-//! - [`serialize`] — serialization to and from a format-independent value model
-//!   ([`SerialValue`](serialize::SerialValue)): the write/read capability traits
-//!   ([`SerializableObject`](serialize::SerializableObject) +
-//!   [`DeserializableObject`](serialize::DeserializableObject) for table objects,
-//!   [`SerializableValue`](serialize::SerializableValue) +
-//!   [`DeserializableValue`](serialize::DeserializableValue) for embedded values),
-//!   the [`SerializableLang`](serialize::SerializableLang) declaration, the session
-//!   ([`SerdeSession`](serialize::SerdeSession)) with the standard tables of
-//!   sources, states, specs, providers, trees, diagnostics, and parse results.
-//! - [`core`] — the machinery hub: the `Lang` contract and parsing state, and the
-//!   parse engine ([`Language`](core::Language) + `parse()` →
-//!   [`ParseResult`](core::ParseResult)), with four submodules:
-//!   - [`core::token`] — the tokenization library: a language's tokenization declared
-//!     as one type, the token types it names, the
-//!     [`TokenReader`](core::token::TokenReader) trait and the standard reader,
-//!     the [`TokenRules`](core::token::TokenRules) data, and the token errors.
-//!   - [`core::specs`] — defining callables: callable specs, providers, packages
-//!     and scopes, command resolution.
-//!   - [`core::constructs`] — construct parsing: the
-//!     [`ConstructParser`](core::constructs::ConstructParser) contract, the standard
-//!     parsers, and their diagnostic conditions.
-//!   - [`core::node`] — the flat, immutable node tree: reading, payloads, building.
-//! - [`latexlike`] — the familiar LaTeX behavior: the
-//!   [`Latexlike`](latexlike::Latexlike) lang with text/math modes, scope-stack
-//!   command resolution, default token rules and base specials, environments
-//!   (`\begin`/`\end`), verbatim, and `NodeRef` accessor sugar. Preset items are
-//!   namespaced (`techy::latexlike::…`).
+//! techy reads marked-up source text — LaTeX itself, or any language built from similar
+//! ingredients — and produces a *node tree*: an Abstract Syntax Tree (AST) your program
+//! can analyze, transform, or convert to another format. The parsing engine has no
+//! built-in LaTeX behavior; the familiar meaning of `\`, `{`, `}`, `%`, math modes, and
+//! environments comes from the [`latexlike`] preset, which is built entirely from the
+//! same public extension points you would use to define a language of your own.
 //!
 //! ## Quick start
 //!
+//! Parse a document with the `latexlike` preset and read what came out. Definitions are
+//! supplied by the embedder — techy ships no LaTeX definitions database — so the example
+//! first registers the one macro it uses.
+//!
 //! ```rust
-//! use std::sync::Arc;
-//! use techy::source::{Source, SourceSpan};
+//! use techy::core::specs::Package;
+//! use techy::core::{Language, ParsingState};
+//! use techy::error::Recovery;
+//! use techy::latexlike::{Latexlike, LatexlikeDriver};
 //!
-//! let source: Arc<Source> = Arc::new(Source::new(r"Hello \world{}!"));
-//! let span = SourceSpan::new(&source, 6..12);
-//! assert_eq!(span.content(), r"\world");
+//! // `\cite` takes an optional `[…]` argument, then a mandatory `{…}` one.
+//! let mut package: Package<Latexlike> = Package::new("mydefs");
+//! package.define_macro("cite", ["o", "m"]).unwrap();
 //!
-//! // Line/column information is computed lazily, for display only:
-//! let mut line_index = source.line_index();
-//! assert_eq!(line_index.line_col(span.start()), Some((1, 7)));
+//! let language: Language<Latexlike> = Language::new(
+//!     LatexlikeDriver::new(Recovery::Strict),
+//!     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
+//! );
+//! let result = language.parse(r"see \cite[Lemma 3]{Author}!").unwrap();
+//!
+//! // The root node lists the top-level content; its second child is the invocation.
+//! let cite = result.tree.root().child(1).unwrap();
+//! assert_eq!(cite.macro_name(), Some("cite"));
+//! assert_eq!(cite.span_content(), r"\cite[Lemma 3]{Author}");
+//!
+//! // Each argument records whether it was provided and where its content nodes are.
+//! let author = cite.argument_content_nodes(1).unwrap();
+//! assert_eq!(author.source_text(), Some("Author"));
 //! ```
+//!
+//! ## Where to go next
+//!
+//! New to techy? The [`guide`] is the narrative documentation; the modules listed below
+//! are the API reference. [Learn techy by example](guide::learn_by_example) covers
+//! parsing, definitions, and the tree-consumer tools in one page, and
+//! [Introduction](guide::introduction) explains what the library is for and how the
+//! documentation is organized.
+//!
+//! ## The public modules
+//!
+//! Every item has exactly one canonical public path, placed by role: the data models
+//! and the tree-consumer tools at the top level, the parsing machinery in [`core`], and
+//! the ready-made language in [`latexlike`].
+//!
+//! - [`source`] — the source model: source content, plain byte ranges
+//!   ([`Span`](source::Span)), ranges that also name their source
+//!   ([`SourceSpan`](source::SourceSpan)), the provenance of included content,
+//!   pluggable source resolution, and line/column analysis computed on demand.
+//! - [`error`] — structured diagnostics tied to source spans, and the policy that
+//!   decides whether a parse stops at the first problem or recovers and continues.
+//! - [`extract`] — helpers that pull content out of a parsed node tree, such as
+//!   splitting a node run at chosen characters or reading a key/value list.
+//! - [`visit`] — read-only traversal of a node tree:
+//!   [`TreeWalker`](visit::TreeWalker) drives a [`NodeVisitor`](visit::NodeVisitor),
+//!   which is called on entering and on leaving each node and controls where the walk
+//!   goes next.
+//! - [`transform`] — tree-to-tree transformation:
+//!   [`TreeRestager`](transform::TreeRestager) reads an existing tree and asks a
+//!   [`RestageVisitor`](transform::RestageVisitor), node by node, what the new tree
+//!   should contain.
+//! - [`recompose`] — tree-to-value recomposition: a
+//!   [`Recomposer`](recompose::Recomposer) returns one instruction per node — emit this
+//!   value, or combine the children's values — and
+//!   [`TreeRecomposer`](recompose::TreeRecomposer) combines them into a single result.
+//!   Re-emitting the original source is one such recomposer, the preset's
+//!   [`source_recomposer`](latexlike::source_recomposer).
+//! - [`serialize`] — serialization to and from a format-independent value model
+//!   ([`SerialValue`](serialize::SerialValue)). Types opt in through the write and read
+//!   traits — [`SerializableObject`](serialize::SerializableObject) and
+//!   [`DeserializableObject`](serialize::DeserializableObject) for objects stored in a
+//!   table, [`SerializableValue`](serialize::SerializableValue) and
+//!   [`DeserializableValue`](serialize::DeserializableValue) for values embedded in
+//!   place — and a language declares its participation with
+//!   [`SerializableLang`](serialize::SerializableLang). A
+//!   [`SerdeSession`](serialize::SerdeSession) holds the standard tables of sources,
+//!   parsing states, specs, providers, trees, diagnostics, and parse results.
+//! - [`core`] — the parsing machinery: the `Lang` contract that defines a language, the
+//!   parsing state, and the parse engine ([`Language`](core::Language) and its
+//!   `parse()`, producing a [`ParseResult`](core::ParseResult)). It has four
+//!   submodules:
+//!   - [`core::token`] — tokenization: a language declares its tokenization as one
+//!     type, which names the token types, the [`TokenReader`](core::token::TokenReader)
+//!     trait and the standard reader, the [`TokenRules`](core::token::TokenRules) data,
+//!     and the token errors.
+//!   - [`core::specs`] — defining callables: the specs that describe a macro,
+//!     environment, or specials; the providers and packages that hold them; and the
+//!     scopes that resolve a name to a spec.
+//!   - [`core::constructs`] — parsing individual constructs: the
+//!     [`ConstructParser`](core::constructs::ConstructParser) contract, the standard
+//!     parsers, and the conditions they report.
+//!   - [`core::node`] — the flat, immutable node tree: reading it, its per-kind
+//!     payloads, and building one.
+//! - [`latexlike`] — the ready-made LaTeX-like language: the
+//!   [`Latexlike`](latexlike::Latexlike) language with text and math modes, command
+//!   resolution through a stack of scopes, the default token rules and base specials,
+//!   environments (`\begin`/`\end`), verbatim content, and convenience accessors on
+//!   node references for the preset's own constructs. Every preset item is namespaced
+//!   under `techy::latexlike`.
+//!
+//! ## Dependencies, features, and the panic policy
+//!
+//! **no_std and alloc.** The crate depends on `core` and `alloc` only. Several objects
+//! are shared as `Arc`, so the target must support atomics. The crate performs no
+//! input/output of its own: content lookup (for `\input`, if the language declares it)
+//! is delegated to traits the embedder implements. It therefore builds for WebAssembly
+//! targets such as `wasm32-unknown-unknown`, where the host supplies all input.
+//!
+//! **Minimal dependencies.** The crate pulls in as few runtime dependencies as
+//! possible: currently only `hashbrown`, plus `serde` when that feature is enabled.
+//! A few build-time dependencies implement the derive macros.
+//!
+//! **The panic policy.** This library never panics on document input. A small set of
+//! public methods and functions may panic on a caller contract violation, following
+//! standard Rust patterns such as unguarded index accessors; the guide chapter
+//! [Panics](guide::panics) is the complete list of public items that can panic.
+//!
+//! **Cargo features.**
+//! - `serde` (off by default) — renders techy's serialized values (node trees, for
+//!   instance) through [serde](https://serde.rs). See [`serialize`] and the guide
+//!   chapter [Serialization](guide::serialize).
 
 // no_std-friendly, alloc-only ([§dd-dr:dependencies]); tests build with std for convenience.
 #![cfg_attr(not(test), no_std)]
@@ -212,15 +242,18 @@ pub mod guide {
     pub mod ai_guide_pylatexenc {}
 }
 
-/// Support module for generated code only — `techy-derive`'s derives and the
-/// `serial_index!` macro: everything the generated code references — `alloc` paths
-/// spelled so they resolve from both `std` and `no_std` consumer crates, the
-/// diagnostics items the derives implement/construct, the serialization capability
-/// traits the value derives implement with the contexts, errors, and field/variant
-/// helpers their bodies use, and the wire conversion traits and helpers a typed table
-/// position implements. The derives and the macro emit only `::techy::__private::…` /
-/// `$crate::__private::…` paths (the serde discipline), so the public topology never
-/// constrains, and is never constrained by, generated output. Not public API.
+/// Support module for generated code only. Not public API.
+///
+/// It re-exports everything the expansions of `techy-derive`'s derives and of the
+/// `serial_index!` macro refer to: `alloc` paths spelled so they resolve from both `std`
+/// and `no_std` consumer crates; the diagnostics items the condition derives implement
+/// and construct; the contexts, errors, and field and variant helpers the value derives'
+/// generated bodies use; and the wire conversion traits and helpers a typed table
+/// position implements.
+///
+/// The derives and the macro emit only `::techy::__private::…` / `$crate::__private::…`
+/// paths, as serde does, so the public module topology never constrains, and is never
+/// constrained by, generated output.
 #[doc(hidden)]
 pub mod __private {
     pub use alloc::string::String;

@@ -1,4 +1,5 @@
-//! [`TextContent`]: logical textual content, span-backed or owned.
+//! The node payload text type [`TextContent`]: a byte range into a source, or an owned
+//! string.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -7,49 +8,58 @@ use super::origin::SourceOrigin;
 use super::source::Source;
 use super::span::Span;
 
-/// Logical textual content of a node payload — the *content* is first-class; a span is
-/// provenance, not the content's storage.
+/// The logical text of a node payload, stored either as a byte range into a source or as
+/// an owned string.
 ///
-/// Content that came from parsing is [`Spanned`](TextContent::Spanned) (zero-copy: a byte
-/// range into the source the carrying node's `SourceSpan` refers to); content that was
-/// synthesized, transformed, or normalized is [`Owned`](TextContent::Owned).
+/// Text that came from parsing is [`Spanned`](TextContent::Spanned): a byte range into
+/// the source that the carrying node's [`SourceSpan`](super::SourceSpan) points into, so
+/// no copy is made. Text that was synthesized, transformed, or normalized is
+/// [`Owned`](TextContent::Owned). Either form is read with
+/// [`resolve`](TextContent::resolve), which is what the node accessors of
+/// [`core::node`](crate::core::node) call.
 ///
-/// Invariant (builder-enforced, debug-asserted): a `Spanned` value refers into the source
-/// of its node's own `SourceSpan`. A transform that replaces a node's span must
-/// materialize its content first.
+/// A `Spanned` value always refers into the source of its own node's `SourceSpan`. The
+/// tree builder enforces this and debug builds assert it, so a transformation that
+/// replaces a node's span must first turn the payload into an `Owned` value with
+/// [`materialized`](TextContent::materialized).
 ///
 /// # Equality
 ///
-/// `TextContent` deliberately implements no `PartialEq`: logical-text equality of a
-/// `Spanned` value requires the source content, so a structural `==` would give
-/// misleading answers (`Spanned(2..4)` vs `Owned("ab")` may denote identical text).
-/// Compare resolved `&str`s (via [`resolve`](TextContent::resolve) or node-level
-/// accessors) instead.
+/// `TextContent` deliberately implements no `PartialEq`. Deciding whether two values
+/// hold the same text requires the source content, so a structural comparison would give
+/// misleading answers: `Spanned(2..4)` and `Owned("ab")` may well denote the same text.
+/// Compare the resolved `&str`s instead, obtained through
+/// [`resolve`](TextContent::resolve) or through the node accessors.
 #[derive(Clone, Debug)]
 pub enum TextContent {
-    /// A byte range into the carrying node's own source — zero-copy parser output.
+    /// A byte range into the carrying node's own source; this is what parsing produces.
     Spanned(Span),
-    /// Content stored directly — synthesized, transformed, or normalized.
+    /// Text stored directly, for synthesized, transformed, or normalized content.
     Owned(Box<str>),
 }
 
 impl TextContent {
-    /// Empty owned content.
+    /// Empty content, as an [`Owned`](TextContent::Owned) value.
     pub fn empty() -> TextContent {
         TextContent::Owned(Box::from(""))
     }
 
     /// The logical text, resolving a [`Spanned`](TextContent::Spanned) value against
-    /// `source` — the source the span refers into (the carrying node's **own**
-    /// source, per the `Spanned` invariant: in a multi-source tree each node's
-    /// payload resolves against its own span's source, never an ambient one).
-    /// For content read off a parsed node, that source is
-    /// `node.span().source()` ([`SourceSpan::source`](super::SourceSpan::source)).
+    /// `source`.
+    ///
+    /// `source` must be the source the span refers into, which is the carrying node's
+    /// own source: in a tree spanning several sources, each node's payload resolves
+    /// against its own span's source and never against an ambient one. For content read
+    /// off a parsed node, that source is `node.span().source()`
+    /// ([`SourceSpan::source`](super::SourceSpan::source)).
+    ///
+    /// An [`Owned`](TextContent::Owned) value ignores `source` entirely.
     ///
     /// # Panics
     ///
-    /// Panics if a `Spanned` range is out of bounds for `source`'s content or not on
-    /// `char` boundaries (same contract as `&content[range]`) — a broken invariant,
+    /// Panics if a `Spanned` range is out of bounds for `source`'s content, or if either
+    /// end falls inside a multi-byte character — the same contract as `&content[range]`.
+    /// This means the invariant above is broken, which no parsed input can cause; it is
     /// not a recoverable condition.
     pub fn resolve<'a, O: SourceOrigin>(&'a self, source: &'a Source<O>) -> &'a str {
         match self {
@@ -58,8 +68,12 @@ impl TextContent {
         }
     }
 
-    /// An always-[`Owned`](TextContent::Owned) copy with the same logical text
-    /// (see [`resolve`](TextContent::resolve) for the `source` contract).
+    /// A copy of this content holding the same text as an
+    /// [`Owned`](TextContent::Owned) value.
+    ///
+    /// Use this before detaching a payload from the source its span points into. The
+    /// `source` argument and the panic condition are those of
+    /// [`resolve`](TextContent::resolve).
     pub fn materialized<O: SourceOrigin>(&self, source: &Source<O>) -> TextContent {
         match self {
             TextContent::Spanned(span) => {

@@ -1,5 +1,5 @@
-//! `Source`, `SourceSpan`, `SourcePos`, and `SourceProvenance` — the Arc-based source
-//! model.
+//! The `Arc`-based source model: [`Source`], [`SourceSpan`], [`SourcePos`], and
+//! [`SourceProvenance`].
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -10,15 +10,23 @@ use super::line_index::LineIndex;
 use super::origin::SourceOrigin;
 use super::span::Span;
 
-/// One unit of source content (a document, an included file, a synthesized snippet).
+/// One unit of source content: a document, an included file, or a snippet synthesized
+/// while parsing.
 ///
-/// Sources are shared as `Arc<Source>`; every [`SourceSpan`] carries such an `Arc`, making
-/// spans (and everything that stores them) self-contained. Sources are immutable once
-/// created.
+/// A source is immutable once created and is shared as `Arc<Source>`. Every
+/// [`SourceSpan`] holds such an `Arc`, which is what makes spans — and the nodes and
+/// diagnostics that store them — self-contained.
 ///
-/// The content backing is a plain `String`, deliberately: a memory-mapped UTF-8 file can be handed in
-/// as text by the embedder after one validation pass, and a genuinely chunked/streaming
-/// backing would need a different reader design — not a backing swap behind this type.
+/// Create the top-level content with [`new`](Source::new); [`resolved`](Source::resolved)
+/// and [`synthesized`](Source::synthesized) create the two kinds of derived source and
+/// record where they came from (see [`SourceProvenance`]). The builder methods
+/// [`with_origin`](Source::with_origin) and
+/// [`with_line_column_number_offsets`](Source::with_line_column_number_offsets) adjust how
+/// the source is displayed in diagnostics.
+///
+/// Content is held as a plain `String`: an embedder with a memory-mapped UTF-8 file hands
+/// it in as text after one validation pass, and genuinely chunked or streaming input would
+/// need a different reader design rather than a different backing behind this type.
 pub struct Source<O: SourceOrigin = Option<String>> {
     /// The source text.
     content: String,
@@ -34,19 +42,20 @@ pub struct Source<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> Source<O> {
-    /// Create a primary source (top-level content provided directly by the user).
+    /// Creates a primary source: top-level content provided directly by the user.
     ///
-    /// Defaults: unknown origin, [`SourceProvenance::Primary`], line/column offsets `(1, 1)`.
+    /// The origin is unknown, the provenance is [`SourceProvenance::Primary`], and the
+    /// line and column number offsets are `(1, 1)`.
     ///
-    /// Every call creates a **new source identity**: [`SourceSpan`] and
-    /// [`SourcePos`] equality compares the `Arc`-held source by identity plus
-    /// offsets ([`SourceSpan::same_source`]), so spans into two `Source` values
-    /// never compare equal, even when the contents are byte-identical. Code that
-    /// must correlate positions across operations holds one `Arc<Source>` and
-    /// passes that same handle everywhere — parsing included:
-    /// [`Language::parse_setup`](crate::engine::Language::parse_setup) takes the
-    /// handle, while [`Language::parse`](crate::engine::Language::parse) mints a
-    /// fresh source per call.
+    /// Every call creates a new source *identity*. [`SourceSpan`] and [`SourcePos`]
+    /// compare their source by identity rather than by content (see
+    /// [`SourceSpan::same_source`]), so spans into two separate `Source` values never
+    /// compare equal, even when the two contents are byte-identical. Code that has to
+    /// correlate positions across several operations therefore creates the source once
+    /// and passes the same `Arc<Source>` everywhere — parsing included:
+    /// [`Language::parse_setup`](crate::core::Language::parse_setup) takes such a handle,
+    /// whereas [`Language::parse`](crate::core::Language::parse) creates a fresh source on
+    /// every call.
     pub fn new(content: impl Into<String>) -> Self {
         Source {
             content: content.into(),
@@ -57,11 +66,14 @@ impl<O: SourceOrigin> Source<O> {
         }
     }
 
-    /// Create a source whose content was resolved from an external `reference`
-    /// (e.g. by an `\input`-like construct at `triggered_at`).
+    /// Creates a source whose content was resolved from the external reference
+    /// `reference`, requested by a construct at `triggered_at`.
     ///
-    /// The origin is left at its default; a creator that knows where the content was
-    /// obtained from (conventionally a URL) attaches it via [`with_origin`](Self::with_origin).
+    /// This is what a caller of a [`SourceResolver`](super::SourceResolver) builds from
+    /// the resolved content; [`resolve_source_reference`](super::resolve_source_reference)
+    /// does it for you. The origin is left at its default, so a creator that knows where
+    /// the content was obtained from (conventionally a URL) attaches it with
+    /// [`with_origin`](Self::with_origin).
     pub fn resolved(
         content: impl Into<String>,
         reference: impl Into<String>,
@@ -73,11 +85,12 @@ impl<O: SourceOrigin> Source<O> {
         }
     }
 
-    /// Create a source whose content was synthesized during parsing (e.g. a macro
-    /// expansion triggered at `triggered_at`).
+    /// Creates a source whose content was synthesized during parsing — a macro expansion,
+    /// for instance — triggered by the construct at `triggered_at`.
     ///
-    /// The origin is left at its default (no origin: the content was not *obtained* from
-    /// anywhere); the provenance carries `description`.
+    /// The origin is left at its default, since the content was not obtained from
+    /// anywhere; `description` says what produced it and is recorded in the source's
+    /// [`SourceProvenance`].
     pub fn synthesized(
         content: impl Into<String>,
         description: impl Into<String>,
@@ -92,25 +105,31 @@ impl<O: SourceOrigin> Source<O> {
         }
     }
 
-    /// Set the origin (conventionally the URL the content was obtained from) for this source.
+    /// Sets the origin of this source, conventionally the URL the content was obtained
+    /// from (see [`SourceOrigin`](super::SourceOrigin)).
     pub fn with_origin(mut self, origin: O) -> Self {
         self.origin = origin;
         self
     }
 
-    /// Set the provenance for this source.
+    /// Sets the [`SourceProvenance`] of this source, overriding the one its constructor
+    /// recorded.
     pub fn with_provenance(mut self, provenance: SourceProvenance<O>) -> Self {
         self.provenance = provenance;
         self
     }
 
-    /// Set the line and column number offsets.
+    /// Sets the line and column number offsets used when a position in this source is
+    /// displayed.
     ///
-    /// Default offsets are `(1, 1)` for 1-indexed line/column numbers; use `(0, 0)` for
-    /// 0-indexed numbers. Any value is accepted: a line or column number is the
-    /// zero-based position plus the offset, computed with saturating addition, so an
-    /// offset near `usize::MAX` (from a serialized source, say) yields `usize::MAX`
-    /// rather than an overflow.
+    /// The defaults are `(1, 1)`, giving 1-indexed line and column numbers; use `(0, 0)`
+    /// for 0-indexed ones. A resolver that consumed a leading part of a file itself uses a
+    /// larger line offset so that reported line numbers still match the original file (see
+    /// [`ResolvedContent::line_number_offset`](super::ResolvedContent::line_number_offset)).
+    ///
+    /// Any value is accepted. A displayed number is the zero-based position plus the
+    /// offset, added with saturating arithmetic, so an offset near `usize::MAX` — read
+    /// back from a serialized source, say — yields `usize::MAX` rather than overflowing.
     pub fn with_line_column_number_offsets(
         mut self,
         line_number_offset: usize,
@@ -136,48 +155,59 @@ impl<O: SourceOrigin> Source<O> {
         &self.provenance
     }
 
-    /// The line number offset (see [`with_line_column_number_offsets`](Self::with_line_column_number_offsets)).
+    /// The line number offset (see
+    /// [`with_line_column_number_offsets`](Self::with_line_column_number_offsets)).
     pub fn line_number_offset(&self) -> usize {
         self.line_number_offset
     }
 
-    /// The column number offset (see [`with_line_column_number_offsets`](Self::with_line_column_number_offsets)).
+    /// The column number offset (see
+    /// [`with_line_column_number_offsets`](Self::with_line_column_number_offsets)).
     pub fn column_number_offset(&self) -> usize {
         self.column_number_offset
     }
 
-    /// Create a lazy line/column index over this source's content, with this source's
-    /// line/column offsets applied.
+    /// Creates a [`LineIndex`](super::LineIndex) over this source's content, with this
+    /// source's line and column number offsets applied.
+    ///
+    /// The index computes line starts lazily and borrows the content, so it is meant to be
+    /// used and dropped. To keep line information across many queries or several parses,
+    /// use a [`LineIndexCache`](super::LineIndexCache) instead.
     pub fn line_index(&self) -> LineIndex<'_> {
         LineIndex::new(&self.content)
             .with_line_column_number_offsets(self.line_number_offset, self.column_number_offset)
     }
 
-    /// Iterate over this source's provenance chain: this source's provenance first, then the
-    /// provenance of each triggering source in turn, ending with a
+    /// Iterates over this source's provenance chain: this source's own provenance first,
+    /// then the provenance of each triggering source in turn, ending with a
     /// [`SourceProvenance::Primary`].
+    ///
+    /// The companion [`including_sources`](Source::including_sources) walks the same chain
+    /// but yields the sources rather than their provenance records.
     pub fn provenance_chain(&self) -> ProvenanceChain<'_, O> {
         ProvenanceChain { next: Some(&self.provenance) }
     }
 
-    /// Iterate over the chain of including sources: this source first, then the
-    /// source containing each [`triggered_at`](SourceProvenance::triggered_at) hop
-    /// in turn, ending with the primary source.
+    /// Iterates over the chain of including sources: this source first, then the source
+    /// containing its [`triggered_at`](SourceProvenance::triggered_at) location, and so on
+    /// up to the primary source.
     ///
-    /// The sibling of [`provenance_chain`](Source::provenance_chain): that iterator
-    /// yields the provenance *records*, this one yields the *sources* — whose
-    /// [origins](Source::origin) carry the comparable names — making it the general
-    /// primitive under include-chain policies (`.any(…)` for a cycle check,
-    /// `.count()` for a depth bound, `.filter(…).count()` for a `.dtx`-style
-    /// bounded self-inclusion policy; the ready-made combination is
-    /// [`check_include_chain`](super::check_include_chain)). The chain is finite by
-    /// construction: a triggering location always lies in an older source.
+    /// This is the building block for include-recursion policies, because it yields the
+    /// sources themselves and their [origins](Source::origin) carry the names a policy
+    /// compares: `.any(…)` gives a cycle check, `.count()` a depth bound, and
+    /// `.filter(…).count()` a bounded self-inclusion policy of the kind `.dtx` files need.
+    /// [`check_include_chain`](super::check_include_chain) is the ready-made combination
+    /// of the first two.
+    ///
+    /// The chain is always finite: a triggering location always lies in a source created
+    /// before this one.
     pub fn including_sources(&self) -> IncludingSources<'_, O> {
         IncludingSources { next: Some(self) }
     }
 }
 
-/// Iterator over a chain of including sources; see [`Source::including_sources`].
+/// Iterator over a chain of including sources, returned by
+/// [`Source::including_sources`].
 pub struct IncludingSources<'a, O: SourceOrigin> {
     next: Option<&'a Source<O>>,
 }
@@ -221,12 +251,22 @@ impl<O: SourceOrigin> fmt::Debug for Source<O> {
     }
 }
 
-/// A byte range within one [`Source`], carrying an `Arc` to that source.
+/// A byte range within one [`Source`], together with an `Arc` to that source.
 ///
-/// This is the location type stored in nodes, diagnostics, and provenance records: it
-/// resolves its own content with no external lookup, and it keeps its source alive across
-/// tree transformations. Equality is *identity-based* for the source (same `Arc`) plus equal
-/// byte range.
+/// This is the location type stored in nodes, diagnostics, and provenance records. It
+/// resolves its own [`content`](SourceSpan::content) with no external lookup and keeps its
+/// source alive for as long as it exists, which is what lets a parsed tree outlive the
+/// parse without a lifetime parameter.
+///
+/// The plain counterpart used during a parse is [`Span`], which is `Copy` and names no
+/// source: [`new`](SourceSpan::new) converts one into a `SourceSpan`, and
+/// [`span`](SourceSpan::span) converts back. [`SourcePos`] is the single-offset
+/// counterpart, reached through [`start_pos`](SourceSpan::start_pos) and
+/// [`end_pos`](SourceSpan::end_pos).
+///
+/// Two spans are equal when their byte ranges are equal and their sources are the *same*
+/// source — compared by `Arc` identity, not by content (see
+/// [`same_source`](SourceSpan::same_source)).
 #[derive(Clone)]
 pub struct SourceSpan<O: SourceOrigin = Option<String>> {
     source: Arc<Source<O>>,
@@ -237,15 +277,21 @@ pub struct SourceSpan<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> SourceSpan<O> {
-    /// Create a span over `range` within `source` — a `Range<usize>` or a plain
-    /// [`Span`] (the transient parsing type; this is the bridge from byte-range land
-    /// into `Arc`-carrying land).
+    /// Creates a span over `range` within `source`.
     ///
-    /// The range must lie within the source content and fall on `char` boundaries —
-    /// the caller's contract: a violation panics here, in all builds — one of the
-    /// crate's few deliberate panics (see the [Panics list](techy::guide::panics)).
-    /// Every constructed `SourceSpan` is therefore valid for
+    /// The range may be given as a `Range<usize>` or as a plain [`Span`]; this is how a
+    /// construct parser turns the byte range it scanned into a location it can store in a
+    /// node. The reverse conversion is [`span`](Self::span).
+    ///
+    /// Because the range is checked here, every `SourceSpan` that exists is valid for
     /// [`content`](Self::content).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range does not lie within the source content, or if either end falls
+    /// inside a multi-byte character. Passing a valid range is the caller's contract, and
+    /// it is checked in all builds — one of the crate's few deliberate panics (see the
+    /// [list of panicking items](crate::guide::panics)).
     pub fn new(source: &Arc<Source<O>>, range: impl Into<Range<usize>>) -> Self {
         let range = range.into();
         assert!(
@@ -265,16 +311,17 @@ impl<O: SourceOrigin> SourceSpan<O> {
         SourceSpan { source: Arc::clone(source), start: range.start, end: range.end }
     }
 
-    /// Create a span covering the entire content of `source`.
+    /// Creates a span covering the entire content of `source`.
     pub fn entire(source: &Arc<Source<O>>) -> Self {
         SourceSpan::new(source, 0..source.content.len())
     }
 
-    /// The empty span at `pos` — the mirror of [`start_pos`](Self::start_pos) /
-    /// [`end_pos`](Self::end_pos), turning a position back into a span.
+    /// Creates the empty span at position `pos`.
     ///
-    /// This is the anchor a diagnostic uses when it reports about a *place* rather
-    /// than a stretch of text ("expected an argument here").
+    /// This is what a diagnostic uses when it reports about a place rather than about a
+    /// stretch of text ("expected an argument here"). It is the inverse of
+    /// [`start_pos`](Self::start_pos) and [`end_pos`](Self::end_pos), which turn a span
+    /// into a position.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -310,8 +357,10 @@ impl<O: SourceOrigin> SourceSpan<O> {
         self.start..self.end
     }
 
-    /// The byte range as a plain [`Span`] — the inverse of the [`new`](Self::new)
-    /// bridge, for handing a stored location back to `Span`-based helpers.
+    /// The byte range as a plain [`Span`], for passing a stored location back to
+    /// `Span`-based helpers.
+    ///
+    /// This is the inverse of [`new`](Self::new).
     pub fn span(&self) -> Span {
         Span::new(self.start, self.end)
     }
@@ -331,20 +380,25 @@ impl<O: SourceOrigin> SourceSpan<O> {
         &self.source.content[self.start..self.end]
     }
 
-    /// Whether `self` and `other` point into the same [`Source`] instance (identity, not
-    /// content comparison).
+    /// Whether `self` and `other` point into the same [`Source`] value.
+    ///
+    /// Sources are compared by `Arc` identity, never by content: two sources built from
+    /// the same text are still different sources.
     pub fn same_source(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source, &other.source)
     }
 
     /// The span's start, as a [`SourcePos`].
+    ///
+    /// [`at`](Self::at) turns a position back into an empty span.
     pub fn start_pos(&self) -> SourcePos<O> {
         SourcePos { source: Arc::clone(&self.source), pos: self.start }
     }
 
-    /// The span's end, as a [`SourcePos`] — **exclusive**: one past the span's last
-    /// byte (the position where content *after* the span begins), not a position
-    /// inside the span.
+    /// The span's end, as a [`SourcePos`].
+    ///
+    /// The end is exclusive: this is the position one past the span's last byte, where the
+    /// content following the span begins, not a position inside the span.
     pub fn end_pos(&self) -> SourcePos<O> {
         SourcePos { source: Arc::clone(&self.source), pos: self.end }
     }
@@ -368,20 +422,19 @@ impl<O: SourceOrigin> fmt::Debug for SourceSpan<O> {
     }
 }
 
-/// A single location within one [`Source`], carrying an `Arc` to that source — the
-/// *point* counterpart of [`SourceSpan`]: one value instead of a loose
-/// `(source, offset)` argument pair.
+/// A single location within one [`Source`], together with an `Arc` to that source.
 ///
-/// This is the query currency for position lookups over parsed trees (a span query
-/// uses [`SourceSpan`] itself). The offset is a byte position into the source
-/// content; like a span's offsets it must fall on a `char` boundary (asserted at
-/// construction — a violation panics, in all builds). Equality is *identity-based*
-/// for the source (same
-/// `Arc`) plus equal offset, exactly as for [`SourceSpan`].
+/// This is the single-offset counterpart of [`SourceSpan`], passed as one value instead of
+/// a loose `(source, offset)` pair. Position lookups over parsed trees take a `SourcePos`;
+/// lookups by range take a `SourceSpan`.
 ///
-/// Line/column display goes through the source's lazy
-/// [`LineIndex`](crate::source::LineIndex), as for spans — there is deliberately no
-/// per-position method:
+/// The offset is a byte position into the source content and must fall on a `char`
+/// boundary, which [`new`](SourcePos::new) checks. Equality compares the offset and the
+/// source by `Arc` identity, exactly as for [`SourceSpan`].
+///
+/// Line and column numbers are not a method on a position: as for spans, they come from
+/// the source's [`LineIndex`](crate::source::LineIndex) (or from a
+/// [`LineIndexCache`](crate::source::LineIndexCache) held across queries).
 ///
 /// ```
 /// use std::sync::Arc;
@@ -399,12 +452,15 @@ pub struct SourcePos<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> SourcePos<O> {
-    /// A position at byte offset `pos` within `source`.
+    /// Creates a position at byte offset `pos` within `source`.
     ///
-    /// The offset must lie within the source content (`0..=len`; the length itself is
-    /// a valid end-of-content position) and fall on a `char` boundary — the caller's
-    /// contract: a violation panics, in all builds — one of the crate's few
-    /// deliberate panics (see the [Panics list](techy::guide::panics)).
+    /// # Panics
+    ///
+    /// Panics if `pos` lies outside the source content, or inside a multi-byte character.
+    /// The valid offsets are `0..=len`; the content length itself is a valid
+    /// end-of-content position. Passing a valid offset is the caller's contract, and it is
+    /// checked in all builds — one of the crate's few deliberate panics (see the [list of
+    /// panicking items](crate::guide::panics)).
     pub fn new(source: &Arc<Source<O>>, pos: usize) -> Self {
         assert!(
             pos <= source.content.len(),
@@ -449,12 +505,17 @@ impl<O: SourceOrigin> fmt::Debug for SourcePos<O> {
     }
 }
 
-/// How a [`Source`] entered the parse.
+/// How a [`Source`] entered the parse: as the primary input, resolved from an external
+/// reference, or synthesized while parsing.
 ///
-/// `Resolved` and `Synthesized` sources point back (via `triggered_at`) to the location that
-/// caused their creation. Since a triggering location always lies in an *older* source, these
-/// back-references form a provenance tree, never a cycle. Provenance only ever
-/// references sources — never nodes.
+/// A `Resolved` or `Synthesized` source points back, through its `triggered_at` span, at
+/// the location that caused it to be created. Following those back-references gives the
+/// include chain of a location, which is what
+/// [`Source::provenance_chain`] and [`Source::including_sources`] iterate over.
+///
+/// A triggering location always lies in a source created earlier, so these
+/// back-references form a tree and never a cycle. Provenance references only sources,
+/// never nodes.
 #[derive(Debug, Clone)]
 pub enum SourceProvenance<O: SourceOrigin = Option<String>> {
     /// Top-level source provided directly by the user.
@@ -476,12 +537,14 @@ pub enum SourceProvenance<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> SourceProvenance<O> {
-    /// Whether this is a primary (user-provided, top-level) source.
+    /// Whether this is a [`Primary`](SourceProvenance::Primary) source: top-level content
+    /// provided by the user.
     pub fn is_primary(&self) -> bool {
         matches!(self, SourceProvenance::Primary)
     }
 
-    /// The location that triggered this source's creation, if any.
+    /// The location that triggered this source's creation, or `None` for a
+    /// [`Primary`](SourceProvenance::Primary) source.
     pub fn triggered_at(&self) -> Option<&SourceSpan<O>> {
         match self {
             SourceProvenance::Primary => None,
@@ -491,7 +554,7 @@ impl<O: SourceOrigin> SourceProvenance<O> {
     }
 }
 
-/// Iterator over a provenance chain; see [`Source::provenance_chain`].
+/// Iterator over a provenance chain, returned by [`Source::provenance_chain`].
 pub struct ProvenanceChain<'a, O: SourceOrigin> {
     next: Option<&'a SourceProvenance<O>>,
 }

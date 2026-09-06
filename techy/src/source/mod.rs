@@ -1,54 +1,67 @@
-//! Source management: content, spans, provenance, resolution, line/column analysis.
+//! The source model: content, byte ranges, provenance, resolution, and line/column
+//! analysis.
 //!
-//! This module provides:
+//! Everything a parse produces points back into a [`Source`]: one unit of content — a
+//! document, an included file, or a snippet synthesized while parsing. Sources are
+//! immutable once created, and are shared as `Arc<Source>`.
 //!
-//! - [`Source`] owns one unit of source content, its origin metadata, and its
-//!   [`SourceProvenance`]. Sources are shared as `Arc<Source>`.
-//! - [`Span`] is a plain `Copy` byte range — the transient span type on which all span
-//!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately; the
-//!   type lives here rather than in the token topic because errors use it independently
-//!   of tokenization).
-//! - [`SourceSpan`] is an `Arc<Source>` + byte range. Nodes and errors/diagnostics carry
-//!   `SourceSpan`s, making them self-contained — no lifetime parameters, no external
-//!   source store. The construct-parser layer is where a byte `Span` becomes a
-//!   `SourceSpan`, via its `ParseContext`'s source.
-//! - [`SourcePos`] is an `Arc<Source>` + single byte offset — the point counterpart
-//!   of `SourceSpan` (position lookups over parsed trees query with it).
-//! - [`SourceProvenance`] records where a source came from (`Primary` / `Resolved` /
-//!   `Synthesized`), with a `triggered_at: SourceSpan` back-reference forming a provenance
-//!   tree walkable for error reporting. Provenance lives on the *source* (one hop per
-//!   resolved/synthesized source), not on every location.
-//! - [`SourceResolver`] is the pluggable content-lookup extension point (`\input`-like
-//!   references), configured on a parse driver through the sealed
-//!   [`IntoSourceResolver`] conversion; an unconfigured driver resolves nothing.
-//!   Recursion/cycle policy stays the embedder's — [`Source::including_sources`]
-//!   and [`check_include_chain`] are the ready-made policy tools.
-//! - [`TextContent`] is logical textual content — span-backed when it came from parsing,
-//!   owned when synthesized or normalized. Node payloads carry it.
-//! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
-//!   purely in byte offsets. [`LineIndexCache`] is its persistent, per-source
-//!   consumer-held form, and [`LineColProvider`] the trait the rendering entry
-//!   points accept.
+//! Two types name a stretch of text inside a source, and the difference between them
+//! decides which one an API asks for:
 //!
-//! # Cycle-prevention invariant
+//! - [`Span`] is a plain `Copy` byte range that does not say *which* source it belongs
+//!   to. Tokens and scanning code use it, and all span arithmetic happens on it.
+//! - [`SourceSpan`] is a byte range plus an `Arc` to the source it points into. Nodes
+//!   and diagnostics store `SourceSpan`s, which makes them self-contained: no lifetime
+//!   parameter, and no external table of sources to look a location up in.
 //!
-//! **Source types never reference node types.** `Source`, `SourceSpan`, and
-//! `SourceProvenance` may only reference other sources. The reference graph is strictly
-//! layered (nodes → sources; sources → sources), which makes `Arc` cycles impossible by
-//! construction.
+//! [`SourceSpan::new`] turns a `Span` into a `SourceSpan` and [`SourceSpan::span`] turns
+//! it back; construct parsers do the first as they build nodes. [`SourcePos`] is the
+//! single-offset counterpart of `SourceSpan`, used to query a parsed tree by location,
+//! and [`TextContent`] is the logical text a node payload stores — a byte range when it
+//! came from parsing, an owned string when it was synthesized or normalized.
 //!
-//! # Genericity note
+//! Every source records a [`SourceProvenance`]: primary input, content resolved from an
+//! external reference, or content synthesized during the parse. The latter two point
+//! back at the location that caused them, so the include chain of any location can be
+//! recovered for error reporting — [`Source::provenance_chain`] yields the provenance
+//! records, [`Source::including_sources`] the sources themselves.
 //!
-//! The origin metadata type is a plain type parameter `O: SourceOrigin` with the default
-//! `Option<String>` (conventionally the URL the content was obtained from, `None` when
-//! unknown or synthesized). The higher layers plug `L::SourceOrigin` into this parameter; the source
-//! layer itself never depends on `Lang`, preserving the strict layering.
+//! [`SourceResolver`] is the extension point that turns an `\input`-like reference into
+//! content; a parse driver with no resolver configured resolves nothing. Bounding
+//! include recursion is the embedder's decision, and [`check_include_chain`] implements
+//! the usual cycle-and-depth policy.
+//!
+//! Line and column numbers are computed on demand, for display only — parsing itself
+//! works purely in byte offsets. [`LineIndex`] is the borrowing index over one content
+//! string, [`LineIndexCache`] the persistent per-source form a consumer keeps across
+//! renders, and [`LineColProvider`] the trait the diagnostic rendering entry points
+//! accept.
+//!
+//! For how these types fit into a parse, see [the concepts
+//! overview](crate::guide::concepts_overview#sources-and-spans); for position queries
+//! and line/column handling in editors and other tools, see [the integration
+//! chapter](crate::guide::integration#tooling-starting-points).
+//!
+//! # Sources never reference nodes
+//!
+//! `Source`, `SourceSpan`, and `SourceProvenance` may reference other sources, and
+//! nothing else. The reference graph is therefore strictly layered — nodes point at
+//! sources, sources point at sources — which makes `Arc` cycles impossible to build out
+//! of these types.
+//!
+//! # The origin type parameter
+//!
+//! Where a source's content nominally comes from is described by a plain type parameter
+//! `O: `[`SourceOrigin`], defaulting to `Option<String>` (conventionally the URL the
+//! content was obtained from, `None` when unknown or synthesized). Higher layers
+//! substitute a language's own origin type for it; this module never depends on the
+//! language type itself, which is what keeps the layering strict.
 //!
 //! # no_std
 //!
-//! This layer, like the whole crate, is `no_std`-friendly (it uses `core` and `alloc` only).
-//! In particular there is no file-system-backed resolver: embedders that want file (or URL,
-//! or database) lookup implement [`SourceResolver`] themselves.
+//! Like the rest of the crate, this module uses only `core` and `alloc`. In particular
+//! it ships no file-system-backed resolver: an embedder that wants file, URL, or
+//! database lookup implements [`SourceResolver`] itself.
 
 mod line_index;
 mod origin;

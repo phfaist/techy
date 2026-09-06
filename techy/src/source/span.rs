@@ -1,20 +1,28 @@
-//! Plain byte ranges ([`Span`]) used throughout parsing.
+//! The plain byte range type [`Span`], used throughout parsing.
 
 use core::fmt;
 use core::ops::Range;
 
-/// A plain byte range within one source's content. `Copy`, no `Arc` — used everywhere
-/// during parsing (tokens, transient scanning). Nodes and errors that must outlive the
-/// parse carry [`SourceSpan`](crate::source::SourceSpan) instead.
+/// A byte range within the content of a single source.
 ///
-/// Both offsets are byte positions into the source content; `start..end` is half-open,
-/// like standard Rust ranges. Positions are expected to fall on `char` boundaries — a
-/// caller contract, enforced where spans meet content ([`slice`](Span::slice) panics,
-/// [`get`](Span::get) returns `None`), not by this type.
+/// Both ends are byte offsets into that content, and `start..end` is half-open, like a
+/// standard Rust range. A `Span` does not record *which* source it refers to; it is
+/// `Copy` and holds no `Arc`, and it is what tokens and other short-lived positions use
+/// during a parse.
 ///
-/// Fields are private and every mutator preserves `start <= end` (consistent with
-/// `SourceSpan`): [`new`](Span::new) asserts it — a violation panics, in all builds —
-/// and in-place growth goes through the monotone [`extend_to`](Span::extend_to).
+/// Nodes and diagnostics outlive the parse and have to name their source, so they store
+/// a [`SourceSpan`](crate::source::SourceSpan) instead.
+/// [`SourceSpan::new`](crate::source::SourceSpan::new) builds one from a `Span` and the
+/// source it points into, and [`SourceSpan::span`](crate::source::SourceSpan::span)
+/// returns the plain range.
+///
+/// Offsets are expected to fall on `char` boundaries. This type does not check that;
+/// the check happens where a span meets content, in [`slice`](Span::slice) (which
+/// panics) and [`get`](Span::get) (which returns `None`).
+///
+/// Every span satisfies `start <= end`. [`new`](Span::new) asserts it, and the only
+/// in-place mutation, [`extend_to`](Span::extend_to), can move the end forward but not
+/// backward.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// Byte offset of the first byte of the range.
@@ -24,16 +32,20 @@ pub struct Span {
 }
 
 impl Span {
-    /// Create a span covering `start..end`. `start <= end` is the caller's contract:
-    /// a violation panics, in all builds — one of the crate's few deliberate panics
-    /// (see the [Panics list](techy::guide::panics)).
+    /// Creates a span covering `start..end`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `start > end`. Keeping the two ends ordered is the caller's contract,
+    /// and it is checked in all builds — one of the crate's few deliberate panics (see
+    /// the [list of panicking items](crate::guide::panics)).
     #[inline]
     pub fn new(start: usize, end: usize) -> Span {
         assert!(start <= end, "span start {} is after end {}", start, end);
         Span { start, end }
     }
 
-    /// Create an empty span positioned at `pos`.
+    /// Creates an empty span at byte offset `pos`.
     #[inline]
     pub fn empty(pos: usize) -> Span {
         Span { start: pos, end: pos }
@@ -52,17 +64,14 @@ impl Span {
     }
 
     /// Length of the range in bytes.
-    ///
-    /// `start <= end` holds for every span by construction ([`new`](Span::new) asserts
-    /// it in all builds and the mutators preserve it), so this is simply `end - start`;
-    /// the saturating subtraction is defensive only.
     #[inline]
     pub fn len(&self) -> usize {
+        // `start <= end` holds for every span built through the public API, so this is
+        // just `end - start`; the saturating subtraction is defensive only.
         self.end.saturating_sub(self.start)
     }
 
-    /// Whether the range is empty (length 0 — consistent with [`len`](Span::len) on
-    /// inverted spans).
+    /// Whether the range is empty, that is, whether its [`len`](Span::len) is zero.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -74,11 +83,17 @@ impl Span {
         self.start..self.end
     }
 
-    /// Grow the span in place so it ends at `end` — the one permitted in-place
-    /// mutation (accumulating a run of tokens into one node's span). Monotone:
-    /// `end >= self.end()` is the caller's contract — a violation panics, in all
-    /// builds (see the [Panics list](techy::guide::panics)) — so the
-    /// `start <= end` invariant is preserved.
+    /// Grows the span in place so that it ends at `end`.
+    ///
+    /// This is the only in-place mutation a span allows. Parsers use it to accumulate a
+    /// run of tokens into the span of the node they are building. The start is left
+    /// untouched, so the `start <= end` invariant still holds afterwards.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `end` is before the span's current end: growth is monotone, and asking
+    /// for a shorter span violates the caller's contract. The check runs in all builds
+    /// (see the [list of panicking items](crate::guide::panics)).
     #[inline]
     pub fn extend_to(&mut self, end: usize) {
         assert!(
@@ -90,41 +105,46 @@ impl Span {
         self.end = end;
     }
 
-    /// The smallest span covering both `self` and `other` (byte-range union including
-    /// any gap between them; the operands may touch, overlap, nest, or be disjoint, in
-    /// either order).
+    /// The smallest span covering both `self` and `other`.
+    ///
+    /// This is the union of the two byte ranges, including any gap between them. The
+    /// operands may touch, overlap, nest, or be disjoint, in either order.
     #[inline]
     pub fn cover(&self, other: Span) -> Span {
         Span { start: self.start.min(other.start), end: self.end.max(other.end) }
     }
 
-    /// Whether `pos` lies within the span — **half-open** containment, like standard
-    /// Rust ranges: `start() <= pos < end()`. In particular the end offset itself is
-    /// *not* contained, and an **empty span contains no position** (not even its own
-    /// start — there is no byte at it to contain).
+    /// Whether byte offset `pos` lies within the span.
+    ///
+    /// Containment is half-open, like a standard Rust range: `start() <= pos < end()`.
+    /// The end offset itself is therefore not contained, and an empty span contains no
+    /// position at all, not even its own start.
     #[inline]
     pub fn contains(&self, pos: usize) -> bool {
         self.start <= pos && pos < self.end
     }
 
-    /// Borrow the spanned text out of the content the span refers into.
+    /// Borrows the text this span covers out of `content`.
     ///
-    /// Use this for spans minted from `content` itself; for spans of unknown
-    /// provenance, use the non-panicking [`get`](Span::get).
+    /// Use this for a span that was produced from `content` itself. For a span of
+    /// unknown provenance, use the non-panicking companion [`get`](Span::get).
     ///
     /// # Panics
     ///
-    /// Panics if the span is out of bounds for `content` or not on `char` boundaries
-    /// (same contract as `&content[range]`) — one of the crate's few deliberate
-    /// panics (see the [Panics list](techy::guide::panics)).
+    /// Panics if the span is out of bounds for `content`, or if either end falls inside
+    /// a multi-byte character — the same contract as `&content[range]`, and one of the
+    /// crate's few deliberate panics (see the [list of panicking
+    /// items](crate::guide::panics)).
     #[inline]
     pub fn slice<'s>(&self, content: &'s str) -> &'s str {
         &content[self.range()]
     }
 
-    /// Borrow the spanned text, or `None` if the span is out of bounds for `content`
-    /// or not on `char` boundaries — the non-panicking companion of
-    /// [`slice`](Span::slice) (same contract as `content.get(range)`).
+    /// Borrows the text this span covers out of `content`, or `None` if the span is out
+    /// of bounds or does not fall on `char` boundaries.
+    ///
+    /// This is the non-panicking companion of [`slice`](Span::slice), with the same
+    /// contract as `content.get(range)`.
     #[inline]
     pub fn get<'s>(&self, content: &'s str) -> Option<&'s str> {
         content.get(self.range())

@@ -1,27 +1,80 @@
-//! Span-based diagnostics, the tolerant-parsing policy, and the parse abort error
-//! ([`ParseError`]).
+//! Structured diagnostics, the strict/tolerant recovery policy, and the parse abort
+//! error.
 //!
-//! Diagnostics carry Arc-based [`SourceSpan`]s, so they are self-contained and outlive the
-//! parse that produced them — no `'src` lifetime spreads through error signatures. Library
-//! conditions are reported through diagnostics (accumulated by the parser session, available
-//! on the parse result), never through a logging side channel.
+//! Everything a parse can complain about is described by a **condition**: a small data
+//! value of a concrete public type, one type per kind of problem, whose fields say what
+//! went wrong. A condition reaches the caller in one of two ways: as a [`Diagnostic`],
+//! which a parse records and continues past, or as a [`ParseError`], which ends the
+//! parse. Both store the condition itself, the [`SourceSpan`] where it occurred, and a
+//! snapshot of the parse frames that were open at that moment ([`TraceFrame`]s).
 //!
-//! # Structured conditions
+//! The library reports its conditions only through these two types; it never writes them
+//! to a logging side channel.
 //!
-//! [`Diagnostic`] and [`ParseError`] carry a structured **condition payload**
-//! (`Box<dyn DiagnosticData>`) plus span and traceback frames — no message string, no kind
-//! enum. The human message is a pure function of the payload (its `Display`); machine
-//! consumers downcast to the concrete condition type (the in-process identity) or compare
-//! [`identifier()`](DiagnosticData::identifier) strings (the wire identity, for boundaries
-//! where types cannot go). Condition types are plain public-field data structs defined next
-//! to the construct that detects them; third-party conditions are structurally identical
-//! citizens — implement [`DiagnosticInfo`] on a data struct and it flows through the same
-//! carriers.
+//! # Tolerant parsing
 //!
-//! The token-level error type carrying a recovery token (`TokenError`) lives with `Token` in
-//! the token layer; the [`Recovery`] policy that governs it is defined here, as is
-//! [`ParseError`] — the construct-parsing abort, which deliberately carries **no**
-//! recovery payload.
+//! The [`Recovery`] policy, chosen on the parse driver, decides which of the two a
+//! problem becomes:
+//!
+//! - [`Recovery::Tolerant`] — the condition is recorded as an error-severity
+//!   [`Diagnostic`], the parser repairs the input at the point of detection in the way
+//!   that condition type documents, and parsing continues.
+//! - [`Recovery::Strict`] — the condition is returned as a [`ParseError`] and the parse
+//!   aborts at the first problem.
+//!
+//! A tolerant parse therefore succeeds and still reports problems. `parse()` returns a
+//! [`ParseResult`](crate::core::ParseResult) whose
+//! [`tree`](crate::core::ParseResult::tree) covers the whole input and whose
+//! [`diagnostics`](crate::core::ParseResult::diagnostics) field is a [`Diagnostics`]
+//! collection holding what was recorded. Call
+//! [`has_errors`](Diagnostics::has_errors) before treating the tree as clean,
+//! [`render_all`](Diagnostics::render_all) to print a report, and
+//! [`sorted_by_position`](Diagnostics::sorted_by_position) to read the problems in
+//! document order rather than in the order the parse hit them.
+//!
+//! [`Severity`] is a separate axis from the recovery policy: it grades a diagnostic as a
+//! note, a warning, or an error, and only errors make
+//! [`has_errors`](Diagnostics::has_errors) true.
+//!
+//! # Working with conditions
+//!
+//! Neither type stores a message string. The human wording is computed from the
+//! condition on demand ([`Diagnostic::message`], [`ParseError::message`]), and a full
+//! report with position and traceback comes from [`Diagnostic::render`].
+//!
+//! To act on a condition programmatically, downcast it to its concrete type — the
+//! condition is reached as [`Diagnostic::data`] and downcast with
+//! [`downcast_ref`](trait.DiagnosticData.html#method.downcast_ref), or, over a whole
+//! collection, with [`Diagnostics::conditions`].
+//!
+//! Where Rust types cannot travel — log lines, wire formats, configuration — use the
+//! condition's identifier string, read from the type as [`DiagnosticInfo::IDENTIFIER`]
+//! rather than written as a literal.
+//!
+//! Conditions of your own are ordinary conditions: implement [`DiagnosticInfo`] on a data
+//! struct, normally with [`#[derive(DiagnosticInfo)]`](derive@DiagnosticInfo), and it
+//! travels through the same types as the library's own. Library conditions are themselves
+//! plain structs with public fields, defined next to the construct that detects them.
+//!
+//! # Spans outlive the parse
+//!
+//! Diagnostics and parse errors hold `Arc`-based [`SourceSpan`]s, so they are
+//! self-contained values that outlive the parse that produced them, and no source
+//! lifetime appears in error signatures.
+//!
+//! # Related error types
+//!
+//! [`ParseError`] ends construct parsing, and deliberately has **no** recovery payload:
+//! nothing continues past one. The token-level error that does hold a recovery token,
+//! [`TokenError`](crate::core::token::TokenError), is defined with the other token types,
+//! though the [`Recovery`] policy governing it is defined here.
+//!
+//! # See also
+//!
+//! - [Running the parser](crate::guide::parsing#working-with-diagnostics) — choosing a
+//!   recovery policy and working with what a parse reports.
+//! - [The parsing model](crate::guide::parsing_model#how-problems-flow) — where
+//!   conditions are detected and how the policy is applied to them.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -41,75 +94,118 @@ use crate::token::TokenErrorKind;
 // for condition structs, `#[derive(ToDiagnosticValue)]` for field-less payload enums.
 pub use techy_derive::{DiagnosticInfo, ToDiagnosticValue};
 
-/// A structured parse condition, as implemented on a plain public-field data struct.
+/// Makes a data struct a parse **condition**: one kind of problem a parse can report.
 ///
-/// Implementors write a data struct (public fields, `#[non_exhaustive]` + constructor for
-/// semver headroom, ordinary `Clone`/`Debug` derives), a `Display` impl for the human
-/// wording — the message is a pure function of the payload — and this trait: the wire
-/// [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) plus, optionally,
-/// [`serializable_data`](DiagnosticInfo::serializable_data). The dyn-compatible facade
-/// [`DiagnosticData`] is blanket-implemented for every `DiagnosticInfo` type; consumers
-/// downcast to the concrete struct for typed access — within one process: a diagnostic
-/// read back through [`techy::serialize`](crate::serialize) carries a
-/// [`DeserializedCondition`](crate::serialize::DeserializedCondition) answering the
-/// written identifier, projection, and message, not the original type.
+/// The implementors listed below are the conditions the library itself reports. A
+/// condition defined outside the library is indistinguishable from them — it is carried,
+/// rendered, matched, and serialized by exactly the same machinery.
+///
+/// # Writing a condition type
+///
+/// A condition is a plain data struct whose public fields describe the problem. Four
+/// things turn it into one:
+///
+/// - `Clone` and `Debug`, so the carriers can store and duplicate it;
+/// - a `Display` implementation producing the human wording, computed from the fields
+///   rather than stored as a message string;
+/// - this trait, supplying the stable [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) and,
+///   optionally, [`serializable_data`](DiagnosticInfo::serializable_data);
+/// - by convention `#[non_exhaustive]` plus a constructor, so that fields can be added
+///   later without breaking callers.
+///
+/// [`#[derive(DiagnosticInfo)]`](derive@DiagnosticInfo) writes all of that except the
+/// fields themselves: the trait implementation, a `Display` implementation from a message
+/// format string, and the constructor.
+///
+/// # How a condition is carried
+///
+/// [`DiagnosticData`] is the dyn-compatible form of this trait and is what [`Diagnostic`]
+/// and [`ParseError`] store; it is blanket-implemented for every `DiagnosticInfo` type,
+/// so a condition needs no further code to be reportable. Consumers get back to the
+/// concrete struct by downcasting.
+///
+/// Downcasting works within one process. A diagnostic read back through
+/// [`techy::serialize`](crate::serialize) has lost the original Rust type and carries a
+/// [`DeserializedCondition`](crate::serialize::DeserializedCondition) instead, which
+/// answers the written identifier, projection, and message.
 pub trait DiagnosticInfo: Any + Clone + fmt::Display + fmt::Debug + Send + Sync {
-    /// Wire/config identity, namespaced `<crate-or-lang>.<area>.<condition>` (library
-    /// conditions use `core.<area>.*`; presets and downstream languages use their own
-    /// namespace). Semver-stable; deliberately decoupled from the type/module name — a
-    /// struct rename is an internal refactor, an identifier change is a silent break.
+    /// The condition's identity as a string: `<crate-or-lang>.<area>.<condition>`.
+    ///
+    /// This is the identity to use wherever Rust types cannot travel — log lines, wire
+    /// formats, configuration that names conditions. Library conditions use the
+    /// `core.<area>.*` namespace; presets and downstream languages use their own.
+    ///
+    /// It is chosen by hand and deliberately decoupled from the type and module name.
+    /// It is part of the semantic-versioning contract: renaming the struct is an
+    /// internal refactor, while changing this string silently breaks every consumer
+    /// matching on it.
+    ///
+    /// At a comparison site, read it from the type (`MyCondition::IDENTIFIER`) instead of
+    /// writing the string literally.
     const IDENTIFIER: &'static str;
 
-    /// The identity a stored condition *instance* answers — what
-    /// [`Diagnostic::identifier`]/[`ParseError::identifier`] report. The default
-    /// answers [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER), and every ordinary
-    /// condition keeps that default: one Rust type, one compile-time identifier
-    /// remains the norm.
+    /// The identity a stored condition *instance* reports.
     ///
-    /// Overriding is for the exceptional case where a compile-time identifier is
-    /// impossible: binding/embedding **adapter types**, where a single Rust struct
-    /// carries conditions defined at runtime on the other side of the boundary
-    /// (e.g. Python-defined conditions carried by one Rust adapter type), answering
-    /// a per-instance identifier stored in the value. An overriding adapter still
-    /// declares its [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const — that stays
-    /// the type's own identity for type-keyed uses; the override changes only what
+    /// This is what [`Diagnostic::identifier`] and [`ParseError::identifier`] return.
+    /// The default implementation returns [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER), and
+    /// every ordinary condition keeps it: one Rust type, one compile-time identifier.
+    ///
+    /// Override it only where a compile-time identifier is impossible — in an **adapter
+    /// type** for a language binding or embedding, where a single Rust struct carries
+    /// conditions defined at run time on the other side of the boundary (conditions
+    /// defined in Python, say) and stores each one's identifier in a field. Such an
+    /// adapter still declares its own [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER), which
+    /// remains the type's identity for type-keyed uses; the override changes only what
     /// stored instances report.
     ///
     /// With both this trait and [`DiagnosticData`] in scope, an unqualified
-    /// `.identifier()` call on a concrete condition type is ambiguous (both traits
-    /// supply the method — E0034); use the qualified spelling,
-    /// `DiagnosticInfo::identifier(&c)` or `DiagnosticData::identifier(&c)`.
+    /// `.identifier()` call on a concrete condition type is ambiguous, because both
+    /// traits supply the method (error E0034). Write `DiagnosticInfo::identifier(&c)` or
+    /// `DiagnosticData::identifier(&c)`.
     fn identifier(&self) -> &str {
         Self::IDENTIFIER
     }
 
-    /// Serialization-boundary projection only (JSON output, generic tooling) — never a
-    /// programmatic access path: consumers downcast to the concrete type instead. The
-    /// default is an empty map; the authoritative schema is the Rust struct itself.
+    /// This condition's field projection for the serialization boundary.
+    ///
+    /// It is used when a diagnostic is written out — through
+    /// [`techy::serialize`](crate::serialize), or by generic tooling that renders
+    /// conditions without knowing their types. It is not an access path for program
+    /// logic: a consumer in the same process downcasts to the concrete struct, which
+    /// stays the authoritative description of the payload.
+    ///
+    /// The default returns an empty map.
+    /// [`#[derive(DiagnosticInfo)]`](derive@DiagnosticInfo) generates a map of every
+    /// field, each converted through [`ToDiagnosticValue`].
     fn serializable_data(&self) -> DiagnosticValue {
         DiagnosticValue::empty_map()
     }
 }
 
 mod sealed {
-    /// Seals [`DiagnosticData`](super::DiagnosticData): the blanket impl over
-    /// [`DiagnosticInfo`](super::DiagnosticInfo) is the only way in, so every stored
-    /// condition is a `DiagnosticInfo` type. The const-identifier discipline is the
-    /// default that comes with it; the per-instance
-    /// [`identifier()`](super::DiagnosticInfo::identifier) override is the
-    /// exceptional case (binding/embedding adapter types).
+    /// Seals [`DiagnosticData`](super::DiagnosticData).
+    ///
+    /// The blanket implementation over [`DiagnosticInfo`](super::DiagnosticInfo) is the
+    /// only way to obtain it, so every stored condition is a `DiagnosticInfo` type and
+    /// comes with a compile-time identifier by default; the per-instance
+    /// [`identifier()`](super::DiagnosticInfo::identifier) override is the exceptional
+    /// case, for binding and embedding adapter types.
     pub trait Sealed {}
 }
 
 impl<T: DiagnosticInfo> sealed::Sealed for T {}
 
-/// The dyn-compatible facade over [`DiagnosticInfo`] — what [`Diagnostic`] and
-/// [`ParseError`] store.
+/// The condition payload as [`Diagnostic`] and [`ParseError`] store it: the
+/// dyn-compatible form of [`DiagnosticInfo`].
 ///
-/// **Sealed**: the blanket impl over `DiagnosticInfo` is the only implementation.
-/// Downcast to the concrete condition type via
-/// [`downcast_ref`](trait.DiagnosticData.html#method.downcast_ref) (dyn trait upcasting
-/// to `dyn Any`; the concrete data struct is the one in-process identity of a condition).
+/// A value of this trait renders its human message through `Display` and answers its
+/// [`identifier`](DiagnosticData::identifier), but says nothing about which condition it
+/// is. To read the condition's own fields, downcast it to the concrete type with
+/// [`downcast_ref`](trait.DiagnosticData.html#method.downcast_ref); that concrete struct
+/// is a condition's identity within one process.
+///
+/// **Sealed**: the blanket implementation over [`DiagnosticInfo`] is the only one, so
+/// implement `DiagnosticInfo` to make a type reportable.
 pub trait DiagnosticData:
     Any + fmt::Display + fmt::Debug + Send + Sync + sealed::Sealed
 {
@@ -121,8 +217,10 @@ pub trait DiagnosticData:
     /// ([`DiagnosticInfo::serializable_data`]).
     fn serializable_data(&self) -> DiagnosticValue;
 
-    /// Clone the payload behind the dyn facade (backed by the concrete type's ordinary
-    /// `Clone`).
+    /// Clones the payload from behind the trait object.
+    ///
+    /// This is what makes [`Diagnostic`] and [`ParseError`] `Clone`; it is backed by the
+    /// concrete condition type's own `Clone` implementation.
     fn clone_box(&self) -> Box<dyn DiagnosticData>;
 }
 
@@ -141,14 +239,19 @@ impl<T: DiagnosticInfo> DiagnosticData for T {
 }
 
 impl dyn DiagnosticData {
-    /// Whether the condition payload is a `T`.
+    /// Returns whether the condition payload is a `T`.
+    ///
+    /// Use [`downcast_ref`](trait.DiagnosticData.html#method.downcast_ref) when the
+    /// payload's fields are wanted as well.
     pub fn is<T: DiagnosticInfo>(&self) -> bool {
         (self as &dyn Any).is::<T>()
     }
 
-    /// Downcast the condition payload to its concrete type — the in-process identity
-    /// (the [`identifier`](DiagnosticData::identifier) string exists only for boundaries
-    /// where types cannot go).
+    /// Returns the condition payload as its concrete type, or `None` if it is not a `T`.
+    ///
+    /// This is the way to read a condition's fields. The
+    /// [`identifier`](DiagnosticData::identifier) string exists only for boundaries where
+    /// Rust types cannot travel.
     pub fn downcast_ref<T: DiagnosticInfo>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref::<T>()
     }
@@ -160,15 +263,17 @@ impl Clone for Box<dyn DiagnosticData> {
     }
 }
 
-/// Minimal alloc-only value tree for the serialization boundary
-/// ([`DiagnosticInfo::serializable_data`]).
+/// A small value tree: what a condition's fields project to at the serialization
+/// boundary ([`DiagnosticInfo::serializable_data`]).
 ///
-/// Deliberately barebones: no float variant — serialize floats
-/// as strings if ever needed. It embeds into
-/// [`SerialValue`](crate::serialize::SerialValue) (`From` impls in
-/// [`techy::serialize`](crate::serialize)) and, with the `serde` cargo feature,
-/// implements `Serialize`/`Deserialize` through that embedding — the same rendering
-/// as a `SerialValue`, and only the kinds this tree holds read back.
+/// The set of variants is deliberately minimal. In particular there is no float variant;
+/// a condition with a floating-point field projects it as a string.
+///
+/// A `DiagnosticValue` converts into a [`SerialValue`](crate::serialize::SerialValue)
+/// (the `From` implementations are in [`techy::serialize`](crate::serialize)). With the
+/// `serde` cargo feature it implements `Serialize` and `Deserialize` through that
+/// conversion, so it renders exactly as the corresponding `SerialValue` does, and reading
+/// back accepts only the kinds this tree can hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticValue {
     /// No value.
@@ -186,26 +291,35 @@ pub enum DiagnosticValue {
 }
 
 impl DiagnosticValue {
-    /// An empty [`Map`](DiagnosticValue::Map) — the default projection of a condition
-    /// that serializes nothing.
+    /// Returns an empty [`Map`](DiagnosticValue::Map).
+    ///
+    /// This is the default projection of a condition that serializes no fields — the
+    /// value returned by the default
+    /// [`serializable_data`](DiagnosticInfo::serializable_data).
     pub fn empty_map() -> DiagnosticValue {
         DiagnosticValue::Map(Vec::new())
     }
 }
 
-/// Conversion of one payload field into its [`DiagnosticValue`] projection — the
-/// serialization bridge behind `#[derive(DiagnosticInfo)]`'s generated
-/// [`serializable_data`](DiagnosticInfo::serializable_data).
+/// Converts one field of a condition into its [`DiagnosticValue`] projection.
 ///
-/// Implemented for the payload primitives below (booleans, integers, `char`, strings,
-/// `Option`, slices/`Vec`, references, and `DiagnosticValue` itself). The derive routes
-/// every field through this trait, so a field of any other type is rejected by the
-/// *compiler* with an error at the field's declaration — serializability of the whole
-/// payload is enforced by trait bounds, not by a macro-side type check. Field-less
-/// payload enums implement it via `#[derive(ToDiagnosticValue)]` (the kebab-cased
-/// variant name); anything else can implement it by hand.
+/// This is the bridge behind the
+/// [`serializable_data`](DiagnosticInfo::serializable_data) implementation that
+/// [`#[derive(DiagnosticInfo)]`](derive@DiagnosticInfo) generates: the derive routes
+/// every field of the condition through this trait.
+///
+/// Implementations are provided for the types condition payloads normally hold —
+/// booleans, integers, `char`, strings, `Option`, slices and `Vec`, references, and
+/// `DiagnosticValue` itself.
+///
+/// A field whose type does not implement this trait is rejected by the compiler at the
+/// field's own declaration, so whether a payload can be serialized is decided by trait
+/// bounds rather than by a check inside the macro. A field-less enum gets an
+/// implementation from [`#[derive(ToDiagnosticValue)]`](derive@ToDiagnosticValue), which
+/// projects the variant name in kebab case; any other type can implement the trait by
+/// hand.
 pub trait ToDiagnosticValue {
-    /// This value's serialization-boundary projection.
+    /// Returns this value's projection for the serialization boundary.
     fn to_diagnostic_value(&self) -> DiagnosticValue;
 }
 
@@ -227,7 +341,8 @@ macro_rules! int_to_diagnostic_value {
 }
 int_to_diagnostic_value!(i8, i16, i32, i64, u8, u16, u32);
 
-/// Integers that may exceed `i64`: saturate (never panic — CLAUDE.md panic policy).
+/// Integers that may exceed `i64`: the projection saturates at `i64::MAX` rather than
+/// failing or panicking.
 macro_rules! saturating_int_to_diagnostic_value {
     ($($t:ty),*) => {$(
         impl ToDiagnosticValue for $t {
@@ -297,13 +412,15 @@ impl ToDiagnosticValue for DiagnosticValue {
     }
 }
 
-/// A [`ResolveError`](crate::source::ResolveError) projects as a map of its
-/// `reference`, its `message`, and the rendered `cause_chain` (each
-/// [`Error::source`](core::error::Error::source) hop's `Display`, outermost
-/// first) — the serialization face of the
-/// [`UnresolvableSourceReference`](crate::constructs::UnresolvableSourceReference)
-/// condition's payload. The impl lives here, not in the source module: the error
-/// module may reach down to source types, never the reverse (strict layering).
+/// Projects as a map of the failed `reference`, the `message`, and a `cause_chain`
+/// list: the `Display` of each [`Error::source`](core::error::Error::source) hop,
+/// outermost first.
+///
+/// This is the serialization face of the payload of the
+/// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
+/// condition.
+// The implementation is here rather than in the source module: the error module may
+// depend on source types, never the reverse.
 impl ToDiagnosticValue for crate::source::ResolveError {
     fn to_diagnostic_value(&self) -> DiagnosticValue {
         let mut chain: Vec<DiagnosticValue> = Vec::new();
@@ -320,12 +437,14 @@ impl ToDiagnosticValue for crate::source::ResolveError {
     }
 }
 
-/// An `Arc`-shared error value — the shape of a condition's optional
-/// underlying-cause field ([`HookFailed::cause`] and the
-/// [`ResolveError`](crate::source::ResolveError) pattern it follows) — projects
-/// as the rendered cause chain: a list of the
-/// error's own `Display`, then each
-/// [`Error::source`](core::error::Error::source) hop's, outermost first.
+/// Projects as the rendered cause chain: a list holding the error's own `Display`,
+/// then that of each [`Error::source`](core::error::Error::source) hop, outermost
+/// first.
+///
+/// `Arc<dyn Error + Send + Sync>` is the shape a condition's optional underlying-cause
+/// field takes — see [`HookFailed::cause`], which follows the
+/// [`ResolveError`](crate::source::ResolveError) pattern. Sharing the error through an
+/// `Arc` is what keeps such a condition `Clone`.
 impl ToDiagnosticValue for Arc<dyn core::error::Error + Send + Sync + 'static> {
     fn to_diagnostic_value(&self) -> DiagnosticValue {
         let mut chain: Vec<DiagnosticValue> = Vec::new();
@@ -339,14 +458,21 @@ impl ToDiagnosticValue for Arc<dyn core::error::Error + Send + Sync + 'static> {
     }
 }
 
-/// One frame of a parse traceback snapshot: a rendered title (`group ‘{’`,
-/// `argument #1 of ‘\frac’`) and the source location the parse descended at.
+/// One frame of a parse traceback: what the parse had descended into, and where.
 ///
-/// Snapshots are taken from the session's live frame stack by the recovery entry
-/// point ([`ParseContext::recover`](crate::constructs::ParseContext::recover))
-/// and stored **innermost first** on [`Diagnostic`] and
-/// [`ParseError`]; unlike the live [`Frame`](crate::engine::Frame), a `TraceFrame` is
-/// `L`-free — generic over the source origin only — so errors aggregate across languages.
+/// The [`title`](TraceFrame::title) is already rendered for display (`group ‘{’`,
+/// `argument #1 of ‘\frac’`), and the [`span`](TraceFrame::span) is the source location
+/// the parse descended at.
+///
+/// [`Diagnostic`] and [`ParseError`] store a list of these, **innermost first**, as a
+/// snapshot of the frames that were open when the problem was reported. The recovery
+/// entry point,
+/// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), takes that
+/// snapshot from the session's live frame stack.
+///
+/// Unlike the live [`Frame`](crate::core::Frame), a `TraceFrame` is not generic over the
+/// language — only over the source origin — so diagnostics produced by parses of
+/// different languages can be collected together.
 #[derive(Debug, Clone)]
 pub struct TraceFrame<O: SourceOrigin = Option<String>> {
     title: String,
@@ -354,7 +480,8 @@ pub struct TraceFrame<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> TraceFrame<O> {
-    /// A snapshot frame with an already-rendered title.
+    /// Creates a traceback frame from an already-rendered title and the location the
+    /// parse descended at.
     pub fn new(title: impl Into<String>, span: SourceSpan<O>) -> TraceFrame<O> {
         TraceFrame { title: title.into(), span }
     }
@@ -372,17 +499,30 @@ impl<O: SourceOrigin> TraceFrame<O> {
 
 /// How severe a [`Diagnostic`] is.
 ///
-/// The derived `Ord` ranks `Note < Warning < Error` for threshold filtering ("warnings
-/// and above"). The core parser currently emits only `Error` diagnostics; `Note` and
-/// `Warning` are constructor-supported for presets and embedders (lint-ish conditions)
-/// and gain core producers only when such conditions arrive.
+/// The derived ordering ranks `Note < Warning < Error`, so filtering on a threshold
+/// ("warnings and above") is a comparison.
+///
+/// Severity is independent of the [`Recovery`] policy. Problems reported through the
+/// recovery entry point are always recorded at [`Error`](Severity::Error); the library's
+/// [`Warning`](Severity::Warning) and [`Note`](Severity::Note) diagnostics come from
+/// places that never abort a parse, such as
+/// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching) or
+/// [`ProviderCommandsShadowedByEscape`](crate::core::specs::ProviderCommandsShadowedByEscape).
+/// Presets and embedders can record diagnostics at any severity through
+/// [`Diagnostic::warning`] and [`Diagnostic::note`].
+///
+/// Only error-severity diagnostics count toward
+/// [`Diagnostics::has_errors`](Diagnostics::has_errors).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     /// Informational note.
     Note,
-    /// Something suspicious that did not prevent parsing.
+    /// Something suspicious that did not prevent parsing, and produced no recovery.
     Warning,
-    /// A genuine error (in tolerant mode, recorded instead of aborting the parse).
+    /// A genuine error: the document is wrong, or a parse could not do what was asked.
+    ///
+    /// Under [`Recovery::Tolerant`] such a condition is recorded here instead of
+    /// aborting the parse; under [`Recovery::Strict`] it becomes a [`ParseError`].
     Error,
 }
 
@@ -396,14 +536,29 @@ impl fmt::Display for Severity {
     }
 }
 
-/// A single condition reported during parsing, anchored to a source location.
+/// One problem reported during a parse: a condition, its severity, and where it
+/// occurred.
 ///
-/// Carries a structured condition payload — no message string; the human message is
-/// rendered from the payload on demand ([`message`](Diagnostic::message)) — plus a
-/// traceback snapshot ([`frames`](Diagnostic::frames), attached by the recovery
-/// entry point, [`ParseContext::recover`](crate::constructs::ParseContext::recover)).
-/// No `PartialEq`: tests compare [`identifier()`](Diagnostic::identifier) and downcast
-/// fields.
+/// A tolerant parse collects these in a [`Diagnostics`] collection, reached as the
+/// [`diagnostics`](crate::core::ParseResult::diagnostics) field of the
+/// [`ParseResult`](crate::core::ParseResult). Code outside the parser creates them with
+/// [`error`](Diagnostic::error), [`warning`](Diagnostic::warning),
+/// [`note`](Diagnostic::note), or [`new`](Diagnostic::new).
+///
+/// The condition is stored as structured data rather than as a message string: read its
+/// fields by downcasting [`data`](Diagnostic::data), get the human wording from
+/// [`message`](Diagnostic::message), and a full report with position and traceback from
+/// [`render`](Diagnostic::render).
+///
+/// [`frames`](Diagnostic::frames) is the traceback of parse frames that were open when
+/// the problem was reported; the recovery entry point,
+/// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), attaches
+/// it.
+///
+/// `Diagnostic` deliberately does not implement `PartialEq`, since conditions are
+/// compared through a trait object that hides their type. Compare
+/// [`identifier()`](Diagnostic::identifier) and the fields of the downcast condition
+/// instead.
 #[derive(Debug, Clone)]
 pub struct Diagnostic<O: SourceOrigin = Option<String>> {
     severity: Severity,
@@ -414,9 +569,13 @@ pub struct Diagnostic<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> Diagnostic<O> {
-    /// Create a diagnostic from a condition (no traceback frames; parses attach them
-    /// through the recovery entry point,
-    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover)).
+    /// Creates a diagnostic from a condition, at the given severity and span.
+    ///
+    /// The traceback is empty; a parse attaches frames through the recovery entry point,
+    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover).
+    ///
+    /// [`error`](Diagnostic::error), [`warning`](Diagnostic::warning) and
+    /// [`note`](Diagnostic::note) are the shorthands for the three severities.
     pub fn new(
         severity: Severity,
         condition: impl DiagnosticInfo,
@@ -425,23 +584,23 @@ impl<O: SourceOrigin> Diagnostic<O> {
         Diagnostic { severity, data: Box::new(condition), span, frames: Vec::new() }
     }
 
-    /// Create an error-severity diagnostic.
+    /// Creates a diagnostic at [`Severity::Error`].
     pub fn error(condition: impl DiagnosticInfo, span: SourceSpan<O>) -> Self {
         Diagnostic::new(Severity::Error, condition, span)
     }
 
-    /// Create a warning-severity diagnostic.
+    /// Creates a diagnostic at [`Severity::Warning`].
     pub fn warning(condition: impl DiagnosticInfo, span: SourceSpan<O>) -> Self {
         Diagnostic::new(Severity::Warning, condition, span)
     }
 
-    /// Create a note-severity diagnostic.
+    /// Creates a diagnostic at [`Severity::Note`].
     pub fn note(condition: impl DiagnosticInfo, span: SourceSpan<O>) -> Self {
         Diagnostic::new(Severity::Note, condition, span)
     }
 
-    /// Assemble a diagnostic from already-boxed parts — the recover funnel's entry
-    /// (post-refinement payload, snapshotted frames).
+    /// Assembles a diagnostic from parts already prepared by the recovery path: a
+    /// condition boxed after the driver's refinement pass, and a frame snapshot.
     pub(crate) fn from_parts(
         severity: Severity,
         data: Box<dyn DiagnosticData>,
@@ -456,18 +615,29 @@ impl<O: SourceOrigin> Diagnostic<O> {
         self.severity
     }
 
-    /// The structured condition payload. Downcast to the concrete type for typed access.
+    /// The condition that was reported.
+    ///
+    /// Downcast it with
+    /// [`downcast_ref`](trait.DiagnosticData.html#method.downcast_ref) to read the
+    /// condition's own fields.
     pub fn data(&self) -> &dyn DiagnosticData {
         &*self.data
     }
 
-    /// The condition's wire identity ([`DiagnosticInfo::identifier`] — for every
-    /// ordinary condition, the [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const).
+    /// The condition's identifier string, for boundaries where Rust types cannot travel.
+    ///
+    /// For every ordinary condition this is the type's
+    /// [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) constant; see
+    /// [`DiagnosticInfo::identifier`] for the adapter-type exception. Compare it against
+    /// `T::IDENTIFIER` rather than against a string literal.
     pub fn identifier(&self) -> &str {
         self.data.identifier()
     }
 
-    /// The human-readable message, rendered from the condition payload's `Display`.
+    /// The human-readable message, rendered from the condition's `Display`.
+    ///
+    /// This allocates a fresh `String` on each call; the condition is the stored value,
+    /// the message is derived from it.
     pub fn message(&self) -> String {
         self.data.to_string()
     }
@@ -477,25 +647,35 @@ impl<O: SourceOrigin> Diagnostic<O> {
         &self.span
     }
 
-    /// The traceback snapshot at the moment the condition was recorded, innermost first
-    /// (empty when recorded outside a parse descent).
+    /// The parse frames that were open when the condition was recorded, innermost first.
+    ///
+    /// Empty when the diagnostic was recorded outside a parse descent. Format them with
+    /// [`format_traceback`].
     pub fn frames(&self) -> &[TraceFrame<O>] {
         &self.frames
     }
 
-    /// Render a human-readable multi-line report: message, position (line/column via
-    /// a transient [`LineIndexCache`], origin label), the traceback
-    /// ([`format_traceback`]), and the source's provenance chain (`included from …` /
-    /// `synthesized from …`). Shorthand for
-    /// [`render_with`](Diagnostic::render_with) over a fresh cache.
+    /// Renders a human-readable, multi-line report of this diagnostic.
+    ///
+    /// The report holds the message, the position (line and column, plus the source's
+    /// origin label when it has one), the traceback of open blocks
+    /// ([`format_traceback`]), and the source's provenance chain, as `included from …` or
+    /// `synthesized from …` lines.
+    ///
+    /// Line and column numbers are computed through a [`LineIndexCache`] created for this
+    /// call and dropped with it. Use [`render_with`](Diagnostic::render_with) to supply a
+    /// cache that persists across calls, or [`Diagnostics::render_all`] for a whole
+    /// collection.
     pub fn render(&self) -> String {
         self.render_with(&mut LineIndexCache::new())
     }
 
     /// [`render`](Diagnostic::render) with a caller-supplied [`LineColProvider`]
-    /// answering the line/column lookups — a persistent [`LineIndexCache`] reused
-    /// across renders (each source indexed once, ever), or an editor tool's own
-    /// incremental line table.
+    /// answering the line and column lookups.
+    ///
+    /// Pass a [`LineIndexCache`] kept across renders, so that each source is indexed only
+    /// once however many diagnostics are rendered from it, or an editor's own incremental
+    /// line table.
     pub fn render_with(&self, line_cols: &mut impl LineColProvider<O>) -> String {
         render_report(line_cols, &self.to_string(), &self.span, &self.frames)
     }
@@ -507,22 +687,41 @@ impl<O: SourceOrigin> fmt::Display for Diagnostic<O> {
     }
 }
 
-/// An ordered collection of [`Diagnostic`]s, as accumulated over one parse.
+/// The [`Diagnostic`]s recorded during one parse, in the order the parse reported them.
 ///
-/// Diagnostics read back through [`techy::serialize`](crate::serialize) (inside a
-/// deserialized parse result) carry
-/// [`DeserializedCondition`](crate::serialize::DeserializedCondition)s: match them by
-/// [`identifier`](Diagnostic::identifier) ([`with_identifier`](Diagnostics::with_identifier)),
-/// not by type ([`conditions`](Diagnostics::conditions) yields nothing for them).
+/// This is the type of the [`diagnostics`](crate::core::ParseResult::diagnostics) field
+/// of a [`ParseResult`](crate::core::ParseResult), and is where a caller looks after a
+/// tolerant parse. Ask [`has_errors`](Diagnostics::has_errors) whether anything serious
+/// happened, [`iter`](Diagnostics::iter) over the diagnostics, print them all with
+/// [`render_all`](Diagnostics::render_all), and use
+/// [`sorted_by_position`](Diagnostics::sorted_by_position) for a report that reads along
+/// the document instead of following the parse.
 ///
-/// Retention is **bounded**: at most [`limit`](Diagnostics::limit)
-/// diagnostics are stored — [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT) unless the
-/// collection was created with [`with_limit`](Diagnostics::with_limit). In tolerant mode
-/// degenerate input can produce one diagnostic per byte; the cap turns that unbounded
-/// allocation into a bounded one. Pushes beyond the cap are counted
-/// ([`suppressed`](Diagnostics::suppressed), surfaced by
-/// [`render_all`](Diagnostics::render_all) as "… and N more") and still feed
-/// [`has_errors`](Diagnostics::has_errors), but the diagnostics themselves are dropped.
+/// To find specific problems, [`conditions`](Diagnostics::conditions) yields the
+/// condition payloads of one concrete type, and
+/// [`with_identifier`](Diagnostics::with_identifier) selects by identifier string.
+///
+/// # Bounded retention
+///
+/// At most [`limit`](Diagnostics::limit) diagnostics are stored — the
+/// [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT), unless the collection was created with
+/// [`with_limit`](Diagnostics::with_limit).
+///
+/// The cap exists because tolerant parsing of degenerate input can produce one diagnostic
+/// per byte, which would otherwise mean unbounded allocation.
+///
+/// Diagnostics pushed beyond the cap are dropped, but not forgotten: they are counted by
+/// [`suppressed`](Diagnostics::suppressed), reported by
+/// [`render_all`](Diagnostics::render_all) as an "… and N more" line, and error-severity
+/// ones still make [`has_errors`](Diagnostics::has_errors) true.
+///
+/// # Deserialized diagnostics
+///
+/// Diagnostics read back through [`techy::serialize`](crate::serialize), inside a
+/// deserialized parse result, have lost their original Rust types and carry
+/// [`DeserializedCondition`](crate::serialize::DeserializedCondition)s. Match those with
+/// [`with_identifier`](Diagnostics::with_identifier); a
+/// [`conditions::<T>()`](Diagnostics::conditions) call yields nothing for them.
 #[derive(Debug, Clone)]
 pub struct Diagnostics<O: SourceOrigin = Option<String>> {
     items: Vec<Diagnostic<O>>,
@@ -536,35 +735,41 @@ pub struct Diagnostics<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> Diagnostics<O> {
-    /// The default retention cap (see [`with_limit`](Diagnostics::with_limit)) — generous
-    /// for any human- or tool-facing report, small enough that degenerate tolerant-mode
-    /// input cannot balloon memory.
+    /// The retention cap a collection gets when none is specified.
+    ///
+    /// It is generous for any human- or tool-facing report, and small enough that
+    /// degenerate tolerant-mode input cannot exhaust memory. Choose a different one with
+    /// [`with_limit`](Diagnostics::with_limit).
     pub const DEFAULT_LIMIT: usize = 1000;
 
-    /// Create an empty collection with the [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT)
-    /// retention cap.
+    /// Creates an empty collection with the
+    /// [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT) retention cap.
     pub fn new() -> Self {
         Diagnostics::with_limit(Diagnostics::<O>::DEFAULT_LIMIT)
     }
 
-    /// Create an empty collection retaining at most `limit` diagnostics; pushes beyond
-    /// the cap are counted as [`suppressed`](Diagnostics::suppressed) instead of stored.
-    /// A driven parse's sink is seeded through
-    /// [`ParseDriver::diagnostics_limit`](crate::engine::ParseDriver::diagnostics_limit).
+    /// Creates an empty collection retaining at most `limit` diagnostics.
     ///
-    /// A limit above `i64::MAX` (`usize::MAX` as "no cap", say) is honored here but
-    /// makes a parse result holding the collection unserializable: the serialized
-    /// form's integers are `i64` (see
-    /// [`ParseResultSerialization`](crate::serialize::ParseResultSerialization)).
+    /// Pushes beyond the cap are counted as [`suppressed`](Diagnostics::suppressed)
+    /// instead of being stored. The collection a parse fills is created for you; set its
+    /// cap through
+    /// [`ParseDriver::diagnostics_limit`](crate::core::ParseDriver::diagnostics_limit).
+    ///
+    /// A limit above `i64::MAX` — `usize::MAX`, meaning "no cap" — is accepted here, but
+    /// a parse result holding such a collection cannot be serialized, because the
+    /// serialized form's integers are `i64`. See
+    /// [`ParseResultSerialization`](crate::serialize::ParseResultSerialization).
     pub fn with_limit(limit: usize) -> Self {
         Diagnostics { items: Vec::new(), limit, suppressed: 0, error_count: 0 }
     }
 
-    /// Assemble a collection from its parts — the deserialization entry (the parts
-    /// as a serialized collection recorded them). The caller establishes the
-    /// invariants `push` maintains: `items.len() <= limit`; `suppressed > 0` only
-    /// when `items.len() == limit`; `error_count` between the number of
-    /// error-severity `items` and that number plus `suppressed`.
+    /// Assembles a collection from the parts a serialized collection recorded — the
+    /// entry point used when deserializing.
+    ///
+    /// The caller is responsible for the invariants `push` maintains:
+    /// `items.len() <= limit`; `suppressed > 0` only when `items.len() == limit`; and
+    /// `error_count` between the number of error-severity `items` and that number plus
+    /// `suppressed`.
     pub(crate) fn from_parts(
         items: Vec<Diagnostic<O>>,
         limit: usize,
@@ -574,8 +779,11 @@ impl<O: SourceOrigin> Diagnostics<O> {
         Diagnostics { items, limit, suppressed, error_count }
     }
 
-    /// Append a diagnostic. Beyond the retention cap the diagnostic is dropped and only
-    /// counted (see the type docs).
+    /// Appends a diagnostic.
+    ///
+    /// Once [`limit`](Diagnostics::limit) diagnostics are stored, further ones are
+    /// dropped and only counted: they raise [`suppressed`](Diagnostics::suppressed), and
+    /// an error-severity one still makes [`has_errors`](Diagnostics::has_errors) true.
     pub fn push(&mut self, diagnostic: Diagnostic<O>) {
         if diagnostic.severity == Severity::Error {
             self.error_count += 1;
@@ -587,46 +795,60 @@ impl<O: SourceOrigin> Diagnostics<O> {
         }
     }
 
-    /// Number of diagnostics retained (excludes [`suppressed`](Diagnostics::suppressed)
-    /// ones).
+    /// The number of diagnostics stored, not counting
+    /// [`suppressed`](Diagnostics::suppressed) ones.
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// Whether no diagnostics were recorded at all — retained *or* suppressed.
+    /// Returns whether the parse reported nothing at all — nothing stored, and nothing
+    /// suppressed.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.suppressed == 0
     }
 
-    /// The retention cap this collection was created with.
+    /// The retention cap this collection was created with, beyond which diagnostics are
+    /// counted rather than stored.
     pub fn limit(&self) -> usize {
         self.limit
     }
 
-    /// Number of diagnostics pushed beyond the retention cap (counted, not stored).
+    /// The number of diagnostics dropped because the retention cap was reached.
     pub fn suppressed(&self) -> usize {
         self.suppressed
     }
 
-    /// Whether any pushed diagnostic — retained or suppressed — has
-    /// [`Severity::Error`].
+    /// Returns whether the parse reported any error-severity diagnostic, stored or
+    /// suppressed.
+    ///
+    /// This is the check to make on a tolerant parse before treating its tree as a clean
+    /// parse of the input.
     pub fn has_errors(&self) -> bool {
         self.error_count > 0
     }
 
-    /// Number of error-severity diagnostics pushed, retained *and* suppressed (what
-    /// [`has_errors`](Diagnostics::has_errors) tests for zero).
+    /// The number of error-severity diagnostics reported, stored and suppressed
+    /// together — the count [`has_errors`](Diagnostics::has_errors) tests against zero.
     pub fn error_count(&self) -> usize {
         self.error_count
     }
 
-    /// Iterate over the diagnostics in the order they were recorded.
+    /// Iterates over the stored diagnostics in the order the parse recorded them.
+    ///
+    /// For document order, use
+    /// [`sorted_by_position`](Diagnostics::sorted_by_position).
     pub fn iter(&self) -> core::slice::Iter<'_, Diagnostic<O>> {
         self.items.iter()
     }
 
-    /// The diagnostics whose condition carries the given wire
+    /// The diagnostics whose condition answers the given
     /// [`identifier`](Diagnostic::identifier), in recording order.
+    ///
+    /// Take the identifier from the condition type (`T::IDENTIFIER`) rather than writing
+    /// it as a literal. This is the way to select
+    /// [deserialized diagnostics](Diagnostics#deserialized-diagnostics), whose original
+    /// types are gone; within one process, [`conditions`](Diagnostics::conditions) is the
+    /// typed equivalent.
     pub fn with_identifier<'a>(
         &'a self,
         identifier: &'a str,
@@ -634,30 +856,35 @@ impl<O: SourceOrigin> Diagnostics<O> {
         self.items.iter().filter(move |d| d.identifier() == identifier)
     }
 
-    /// The recorded condition payloads of concrete type `T`, in recording order —
-    /// downcast-based typed access (pair with [`iter`](Diagnostics::iter) when the
-    /// span/severity is needed alongside).
+    /// The recorded conditions of concrete type `T`, in recording order.
+    ///
+    /// Each stored condition is downcast to `T` and the ones that are not a `T` are
+    /// skipped. Iterate with [`iter`](Diagnostics::iter) instead when the span or
+    /// severity is needed alongside the condition.
     pub fn conditions<T: DiagnosticInfo>(&self) -> impl Iterator<Item = &T> {
         self.items.iter().filter_map(|d| d.data().downcast_ref::<T>())
     }
 
-    /// The diagnostics as a slice.
+    /// The stored diagnostics as a slice, in recording order.
     pub fn as_slice(&self) -> &[Diagnostic<O>] {
         &self.items
     }
 
-    /// The retained diagnostics **sorted by source position**: diagnostics arrive
-    /// in *recovery* order (the order the parse hit them, which nested descents
-    /// and deferred recoveries can permute), and this view re-sorts them by
-    /// (source, span start) — **source order within each source**, for reports
-    /// that read along the document.
+    /// The stored diagnostics ordered by source position, for a report that reads along
+    /// the document.
     ///
-    /// Sources are ordered by **first appearance** in the recorded sequence
-    /// (matched by `Arc` identity). Deliberately narrow: a total "position order"
-    /// across sources is ill-defined on multi-source parse trees (`\input`
-    /// attachments are first-class), so no cross-source claim is made beyond the
-    /// stable first-appearance grouping. The sort is stable — equal positions
-    /// keep recovery order.
+    /// A parse records diagnostics in the order it hits them, which nested descents and
+    /// deferred recoveries can permute relative to the document. This view re-sorts them
+    /// by source and then by span start, so that within each source they appear in
+    /// document order.
+    ///
+    /// Sources themselves are ordered by first appearance in the recorded sequence, and
+    /// matched by `Arc` identity. That is the only cross-source claim made: a document
+    /// can be parsed from several sources at once (an `\input`-like inclusion attaches
+    /// another one), and a total position order across separate sources has no meaning.
+    ///
+    /// The sort is stable, so diagnostics at equal positions keep their recording order.
+    /// The collection itself is unchanged; the returned vector borrows from it.
     pub fn sorted_by_position(&self) -> Vec<&Diagnostic<O>> {
         let mut sources: Vec<&Arc<Source<O>>> = Vec::new();
         let mut keyed: Vec<(usize, usize, usize)> =
@@ -679,27 +906,30 @@ impl<O: SourceOrigin> Diagnostics<O> {
         keyed.into_iter().map(|(_, _, arrival)| &self.items[arrival]).collect()
     }
 
-    /// Render every retained diagnostic as one human-readable report — the
-    /// [`Diagnostic::render`] blocks in recording order, blank-line separated, followed
-    /// by an "… and N more" line when pushes were
+    /// Renders every stored diagnostic into one human-readable report.
+    ///
+    /// The report holds the [`Diagnostic::render`] blocks in recording order, separated
+    /// by blank lines, and ends with an "… and N more" line when diagnostics were
     /// [`suppressed`](Diagnostics::suppressed) beyond the retention cap.
     ///
-    /// Positions are formatted through one transient [`LineIndexCache`] shared across
-    /// the whole report (one line-starts table per distinct source, matched by `Arc`
-    /// identity), so rendering k diagnostics over an N-byte document scans it once,
-    /// not k times — per-diagnostic [`render`](Diagnostic::render)
-    /// calls in a loop rebuild the index for every position (fine for a handful; this is
-    /// the API for whole collections). Provenance chains benefit the same way: each
-    /// including document is indexed once for the whole report. Shorthand for
-    /// [`render_all_with`](Diagnostics::render_all_with) over a fresh cache.
+    /// This is the call to use for a whole collection. All positions are resolved through
+    /// one [`LineIndexCache`], created for this call, which indexes each distinct source
+    /// once (sources matched by `Arc` identity); calling
+    /// [`render`](Diagnostic::render) in a loop instead rebuilds the line index for every
+    /// diagnostic. Provenance chains are resolved through the same cache, so each
+    /// including document is also indexed once.
+    ///
+    /// Use [`render_all_with`](Diagnostics::render_all_with) to supply a cache that
+    /// persists across reports.
     pub fn render_all(&self) -> String {
         self.render_all_with(&mut LineIndexCache::new())
     }
 
     /// [`render_all`](Diagnostics::render_all) with a caller-supplied
-    /// [`LineColProvider`] answering the line/column lookups — a persistent
-    /// [`LineIndexCache`] reused across reports, or an editor tool's own
-    /// incremental line table.
+    /// [`LineColProvider`] answering the line and column lookups.
+    ///
+    /// Pass a [`LineIndexCache`] kept across reports, or an editor's own incremental line
+    /// table.
     pub fn render_all_with(&self, line_cols: &mut impl LineColProvider<O>) -> String {
         let mut out = String::new();
         for (i, diagnostic) in self.items.iter().enumerate() {
@@ -753,31 +983,56 @@ impl<'a, O: SourceOrigin> IntoIterator for &'a Diagnostics<O> {
     }
 }
 
-/// Tolerant-parsing policy: what to do when an error carries a recovery possibility.
+/// Whether a parse aborts at the first problem or records it and carries on.
 ///
-/// Under `Strict`, the parse aborts on the first error. Under `Tolerant`, a diagnostic is
-/// recorded and parsing continues with the error's recovery token where one is available
-/// (the recovery-token mechanism itself arrives with the token layer).
+/// This is the parse-wide policy, set on the parse driver — for the preset, as the
+/// argument of [`LatexlikeDriver::new`](crate::latexlike::LatexlikeDriver::new) — and
+/// applied wherever a construct parser reports a condition.
+///
+/// The two policies are described in full under
+/// [tolerant parsing](crate::error#tolerant-parsing); the guide chapter
+/// [Running the parser](crate::guide::parsing#strict-versus-tolerant) shows both in
+/// action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recovery {
-    /// Abort on the first error.
+    /// Abort at the first problem: it is returned as a [`ParseError`], and no tree is
+    /// produced.
     Strict,
-    /// Record a diagnostic and continue whenever recovery is possible.
+    /// Record each problem as a [`Diagnostic`] and continue parsing.
+    ///
+    /// The parser repairs the input where the problem was detected, as that condition
+    /// type's documentation describes — at the token level, by continuing from the
+    /// recovery token the error carries. The parse succeeds and returns a best-effort
+    /// tree alongside the diagnostics.
     Tolerant,
 }
 
-/// The abort error of construct parsing: a strict-mode escalation or a genuinely
-/// unrecoverable condition.
+/// The error that ends a parse: the `Err` of
+/// [`Language::parse`](crate::core::Language::parse).
 ///
-/// **`Err` means abort**: recovery happens where a problem is
-/// detected (through the recovery entry point,
-/// [`ParseContext::recover`](crate::constructs::ParseContext::recover)),
-/// abnormal endings of sub-parses travel as data
-/// (`StopCause`), and nobody ever continues *past* a `ParseError` — it
-/// carries no recovery payload and bubbles freely. Like [`Diagnostic`], it holds an
-/// Arc-based [`SourceSpan`] plus the structured condition payload and the traceback
-/// snapshot, so it is self-contained and outlives the parse. No `PartialEq`: tests
-/// compare [`identifier()`](ParseError::identifier) and downcast fields.
+/// It arises in two situations: a problem reported under [`Recovery::Strict`], which is
+/// escalated instead of recorded, and a condition no policy can absorb — a failure in
+/// consumer-supplied code ([`HookFailed`]) or a contract violation by an extension
+/// ([`ImplementationError`](crate::core::constructs::ImplementationError)), both of which
+/// abort even a tolerant parse.
+///
+/// **An `Err` always means the parse stopped.** Nothing continues past a `ParseError`: it
+/// carries no recovery payload, and propagates out of every construct parser it passes
+/// through. Recovery, when it happens, happens where the problem was detected, through
+/// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover); a sub-parse
+/// that merely ended early reports that as ordinary data
+/// ([`StopCause`](crate::core::constructs::StopCause)), not as an error.
+///
+/// A `ParseError` holds the same three things a [`Diagnostic`] does — the condition
+/// ([`data`](ParseError::data)), the `Arc`-based [`SourceSpan`]
+/// ([`span`](ParseError::span)), and the traceback ([`frames`](ParseError::frames)) — so
+/// it is self-contained and outlives the parse. [`render`](ParseError::render) formats
+/// all of it as a report.
+///
+/// `ParseError` deliberately does not implement `PartialEq`, since conditions are
+/// compared through a trait object that hides their type. Compare
+/// [`identifier()`](ParseError::identifier) and the fields of the downcast condition
+/// instead.
 #[derive(Debug, Clone)]
 pub struct ParseError<O: SourceOrigin = Option<String>> {
     data: Box<dyn DiagnosticData>,
@@ -787,22 +1042,28 @@ pub struct ParseError<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> ParseError<O> {
-    /// Create a parse error from a condition (no traceback frames; parses attach them
-    /// through the recovery entry point,
-    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover)).
+    /// Creates a parse error from a condition and the span it occurred at.
+    ///
+    /// The traceback is empty. A parse attaches frames through the recovery entry point,
+    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), or
+    /// explicitly with [`with_frames`](ParseError::with_frames).
     pub fn new(condition: impl DiagnosticInfo, span: SourceSpan<O>) -> ParseError<O> {
         ParseError { data: Box::new(condition), span, frames: Vec::new() }
     }
 
-    /// Lift a token error's kind into the abort error: the
-    /// built-in token conditions are boxed; a custom payload is unwrapped, never
-    /// double-boxed.
+    /// Creates a parse error from a token error's kind — how a tokenization failure
+    /// becomes a parse abort.
+    ///
+    /// A built-in token condition is stored as the parse error's condition; a
+    /// [`TokenErrorKind::Custom`] payload is
+    /// unwrapped and stored directly, rather than boxed a second time, so downcasting
+    /// finds the original condition type either way.
     pub fn from_token_error(kind: TokenErrorKind, span: SourceSpan<O>) -> ParseError<O> {
         ParseError { data: kind.into_condition(), span, frames: Vec::new() }
     }
 
-    /// Assemble a parse error from already-boxed parts — the recover funnel's entry
-    /// (post-refinement payload, snapshotted frames).
+    /// Assembles a parse error from parts already prepared by the recovery path: a
+    /// condition boxed after the driver's refinement pass, and a frame snapshot.
     pub(crate) fn from_parts(
         data: Box<dyn DiagnosticData>,
         span: SourceSpan<O>,
@@ -811,29 +1072,42 @@ impl<O: SourceOrigin> ParseError<O> {
         ParseError { data, span, frames }
     }
 
-    /// Attach a traceback snapshot (for the direct-abort sites, which do not pass
-    /// through the recovery entry point) —
-    /// typically [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames).
-    /// Inside a construct parser,
-    /// [`ParseContext::attach_hook_frames`](crate::constructs::ParseContext::attach_hook_frames)
-    /// is the one-call form for a hook-returned error.
+    /// Attaches a traceback snapshot, replacing any frames already stored.
+    ///
+    /// This is for the sites that abort directly instead of going through the recovery
+    /// entry point; the frames normally come from
+    /// [`ParserSession::snapshot_frames`](crate::core::ParserSession::snapshot_frames).
+    /// Inside a construct parser, use
+    /// [`ParseContext::attach_hook_frames`](crate::core::constructs::ParseContext::attach_hook_frames)
+    /// instead: it snapshots and attaches a hook-returned error's frames in one call.
     pub fn with_frames(mut self, frames: Vec<TraceFrame<O>>) -> ParseError<O> {
         self.frames = frames;
         self
     }
 
-    /// The structured condition payload. Downcast to the concrete type for typed access.
+    /// The condition that was reported.
+    ///
+    /// Downcast it with
+    /// [`downcast_ref`](trait.DiagnosticData.html#method.downcast_ref) to read the
+    /// condition's own fields.
     pub fn data(&self) -> &dyn DiagnosticData {
         &*self.data
     }
 
-    /// The condition's wire identity ([`DiagnosticInfo::identifier`] — for every
-    /// ordinary condition, the [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const).
+    /// The condition's identifier string, for boundaries where Rust types cannot travel.
+    ///
+    /// For every ordinary condition this is the type's
+    /// [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) constant; see
+    /// [`DiagnosticInfo::identifier`] for the adapter-type exception. Compare it against
+    /// `T::IDENTIFIER` rather than against a string literal.
     pub fn identifier(&self) -> &str {
         self.data.identifier()
     }
 
-    /// The human-readable message, rendered from the condition payload's `Display`.
+    /// The human-readable message, rendered from the condition's `Display`.
+    ///
+    /// This allocates a fresh `String` on each call; the condition is the stored value,
+    /// the message is derived from it.
     pub fn message(&self) -> String {
         self.data.to_string()
     }
@@ -843,21 +1117,26 @@ impl<O: SourceOrigin> ParseError<O> {
         &self.span
     }
 
-    /// The traceback snapshot at the moment of the abort, innermost first (empty when
-    /// the abort happened outside a parse descent).
+    /// The parse frames that were open at the moment of the abort, innermost first.
+    ///
+    /// Empty when the abort happened outside a parse descent. Format them with
+    /// [`format_traceback`].
     pub fn frames(&self) -> &[TraceFrame<O>] {
         &self.frames
     }
 
-    /// Render a human-readable multi-line report (message, position, traceback,
-    /// provenance chain), like [`Diagnostic::render`]. Shorthand for
-    /// [`render_with`](ParseError::render_with) over a fresh transient cache.
+    /// Renders a human-readable, multi-line report of this error: message, position,
+    /// traceback, and provenance chain, as [`Diagnostic::render`] does.
+    ///
+    /// Line and column numbers are computed through a [`LineIndexCache`] created for this
+    /// call and dropped with it; [`render_with`](ParseError::render_with) takes a
+    /// persistent one.
     pub fn render(&self) -> String {
         self.render_with(&mut LineIndexCache::new())
     }
 
     /// [`render`](ParseError::render) with a caller-supplied [`LineColProvider`]
-    /// answering the line/column lookups, like [`Diagnostic::render_with`].
+    /// answering the line and column lookups, like [`Diagnostic::render_with`].
     pub fn render_with(&self, line_cols: &mut impl LineColProvider<O>) -> String {
         render_report(line_cols, &format!("error: {}", self.data), &self.span, &self.frames)
     }
@@ -871,36 +1150,41 @@ impl<O: SourceOrigin> fmt::Display for ParseError<O> {
 
 impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 
-/// Condition: an extension hook — consumer-supplied code the library calls, such
-/// as a [`ParseDriver`](crate::engine::ParseDriver) method, a
-/// [`Lang`](crate::state::Lang) hook, or a descent-state callback
-/// ([`GroupChildState::Compute`](crate::constructs::GroupChildState::Compute)) —
-/// reported that it failed to do its own work: an input/output failure, or a
-/// runtime failure inside an embedding (for example, an exception raised by code
-/// behind a language binding). Carried on the [`ParseError`] the hook returns;
-/// the parse aborts.
+/// Condition: consumer-supplied code the library called reported that it failed to do
+/// its own work.
 ///
-/// A failing hook chooses between three distinct answers, and this condition is
-/// exactly one of them:
+/// The code in question is a hook — a [`ParseDriver`](crate::core::ParseDriver) method, a
+/// [`Lang`](crate::core::Lang) hook, a descent-state callback such as
+/// [`GroupChildState::Compute`](crate::core::constructs::GroupChildState::Compute) — and
+/// the failure is operational: an input/output failure, or a runtime failure inside an
+/// embedding, such as an exception raised by code behind a language binding. The hook
+/// returns it on a [`ParseError`], and the parse aborts whatever the recovery policy is.
 ///
-/// - **`HookFailed`** — the hook's own code failed while doing its work
-///   (input/output, a runtime failure in an embedding). Not a statement about
-///   the document or about library contracts.
-/// - [`ImplementationError`](crate::constructs::ImplementationError) — an
-///   extension implementation violated a library contract: an implementation
-///   bug to fix, not an operational failure.
-/// - Any other condition type describing a problem **in the parsed document** —
-///   reported through the recovery entry point
-///   ([`ParseContext::recover`](crate::constructs::ParseContext::recover)) where
-///   the hook's signature allows, so tolerant parses can record it and continue.
+/// # Choosing this condition
 ///
-/// The optional [`cause`](HookFailed::cause) field carries the underlying error
-/// behind an `Arc` (the [`ResolveError`](crate::source::ResolveError) pattern:
-/// the `Arc` is what keeps the condition `Clone` — clones share the cause by
-/// reference count). Embedders walk the chain from the field
-/// ([`Error::source`](core::error::Error::source) hops) or downcast its
-/// concrete type; the serialized projection renders the `detail` and the cause
-/// chain as text.
+/// A failing hook has three distinct things it can say, and this is one of them:
+///
+/// - **`HookFailed`** — the hook's own code failed while doing its work. It says nothing
+///   about the document, and nothing about library contracts.
+/// - [`ImplementationError`](crate::core::constructs::ImplementationError) — the
+///   extension violated a library contract. That is a bug to fix in the extension, not an
+///   operational failure.
+/// - Any other condition type — a problem **in the parsed document**. Report it through
+///   the recovery entry point,
+///   [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), wherever
+///   the hook's signature allows, so that a tolerant parse can record it and continue.
+///
+/// # The underlying error
+///
+/// [`cause`](HookFailed::cause) optionally holds the error that caused the failure,
+/// shared behind an `Arc` — the same shape
+/// [`ResolveError`](crate::source::ResolveError) uses. The `Arc` is what keeps this
+/// condition `Clone`: clones share one cause by reference count.
+///
+/// A consumer can walk the chain from that field, through
+/// [`Error::source`](core::error::Error::source), or downcast it to the concrete error
+/// type. The serialized projection renders the `detail` string and the cause chain as
+/// text.
 #[derive(Debug, Clone, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -910,17 +1194,22 @@ impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 pub struct HookFailed {
     /// Human-readable description of the failure.
     pub detail: String,
-    /// The underlying error, if the hook has one to attach (`None` when the
-    /// `detail` string says everything). Attach via [`new`](HookFailed::new)'s
-    /// second argument or [`with_cause`](HookFailed::with_cause).
+    /// The underlying error, if the hook has one to attach.
+    ///
+    /// `None` when the `detail` string says everything. Attach one through
+    /// [`new`](HookFailed::new)'s second argument, or with
+    /// [`with_cause`](HookFailed::with_cause).
     pub cause: Option<Arc<dyn core::error::Error + Send + Sync + 'static>>,
 }
 
 impl HookFailed {
-    /// Attach the underlying error (kept on the [`cause`](HookFailed::cause)
-    /// field; the `detail` string stays the rendered summary). Sugar over
-    /// `new`'s second argument for a not-yet-shared error value: it takes the
-    /// concrete error by value and shares it internally (`Arc`).
+    /// Attaches the underlying error, storing it on the
+    /// [`cause`](HookFailed::cause) field.
+    ///
+    /// The `detail` string stays the rendered summary. Unlike
+    /// [`new`](HookFailed::new)'s second argument, this takes the concrete error by value
+    /// and wraps it in the `Arc` itself, which is what a not-yet-shared error value
+    /// needs.
     pub fn with_cause(
         mut self,
         cause: impl core::error::Error + Send + Sync + 'static,
@@ -930,10 +1219,12 @@ impl HookFailed {
     }
 }
 
-/// The shared body of the `render`/`render_with` family: headline, position,
-/// traceback, provenance chain — line/column lookups answered by `line_cols`
-/// (what makes [`Diagnostics::render_all`] O(N + k) instead of O(k·N): one
-/// line-starts table per distinct source, however many positions ask).
+/// The shared body of the `render`/`render_with` family: headline, position, traceback,
+/// and provenance chain, with every line/column lookup answered by `line_cols`.
+///
+/// Routing all lookups through one provider is what makes
+/// [`Diagnostics::render_all`] cost O(N + k) rather than O(k·N): one line-starts table
+/// per distinct source, however many positions ask for one.
 fn render_report<O: SourceOrigin>(
     line_cols: &mut impl LineColProvider<O>,
     headline: &str,
@@ -973,23 +1264,24 @@ fn render_report<O: SourceOrigin>(
     msg
 }
 
-/// Format a span's starting position for display: `@ (line 2, col 5) [origin]`, falling
-/// back to a raw byte position — with a short parenthetical explaining that line
-/// information is unavailable — whenever the line/column provider answers `None`
-/// for the position (content past the [`LineIndexCache`] scan cap is one such
-/// reason). The `[origin]` part is omitted when the source's origin has no label.
+/// Formats the start of a span for display, as `@ (line 2, col 5) [origin]`.
 ///
-/// One-shot convenience: builds (and drops) a fresh transient cache per call —
-/// shorthand for [`format_position_with`]. Rendering a
-/// whole collection goes through [`Diagnostics::render_all`], which shares one
-/// cache across positions.
+/// The `[origin]` part is omitted when the source's origin has no label.
+///
+/// When line and column information is unavailable for the position — the content lies
+/// past the [`LineIndexCache`] scan cap, for instance — the result falls back to the raw
+/// byte position, as `@ char pos 42 (no line info)`.
+///
+/// This builds a [`LineIndexCache`] for the call and drops it again. Pass a persistent one
+/// to [`format_position_with`], or render a whole collection with
+/// [`Diagnostics::render_all`], which shares a single cache across all positions.
 pub fn format_position<O: SourceOrigin>(span: &SourceSpan<O>) -> String {
     format_position_with(span, &mut LineIndexCache::new())
 }
 
-/// [`format_position`] with a caller-supplied [`LineColProvider`] answering the
-/// line/column lookup (a persistent [`LineIndexCache`], an editor's incremental
-/// line table).
+/// [`format_position`] with a caller-supplied [`LineColProvider`] answering the line and
+/// column lookup — a persistent [`LineIndexCache`], or an editor's own incremental line
+/// table.
 pub fn format_position_with<O: SourceOrigin>(
     span: &SourceSpan<O>,
     line_cols: &mut impl LineColProvider<O>,
@@ -1006,12 +1298,17 @@ pub fn format_position_with<O: SourceOrigin>(
     }
 }
 
-/// Format a traceback snapshot ([`TraceFrame`]s, innermost first) — one line per open
-/// block, using each frame's own source for position and origin information.
+/// Formats a traceback — the [`TraceFrame`]s of [`Diagnostic::frames`] or
+/// [`ParseError::frames`], innermost first — as one line per open block.
 ///
-/// Returns an empty string if `frames` is empty. [`Diagnostic::render`] and
-/// [`ParseError::render`] append this to their reports. One-shot convenience over
-/// a fresh transient cache — shorthand for [`format_traceback_with`].
+/// Each frame's position and origin label come from its own source, so a traceback that
+/// crosses an included document reads correctly. Returns an empty string when `frames` is
+/// empty.
+///
+/// [`Diagnostic::render`] and [`ParseError::render`] already append this to their
+/// reports; call it directly to format a traceback on its own. It builds a
+/// [`LineIndexCache`] for the call and drops it again;
+/// [`format_traceback_with`] takes a persistent one.
 ///
 /// # Example output
 ///
@@ -1024,9 +1321,9 @@ pub fn format_traceback<O: SourceOrigin>(frames: &[TraceFrame<O>]) -> String {
     format_traceback_with(frames, &mut LineIndexCache::new())
 }
 
-/// [`format_traceback`] with a caller-supplied [`LineColProvider`] answering the
-/// line/column lookups (a persistent [`LineIndexCache`], an editor's incremental
-/// line table).
+/// [`format_traceback`] with a caller-supplied [`LineColProvider`] answering the line and
+/// column lookups — a persistent [`LineIndexCache`], or an editor's own incremental line
+/// table.
 pub fn format_traceback_with<O: SourceOrigin>(
     frames: &[TraceFrame<O>],
     line_cols: &mut impl LineColProvider<O>,
