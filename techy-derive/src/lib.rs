@@ -381,7 +381,8 @@ pub fn derive_from_serial_value(input: TokenStream) -> TokenStream {
 // Why the two diagnostic derives reject generic types: `DiagnosticInfo` requires `Any`,
 // hence `'static`, and a generic payload has no single wire identity.
 pub(crate) const DIAGNOSTIC_NO_GENERICS_REASON: &str =
-    "diagnostic payloads are concrete data structs (DESIGN_RATIONALE.md [§dd-dr:errors])";
+    "diagnostic payloads are concrete data structs, because the trait requires `Any` \
+     (hence `'static`) and a generic payload has no single wire identifier";
 
 // Rejects a generic type or a `where` clause on the derived type; `reason` completes
 // the error message (each derive supplies its own).

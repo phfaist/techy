@@ -17,8 +17,7 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
                 return Err(syn::Error::new_spanned(
                     unnamed,
                     "#[derive(DiagnosticInfo)] requires named fields (or a unit struct): \
-                     field names are the payload's serialization keys \
-                     (DESIGN_RATIONALE.md [§dd-dr:errors])",
+                     field names are the payload's serialization keys",
                 ));
             }
         },
@@ -26,7 +25,7 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
             return Err(syn::Error::new(
                 data.enum_token.span,
                 "#[derive(DiagnosticInfo)] supports structs only: a condition is one \
-                 plain data struct (DESIGN_RATIONALE.md [§dd-dr:errors])",
+                 plain data struct describing the problem",
             ));
         }
         Data::Union(data) => {
@@ -119,7 +118,8 @@ impl DiagnosticAttrs {
             syn::Error::new(
                 input.ident.span(),
                 "missing `#[diagnostic(id = \"…\")]`: the wire identifier is mandatory \
-                 and never derived from the type name (DESIGN_RATIONALE.md [§dd-dr:errors])",
+                 and never derived from the type name, so that renaming the type cannot \
+                 change the serialized form",
             )
         })?;
 
@@ -172,7 +172,7 @@ fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
         return Err(syn::Error::new(
             lit.span(),
             "the identifier must be a namespaced dotted name like \
-             `core.area.condition` (DESIGN_RATIONALE.md [§dd-dr:errors])",
+             `core.area.condition`",
         ));
     }
     Ok(())
