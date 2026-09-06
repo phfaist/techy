@@ -1,10 +1,16 @@
-//! The serialization engine: the session and its tables ([`SerdeSession`],
-//! [`TableHandle`]), the per-table driver ([`ObjectSerdeDriver`]), the contexts handed
-//! to serialization and deserialization calls ([`SerializeContext`],
-//! [`DeserializeContext`]), the read dispatch of heterogeneous tables
-//! ([`DispatchingSerdeDriver`], [`ObjectReader`], [`IdentifierResolver`]), and the
-//! unit of emission ([`Segment`], [`SegmentTable`]). Type-blind: nothing here names a
-//! source, a state, or a spec — every object kind is registered on it identically.
+//! The serialization engine: the session, its tables, and the segments they exchange.
+//!
+//! [`SerdeSession`] holds the tables and is the entry point; [`TableHandle`] is a typed
+//! handle on one of them, and [`ObjectSerdeDriver`] says how the objects of one table
+//! are serialized and rebuilt. [`SerializeContext`] and [`DeserializeContext`] are what
+//! a driver's calls receive to reach the session. [`DispatchingSerdeDriver`], with
+//! [`ObjectReader`] and [`IdentifierResolver`], is the driver of a table holding objects
+//! of several concrete types. [`Segment`] and [`SegmentTable`] are what a session emits
+//! and absorbs.
+//!
+//! Nothing here names a source, a state, or a spec: every object kind is registered on
+//! the engine the same way, and the crate's own kinds are registered exactly as a
+//! framework's own would be.
 
 mod context;
 mod dispatch;

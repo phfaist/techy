@@ -1,5 +1,5 @@
-//! The recompose driver: the [`TreeRecomposer`] entry point and the run
-//! context ([`RecomposeContext`]) handed to recomposers.
+//! The recompose driver ([`TreeRecomposer`]) and the run context
+//! ([`RecomposeContext`]) passed to every recomposer call.
 
 use core::marker::PhantomData;
 use core::ops::Range;
@@ -13,9 +13,11 @@ use crate::visit::scoped_children;
 
 use super::{ComposePiece, Recompose, RecomposeError, Recomposer};
 
-/// The recompose driver: holds the recomposer and the run configuration, and
-/// [`recompose`](TreeRecomposer::recompose)s a tree — see
-/// [`Recomposer`] and the [module docs](super).
+/// Drives a [`Recomposer`] over a tree and returns the single value it produces.
+///
+/// This is the entry point of [`recompose`](super): create one with
+/// [`new`](TreeRecomposer::new), configure it with the `with_*` methods, and run it
+/// with [`recompose`](TreeRecomposer::recompose).
 ///
 /// ```text
 /// let piece = TreeRecomposer::new(&mut recomposer).recompose(&tree, state)?;
@@ -24,26 +26,30 @@ use super::{ComposePiece, Recompose, RecomposeError, Recomposer};
 ///     .recompose(&tree, state)?;
 /// ```
 ///
-/// The recomposer is held by `&mut` borrow: its run-spanning state stays
-/// caller-owned and is read back after the run.
+/// The recomposer is borrowed mutably, so whatever state it accumulated during the
+/// run stays owned by the caller and can be read back afterwards.
 pub struct TreeRecomposer<'v, R: ?Sized> {
     recomposer: &'v mut R,
     descent_guard_init: StdDescentGuardInit,
 }
 
 impl<'v, R: ?Sized> TreeRecomposer<'v, R> {
-    /// A driver folding through `recomposer` — configure with the `with_*`
-    /// methods, then run with [`recompose`](TreeRecomposer::recompose).
+    /// Creates a driver that will ask `recomposer` about each node.
+    ///
+    /// Configure it with the `with_*` methods, then run it with
+    /// [`recompose`](TreeRecomposer::recompose).
     pub fn new(recomposer: &'v mut R) -> TreeRecomposer<'v, R> {
         TreeRecomposer { recomposer, descent_guard_init: StdDescentGuardInit::default() }
     }
 
-    /// Configure the run's descent guard
-    /// ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit): a stack
-    /// budget, a depth limit, or off; a traversal costs one descent per tree
-    /// nesting level — the re-entrant region ops included). Without this call
-    /// the run uses the guard's default — a deliberately tight stack budget
-    /// whose refusal names this method family.
+    /// Sets how deeply the run may descend: a stack budget, a fixed depth limit,
+    /// or no limit ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit)).
+    ///
+    /// One descent is counted per level of tree nesting, the re-entrant operations
+    /// of [`RecomposeContext`] included; exceeding the limit abandons the run with
+    /// [`DescentLimitExceeded`](RecomposeError::DescentLimitExceeded). Without this
+    /// call the run uses the guard's default, a deliberately tight stack budget
+    /// whose refusal message names this method.
     pub fn with_descent_guard_init(
         mut self,
         init: StdDescentGuardInit,
@@ -52,12 +58,22 @@ impl<'v, R: ?Sized> TreeRecomposer<'v, R> {
         self
     }
 
-    /// Recompose `tree` into one piece: the fold asks the recomposer for an
-    /// [instruction](Recompose) per node (root first), lowers `Concat`
-    /// instructions over the scoped children, and composes the pieces bottom-up
-    /// — see the [module docs](super) for the state model, the scope, and the
-    /// wrapping contract. `state` is the root's downward state (`()` for
-    /// stateless recomposers).
+    /// Recomposes `tree` into one value.
+    ///
+    /// The driver asks the recomposer for an [instruction](Recompose) about each
+    /// node, starting at the root; it carries out a `Concat` by recomposing the
+    /// children it includes and appending their values in document order, and
+    /// returns the value of the root. See the [module docs](super) for how state is
+    /// threaded, which children a `Concat` includes, and what happens when one
+    /// recomposer wraps another.
+    ///
+    /// `state` is the state the root is recomposed under (`()` for a recomposer
+    /// that needs none).
+    ///
+    /// # Errors
+    ///
+    /// [`RecomposeError`], which returns the recomposer's own failure unchanged and
+    /// otherwise reports the descent guard's refusal.
     pub fn recompose<L, A>(
         self,
         tree: &NodeTree<L, A>,
@@ -83,10 +99,11 @@ impl<R: ?Sized> core::fmt::Debug for TreeRecomposer<'_, R> {
     }
 }
 
-/// Fold one node, guarded: ask the guard, ask the instruction, then emit or
-/// lower the concat over the scoped children (recursing per child under the
-/// derived or inherited state). The guard's `exit` runs on the success and
-/// error paths alike; a refused descent gets no `exit`.
+/// Recompose one node, under the descent guard: ask the guard, ask for the
+/// instruction, then either return the emitted value or recompose the children in
+/// scope (one recursive call each, under the derived or inherited state) and append
+/// their values. The guard's `exit` runs on the success and error paths alike; a
+/// refused descent gets no `exit`.
 pub(super) fn drive<L, A, R>(
     recomposer: &mut R,
     node: NodeRef<'_, L, A>,
@@ -127,8 +144,8 @@ where
         Recompose::Emit(piece) => Ok(piece),
         Recompose::Concat(pieces) => {
             let lowering = pieces.into_lowering();
-            // The children fold under the derived state when the instruction
-            // carries one, else they inherit the parent's.
+            // The children are recomposed under the derived state when the
+            // instruction supplies one, else they inherit the parent's.
             let child_state = lowering.state.as_ref().unwrap_or(state);
             let mut acc = lowering.head;
             let mut first = true;
@@ -143,8 +160,8 @@ where
                 acc.append(drive(recomposer, child, child_state, cx)?);
             }
             acc.append(lowering.tail);
-            // The instruction's post-processing sees the whole assembled piece,
-            // head and tail included — after the children lowered against this
+            // The instruction's post-processing sees the whole assembled value,
+            // head and tail included — after the children were recomposed by this
             // (outermost) recomposer.
             if let Some(map) = lowering.map {
                 acc = map(acc);
@@ -154,47 +171,58 @@ where
     }
 }
 
-/// The run context of a [`TreeRecomposer`] fold, handed to every recomposer call.
-/// It carries **no user state** (the three-channel discipline,
-/// [`techy::visit`](crate::visit)); its surface is the self-passing region
-/// ops (arriving with the op roster) that re-enter the fold for one node's
-/// children or for one argument's/slot's nodes — the recompose mirror of
-/// [`RestageContext`](crate::transform::RestageContext)'s op family.
+/// The run context of a [`TreeRecomposer`] run, passed to every recomposer call.
+///
+/// It holds **no user state** — that belongs in the recomposer's own `&mut self`
+/// fields or in the downward-threaded state, as in [`visit`](crate::visit). Its
+/// surface is the operations below, which recompose one node's children, or one
+/// argument's or slot's nodes, on demand. They mirror the operations of
+/// [`RestageContext`](crate::transform::RestageContext) on the transform side.
+///
+/// Every one of them recomposes through the recomposer *you pass in*, which matters
+/// when recomposers are wrapped: see the [module docs](super).
 pub struct RecomposeContext<'t, L: Lang, A = ()> {
     /// The run's descent guard, consulted by every [`drive`] — the re-entrant
-    /// region ops included, since they fold through this same context.
+    /// region operations included, since they recompose through this same
+    /// context.
     descent_guard: StdDescentGuard,
-    /// The run's input tree, as a type/lifetime anchor: the context stores no
-    /// borrow of it (ops take their nodes explicitly and accept any tree's).
+    /// The run's input tree, present only to anchor the type and lifetime
+    /// parameters: the context stores no borrow of it, since the operations take
+    /// their nodes explicitly and accept nodes of any tree.
     _input: PhantomData<&'t NodeTree<L, A>>,
 }
 
 impl<L: Lang, A> RecomposeContext<'_, L, A> {
     // --- the region ops (the restage-family mirror) -------------------------------------
 
-    /// Recompose the **children** of `node` — any kind of node, callable or
-    /// not — folded through `recomposer` under `state`, in source order. The
-    /// two flags select the same child scope a
-    /// [`Concat`](Recompose::Concat) instruction does:
+    /// Recomposes the children of `node` — a callable or any other kind of node —
+    /// through `recomposer` under `state`, appending their values in document
+    /// order.
+    ///
+    /// The two flags choose the same children a [`Concat`](Recompose::Concat)
+    /// instruction would: children in
     /// [`Attached`](crate::core::node::SlotRole::Attached) and
-    /// [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions are skipped
-    /// unless `include_attached` / `include_hidden` opts them in (only
-    /// callables carry slots; for every other kind both flags are moot). A node
-    /// with no children in scope composes the empty piece — not an error.
+    /// [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions are left out
+    /// unless `include_attached` or `include_hidden` asks for them. Only callables
+    /// have slots, so for every other kind both flags make no difference. A node
+    /// with no children in scope produces the empty value, not an error.
     ///
-    /// This is the op-family mirror of
-    /// [`restage_children`](crate::transform::RestageContext::restage_children)
-    /// — with the scope flags added, since the transform side descends
-    /// role-blind and recompose is the one role-sensitive site — and it is
-    /// **self-passing** like every op here: the sub-fold lowers
-    /// against the recomposer the caller hands in, so a recomposer that passes
-    /// `self` cannot reach a recomposer wrapping it — those children are folded
-    /// by the callee alone. To post-process a fold *without* stepping outside
-    /// the wrapping contract, return the `Concat` instruction and attach
-    /// [`ConcatPieces::map`](crate::recompose::ConcatPieces::map) instead.
+    /// This mirrors
+    /// [`restage_children`](crate::transform::RestageContext::restage_children) on
+    /// the transform side, which needs no such flags because it descends into every
+    /// child regardless of role.
     ///
-    /// Errors: whatever the fold produces (the descent guard applies, one
-    /// descent per level, exactly as for an instruction's own lowering).
+    /// Like every operation here, this one recomposes through the recomposer you
+    /// pass in: a recomposer that passes `self` cannot be reached by a recomposer
+    /// wrapping it for those children. To post-process a result *without* leaving
+    /// the wrapping recomposer out, return the `Concat` instruction with
+    /// [`ConcatPieces::map`](crate::recompose::ConcatPieces::map) attached instead.
+    ///
+    /// # Errors
+    ///
+    /// Whatever recomposing the children produces, including the descent guard's
+    /// refusal — one descent per level, exactly as when the driver carries out an
+    /// instruction itself.
     pub fn recompose_children<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -213,14 +241,21 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         Ok(acc)
     }
 
-    /// Recompose argument `index` of callable `node` — the **whole region**
-    /// (leading noise, wrapper syntax, and content, in source order) folded
-    /// through `recomposer` under `state`. An **absent argument composes the
-    /// empty piece** (it contributed nothing — presence semantics, no error).
+    /// Recomposes the whole of argument `index` of callable `node` through
+    /// `recomposer` under `state`: its leading whitespace and comments, its wrapper
+    /// syntax, and its content, in document order.
     ///
-    /// Errors: [`NotACallable`](RecomposeError::NotACallable),
-    /// [`ArgumentIndexOutOfRange`](RecomposeError::ArgumentIndexOutOfRange),
-    /// plus anything the fold produces.
+    /// An argument that was not provided produces the empty value, since it
+    /// contributed nothing to the source; that is not an error. To recompose only
+    /// the argument's content, use
+    /// [`recompose_argument_content`](RecomposeContext::recompose_argument_content).
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RecomposeError::NotACallable) if `node` is not a callable,
+    /// [`ArgumentIndexOutOfRange`](RecomposeError::ArgumentIndexOutOfRange) for an
+    /// index the callable has no argument at, plus anything recomposing the nodes
+    /// produces.
     pub fn recompose_argument<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -238,11 +273,16 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         }
     }
 
-    /// [`recompose_argument`](RecomposeContext::recompose_argument) by the
-    /// argument's spec name. A name matching none of the callable's argument
-    /// specs is [`UnknownArgumentName`](RecomposeError::UnknownArgumentName)
-    /// — asking for an argument the callable does not have is a caller bug,
-    /// not an absence.
+    /// Recomposes the argument whose spec is named `name`, otherwise like
+    /// [`recompose_argument`](RecomposeContext::recompose_argument).
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownArgumentName`](RecomposeError::UnknownArgumentName) when no
+    /// argument spec of the callable carries that name — asking for an argument the
+    /// callable does not have is a mistake in calling code, not an absent argument
+    /// — plus every error of
+    /// [`recompose_argument`](RecomposeContext::recompose_argument).
     pub fn recompose_argument_named<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -257,12 +297,15 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         self.recompose_argument(node, index, state, recomposer)
     }
 
-    /// Recompose the **designated content nodes** of argument `index` of
-    /// callable `node` (noise and wrapper syntax excluded — exactly what the
-    /// argument's parser designated). An absent argument composes the empty
-    /// piece.
+    /// Recomposes only the content nodes of argument `index` of callable `node`:
+    /// exactly the nodes the argument's parser designated as its content, with the
+    /// surrounding whitespace, comments, and wrapper syntax left out.
     ///
-    /// Errors: as [`recompose_argument`](RecomposeContext::recompose_argument).
+    /// An argument that was not provided produces the empty value.
+    ///
+    /// # Errors
+    ///
+    /// As [`recompose_argument`](RecomposeContext::recompose_argument).
     pub fn recompose_argument_content<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -280,9 +323,15 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         }
     }
 
-    /// [`recompose_argument_content`](RecomposeContext::recompose_argument_content)
-    /// by the argument's spec name (unknown name =
-    /// [`UnknownArgumentName`](RecomposeError::UnknownArgumentName)).
+    /// Recomposes the content of the argument whose spec is named `name`,
+    /// otherwise like
+    /// [`recompose_argument_content`](RecomposeContext::recompose_argument_content).
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownArgumentName`](RecomposeError::UnknownArgumentName) when no
+    /// argument spec of the callable carries that name, plus every error of
+    /// [`recompose_argument_content`](RecomposeContext::recompose_argument_content).
     pub fn recompose_argument_content_named<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -297,13 +346,15 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         self.recompose_argument_content(node, index, state, recomposer)
     }
 
-    /// Recompose the **content nodes** of slot `index` of callable `node`
-    /// (the body nodes, for the standard environment shape) folded through
-    /// `recomposer` under `state`.
+    /// Recomposes the content nodes of slot `index` of callable `node` through
+    /// `recomposer` under `state` — for the usual shape of an environment, the
+    /// nodes of its body.
     ///
-    /// Errors: [`NotACallable`](RecomposeError::NotACallable),
-    /// [`SlotIndexOutOfRange`](RecomposeError::SlotIndexOutOfRange), plus
-    /// anything the fold produces.
+    /// # Errors
+    ///
+    /// [`NotACallable`](RecomposeError::NotACallable),
+    /// [`SlotIndexOutOfRange`](RecomposeError::SlotIndexOutOfRange), plus anything
+    /// recomposing the nodes produces.
     pub fn recompose_slot_content<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -323,9 +374,14 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         self.fold_nodes(node, slot.region.content_range(), state, recomposer)
     }
 
-    /// [`recompose_slot_content`](RecomposeContext::recompose_slot_content)
-    /// by the slot's recorded name. A name matching none of the callable's
-    /// slots is [`UnknownSlotName`](RecomposeError::UnknownSlotName).
+    /// Recomposes the content of the slot recorded under `name`, otherwise like
+    /// [`recompose_slot_content`](RecomposeContext::recompose_slot_content).
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownSlotName`](RecomposeError::UnknownSlotName) when the callable has
+    /// no slot of that name, plus every error of
+    /// [`recompose_slot_content`](RecomposeContext::recompose_slot_content).
     pub fn recompose_slot_content_named<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -343,16 +399,18 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
         self.fold_nodes(node, slot.region.content_range(), state, recomposer)
     }
 
-    /// Recompose the content of callable `node`'s **body slot** — the first
-    /// slot whose ext reports
-    /// [`is_body`](crate::core::node::BodySlotExt::is_body) (the
-    /// [`NodeRef::body`](crate::core::node::NodeRef::body) selection: the ext
-    /// axis alone, no role conjunction).
+    /// Recomposes the content of callable `node`'s body slot: the first slot whose
+    /// ext reports [`is_body`](crate::core::node::BodySlotExt::is_body).
     ///
-    /// Errors: [`NotACallable`](RecomposeError::NotACallable),
-    /// [`NoBodySlot`](RecomposeError::NoBodySlot) (no slot ext designates a
-    /// body — a macro-shaped callable, or a language whose exts mark none),
-    /// plus anything the fold produces.
+    /// That is the same slot [`NodeRef::body`](crate::core::node::NodeRef::body)
+    /// selects — chosen by the ext alone, with the slot's role playing no part.
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RecomposeError::NotACallable),
+    /// [`NoBodySlot`](RecomposeError::NoBodySlot) when no slot of the callable is
+    /// marked as its body — a callable shaped like a macro, or a language whose
+    /// exts mark none — plus anything recomposing the nodes produces.
     pub fn recompose_body<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -374,7 +432,8 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
 
     // --- shared tails -------------------------------------------------------------------
 
-    /// Argument `index` of callable `node`, or the op-misuse error.
+    /// Argument `index` of callable `node`, or the error for a misused
+    /// operation.
     fn argument<'n, E>(
         &self,
         node: NodeRef<'n, L, A>,
@@ -387,7 +446,8 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
             .ok_or(RecomposeError::ArgumentIndexOutOfRange { node: node.id(), index, count })
     }
 
-    /// The index of the argument named `name`, or the op-misuse error.
+    /// The index of the argument named `name`, or the error for a misused
+    /// operation.
     fn argument_index<E>(
         &self,
         node: NodeRef<'_, L, A>,
@@ -403,10 +463,11 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
             })
     }
 
-    /// Fold one contiguous node range of `node`'s tree through the passed
-    /// recomposer — the ops' shared tail. Self-passing keeps the wrapping
-    /// contract intact: the sub-fold lowers against whatever recomposer the
-    /// caller hands in (its own outermost self, in the wrapper pattern).
+    /// Recompose one contiguous range of nodes of `node`'s tree through the passed
+    /// recomposer, appending their values — the shared tail of the operations
+    /// above. Passing the recomposer explicitly is what keeps wrapping working:
+    /// the nodes are recomposed by whatever recomposer the caller supplies, which
+    /// in the wrapping pattern is its own outermost self.
     fn fold_nodes<R>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -425,7 +486,7 @@ impl<L: Lang, A> RecomposeContext<'_, L, A> {
     }
 }
 
-/// The callable payload of `node`, or the op-misuse error.
+/// The callable payload of `node`, or the error for a misused operation.
 fn callable_data<'n, L: Lang, A, E>(
     node: NodeRef<'n, L, A>,
 ) -> Result<&'n CallableData<L>, RecomposeError<E>> {

@@ -1,16 +1,16 @@
-//! The parse-result driver: [`ParseResultSerdeDriver`], the driver of the parse-results
-//! table, and [`ParseResultIndex`], its position type; the [`SerializableObject`] /
-//! [`DeserializableObject`] impls of [`ParseResult`], which the driver delegates to;
-//! and the [`ParseResultSerialization`] extension trait (`serialize_parse_result` /
-//! `parse_result`).
+//! The parse-results table: [`ParseResultSerdeDriver`], its driver, and
+//! [`ParseResultIndex`], its position type.
 //!
-//! A parse result's entry ties together what a parse produced: its tree (an entry of
-//! the trees table), its diagnostics (entries of the diagnostics table, plus the
-//! collection's retention cap and counts), and its session extension (in the
-//! language's own form). Everything the tree and the diagnostics refer to — sources,
-//! states, specs, providers — is shared through the standard tables, so one stream
-//! holds a whole parse: the convenience wrapper over the tables that a program keeping
-//! or transmitting complete parses uses.
+//! The driver delegates to the [`SerializableObject`] and [`DeserializableObject`] impls
+//! of [`ParseResult`], which are defined here, and [`ParseResultSerialization`] holds
+//! the by-kind methods (`serialize_parse_result` and `parse_result`).
+//!
+//! A parse result's entry ties together what a parse produced: its tree (an entry of the
+//! trees table), its diagnostics (entries of the diagnostics table, plus the
+//! collection's retention cap and counts), and its session extension (in the language's
+//! own form). Everything the tree and the diagnostics refer to — sources, states, specs,
+//! providers — is shared through the standard tables, so one stream holds a whole parse.
+//! This is the table a program that keeps or transmits complete parses works with.
 
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -47,17 +47,21 @@ crate::serial_index! {
 /// object — identifier `core.parse-result`): how a [`ParseResult`] is serialized and
 /// rebuilt.
 ///
-/// A parse result's entry carries the position of its tree in the trees table (written
-/// under the unit annotation, as the parser produces it), its diagnostics collection —
-/// the positions of the retained diagnostics in the diagnostics table, in recording
-/// order, plus the collection's retention cap ([`Diagnostics::limit`]), its
-/// [`suppressed`](Diagnostics::suppressed) count, and its count of error-severity
-/// pushes (what [`Diagnostics::has_errors`] answers, retained and suppressed alike)
-/// — and its session extension ([`ParseResult::session_ext`], through the language's
-/// `SessionExt` value conversion). Writing a parse result writes its tree and each of
-/// its diagnostics as new entries of their tables (they are values), and interns
-/// everything they refer to into the standard tables, so the whole parse is written
-/// into one stream with its sharing intact.
+/// A parse result's entry records the position of its tree in the trees table (written
+/// under the unit annotation, as the parser produces it), its diagnostics collection,
+/// and its session extension ([`ParseResult::session_ext`], through the language's
+/// `SessionExt` value conversion).
+///
+/// The diagnostics collection is recorded as the positions of the retained diagnostics
+/// in the diagnostics table, in recording order, plus the collection's retention cap
+/// ([`Diagnostics::limit`]), its [`suppressed`](Diagnostics::suppressed) count, and its
+/// count of error-severity pushes (what [`Diagnostics::has_errors`] answers, retained
+/// and suppressed alike).
+///
+/// Writing a parse result writes its tree and each of its diagnostics as new entries of
+/// their tables, since both are values, and interns everything they refer to into the
+/// standard tables, so the whole parse is written into one stream with its sharing
+/// intact.
 ///
 /// Reading rebuilds the tree through the trees table and each diagnostic through the
 /// diagnostics table (its condition is then a
@@ -71,14 +75,15 @@ crate::serial_index! {
 /// otherwise; whether the suppressed pushes were errors is not recoverable, so the
 /// error count is trusted within those bounds).
 ///
-/// A parse result is an object of the table: interning the same `Arc<ParseResult>`
-/// twice yields the existing position (unlike a tree or a diagnostic written on its
-/// own, which is a value). Reading back yields the shared `Arc<ParseResult>` the
-/// session holds — a parse result is not cloned out, since a language's session
-/// extension need not be `Clone`. The convenience methods are the
-/// [`ParseResultSerialization`] extension trait's `serialize_parse_result` and
-/// `parse_result`. The driver delegates to `ParseResult`'s own [`SerializableObject`]
-/// and [`DeserializableObject`] impls. Registered by
+/// A parse result is an object of the table: interning the same `Arc<ParseResult>` twice
+/// yields the existing position, unlike a tree or a diagnostic written on its own, which
+/// is a value. Reading back yields the shared `Arc<ParseResult>` the session holds — a
+/// parse result is not cloned out, since a language's session extension need not be
+/// `Clone`.
+///
+/// The by-kind methods are the [`ParseResultSerialization`] extension trait's
+/// `serialize_parse_result` and `parse_result`. The driver delegates to `ParseResult`'s
+/// own [`SerializableObject`] and [`DeserializableObject`] impls. Registered by
 /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
 ///
 /// Everything read is untrusted input: a tree position naming an entry that is not a
@@ -217,25 +222,28 @@ impl<L: SerializableLang> DeserializableObject<L> for ParseResult<L> {
     }
 }
 
-// --- the sugar -------------------------------------------------------------------------
+// --- the by-kind methods ----------------------------------------------------------------
 
-/// Serializing a parse result into and reading one back from a session's parse-results
-/// table by kind — `serialize_parse_result` and `parse_result` — on a [`SerdeSession`]:
-/// the convenience methods over the general
+/// Serializing a parse result into a session's parse-results table and reading one back:
+/// `serialize_parse_result` and `parse_result` on a [`SerdeSession`].
+///
+/// These are the convenience methods over the general
 /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) /
 /// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the
 /// parse-results table handle.
 ///
 /// An extension trait: bring it into scope with `use techy::serialize::ParseResultSerialization;`.
 pub trait ParseResultSerialization<L: SerializableLang> {
-    /// Serialize `result` into the parse-results table, returning its position: its
-    /// tree and each of its diagnostics are written as new entries of their tables,
-    /// everything they refer to is interned into the standard tables. The parse
-    /// result is interned by identity — the same `Arc` again yields its existing
-    /// position — which is why it is passed as an `Arc` (a
-    /// [`Language::parse`](crate::core::Language::parse) result is wrapped with
-    /// `Arc::new`; a parse result cannot be cloned into one here, since a language's
-    /// session extension need not be `Clone`).
+    /// Serializes `result` into the parse-results table, returning its position.
+    ///
+    /// Its tree and each of its diagnostics are written as new entries of their tables,
+    /// and everything they refer to is interned into the standard tables.
+    ///
+    /// The parse result is interned by identity — the same `Arc` again yields its
+    /// existing position — which is why it is passed as an `Arc`: wrap a
+    /// [`Language::parse`](crate::core::Language::parse) result with `Arc::new`. It
+    /// cannot be cloned into one here, since a language's session extension need not be
+    /// `Clone`.
     ///
     /// # Errors
     ///
@@ -250,10 +258,12 @@ pub trait ParseResultSerialization<L: SerializableLang> {
     /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern).
     fn serialize_parse_result(&mut self, result: &Arc<ParseResult<L>>) -> Result<ParseResultIndex, SerializeError>;
 
-    /// The parse result at `position` of the parse-results table: the `Arc` the
-    /// session holds (the same one for every call with that position; its tree is a
-    /// `NodeTree<L>` and its diagnostics carry
-    /// [`DeserializedCondition`](crate::serialize::DeserializedCondition)s).
+    /// The parse result at `position` of the parse-results table: the `Arc` the session
+    /// holds, the same one for every call with that position.
+    ///
+    /// Its tree is a `NodeTree<L>`, and each of its diagnostics has a
+    /// [`DeserializedCondition`](crate::serialize::DeserializedCondition) as its
+    /// condition.
     ///
     /// # Errors
     ///

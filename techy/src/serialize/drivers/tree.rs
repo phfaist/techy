@@ -1,23 +1,23 @@
-//! The tree driver: [`TreeSerdeDriver`], the driver of the trees table, and
-//! [`TreeIndex`], its position type; the annotation-codec registration
-//! ([`TableHandle::register_annotation`]); the [`TreeSerialization`] extension trait
-//! (`serialize_tree` / `tree`); and the context-aware value conversions of the core
-//! payload types a language's own codecs reuse ([`TextContent`] — owned text only,
-//! [`SlotRole`], [`GroupRule`]).
+//! The trees table: [`TreeSerdeDriver`], its driver, and [`TreeIndex`], its position
+//! type.
 //!
-//! A node tree is rebuilt through the node builder: the reader stages the nodes in
-//! reverse storage order (so a node's children exist before it), re-resolves each
-//! callable's argument and slot regions from the builder-ready form the wire stores,
-//! and [`finish`](crate::core::node::NodeTreeBuilder::finish)es the tree — which mints a
-//! fresh layout tag, recomputes the parent table, and re-establishes every region
-//! invariant by construction. Everything read is untrusted input: a children range
-//! out of bounds, a node no other node claims as a child, a region that does not tile
-//! the child list, a content parent outside its region, a span out of bounds, a
-//! reference into the wrong table — each is an error naming the node
-//! ([`DeserializeError::InNode`]), never a panic. Text inside language-typed payloads
-//! (the invocation syntax, the ext values) is owned on the wire — the value
-//! conversions receive no node whose source a span could be validated against; the
-//! [`TreeSerdeDriver`] docs state the rule.
+//! [`TableHandle::register_annotation`] registers a tree annotation type,
+//! [`TreeSerialization`] holds the by-kind methods (`serialize_tree` and `tree`), and
+//! the value conversions of the core payload types a language's own conversions reuse
+//! are defined here too ([`TextContent`] — owned text only — [`SlotRole`] and
+//! [`GroupRule`]).
+//!
+//! A node tree is rebuilt through the node builder. The reader stages the nodes in
+//! reverse storage order, so that a node's children exist before it; re-resolves each
+//! callable's argument and slot regions from the builder-ready form the wire stores; and
+//! calls [`finish`](crate::core::node::NodeTreeBuilder::finish), which mints a fresh
+//! layout tag, recomputes the parent table, and re-establishes every region invariant by
+//! construction.
+//!
+//! Everything read is untrusted input: a children range out of bounds, a node no other
+//! node claims as a child, a region that does not tile the child list, a content parent
+//! outside its region, a span out of bounds, a reference into the wrong table — each is
+//! an error naming the node ([`DeserializeError::InNode`]), never a panic.
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -67,28 +67,31 @@ crate::serial_index! {
 ///
 /// The trees table is *heterogeneous* by the tree's **annotation type**: a
 /// `NodeTree<L, A>` is written under the identifier registered for `A`, and read back
-/// through the conversions registered with it. The unit annotation (`NodeTree<L>`,
-/// the parser's output) is registered by the driver itself, in every session it is
-/// registered in, under the identifier `core.tree`, and its annotations are omitted
-/// from the wire; any
-/// other annotation type is registered on the table's handle with
-/// [`register_annotation`](TableHandle::register_annotation), which serializes each
-/// node's annotation through the type's own
-/// [`SerializableValue`]/[`DeserializableValue`] conversions (so an annotation that
-/// refers to a table object — a [`SourceSpan`](crate::source::SourceSpan), say —
-/// interns it like any other value). Serializing a tree whose annotation type is not
-/// registered is a [`SerializeError`].
+/// through the conversions registered with it.
 ///
-/// The table's object type is `dyn Any + Send + Sync` (one table for every annotation
-/// type), but the table accepts `NodeTree<L, A>` values only: interning any other
-/// object through the general [`SerdeSession::intern`](crate::serialize::SerdeSession::intern)
-/// is a [`SerializeError`] naming the object as not a node tree of a registered
-/// annotation type. The convenience methods, typed to node trees, are the
-/// [`TreeSerialization`] extension trait's `serialize_tree` and `tree`. Registered by
-/// [`SerdeSession::new`](crate::serialize::SerdeSession::new); a session composed with
-/// [`SerdeSession::empty`](crate::serialize::SerdeSession::empty) registers it with
-/// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table)
-/// (the unit annotation needs no further registration).
+/// The unit annotation (`NodeTree<L>`, the parser's output) is registered by the driver
+/// itself, in every session it is registered in, under the identifier `core.tree`, and
+/// its annotations are omitted from the wire. Any other annotation type is registered on
+/// the table's handle with [`register_annotation`](TableHandle::register_annotation),
+/// which serializes each node's annotation through the type's own
+/// [`SerializableValue`]/[`DeserializableValue`] conversions — so an annotation that
+/// refers to a table object, a [`SourceSpan`](crate::source::SourceSpan) say, interns it
+/// like any other value. Serializing a tree whose annotation type is not registered is a
+/// [`SerializeError`].
+///
+/// The table's object type is `dyn Any + Send + Sync`, one table for every annotation
+/// type, but the table accepts `NodeTree<L, A>` values only: interning any other object
+/// through the general
+/// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) is a
+/// [`SerializeError`] naming the object as not a node tree of a registered annotation
+/// type. The by-kind methods, typed to node trees, are the [`TreeSerialization`]
+/// extension trait's `serialize_tree` and `tree`.
+///
+/// Registered by [`SerdeSession::new`](crate::serialize::SerdeSession::new); a session
+/// composed with [`SerdeSession::empty`](crate::serialize::SerdeSession::empty)
+/// registers it with
+/// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table), and
+/// the unit annotation then needs no further registration.
 ///
 /// **Text in language payloads is owned on the wire.** A node's own text payloads
 /// (the content of a `Chars` node, a group's delimiters, a comment's parts) may be
@@ -106,14 +109,15 @@ crate::serial_index! {
 /// # Panics
 ///
 /// Serializing a tree does not panic on any tree the parser or the node builder
-/// produced, and reading never panics (every wire input is validated). The one panic
-/// reachable is the crate-wide [`TextContent::resolve`] invariant panic (listed in the
-/// crate documentation's "Panics" section): the writer calls
+/// produced, and reading never panics: every wire input is validated.
+///
+/// The one reachable panic is the crate-wide [`TextContent::resolve`] invariant panic
+/// (listed in [Panics](crate::guide::panics)). The writer calls
 /// [`InvocationSyntax::materialized`] on each callable node's invocation syntax, so a
 /// consumer-built tree that violates the [`TextContent::Spanned`] invariant — a
 /// span-backed text of the invocation syntax whose byte range is not a valid range of
-/// the node's source — panics there, exactly as [`NodeTree::materialize`] does on
-/// such a tree.
+/// the node's source — panics there, exactly as [`NodeTree::materialize`] does on such a
+/// tree.
 pub struct TreeSerdeDriver<L: SerializableLang> {
     lang: core::marker::PhantomData<fn() -> L>,
 }
@@ -372,14 +376,17 @@ fn downcast_tree<L: SerializableLang, A: 'static>(
 // --- registration ---------------------------------------------------------------------
 
 impl<L: SerializableLang> TableHandle<TreeSerdeDriver<L>> {
-    /// Register tree annotation type `A` under `identifier` in this trees table of
-    /// `session`: `NodeTree<L, A>` values are then serialized and read back through
-    /// `A`'s own [`SerializableValue`] / [`DeserializableValue`] conversions (one wire
-    /// value per node). The unit annotation (`NodeTree<L>`) is
-    /// pre-registered under `core.tree` and needs no registration. An annotation
-    /// value must not carry spans relative to a node's source: the conversion runs
-    /// without access to any node (a [`SourceSpan`](crate::source::SourceSpan), which names
-    /// its source, is fine).
+    /// Registers tree annotation type `A` under `identifier` in this trees table of
+    /// `session`.
+    ///
+    /// `NodeTree<L, A>` values are then serialized and read back through `A`'s own
+    /// [`SerializableValue`] / [`DeserializableValue`] conversions, one wire value per
+    /// node. The unit annotation (`NodeTree<L>`) is pre-registered under `core.tree` and
+    /// needs no registration.
+    ///
+    /// An annotation value must not hold spans relative to a node's source, because the
+    /// conversion runs without access to any node. A
+    /// [`SourceSpan`](crate::source::SourceSpan), which names its own source, is fine.
     ///
     /// # Errors
     ///
@@ -398,15 +405,16 @@ impl<L: SerializableLang> TableHandle<TreeSerdeDriver<L>> {
         register_codec::<L>(self, session, TypeId::of::<NodeTree<L, A>>(), value_tree_codec::<L, A>(identifier.into()))
     }
 
-    /// Register tree annotation type `A` under `identifier` through the serde
-    /// bridge: `A`'s annotations are serialized with
-    /// [`to_value`](crate::serialize::to_value) and read back with
-    /// [`from_value`](crate::serialize::from_value) — the convenience for a plain-data
-    /// annotation type (one whose values refer to no table object, so they need no
-    /// serialization context). An annotation type that does refer to a table object (a
-    /// [`SourceSpan`](crate::source::SourceSpan)) uses
-    /// [`register_annotation`](TableHandle::register_annotation) instead. Available
-    /// with the `serde` cargo feature.
+    /// Registers tree annotation type `A` under `identifier` through the serde bridge.
+    ///
+    /// `A`'s annotations are serialized with [`to_value`](crate::serialize::to_value) and
+    /// read back with [`from_value`](crate::serialize::from_value). This is the
+    /// convenience for a plain-data annotation type — one whose values refer to no table
+    /// object, so that they need no serialization context. An annotation type that does
+    /// refer to a table object (a [`SourceSpan`](crate::source::SourceSpan)) uses
+    /// [`register_annotation`](TableHandle::register_annotation) instead.
+    ///
+    /// Available with the `serde` cargo feature.
     ///
     /// # Errors
     ///
@@ -479,20 +487,25 @@ fn register_codec<L: SerializableLang>(
     Ok(())
 }
 
-// --- the sugar -------------------------------------------------------------------------
+// --- the by-kind methods ----------------------------------------------------------------
 
-/// Serializing a node tree into and reading one back from a session's trees table by
-/// kind — `serialize_tree` and `tree` — on a [`SerdeSession`]: the convenience
-/// methods over the general [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) /
-/// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the trees
-/// table handle.
+/// Serializing a node tree into a session's trees table and reading one back:
+/// `serialize_tree` and `tree` on a [`SerdeSession`].
+///
+/// These are the convenience methods over the general
+/// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) /
+/// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the trees table
+/// handle.
 ///
 /// An extension trait: bring it into scope with `use techy::serialize::TreeSerialization;`.
 pub trait TreeSerialization<L: SerializableLang> {
-    /// Serialize `tree` into the trees table, returning its position. Every call is a
-    /// new entry: a node tree is a value, written in full, so two calls with equal
-    /// trees produce two entries (unlike an interned source or state, which is written
-    /// once and shared). The tree's annotation type must be registered
+    /// Serializes `tree` into the trees table, returning its position.
+    ///
+    /// Every call writes a new entry: a node tree is a value, written in full, so two
+    /// calls with equal trees produce two entries — unlike an interned source or state,
+    /// which is written once and shared.
+    ///
+    /// The tree's annotation type must be registered
     /// ([`TableHandle::register_annotation`]; the unit annotation is pre-registered).
     ///
     /// # Errors
@@ -1018,18 +1031,20 @@ fn staged_region(wire: &WireRegion, build_id_of: &[Option<BuildId>]) -> Result<C
 // --- value conversions of core payload types (owned text only, see the TreeSerdeDriver
 // docs; a language's own conversions reuse them)
 
-/// The value conversion of textual content — for text inside a language-typed payload
-/// (a callable's invocation syntax, an ext value) — carries **owned text only**:
-/// `{owned: "text"}`. A [`Spanned`](TextContent::Spanned) value is an error: the
-/// conversion receives no node, so a byte range into the carrying node's
-/// source could not be validated on reading, and text that is span-backed must be
-/// materialized against the node's source first ([`TextContent::materialized`] — for a
-/// callable's invocation syntax, the tree writer does so through
-/// [`InvocationSyntax::materialized`] before converting the payload; see
-/// [`TreeSerdeDriver`]). The text payloads of the nodes themselves (a `Chars` node's
-/// content, a group's delimiters, a comment's parts) do not go through this
-/// conversion: the tree driver writes them span-backed and validates the ranges
-/// against the node's source.
+/// The value conversion of textual content — used for text inside a language-typed
+/// payload, such as a callable's invocation syntax or an ext value — writes **owned text
+/// only**: `{owned: "text"}`.
+///
+/// A [`Spanned`](TextContent::Spanned) value is an error. The conversion receives no
+/// node, so a byte range into the carrying node's source could not be validated on
+/// reading; span-backed text must be materialized against the node's source first
+/// ([`TextContent::materialized`]). For a callable's invocation syntax the tree writer
+/// does so through [`InvocationSyntax::materialized`] before converting the payload; see
+/// [`TreeSerdeDriver`].
+///
+/// The text payloads of the nodes themselves — a `Chars` node's content, a group's
+/// delimiters, a comment's parts — do not go through this conversion: the tree driver
+/// writes them span-backed and validates the ranges against the node's source.
 impl<L: Lang> SerializableValue<L> for TextContent {
     fn serialize_value(&self, _cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
     where

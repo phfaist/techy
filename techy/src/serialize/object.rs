@@ -14,28 +14,30 @@ use super::error::{DeserializeError, SerialValueError, SerializeError};
 use super::value::{SerialEntry, SerialValue};
 use super::wire::{FieldReader, FieldWriter};
 
-/// A language that supports serialization. Implementing this trait for a [`Lang`]
-/// is what makes serialization and deserialization available for that language: a
-/// [`SerializeContext`] or [`DeserializeContext`] can only exist for a
-/// `SerializableLang`, so the serialization methods on the traits below — bounded
-/// `where L: SerializableLang` — can be called exactly for such languages.
+/// A language that supports serialization.
 ///
-/// The trait has no items of its own. Its bounds require every type the language
-/// supplies to the parse — its closed vocabularies ([`ModeId`](Lang::ModeId),
-/// [`CallableTypeId`](Lang::CallableTypeId), [`GroupTypeId`](Lang::GroupTypeId),
-/// [`Event`](Lang::Event)), its extension types ([`StateExt`](Lang::StateExt),
-/// [`SessionExt`](Lang::SessionExt), the node-ext bundle [`NodeExts`](Lang::NodeExts)),
-/// its [`SourceOrigin`](Lang::SourceOrigin), and its
+/// Implementing this trait for a [`Lang`] is what makes serialization and
+/// deserialization available for that language: a [`SerializeContext`] or
+/// [`DeserializeContext`] can only exist for a `SerializableLang`, so the serialization
+/// methods on the traits below — bounded `where L: SerializableLang` — can be called
+/// exactly for such languages.
+///
+/// The trait has no items of its own, and an implementation of it is an empty block.
+/// Its bounds require every type the language supplies to the parse — its closed
+/// vocabularies ([`ModeId`](Lang::ModeId), [`CallableTypeId`](Lang::CallableTypeId),
+/// [`GroupTypeId`](Lang::GroupTypeId), [`Event`](Lang::Event)), its extension types
+/// ([`StateExt`](Lang::StateExt), [`SessionExt`](Lang::SessionExt), the node-ext bundle
+/// [`NodeExts`](Lang::NodeExts)), its [`SourceOrigin`](Lang::SourceOrigin), and its
 /// [`InvocationSyntax`](Lang::InvocationSyntax) — to implement [`SerializableValue`]
-/// and [`DeserializableValue`] for the language: those are the conversions the
-/// crate's own serialization uses whenever such a value is embedded in an entry (a
-/// state's mode and ext, a group rule's group type, a source's origin, …). The
-/// implementation of every such type is what its owner writes; the impl of this
-/// trait itself is empty. A language built on the crate's defaults (`()` for the
-/// exts and events, `u32` ids, `Option<String>` origin — what
-/// [`TrivialLang`](crate::core::TrivialLang) supplies) opts in with an empty impl
-/// block, the core impls covering every type; a language with its own vocabulary or
-/// ext types implements the two value traits for those types first.
+/// and [`DeserializableValue`] for the language. Those are the conversions the crate's
+/// own serialization uses whenever such a value is embedded in an entry: a state's mode
+/// and ext, a group rule's group type, a source's origin, and so on.
+///
+/// A language built on the crate's defaults (`()` for the exts and events, `u32` ids,
+/// `Option<String>` origin — what [`TrivialLang`](crate::core::TrivialLang) supplies)
+/// opts in with an empty impl block, because the crate's own impls already cover every
+/// type. A language with its own vocabulary or extension types implements the two value
+/// traits for those types first.
 pub trait SerializableLang:
     Lang<
         ModeId: SerializableValue<Self> + DeserializableValue<Self>,
@@ -58,6 +60,17 @@ pub trait SerializableLang:
 /// The write side of the serialization capability: an object that can produce its
 /// serialized form.
 ///
+/// An *object* is a thing stored in a table and referred to by its position there — a
+/// source, a parsing state, a callable spec, a provider (see the
+/// [module documentation](crate::serialize)). This trait is what writes the objects of
+/// a table whose entries are trait objects of several concrete types, the specs and
+/// providers tables above all: that table's driver
+/// ([`DispatchingSerdeDriver`](crate::serialize::DispatchingSerdeDriver)) writes each
+/// object by calling [`serialize_object`](Self::serialize_object) on it. A table whose
+/// objects all have one Rust type is written by its own
+/// [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver) instead. The paired read
+/// side is [`DeserializableObject`].
+///
 /// Every [`CallableSpec`](crate::core::specs::CallableSpec) and every
 /// [`SpecsProvider`](crate::core::specs::SpecsProvider) implements this trait — it is a
 /// supertrait of both, so that the method is callable through their trait objects
@@ -79,13 +92,18 @@ pub trait SerializableLang:
 /// impl CallableSpec<Latexlike> for MySpec {}
 /// ```
 ///
-/// A participating type overrides [`serialize_object`](Self::serialize_object). The
-/// method is available only when the language is a [`SerializableLang`]: for any
-/// other language it cannot be called (and no context value exists to call it with).
+/// A participating type overrides [`serialize_object`](Self::serialize_object): it
+/// returns the identifier naming its kind together with its data, and interns through
+/// the context every object it refers to. The method is available only when the
+/// language is a [`SerializableLang`]: for any other language it cannot be called (and
+/// no context value exists to call it with).
 pub trait SerializableObject<L: Lang> {
     /// Produce this object's serialized form: its identifier and its data as a
-    /// [`SerialEntry`]. `cx` gives the call access to the state of the serialization
-    /// in progress.
+    /// [`SerialEntry`].
+    ///
+    /// `cx` is the serialization in progress: an implementation interns through it
+    /// every object this one refers to (a spec's provider, say), embedding the position
+    /// it returns, and reads the session's user data through it.
     ///
     /// # Errors
     ///
@@ -105,10 +123,18 @@ pub trait SerializableObject<L: Lang> {
 }
 
 /// The read side of the serialization capability: a type that can rebuild an object
-/// from its serialized data. Opt-in and implemented by concrete types only: it is
-/// never a supertrait (its associated type and its constructor — a function without a
-/// `self` argument — would make the spec/provider traits unusable as trait objects),
-/// and a type that does not participate implements nothing.
+/// from its serialized data.
+///
+/// The trait is opt-in and implemented by concrete types only; a type that does not
+/// participate implements nothing. It is never a supertrait: its associated type and
+/// its constructor — a function without a `self` argument — would make the spec and
+/// provider traits unusable as trait objects.
+///
+/// An implementation is put to work by registering it for one identifier on the table's
+/// handle ([`TableHandle::register_type`](crate::serialize::TableHandle::register_type));
+/// reading an entry that carries that identifier then calls
+/// [`deserialize_object`](Self::deserialize_object). The paired write side is
+/// [`SerializableObject`].
 ///
 /// [`Output`](Self::Output) is what the read produces: the type itself for a type
 /// rebuilt from a self-contained description, or a shared handle to an already
@@ -119,8 +145,11 @@ pub trait DeserializableObject<L: SerializableLang>: Sized {
     /// What [`deserialize_object`](Self::deserialize_object) produces.
     type Output;
 
-    /// Rebuild an object from its serialized `value`. `cx` gives the call access to
-    /// the state of the deserialization in progress.
+    /// Rebuild an object from its serialized `value`.
+    ///
+    /// `cx` is the deserialization in progress: an implementation reads through it the
+    /// objects this one refers to by position, and the session's user data — which is
+    /// where the reading environment is found.
     ///
     /// # Errors
     ///
@@ -133,23 +162,28 @@ pub trait DeserializableObject<L: SerializableLang>: Sized {
     ) -> Result<Self::Output, DeserializeError>;
 }
 
-/// The write side of the serialization capability for *values*: data embedded
-/// inline in an entry, as opposed to an *object*, which is a table entry referred to
-/// by position (see the [module documentation](crate::serialize)). A language's mode,
-/// its state ext, a group rule's group type, a source's origin are values: they are
-/// written into the entry of the state or source that carries them, not interned in a
-/// table of their own.
+/// The write side of the serialization capability for *values*: data embedded in place
+/// inside an entry.
 ///
-/// Implemented by the owner of the type, for every language: the crate implements it
-/// for `()`, `bool`, `char`, the integer types, `String`, `Option<T>` and `Vec<T>`
-/// (over an implementing `T`), and for [`SerialValue`] itself (carried as it is) —
-/// the types a language built on the crate's defaults supplies, and what a structure
-/// of such fields is made of; a language implements it for its own value and ext
-/// types (typically as `impl<L: Lang> SerializableValue<L> for MyMode`, so that any
-/// language reusing the type gets the conversion — or derives it with
-/// `#[derive(SerializableValue)]`). [`SerializableLang`] requires it of every type the
-/// language supplies to the parse. The methods are available only when the language
-/// is a [`SerializableLang`], like [`SerializableObject::serialize_object`].
+/// A value is the counterpart of an *object*, which is a table entry referred to by
+/// position (see the [module documentation](crate::serialize)). A language's mode, its
+/// state ext, a group rule's group type, a source's origin are values: they are written
+/// into the entry of the state or source that holds them, not interned in a table of
+/// their own.
+///
+/// The trait is implemented by the owner of the type, for every language. The crate
+/// implements it for `()`, `bool`, `char`, the integer types, `String`, `Option<T>` and
+/// `Vec<T>` (over an implementing `T`), and for [`SerialValue`] itself (kept as it is) —
+/// the types a language built on the crate's defaults supplies, and what a structure of
+/// such fields is made of; the crate's own value types, spans above all, have their
+/// impls next to the driver that writes them.
+///
+/// A language implements it for its own value and extension types, typically as
+/// `impl<L: Lang> SerializableValue<L> for MyMode`, so that any language reusing the
+/// type gets the conversion — or derives it with `#[derive(SerializableValue)]`.
+/// [`SerializableLang`] requires it of every type the language supplies to the parse.
+/// The methods are available only when the language is a [`SerializableLang`], like
+/// [`SerializableObject::serialize_object`].
 pub trait SerializableValue<L: Lang> {
     /// Produce this value's serialized form. `cx` gives the call access to the state
     /// of the serialization in progress — a value that refers to a table object
@@ -157,8 +191,8 @@ pub trait SerializableValue<L: Lang> {
     ///
     /// # Errors
     ///
-    /// The value cannot be represented in the serialized form (an integer outside
-    /// `i64`, an implementation's own reason).
+    /// A [`SerializeError`] when the value cannot be represented in the serialized form
+    /// (an integer outside `i64`, or an implementation's own reason).
     fn serialize_value(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
     where
         L: SerializableLang;

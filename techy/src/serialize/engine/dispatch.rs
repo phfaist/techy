@@ -1,7 +1,8 @@
-//! Heterogeneous tables: [`DispatchingSerdeDriver`], the driver of a table holding
-//! trait objects of several concrete types; [`ObjectReader`], the registered way to
-//! rebuild the objects of one identifier; [`IdentifierResolver`], a supplier of
-//! readers for the identifiers of one prefix; and the registration methods on the
+//! Heterogeneous tables — tables holding trait objects of several concrete types.
+//!
+//! [`DispatchingSerdeDriver`] is such a table's driver, [`ObjectReader`] the registered
+//! way to rebuild the objects of one identifier, and [`IdentifierResolver`] a supplier
+//! of readers for the identifiers of one prefix. The registration methods are on the
 //! table's handle.
 
 use alloc::borrow::Cow;
@@ -22,28 +23,30 @@ use super::driver::{ObjectSerdeDriver, TableHandle};
 use super::session::{SerdeSession, TableRegistry};
 
 /// The driver of a *heterogeneous* table: a table whose objects are trait objects
-/// (`Arc<T>` with `T = dyn …`) of several concrete types, each with its own
-/// identifier and serialized form.
+/// (`Arc<T>` with `T = dyn …`) of several concrete types, each with its own identifier
+/// and serialized form.
 ///
 /// Writing needs no registration: every object serializes itself through its own
-/// [`SerializableObject::serialize_object`] (a supertrait method, so it is reached
-/// through the trait object). Reading dispatches on the entry's identifier: the
-/// readers registered on the table's handle
-/// ([`TableHandle::register_type`] / [`register_reader`](TableHandle::register_reader)),
-/// then the registered [`IdentifierResolver`]s
-/// ([`register_resolver`](TableHandle::register_resolver)) — each registered for a
-/// *namespace*, an identifier prefix owned by one framework or package; a
-/// resolver's answer, a reader or a decline, is kept, so it is asked once per
-/// identifier for the session's lifetime — and, when nothing recognizes the
-/// identifier, the error [`DeserializeError::UnknownIdentifier`]: an unknown
-/// identifier is an error, never a guess. Registrations belong to the session (the
-/// driver holds none), so a driver value can be registered in any number of
-/// sessions.
+/// [`SerializableObject::serialize_object`], a supertrait method reached through the
+/// trait object.
+///
+/// Reading dispatches on the entry's identifier, in this order: the readers registered
+/// on the table's handle ([`TableHandle::register_type`] /
+/// [`register_reader`](TableHandle::register_reader)); then the registered
+/// [`IdentifierResolver`]s ([`register_resolver`](TableHandle::register_resolver)), each
+/// registered for a *namespace* — an identifier prefix owned by one framework or package
+/// — and each asked at most once per identifier, since its answer (a reader or a
+/// decline) is kept for the session's lifetime; and, when nothing recognizes the
+/// identifier, the error [`DeserializeError::UnknownIdentifier`]. An unknown identifier
+/// is an error, never a guess.
+///
+/// Registrations belong to the session, not to the driver, so one driver value can be
+/// registered in any number of sessions.
 ///
 /// `T` is the trait object type; `I` the table's position type (a
-/// [`serial_index!`](crate::serialize::serial_index) type). The table is
-/// heterogeneous ([`homogeneous_identifier`](ObjectSerdeDriver::homogeneous_identifier)
-/// is `None`): entries carry their identifier on the wire.
+/// [`serial_index!`](crate::serialize::serial_index) type). The table is heterogeneous
+/// ([`homogeneous_identifier`](ObjectSerdeDriver::homogeneous_identifier) is `None`):
+/// its entries record their identifier on the wire.
 pub struct DispatchingSerdeDriver<L, T: ?Sized, I> {
     table_name: &'static str,
     types: PhantomData<DriverMarker<L, T, I>>,
@@ -92,10 +95,11 @@ where
         object.serialize_object(cx)
     }
 
-    /// Rebuild the object of `entry` through the reader for its identifier — the one
-    /// registered, in the session `cx` belongs to, on the table of this driver's
-    /// [`table_name`](ObjectSerdeDriver::table_name) (the readers are found by table
-    /// name, so the call works from any deserialization context of that session).
+    /// Rebuilds the object of `entry` through the reader for its identifier.
+    ///
+    /// The reader is the one registered, in the session `cx` belongs to, on the table of
+    /// this driver's [`table_name`](ObjectSerdeDriver::table_name). Readers are found by
+    /// table name, so the call works from any deserialization context of that session.
     ///
     /// # Errors
     ///
@@ -113,13 +117,16 @@ where
     }
 }
 
-/// How the objects of one identifier are rebuilt: the read side's registered unit,
-/// held by a heterogeneous table's dispatch (see [`DispatchingSerdeDriver`]) and
-/// produced by [`IdentifierResolver`]s. Wraps one deserialization routine producing
-/// `Arc<T>`, either a type's own [`DeserializableObject`] impl
-/// ([`from_type`](ObjectReader::from_type)) or any routine ([`new`](ObjectReader::new)
-/// — how a resolver wraps a definition it obtained at run time). Cheap to clone (the
-/// routine is shared).
+/// How the objects of one identifier are rebuilt: the read side's registered unit.
+///
+/// A reader is held by a heterogeneous table's dispatch (see
+/// [`DispatchingSerdeDriver`]) and produced by [`IdentifierResolver`]s. It wraps one
+/// deserialization routine producing `Arc<T>`: either a type's own
+/// [`DeserializableObject`] impl ([`from_type`](ObjectReader::from_type)) or any routine
+/// at all ([`new`](ObjectReader::new) — how a resolver wraps a definition it obtained at
+/// run time).
+///
+/// Cloning is cheap: the routine is shared.
 pub struct ObjectReader<L: SerializableLang, T: ?Sized> {
     read: Arc<ReadFn<L, T>>,
 }
@@ -140,11 +147,12 @@ impl<L: SerializableLang, T: ?Sized + Send + Sync + 'static> ObjectReader<L, T> 
         ObjectReader { read: Arc::new(read) }
     }
 
-    /// A reader from a type's own [`DeserializableObject`] impl: `C::deserialize_object`
-    /// rebuilds the value, and `wrap` turns it into the table's `Arc<T>` — `Arc::new`
-    /// (with the coercion to the trait object) for a type whose `Output` is itself,
-    /// the identity for a type whose `Output` is already an `Arc<T>` (an object looked
-    /// up in the reading environment).
+    /// A reader from a type's own [`DeserializableObject`] impl.
+    ///
+    /// `C::deserialize_object` rebuilds the value, and `wrap` turns it into the table's
+    /// `Arc<T>`: `Arc::new` (with the coercion to the trait object) for a type whose
+    /// `Output` is itself, or the identity function for a type whose `Output` is already
+    /// an `Arc<T>` — an object looked up in the reading environment.
     pub fn from_type<C: DeserializableObject<L>>(
         wrap: impl Fn(C::Output) -> Arc<T> + Send + Sync + 'static,
     ) -> Self {
@@ -177,15 +185,18 @@ impl<L: SerializableLang, T: ?Sized> fmt::Debug for ObjectReader<L, T> {
     }
 }
 
-/// A namespace's supplier of readers for a heterogeneous table — a *namespace* being
-/// an identifier prefix owned by one framework or package: asked for an identifier no
-/// registered reader covers, it answers with the [`ObjectReader`] for it (constructed
-/// on demand — from a definition it obtains at run time, under its own trust policy)
-/// or declines. Registered with a prefix on the table's handle
-/// ([`TableHandle::register_resolver`]); a resolver is asked only for identifiers
-/// beginning with its prefix, and its answer for an identifier — a reader or a
-/// decline — is kept by the session, so it is never asked twice for one identifier
-/// (the answers recorded during a segment push that fails are dropped with it).
+/// A supplier of readers for one namespace of a heterogeneous table — a *namespace*
+/// being an identifier prefix owned by one framework or package.
+///
+/// Asked for an identifier no registered reader covers, a resolver answers with the
+/// [`ObjectReader`] for it — constructed on demand, from a definition it obtains at run
+/// time under its own trust policy — or declines.
+///
+/// A resolver is registered with a prefix on the table's handle
+/// ([`TableHandle::register_resolver`]) and is asked only for identifiers beginning with
+/// that prefix. Its answer for an identifier, a reader or a decline, is kept by the
+/// session, so it is never asked twice for one identifier; the answers recorded during a
+/// segment push that fails are dropped with it.
 pub trait IdentifierResolver<L: SerializableLang, T: ?Sized>: Send + Sync {
     /// The reader for `identifier`, or `None` to decline. `cx` gives access to the
     /// session — the caller's user data in particular.
@@ -290,10 +301,12 @@ where
     T: ?Sized + SerializableObject<L> + Send + Sync + 'static,
     I: SerialIndex,
 {
-    /// Register the reader for `identifier` in this table of `session`, from `C`'s
-    /// own [`DeserializableObject`] impl: entries with that identifier are rebuilt by
-    /// `C::deserialize_object`, and `wrap` turns the result into the table's `Arc<T>`
-    /// (see [`ObjectReader::from_type`]).
+    /// Registers the reader for `identifier` in this table of `session`, from `C`'s own
+    /// [`DeserializableObject`] impl.
+    ///
+    /// Entries with that identifier are then rebuilt by `C::deserialize_object`, and
+    /// `wrap` turns the result into the table's `Arc<T>` (see
+    /// [`ObjectReader::from_type`]).
     ///
     /// # Errors
     ///
@@ -334,14 +347,16 @@ where
         Ok(())
     }
 
-    /// Register `resolver` for the identifiers beginning with `prefix` — its
-    /// namespace — in this table of `session`. Several resolvers may be registered,
-    /// with any prefixes (the empty prefix matches every identifier): for an
-    /// identifier no registered reader covers, the resolvers whose prefix matches are
-    /// asked in order of decreasing prefix length — the most specific first;
-    /// registration order among equal lengths — until one answers; the answer (the
-    /// reader, or the decline of every matching resolver) is kept for the session's
-    /// lifetime, so no resolver is asked twice for one identifier.
+    /// Registers `resolver` for the identifiers beginning with `prefix` — its namespace
+    /// — in this table of `session`.
+    ///
+    /// Several resolvers may be registered, with any prefixes; the empty prefix matches
+    /// every identifier. For an identifier no registered reader covers, the resolvers
+    /// whose prefix matches are asked in order of decreasing prefix length — the most
+    /// specific first, registration order among equal lengths — until one answers.
+    ///
+    /// The answer, either the reader or the decline of every matching resolver, is kept
+    /// for the session's lifetime, so no resolver is asked twice for one identifier.
     ///
     /// # Errors
     ///

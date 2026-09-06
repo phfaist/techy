@@ -1,11 +1,14 @@
-//! The serialized shapes of the crate's own callable specs and providers: a package
-//! by identity ([`WirePackage`]), a scope and a fallback provider in full
-//! ([`WireScope`], [`WireFallbackProvider`] — their specs as positions in the specs
-//! table), a spec by identity ([`WireSpecIdentity`] — its provider's position plus the
-//! key it is defined under), and the error spec's self-contained form
-//! ([`WireErrorSpec`]). Written and read by the impls in
-//! [`drivers::specs`](crate::serialize::drivers::specs). The callable types are
-//! carried as [`SerialValue`]s produced by the language's own conversion.
+//! The serialized shapes of the crate's own callable specs and providers.
+//!
+//! A package goes by identity ([`WirePackage`]); a scope and a fallback provider are
+//! written in full ([`WireScope`], [`WireFallbackProvider`], their specs as positions in
+//! the specs table); a spec goes by identity ([`WireSpecIdentity`]: its provider's
+//! position plus the key it is defined under); and the error spec has a self-contained
+//! form ([`WireErrorSpec`]). Written and read by the impls in
+//! [`drivers::specs`](crate::serialize::drivers::specs).
+//!
+//! The callable types are stored as [`SerialValue`]s produced by the language's own
+//! conversion.
 
 use alloc::string::String;
 use alloc::vec::Vec;

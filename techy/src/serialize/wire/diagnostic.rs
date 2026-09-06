@@ -1,9 +1,11 @@
-//! The serialized shape of a [`Diagnostic`](crate::error::Diagnostic): [`WireDiagnostic`]
-//! and its parts — the severity ([`WireSeverity`]), the condition's identifier, the
-//! rendered message, the serialization projection (a [`SerialValue`] holding the
-//! embedded [`DiagnosticValue`](crate::error::DiagnosticValue)), the span,
-//! and the traceback frames ([`WireTraceFrame`]). Written and read by the crate's
-//! diagnostic driver ([`DiagnosticSerdeDriver`](crate::serialize::DiagnosticSerdeDriver)).
+//! The serialized shape of a [`Diagnostic`](crate::error::Diagnostic):
+//! [`WireDiagnostic`] and its parts.
+//!
+//! A diagnostic is its severity ([`WireSeverity`]), its condition's identifier, its
+//! rendered message, its serialization projection (a [`SerialValue`] holding the
+//! embedded [`DiagnosticValue`](crate::error::DiagnosticValue)), its span, and its
+//! traceback frames ([`WireTraceFrame`]). Written and read by the crate's diagnostic
+//! driver ([`DiagnosticSerdeDriver`](crate::serialize::DiagnosticSerdeDriver)).
 
 use alloc::string::String;
 use alloc::vec::Vec;

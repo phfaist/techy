@@ -1,16 +1,34 @@
-//! Recomposition: a **meaning-free value fold** composing generic *pieces*
-//! over the tree.
+//! Tree-to-value recomposition: combine a node tree into one value.
 //!
-//! The machinery attaches no meaning to what it composes: a [`Recomposer`]
-//! answers one [instruction](Recompose) per node — *emit this piece* or
-//! *concatenate the children's pieces* (with optional head/separator/tail,
-//! [`ConcatPieces`]) — and the driver ([`TreeRecomposer`],
-//! `TreeRecomposer::new(&mut recomposer).recompose(&tree, state)`) folds the
-//! pieces bottom-up into one value. Source re-emission is ONE recomposer
-//! implementation (the latexlike preset's
-//! [`SourceRecomposer`](crate::latexlike::SourceRecomposer)), never a
-//! machinery default; the same fold renders plain text, HTML, token streams,
-//! or nothing at all (`Piece = ()` — a scoped-state walk).
+//! The value can be anything that can be built by appending — a `String` of source
+//! text or HTML, a vector of tokens, or nothing at all. The library attaches no
+//! meaning to it; it only asks about each node and joins the answers together.
+//!
+//! The two items to know are a callback and a driver. You implement a
+//! [`Recomposer`], which is asked about one node at a time and answers either
+//! [`Emit(value)`](Recompose::Emit) — "the value for this node is exactly this" —
+//! or [`Concat`](Recompose::Concat) — "combine my children's values", optionally
+//! with a head, a separator, and a tail ([`ConcatPieces`]). You pass it to the
+//! driver [`TreeRecomposer`]:
+//! `TreeRecomposer::new(&mut recomposer).recompose(&tree, state)` asks about the
+//! root, works downward, appends each node's children's values in document order to
+//! make that node's value, and returns the value of the root.
+//!
+//! The value type is the recomposer's [`Piece`](Recomposer::Piece), which must
+//! implement [`ComposePiece`]: an empty value plus an append operation. techy
+//! implements it for `String` and for `()`.
+//!
+//! Re-emitting the original source text is one recomposer among others rather than
+//! something the driver does by default; the ready-made one is the preset's
+//! [`source_recomposer`](crate::latexlike::source_recomposer), and
+//! [`core_source_instruction`] is the building block to write your own.
+//!
+//! This module is one of three tree consumers, which differ in what they produce:
+//! [`visit`](crate::visit) produces nothing (a read-only traversal),
+//! [`transform`](crate::transform) produces a new tree, and this one produces a
+//! single value. [Node trees](crate::guide::node_trees) compares the three on one
+//! page, and [Learn techy by example](crate::guide::learn_by_example) works one
+//! transformation through from parse to re-emitted source.
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -21,9 +39,9 @@
 //!     core_source_instruction, Recompose, RecomposeContext, Recomposer, TreeRecomposer,
 //! };
 //!
-//! // A minimal source reemitter over the core-complete kinds (a real language
-//! // preset also handles callables from their recorded payload — see
-//! // `latexlike::source_recomposer`).
+//! // A minimal source re-emitter, for the node kinds the core can emit on its
+//! // own. A real language preset also emits callables, from their recorded
+//! // payload — see `latexlike::source_recomposer`.
 //! struct CoreSource;
 //!
 //! impl<A> Recomposer<Latexlike, A> for CoreSource {
@@ -50,113 +68,121 @@
 //! assert_eq!(out, "a{b}c");
 //! ```
 //!
-//! # State: threaded downward by argument
+//! # State is threaded downward
 //!
-//! A recomposer's [`State`](Recomposer::State) is downward context (math depth,
-//! list nesting, an output mode): the entry hands the root its initial state,
-//! and a [`Concat`](Recompose::Concat) instruction optionally derives a new
-//! state for the children ([`with_state`](ConcatPieces::with_state)) —
-//! otherwise they inherit the parent's. State flows *down* only; run-spanning
-//! facts live in the recomposer's own `&mut self` fields, and fold accumulation
-//! is the driver's business (the three-channel discipline,
-//! [`techy::visit`](crate::visit)).
+//! A recomposer's [`State`](Recomposer::State) is context that flows from a node to
+//! its children: a math nesting depth, a list level, an output mode. The entry
+//! point gives the root its initial state, and a [`Concat`](Recompose::Concat) may
+//! derive a different state for the children with
+//! [`with_state`](ConcatPieces::with_state); children for which none is derived
+//! inherit their parent's.
 //!
-//! # No sink: streaming is a recomposer concern
+//! State never flows back upward. Facts that must survive the whole run belong in
+//! the recomposer's own `&mut self` fields, and accumulating the result is the
+//! driver's job — the same division of state as in [`visit`](crate::visit).
 //!
-//! The fold returns a value; there is deliberately no sink type in the
-//! machinery. A streaming recomposer holds its writer in `&mut self` and uses
-//! `Piece = ()` — it writes on [`recompose_node`](Recomposer::recompose_node)
-//! (enter order) and the `()` pieces compose for free.
+//! # Streaming output is the recomposer's business
 //!
-//! # The `Concat` scope: `Attached` and `Hidden` are skipped by default
+//! A run returns a value, and there is deliberately no writer or sink type in the
+//! machinery. A recomposer that streams its output instead holds the writer in its
+//! own `&mut self` fields and writes from
+//! [`recompose_node`](Recomposer::recompose_node), which is called on the way down;
+//! its `Piece` is then `()`, and appending `()` values costs nothing.
 //!
-//! `Concat` folds the node's *plain children and `Content` regions*: children
-//! in [`Attached`](crate::core::node::SlotRole::Attached) or
-//! [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions are skipped
-//! unless explicitly opted in ([`include_attached`](ConcatPieces::include_attached) /
-//! [`include_hidden`](ConcatPieces::include_hidden)). An `Attached` region is
-//! *derived* content whose invocation text is its own recomposition (`\input`'s
-//! resolved file), and `Hidden` means "no recomposition, no byte accounting" —
-//! recompose is the **one role-sensitive site**; reads (the
-//! [walk](crate::visit::TreeWalker) included) stay role-blind.
+//! # Which children `Concat` includes
 //!
-//! # The wrapping contract: instructions lower against the outermost recomposer
+//! `Concat` combines the values of the node's plain children and of its `Content`
+//! regions. Children in [`Attached`](crate::core::node::SlotRole::Attached) or
+//! [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions are left out unless
+//! the instruction asks for them with
+//! [`include_attached`](ConcatPieces::include_attached) or
+//! [`include_hidden`](ConcatPieces::include_hidden).
 //!
-//! The driver holds exactly **one** recomposer, and every `Concat` descent
-//! re-enters it — so a recomposer that *wraps* another (overriding some nodes,
-//! delegating the rest with a plain inner `recompose_node` call) sees its
-//! overrides applied at **every depth** of the delegated subtrees. A
-//! wrap-intended recomposer therefore returns instructions and never descends
-//! explicitly (contrast [`transform`](crate::transform), where a takeover
-//! visitor stages its subtree itself). Layering is free: wrapping N deep still
-//! lowers every instruction against the outermost value.
+//! That default follows from what the two roles mean. An `Attached` region holds
+//! *derived* content — the file an `\input` resolved to, say — which the invocation
+//! that produced it already accounts for, and `Hidden` means the content
+//! contributes neither output nor byte accounting. Recomposition is the one place
+//! in the library where a slot role changes what happens: reading a tree, the
+//! [walk](crate::visit::TreeWalker) included, visits every node the same way
+//! regardless of role.
 //!
-//! **Post-processing a fold keeps the contract**: attach a function to the
-//! instruction with [`map`](ConcatPieces::map) — the driver lowers the children
-//! against the outermost recomposer as usual and applies the function to the
-//! assembled result (head and tail included). Folding the children *inside*
-//! [`recompose_node`](Recomposer::recompose_node) instead — through
-//! [`recompose_children`](RecomposeContext::recompose_children), the op-family
-//! mirror of
-//! [`restage_children`](crate::transform::RestageContext::restage_children)
-//! carrying the scope flags the transform side has no use for (recompose is
-//! the one role-sensitive site) — gives the same reach over the children of
-//! any node, but every
-//! [region op](RecomposeContext) is **self-passing**: the sub-fold lowers
-//! against the recomposer the caller hands in, so a recomposer that passes
-//! `self` bypasses whatever wraps it for exactly those children. Pass an op a
-//! recomposer deliberately; post-process with `map`.
+//! # Wrapping one recomposer in another
 //!
-//! **Targeted replacement is this pattern, not a mechanism**: to replace the
-//! recomposition of selected nodes, wrap the base recomposer and override
-//! exactly those nodes (there is no span-based fast path — see the reading
-//! contract below). To replace the *tree content* itself, transform first and
-//! reemit after: the restage→recompose pipeline
-//! ([`TreeRestager`](crate::transform::TreeRestager), then [`TreeRecomposer`]).
+//! A run has exactly one recomposer, and every descent a `Concat` causes comes back
+//! to it. A recomposer that *wraps* another one — overriding some nodes and
+//! delegating the rest by calling the inner
+//! [`recompose_node`](Recomposer::recompose_node) — therefore has its overrides
+//! applied at every depth of the delegated subtrees, however many layers of
+//! wrapping there are. A recomposer meant to be wrapped answers with instructions
+//! and never descends on its own. (This is the opposite of
+//! [`transform`](crate::transform), where a callback that takes a node over stages
+//! its subtree itself.)
 //!
-//! # The reading contract: payload only, spans are provenance
+//! To post-process what a `Concat` produced without breaking that property, attach
+//! a function to the instruction with [`map`](ConcatPieces::map): the children are
+//! still asked of the outermost recomposer, and the function runs afterwards on the
+//! assembled result, head and tail included.
 //!
-//! A recomposer reconstructs each node from the node's **own recorded data**:
+//! The alternative is to combine the children inside
+//! [`recompose_node`](Recomposer::recompose_node) yourself, through
+//! [`recompose_children`](RecomposeContext::recompose_children) or another
+//! [operation of the context](RecomposeContext). Those reach the children of any
+//! node, but each of them asks the recomposer *you hand it*, so a recomposer that
+//! passes `self` bypasses whatever wraps it for exactly those children. Do that
+//! deliberately; otherwise post-process with `map`.
 //!
-//! - *Permitted*: reading any field of the node's own payload — including
-//!   resolving span-backed payload
-//!   ([`TextContent::Spanned`](crate::source::TextContent)) against the node's
-//!   own source, an internal detail of how a content field is stored (parse
-//!   trees recompose zero-copy).
-//! - *Forbidden*: resolving any **span content** against the source — the
-//!   node's own span included — and any **inter-node** span arithmetic
-//!   ("apparent gaps" between siblings resurrect deleted content on any
-//!   transformed tree). Spans give provenance, not output location.
+//! Replacing the recomposition of selected nodes is this wrapping pattern, not a
+//! mechanism of its own: wrap the base recomposer and override exactly those nodes.
+//! Replacing the *content of the tree* is a different job — transform the tree with
+//! [`TreeRestager`](crate::transform::TreeRestager) first, then recompose the
+//! result.
 //!
-//! There is no span fast path: a tree carries no reliable "still fresh from
-//! parse" signal, so a shortcut could never be safely gated.
-//! [`span_content()`](crate::core::node::NodeRef::span_content) remains a
-//! public *consumer* affordance — the recomposer simply never uses it.
-//! Byte-exact reemission therefore rests entirely on payload completeness:
-//! what the parse records is what recomposition can reproduce (the preset's
-//! accuracy rule,
+//! # A recomposer reads node payload, never source spans
+//!
+//! Each node is reconstructed from the data that node itself records:
+//!
+//! - *Permitted*: reading any field of the node's own payload, including resolving
+//!   a span-backed payload field
+//!   ([`TextContent::Spanned`](crate::source::TextContent)) against the node's own
+//!   source. Whether such a field stores its text or a range into the source is an
+//!   internal storage detail, and resolving it is what lets a freshly parsed tree
+//!   be recomposed without copying any text.
+//! - *Forbidden*: reading the source text under any **span**, the node's own span
+//!   included, and any arithmetic between the spans of different nodes. On a
+//!   transformed tree, the apparent gap between two siblings' spans would bring
+//!   back content that was deleted. A span records where a node came from, not
+//!   where its output goes.
+//!
+//! There is deliberately no faster path that reads the source directly for an
+//! unmodified tree: a tree holds no reliable "still exactly as parsed" signal, so
+//! such a shortcut could not be gated safely.
+//! [`span_content()`](crate::core::node::NodeRef::span_content) stays available to
+//! consumers generally — a recomposer simply does not use it.
+//!
+//! Byte-exact re-emission therefore rests entirely on the parse having recorded
+//! everything: what a node stores is what recomposition can reproduce (see
 //! [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)).
 //!
-//! The same rule fixes what a source reemitter promises for a language with
-//! [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`: it
-//! reemits the tree **as stored** — the owned text the parser recorded where
-//! the content did not lie in the node's own source — and claims no
-//! byte-equality with any one source, since the tree's content need not be a
-//! range of one. Nothing else changes: the fold reads node data in both cases.
+//! The same rule settles what a source recomposer promises for a language whose
+//! [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) is `false`: it
+//! re-emits the tree **as stored**, including the text the parser recorded directly
+//! where the content did not lie in the node's own source, and promises no byte
+//! equality with any one source, since the tree's content need not be a range of
+//! one. Nothing else changes; node data is read the same way in both cases.
 //!
-//! # The fold is depth-guarded
+//! # Nesting depth is capped
 //!
-//! The fold recurses once per tree nesting level (at a small, constant stack
-//! cost per level), and every level passes the run's descent guard
+//! Recomposition recurses once per level of tree nesting, at a small and constant
+//! stack cost per level, and every level passes the run's descent guard
 //! ([`StdDescentGuard`](crate::core::StdDescentGuard), configured per run with
-//! [`with_descent_guard_init`](TreeRecomposer::with_descent_guard_init)): a
-//! tree nested too deeply for the configured limit — hand-built through
-//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or recomposed on
-//! a thread with a smaller stack than the parse's — is refused with
-//! [`RecomposeError::DescentLimitExceeded`] instead of exhausting the
-//! thread's stack. The guard's early warning (emitted under the unconfigured
-//! default at half the stack budget) reaches the recomposer's
-//! [`observe_descent_warning`](Recomposer::observe_descent_warning) hook.
+//! [`with_descent_guard_init`](TreeRecomposer::with_descent_guard_init)). A tree
+//! nested more deeply than the configured limit — built by hand through
+//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or recomposed on a
+//! thread with a smaller stack than the parse ran on — is refused with
+//! [`RecomposeError::DescentLimitExceeded`] instead of exhausting the thread's
+//! stack. The guard's early warning, emitted under the unconfigured default at half
+//! the stack budget, reaches the recomposer's
+//! [`observe_descent_warning`](Recomposer::observe_descent_warning) method.
 
 use core::fmt;
 
@@ -171,31 +197,32 @@ mod context;
 
 pub use context::{RecomposeContext, TreeRecomposer};
 
-/// The piece monoid of a recomposition: an empty value and an associative
-/// append — everything the fold needs to compose children's contributions.
+/// A value type recomposition can build up: an empty value plus an append
+/// operation.
 ///
-/// techy implements it for `String` (text recomposition) and `()` (no
-/// composed value — streaming recomposers hold their writer in `&mut self`
-/// and compose unit pieces for free). Consumer piece types (token vectors,
-/// rope builders, layout trees) implement it the same way.
+/// This is the [`Piece`](Recomposer::Piece) of a [`Recomposer`] — the type of the
+/// values it answers with and that the driver joins together. techy implements it
+/// for `String`, for text output, and for `()`, for recomposers that write to a
+/// writer of their own and return nothing. Your own value types — a vector of
+/// tokens, a rope builder, a layout tree — implement it the same way.
 ///
-/// The `Clone` supertrait exists for exactly one reason: a
-/// [`Concat`](Recompose::Concat) separator is appended once **per gap**, so
-/// the driver duplicates it.
+/// `Clone` is a supertrait for exactly one reason: a
+/// [`Concat`](Recompose::Concat) separator is appended once between every two
+/// children, so the driver has to duplicate it.
 pub trait ComposePiece: Clone {
-    /// The empty piece (the fold's neutral element).
+    /// The empty value: appending it to anything, or anything to it, changes
+    /// nothing.
     fn empty() -> Self;
 
-    /// Append `other` after `self`.
+    /// Appends `other` after `self`.
     ///
-    /// Deliberately infallible: both shipped piece types (`String` and `()`)
-    /// genuinely cannot fail here, and a recomposition already has a typed
-    /// failure channel of its own ([`Recomposer::Error`]). Embedding or binding
-    /// code whose piece type can still fail (one writing into an external
-    /// buffer) should report the failure through the embedding's own channel —
-    /// recording it so the recomposer can answer its own
-    /// [`Error`](Recomposer::Error) from the next instruction callback — and
-    /// leave `self` unchanged.
+    /// This is deliberately infallible. Neither `String` nor `()` can fail here,
+    /// and a recomposition already has a failure channel of its own
+    /// ([`Recomposer::Error`]). If your own value type can fail while appending —
+    /// one writing into an external buffer, say — record the failure somewhere the
+    /// recomposer can see it, leave `self` unchanged, and answer
+    /// [`Error`](Recomposer::Error) from the next call to
+    /// [`recompose_node`](Recomposer::recompose_node).
     fn append(&mut self, other: Self);
 }
 
@@ -209,38 +236,42 @@ impl ComposePiece for String {
     }
 }
 
-/// The no-value piece: streaming recomposers compose `()` and write to their
-/// own writer instead (see the [module docs](self)).
+/// The value type of a recomposer that produces no value: one that writes to a
+/// writer of its own instead (see the [module docs](self)).
 impl ComposePiece for () {
     fn empty() {}
 
     fn append(&mut self, _other: ()) {}
 }
 
-/// A recomposition callback: invoked once per composed node with the node,
-/// the downward [`State`](Recomposer::State), and the run's
-/// [`RecomposeContext`]; answers the node's [instruction](Recompose).
+/// The callback half of a [`TreeRecomposer`] run: implement this, and the driver
+/// asks it about one node at a time.
 ///
-/// Run-spanning state lives in the recomposer's own `&mut self` fields;
-/// `State` threads *downward* only (module docs). Deliberately **no
-/// `Send`/`Sync` bounds** (the
-/// [`RestageVisitor`](crate::transform::RestageVisitor) argument: the fold
-/// runs synchronously on the calling thread).
+/// Each call receives the node, the [`State`](Recomposer::State) threaded down from
+/// its parent, and the run's [`RecomposeContext`], and answers a [`Recompose`]
+/// instruction: emit this value for the node, or combine the children's values.
+/// The driver appends the children's values in document order to make the parent's;
+/// see the [module docs](self).
+///
+/// Facts that span the whole run belong in the recomposer's own `&mut self` fields,
+/// since `State` flows downward only. A recomposer need not be `Send` or `Sync`,
+/// for the same reason a
+/// [`RestageVisitor`](crate::transform::RestageVisitor) need not be: the driver
+/// runs it synchronously on the calling thread.
 pub trait Recomposer<L: Lang, A> {
-    /// The downward-threaded state (module docs); `()` for stateless
-    /// recomposers.
+    /// The context threaded down from a node to its children (module docs); `()`
+    /// for a recomposer that needs none.
     type State;
 
-    /// The composed piece type (see [`ComposePiece`]).
+    /// The type of value this recomposer produces (see [`ComposePiece`]).
     type Piece: ComposePiece;
 
-    /// The recomposer's own failure type; it rides through
-    /// [`TreeRecomposer::recompose`]
-    /// typed, as [`RecomposeError::Recomposer`].
+    /// The recomposer's own failure type; it is returned unchanged from
+    /// [`TreeRecomposer::recompose`], as [`RecomposeError::Recomposer`].
     type Error;
 
-    /// Answer the [instruction](Recompose) for `node` (composed under
-    /// `state`).
+    /// Answers the [instruction](Recompose) for `node`, which is being recomposed
+    /// under `state`.
     fn recompose_node(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -248,41 +279,48 @@ pub trait Recomposer<L: Lang, A> {
         cx: &mut RecomposeContext<'_, L, A>,
     ) -> Result<Recompose<Self::Piece, Self::State>, Self::Error>;
 
-    /// Notification: the run's descent guard granted a descent with an early
-    /// warning (under the unconfigured default, at half the stack budget — see
-    /// [`StdDescentGuardInit`](crate::core::StdDescentGuardInit)). Run-spanning
-    /// consumer state lives in the recomposer's own `&mut self`, so the warning
-    /// is delivered here. Defaults to ignoring it.
+    /// Reports that the run's descent guard allowed a descent but is nearing its
+    /// limit — under the unconfigured default, at half the stack budget (see
+    /// [`StdDescentGuardInit`](crate::core::StdDescentGuardInit)).
+    ///
+    /// The warning is delivered here, rather than through the context, because
+    /// state that spans a whole run belongs in the recomposer's own `&mut self`
+    /// fields. The default implementation ignores it.
     fn observe_descent_warning(&mut self, warning: DescentWarning) {
         let _ = warning;
     }
 }
 
-/// The recomposer's instruction for one node (returned from
-/// [`Recomposer::recompose_node`]).
+/// What a [`Recomposer`] answers about one node, returned from
+/// [`Recomposer::recompose_node`].
 ///
-/// Not `Clone`: a [`Concat`](Recompose::Concat) may carry a post-processing
-/// function ([`ConcatPieces::map`]), which is consumed by the one lowering
-/// that runs it. That function is also why an instruction is neither `Send`
-/// nor `Sync` for any piece or state type — deliberately, so that a
-/// post-processing closure need not be: an instruction is built and consumed
-/// inside one driver call, never handed to another thread.
+/// An instruction is not `Clone`, because a [`Concat`](Recompose::Concat) may hold
+/// a post-processing function ([`ConcatPieces::map`]) that the one call carrying it
+/// out consumes. That function is also why an instruction is neither `Send` nor
+/// `Sync` for any value or state type: a post-processing closure is deliberately
+/// not required to be either, and an instruction is built and consumed within a
+/// single driver call, never passed to another thread.
 #[derive(Debug)]
 pub enum Recompose<P, S> {
-    /// This node's recomposition is exactly this piece; the driver does not
-    /// descend (whatever the subtree should contribute is already in the
-    /// piece).
+    /// The value for this node is exactly this one.
+    ///
+    /// The driver does not descend: whatever the subtree ought to contribute is
+    /// already part of the value.
     Emit(P),
-    /// Fold the node's children and compose
-    /// `head + child₁ + sep + … + childₙ + tail` ([`ConcatPieces`]). The
-    /// children fold under the parent's state, or under the instruction's
-    /// derived state ([`with_state`](ConcatPieces::with_state)).
+    /// Recompose the node's children and append their values as
+    /// `head + child₁ + sep + … + childₙ + tail` (see [`ConcatPieces`]).
+    ///
+    /// The children are recomposed under the parent's state, or under a state the
+    /// instruction derives ([`with_state`](ConcatPieces::with_state)).
     Concat(ConcatPieces<P, S>),
 }
 
-/// The joiner payload of [`Recompose::Concat`]:
-/// `head + child₁ + sep + … + childₙ + tail`, plus the optional derived state
-/// and the child scope. Built by chainable constructors:
+/// How the children's values are joined for a [`Recompose::Concat`]:
+/// `head + child₁ + sep + … + childₙ + tail`, plus the state to recompose them
+/// under and which children to include.
+///
+/// Start from [`children()`](ConcatPieces::children) and chain the methods that
+/// apply:
 ///
 /// ```
 /// # use techy::recompose::ConcatPieces;
@@ -291,14 +329,13 @@ pub enum Recompose<P, S> {
 ///     ConcatPieces::children().wrap("{", "}").join(", ");
 /// ```
 ///
-/// The default scope is the node's **plain children and `Content` regions**:
-/// children in `Attached` or `Hidden` slot regions are skipped unless
-/// explicitly included (see the [module docs](self)).
+/// By default the children included are the node's plain children and its
+/// `Content` regions; children in `Attached` or `Hidden` slot regions are left out
+/// unless asked for (see the [module docs](self)).
 ///
 /// A [`map`](ConcatPieces::map) function may be attached to post-process the
-/// assembled result; it makes the instruction non-`Clone` (the function is
-/// consumed by the lowering that runs it) and neither `Send` nor `Sync` (the
-/// function is not required to be either — see [`Recompose`]).
+/// assembled result. It makes the instruction neither `Clone`, `Send`, nor `Sync`
+/// (see [`Recompose`]).
 pub struct ConcatPieces<P, S> {
     head: P,
     sep: P,
@@ -310,8 +347,9 @@ pub struct ConcatPieces<P, S> {
 }
 
 impl<P: ComposePiece, S> ConcatPieces<P, S> {
-    /// The seed: plain concatenation of the children's pieces (empty
-    /// head/separator/tail, inherited state, default scope).
+    /// The starting point: append the children's values and nothing else — no
+    /// head, separator, or tail, the parent's state inherited, and the default
+    /// choice of children.
     pub fn children() -> ConcatPieces<P, S> {
         ConcatPieces {
             head: P::empty(),
@@ -324,52 +362,57 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
         }
     }
 
-    /// Compose `head` before the first child and `tail` after the last
-    /// (emitted even when there are no children).
+    /// Appends `head` before the first child and `tail` after the last.
+    ///
+    /// Both are emitted even when the node has no children in scope.
     pub fn wrap(mut self, head: impl Into<P>, tail: impl Into<P>) -> ConcatPieces<P, S> {
         self.head = head.into();
         self.tail = tail.into();
         self
     }
 
-    /// Compose `sep` between every two consecutive children (duplicated per
-    /// gap — the [`ComposePiece`] `Clone` requirement).
+    /// Appends `sep` between every two consecutive children.
+    ///
+    /// It is cloned once per gap, which is why [`ComposePiece`] requires `Clone`.
     pub fn join(mut self, sep: impl Into<P>) -> ConcatPieces<P, S> {
         self.sep = sep.into();
         self
     }
 
-    /// Fold the children under this derived state instead of inheriting the
-    /// parent's (downward threading; module docs).
+    /// Recomposes the children under this state instead of the parent's (module
+    /// docs).
     pub fn with_state(mut self, state: S) -> ConcatPieces<P, S> {
         self.state = Some(state);
         self
     }
 
-    /// Widen the scope to include children in
-    /// [`Attached`](crate::core::node::SlotRole::Attached) slot regions.
+    /// Also includes the children in
+    /// [`Attached`](crate::core::node::SlotRole::Attached) slot regions, which are
+    /// left out by default.
     pub fn include_attached(mut self) -> ConcatPieces<P, S> {
         self.include_attached = true;
         self
     }
 
-    /// Widen the scope to include children in
-    /// [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions.
+    /// Also includes the children in
+    /// [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions, which are left
+    /// out by default.
     pub fn include_hidden(mut self) -> ConcatPieces<P, S> {
         self.include_hidden = true;
         self
     }
 
-    /// Post-process this instruction's result: the driver applies `f` to the
-    /// **fully assembled piece** — `head + child₁ + sep + … + childₙ + tail`,
-    /// head and tail included — and the value `f` returns is what the node
-    /// contributes to its parent's fold.
+    /// Post-processes this instruction's result: the driver applies `f` to the
+    /// fully assembled value — `head + child₁ + sep + … + childₙ + tail`, head and
+    /// tail included — and what `f` returns is what the node contributes to its
+    /// parent.
     ///
-    /// This is the **wrap-transparent** way to post-process a fold: the
-    /// children are lowered against the outermost recomposer of the run (the
-    /// wrapping contract, [module docs](self)), and `f` runs on their assembled
-    /// result afterwards. A recomposer that instead folds the children itself
-    /// — through a [region op](RecomposeContext) with `self` — bypasses any
+    /// This is the way to post-process a result that keeps working when another
+    /// recomposer wraps this one: the children are still recomposed by the
+    /// outermost recomposer of the run (the [module docs](self) explain why), and
+    /// `f` runs on their assembled result afterwards. A recomposer that instead
+    /// recomposes the children itself — through an
+    /// [operation of the context](RecomposeContext), passing `self` — bypasses any
     /// recomposer wrapping it for those children.
     ///
     /// ```
@@ -379,18 +422,18 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
     ///     .map(|piece| format!("[{piece}]"));
     /// ```
     ///
-    /// Called twice, the functions **compose in registration order**: the
-    /// first-registered runs first, the second on its result.
+    /// Called twice, the functions run in the order they were attached: the first
+    /// one runs first, and the second on its result.
     ///
-    /// `f` runs only when the fold of this node succeeds: a failing child
-    /// returns its error before the assembly completes, and the function is
-    /// dropped unused.
+    /// `f` runs only if recomposing this node succeeds. A failing child returns its
+    /// error before the assembly completes, and the function is then dropped
+    /// unused.
     ///
-    /// `f` is deliberately infallible and `'static` (it may not borrow the
-    /// recomposer): a recomposition already has a typed failure channel
-    /// ([`Recomposer::Error`]), so post-processing that can fail belongs in
-    /// the recomposer, which records the failure and answers its own error
-    /// from the next instruction callback.
+    /// `f` is deliberately infallible and `'static`, so it cannot borrow the
+    /// recomposer: a recomposition already has a failure channel of its own
+    /// ([`Recomposer::Error`]), so post-processing that can fail belongs in the
+    /// recomposer, which records the failure and answers with its own error on the
+    /// next call.
     pub fn map(mut self, f: impl FnOnce(P) -> P + 'static) -> ConcatPieces<P, S>
     where
         P: 'static,
@@ -402,7 +445,7 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
         self
     }
 
-    /// Take this instruction apart for the driver's lowering (see
+    /// Take this instruction apart for the driver to carry out (see
     /// [`ConcatLowering`]).
     pub(crate) fn into_lowering(self) -> ConcatLowering<P, S> {
         ConcatLowering {
@@ -417,8 +460,8 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
     }
 }
 
-/// A [`ConcatPieces`] taken apart for the driver's lowering — the same fields,
-/// owned by the driver instead of the instruction.
+/// A [`ConcatPieces`] taken apart for the driver to carry out — the same fields,
+/// owned by the driver instead of by the instruction.
 pub(crate) struct ConcatLowering<P, S> {
     pub(crate) head: P,
     pub(crate) sep: P,
@@ -452,16 +495,19 @@ impl<P: fmt::Debug, S: fmt::Debug> fmt::Debug for ConcatPieces<P, S> {
     }
 }
 
-/// Error of a [`TreeRecomposer`] run — generic over the recomposer's own error
-/// type `E` (the framework's error rides through typed;
-/// `Clone`/`PartialEq`/`Eq` are conditional on `E`, keeping the uniform-Clone
-/// principle). The variant roster deliberately mirrors
-/// [`RestageError`](crate::transform::RestageError) — the recompose surface
-/// speaks the transform family's vocabulary; the variants beyond the
-/// recomposer's own report the descent guard's refusal
-/// ([`DescentLimitExceeded`](RecomposeError::DescentLimitExceeded)) or misuse
-/// of a [context op](RecomposeContext) (a
-/// documented-contract violation returns an `Err`, never panics).
+/// Why a [`TreeRecomposer`] run failed, generic over the recomposer's own error
+/// type `E`.
+///
+/// A failure of the recomposer itself is returned unchanged as
+/// [`Recomposer`](RecomposeError::Recomposer). The other variants report a tree
+/// nested deeper than the run's descent guard allows
+/// ([`DescentLimitExceeded`](RecomposeError::DescentLimitExceeded)) or misuse of a
+/// [`RecomposeContext`] operation — violating a documented contract returns an
+/// `Err` here, it never panics. The variants match those of
+/// [`RestageError`](crate::transform::RestageError) wherever the two modules can
+/// fail the same way.
+///
+/// `Clone`, `PartialEq`, and `Eq` are implemented when `E` implements them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecomposeError<E> {
@@ -509,16 +555,16 @@ pub enum RecomposeError<E> {
         name: String,
     },
     /// [`recompose_body`](RecomposeContext::recompose_body) was applied to a
-    /// callable none of whose slot exts designates a body
+    /// callable no slot of which is marked as its body
     /// ([`BodySlotExt::is_body`](crate::core::node::BodySlotExt::is_body)).
     NoBodySlot {
         /// The callable that was queried.
         node: NodeId,
     },
-    /// The run's descent guard refused to go one level deeper (the tree is
-    /// nested too deeply for the configured limit): the run is abandoned.
-    /// Configure the limit with
-    /// [`TreeRecomposer::with_descent_guard_init`].
+    /// The tree is nested more deeply than the run's descent guard allows, so the
+    /// guard refused to go one level deeper and the run is abandoned.
+    ///
+    /// Configure the limit with [`TreeRecomposer::with_descent_guard_init`].
     DescentLimitExceeded {
         /// Which limit was hit and how to configure it.
         detail: String,
@@ -570,24 +616,40 @@ where
     }
 }
 
-/// The core-provided instruction for **source-faithful emission** of a node
-/// from its own recorded payload — for the kinds whose payload the core owns
-/// completely:
+/// Returns the instruction that re-emits `node` as source text, for the node kinds
+/// whose payload the core records completely.
 ///
-/// - `Chars` → emit the content;
-/// - `Comment` → emit start delimiter + content + post-space;
-/// - `Group` → concatenate the children wrapped in the recorded delimiters;
-/// - `List` → concatenate the children;
-/// - `Callable` → **`None`**: a callable's trigger spelling is Lang-owned
-///   recorded payload
-///   ([`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)),
-///   so its emission belongs to the language's recomposer (the latexlike
-///   preset's [`SourceRecomposer`](crate::latexlike::SourceRecomposer) reads
-///   its payload enum here).
+/// This is the building block for writing a recomposer that reproduces a tree's
+/// source spelling. The ready-made recomposer built on it is the preset's
+/// [`source_recomposer`](crate::latexlike::source_recomposer); reach for this
+/// function when you write a recomposer of your own — for another language, or one
+/// that overrides some nodes and wants the ordinary spelling for all the rest.
 ///
-/// Per-node rule throughout: span-backed *payload* fields resolve against
-/// the node's own source (permitted — a storage detail); the node's span
-/// content is never consulted.
+/// - `Chars` — emits the content;
+/// - `Comment` — emits the start delimiter, the comment text, and the whitespace
+///   the comment consumed after it;
+/// - `Group` — concatenates the children between the recorded delimiters;
+/// - `List` — concatenates the children;
+/// - `Callable` — returns `None`. How a callable is written is the language's
+///   business and is recorded in
+///   [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax),
+///   so emitting one belongs to the language's own recomposer; the preset's
+///   [`SourceRecomposer`](crate::latexlike::SourceRecomposer) reads that payload
+///   at this point.
+///
+/// Every span-backed payload field is resolved against the node's own source, and
+/// the source text under the node's span is never read — the reading rule of the
+/// [module docs](self).
+///
+/// # Panics
+///
+/// Panics if a span-backed payload field of `node` names a range that is not within
+/// the content of the node's own source, or does not fall on character boundaries
+/// — the panic condition of
+/// [`TextContent::resolve`](crate::source::TextContent::resolve). That means a tree
+/// invariant is broken, which no parsed input can cause; only a tree assembled by
+/// hand through [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder) can reach
+/// it.
 pub fn core_source_instruction<'t, L, A, P, S>(node: NodeRef<'t, L, A>) -> Option<Recompose<P, S>>
 where
     L: Lang,

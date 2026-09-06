@@ -1,12 +1,15 @@
-//! The serialized shape of a [`ParsingState`](crate::core::ParsingState):
-//! [`WireState`] and its parts — the seven token-rules sections, every one optional
-//! (a language declares each feature present or absent at compile time; only the
-//! present features' sections are written), the mode and ext (carried as
-//! [`SerialValue`]s produced by the language's own conversions), and the scope stack
-//! as provider positions. Written and read by the crate's state driver
-//! ([`StateSerdeDriver`](crate::serialize::StateSerdeDriver)). The derived caches of a
-//! state (the delimiter prefix table, the specials trigger characters) are never
-//! written: the reading side rebuilds them.
+//! The serialized shape of a [`ParsingState`](crate::core::ParsingState): [`WireState`]
+//! and its parts.
+//!
+//! A state is its seven token-rules sections, every one optional (a language declares
+//! each feature present or absent at compile time, and only the present features'
+//! sections are written), its mode and ext (stored as [`SerialValue`]s produced by the
+//! language's own conversions), and its scope stack as provider positions. Written and
+//! read by the crate's state driver
+//! ([`StateSerdeDriver`](crate::serialize::StateSerdeDriver)).
+//!
+//! A state's derived caches (the delimiter prefix table, the specials trigger
+//! characters) are never written: the reading side rebuilds them.
 
 use alloc::string::String;
 use alloc::vec::Vec;

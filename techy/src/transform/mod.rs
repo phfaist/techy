@@ -20,7 +20,9 @@
 //! [`visit`](crate::visit) produces nothing (a read-only traversal),
 //! [`recompose`](crate::recompose) produces a single value such as a `String`, and
 //! this one produces a new tree. [Node trees](crate::guide::node_trees) compares
-//! the three on one page.
+//! the three on one page, and [Learn techy by
+//! example](crate::guide::learn_by_example) works one transformation through from
+//! parse to re-emitted source.
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -209,7 +211,7 @@ pub enum Restage<B> {
 ///
 /// ```text
 /// enum PassError {
-///     Restage(Box<RestageError<PassError>>),  // op failures, boxed
+///     Restage(Box<RestageError<PassError>>),  // context-op failures, boxed
 ///     BadReference(String),                   // the pass's own conditions
 /// }
 /// impl From<RestageError<PassError>> for PassError { … }

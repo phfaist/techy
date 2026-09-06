@@ -277,38 +277,45 @@ impl<L: SerializableLang> SerdeSession<L> {
         }
     }
 
-    /// Configure the descent guard that bounds nested calls — an object's
-    /// serialization interning the objects it refers to, an entry's deserialization
-    /// reading the objects it refers to, each level one *descent* — for every
-    /// subsequent [`intern`](SerdeSession::intern), [`object`](SerdeSession::object),
-    /// and [`push_segment`](SerdeSession::push_segment) call (each is one run with a
-    /// fresh guard). The default is the crate-wide default ([`StdDescentGuardInit`]:
-    /// a stack budget). The guard's early warning (that the limit is getting close)
-    /// has no observer here and is dropped; a refusal is a `DescentLimitExceeded`
-    /// error.
+    /// Sets the descent guard that bounds nested serialization and deserialization
+    /// calls.
+    ///
+    /// Each level of nesting — an object's serialization interning the objects it refers
+    /// to, an entry's deserialization reading the objects it refers to — is one
+    /// *descent*. The guard applies to every subsequent
+    /// [`intern`](SerdeSession::intern), [`object`](SerdeSession::object), and
+    /// [`push_segment`](SerdeSession::push_segment) call; each such call is one run with
+    /// a fresh guard. The default is the crate-wide default ([`StdDescentGuardInit`], a
+    /// stack budget).
+    ///
+    /// Exceeding the limit is a `DescentLimitExceeded` error
+    /// ([`SerializeError::DescentLimitExceeded`] when writing,
+    /// [`DeserializeError::DescentLimitExceeded`] when reading). The guard's early
+    /// warning that the limit is getting close has no observer here and is discarded.
     pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> SerdeSession<L> {
         self.descent_guard_init = init;
         self
     }
 
-    /// Declare the session's *profile*: a caller-chosen string naming the
-    /// configuration that can read the session's stream fully — the environment and
-    /// version whose packages, spec types, annotation identifiers, and readers resolve
-    /// every identity and identifier the stream refers to (a name like
-    /// `"myframework 2.3 / techy 1"` is the caller's to choose and to keep meaningful;
-    /// the crate compares it and does nothing else with it). Every segment the session
-    /// emits then carries it (in the segment's [`meta`](Segment::meta)), and every
-    /// segment pushed into the session must carry the same one:
-    /// [`push_segment`](SerdeSession::push_segment) rejects a segment whose profile
-    /// differs or is missing ([`DeserializeError::ProfileMismatch`]) — the check
-    /// runs before any entry is touched. A session with no profile declared writes
-    /// none and accepts any.
+    /// Declares the session's *profile*: a caller-chosen string naming the configuration
+    /// that can read the session's stream fully.
     ///
-    /// The profile is the caller's contract about the reading environment, made
-    /// checkable: a stream written for one configuration is refused up front by a
-    /// reader configured for another, instead of failing later on some unresolvable
-    /// entry — or, worse, reading through with a package of the same name that
-    /// defines things differently.
+    /// The profile names the environment and version whose packages, spec types,
+    /// annotation identifiers, and readers resolve every identity and identifier the
+    /// stream refers to. A name like `"myframework 2.3 / techy 1"` is the caller's to
+    /// choose and to keep meaningful; the crate compares it and does nothing else with
+    /// it.
+    ///
+    /// Every segment the session emits then records the profile (in the segment's
+    /// [`meta`](Segment::meta)), and every segment pushed into the session must record
+    /// the same one: [`push_segment`](SerdeSession::push_segment) rejects a segment whose
+    /// profile differs or is missing ([`DeserializeError::ProfileMismatch`]), before any
+    /// entry is touched. A session that declares no profile writes none and accepts any.
+    ///
+    /// This makes the caller's contract about the reading environment checkable: a stream
+    /// written for one configuration is refused up front by a reader configured for
+    /// another, instead of failing later on some unresolvable entry — or, worse, reading
+    /// through with a package of the same name that defines things differently.
     pub fn set_profile(&mut self, profile: impl Into<String>) {
         self.profile = Some(profile.into());
     }
@@ -320,9 +327,11 @@ impl<L: SerializableLang> SerdeSession<L> {
 
     // --- registration -----------------------------------------------------------------
 
-    /// Register a table with its driver, returning the typed handle to intern and
-    /// read through. Tables are numbered in registration order; the id is the
-    /// handle's [`id`](TableHandle::id).
+    /// Registers a table with its driver, returning the typed handle to intern and read
+    /// through.
+    ///
+    /// Tables are numbered in registration order; the number is the handle's
+    /// [`id`](TableHandle::id).
     ///
     /// # Errors
     ///
@@ -361,13 +370,14 @@ impl<L: SerializableLang> SerdeSession<L> {
         Ok(TableHandle::new(TableId::new(ordinal)))
     }
 
-    /// The handle of the table named `name`, if this session has a table of that name
-    /// registered with driver type `D` — how code that did not register a table finds
-    /// it (a driver referring to another table, or the accessors of the crate's own
-    /// standard tables), given the table's name (the driver's
-    /// [`table_name`](ObjectSerdeDriver::table_name)) and driver type. `None` when no
-    /// table of that name is registered, or when it is registered with a different
-    /// driver type.
+    /// Returns the handle of the table named `name`, if this session has a table of that
+    /// name registered with driver type `D`.
+    ///
+    /// This is how code that did not register a table finds it — a driver referring to
+    /// another table, or the accessors of the crate's own standard tables — given the
+    /// table's name (its driver's [`table_name`](ObjectSerdeDriver::table_name)) and its
+    /// driver type. `None` when no table of that name is registered, or when it is
+    /// registered with a different driver type.
     pub fn table_handle<D: ObjectSerdeDriver<L>>(&self, name: &str) -> Option<TableHandle<D>> {
         let ordinal = self.table_ordinal_by_name(name)?;
         let table = self.tables.get(ordinal)?;
@@ -415,34 +425,43 @@ impl<L: SerializableLang> SerdeSession<L> {
 
     // --- user data ----------------------------------------------------------------------
 
-    /// Set the caller's user data of type `T`: any value, one per type — setting a
-    /// value of a type already set replaces that value and leaves the values of
-    /// other types in place. It is what serialization and deserialization calls see
-    /// through their context's `user_data::<T>()` — the reading environment (the
-    /// live objects that serialized data refers to by identity: the crate's own
-    /// [`KnownProviders`](crate::serialize::KnownProviders), a framework's own
-    /// environment type), or anything else an implementation needs. Keyed by type,
-    /// so the crate's and a framework's environment values coexist in one session.
+    /// Sets the caller's user data of type `T`: any value, one per type.
+    ///
+    /// Setting a value of a type already set replaces that value and leaves the values of
+    /// other types in place. Values are keyed by type, so the crate's environment value
+    /// and a framework's own coexist in one session.
+    ///
+    /// This is what serialization and deserialization calls see through their context's
+    /// `user_data::<T>()` ([`SerializeContext::user_data`],
+    /// [`DeserializeContext::user_data`]). It is above all the *reading environment* —
+    /// the live objects that serialized data refers to by identity, such as the crate's
+    /// own [`KnownProviders`](crate::serialize::KnownProviders) — but an implementation
+    /// may store anything it needs there.
     pub fn set_user_data<T: Any + Send + Sync>(&mut self, data: T) {
         self.user_data.insert(TypeId::of::<T>(), Box::new(data));
     }
 
-    /// The caller's user data of type `T`, if a value of that type was set.
+    /// Returns the caller's user data of type `T`, if a value of that type was set
+    /// ([`set_user_data`](SerdeSession::set_user_data)).
     pub fn user_data<T: Any>(&self) -> Option<&T> {
         self.user_data.get(&TypeId::of::<T>())?.downcast_ref::<T>()
     }
 
     // --- writing ------------------------------------------------------------------------
 
-    /// Intern `object` into the table `table`, returning its typed position — the
-    /// top-level entry point of the write side ([`SerializeContext::intern`] is the
-    /// same operation from inside a serialization call). An object already interned
-    /// in the table (the same `Arc`, by pointer identity) yields its existing position
-    /// without being serialized again; a new object is serialized by the table's
-    /// driver — which may intern the objects it refers to, recursively — and appended
-    /// to the table, after the objects it interned (so every reference points to an
-    /// earlier position). Objects interned by a failed call's nested interning stay
-    /// interned.
+    /// Interns `object` into the table `table`, returning its typed position.
+    ///
+    /// This is the top-level entry point of the write side;
+    /// [`SerializeContext::intern`] is the same operation from inside a serialization
+    /// call.
+    ///
+    /// An object already interned in the table — the same `Arc`, by pointer identity —
+    /// yields its existing position without being serialized again. A new object is
+    /// serialized by the table's driver, which may intern the objects it refers to,
+    /// recursively; it is then appended to the table after the objects it interned, so
+    /// every reference points to an earlier position.
+    ///
+    /// Objects interned by the nested interning of a call that then fails stay interned.
     ///
     /// # Errors
     ///
@@ -450,7 +469,7 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// the driver's failure, wrapped in [`SerializeError::InTable`]; the object refers
     /// back to itself ([`SerializeError::ReferenceCycle`]); the nesting of interning
     /// calls exceeds the descent limit ([`SerializeError::DescentLimitExceeded`]);
-    /// the entry the driver produced for a homogeneous table carries an identifier
+    /// the entry the driver produced for a homogeneous table has an identifier
     /// other than the table's ([`SerializeError::UnexpectedIdentifier`]); the entry
     /// nests too deep for a segment
     /// ([`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
@@ -538,32 +557,40 @@ impl<L: SerializableLang> SerdeSession<L> {
         Arc::clone(&self.tables.get(ordinal)?.driver).downcast::<D>().ok()
     }
 
-    /// Emit a segment: every entry interned into any table since the previous
-    /// emission (or since the session was created), and nothing older — the
-    /// entries absorbed with [`push_segment`](SerdeSession::push_segment) are never
-    /// re-emitted. Every registered table appears in the segment, in registration
-    /// order, with the position its entries start at (so a reading session can check
-    /// it continues the stream) — with no entries if nothing new was interned into it.
-    /// The segment's version is [`Segment::VERSION`]; its metadata carries the
-    /// session's profile when one is declared ([`set_profile`](SerdeSession::set_profile));
-    /// it names no main entry (see [`take_segment_with_main`](SerdeSession::take_segment_with_main)).
+    /// Emits a segment: every entry interned into any table since the previous emission
+    /// (or since the session was created), and nothing older.
+    ///
+    /// Entries absorbed with [`push_segment`](SerdeSession::push_segment) are never
+    /// re-emitted. Every registered table appears in the segment, in registration order,
+    /// with the position its entries start at — so that a reading session can check that
+    /// the segment continues the stream — and with no entries when nothing new was
+    /// interned into it.
+    ///
+    /// The segment's version is [`Segment::VERSION`]; its metadata records the session's
+    /// profile when one is declared ([`set_profile`](SerdeSession::set_profile)); it
+    /// names no main entry (see
+    /// [`take_segment_with_main`](SerdeSession::take_segment_with_main)).
     ///
     /// The output is deterministic: entries in position order, tables in registration
-    /// order; two sessions that intern the same objects in the same order emit equal
+    /// order. Two sessions that intern the same objects in the same order emit equal
     /// segments.
     pub fn take_segment(&mut self) -> Segment {
         self.emit_segment(None)
     }
 
-    /// [`take_segment`](SerdeSession::take_segment), with the segment naming `main`
-    /// as its main entry: the position of the one entry the segment is about — the
-    /// parse result of this line in a stream of parse results, say — so that a reader
-    /// finds it without knowing the tables' layout
-    /// ([`push_segment`](SerdeSession::push_segment) returns it translated into the
-    /// reading session's numbering; [`Segment::main`] carries it as this session
-    /// numbers it). `main` is a typed position this session minted (an
-    /// [`intern`](SerdeSession::intern) result — of this segment or of an earlier one
-    /// of the same stream: the entry must exist in the session).
+    /// Emits a segment as [`take_segment`](SerdeSession::take_segment) does, naming
+    /// `main` as its main entry.
+    ///
+    /// The main entry is the position of the one entry the segment is about — the parse
+    /// result of this line in a stream of parse results, say — so that a reader finds it
+    /// without knowing the layout of the tables.
+    /// [`push_segment`](SerdeSession::push_segment) returns it translated into the
+    /// reading session's numbering; [`Segment::main`] reports it as this session numbers
+    /// it.
+    ///
+    /// `main` is a typed position this session minted (an
+    /// [`intern`](SerdeSession::intern) result, of this segment or of an earlier one of
+    /// the same stream); the entry must exist in the session.
     ///
     /// # Errors
     ///
@@ -606,43 +633,45 @@ impl<L: SerializableLang> SerdeSession<L> {
 
     // --- reading ------------------------------------------------------------------------
 
-    /// Absorb a segment: append its entries to the session's tables and rebuild every
+    /// Absorbs a segment: appends its entries to the session's tables and rebuilds every
     /// object, so that they can be read back ([`object`](SerdeSession::object)) and
     /// interned again (an absorbed object interned into its table yields its existing
-    /// position — no re-emission).
+    /// position, and is not written out again).
     ///
-    /// The segment is validated as untrusted input, then materialized: its version
-    /// must be [`Segment::VERSION`]; when this session declares a profile
-    /// ([`set_profile`](SerdeSession::set_profile)), the segment's must be the same
-    /// (a session without one accepts any); each of its tables is matched to a table of this
-    /// session *by name* (registration order may differ between writer and reader),
-    /// and its entries must start exactly where the session's table ends — segments
-    /// of a stream are pushed in order, each once; every table reference in the
-    /// entries is translated from the writer's table numbering to this session's,
-    /// through the segment's table directory; then every new entry is rebuilt by its
-    /// table's driver, table by table in registration order and entry by entry in
-    /// position order (an entry referred to before its turn is rebuilt on demand).
-    /// The session must have no entries pending emission (interned since the last
-    /// [`take_segment`](SerdeSession::take_segment)): a segment continues the stream
-    /// the session has emitted so far.
+    /// The segment is validated as untrusted input before anything is rebuilt. Its
+    /// version must be [`Segment::VERSION`]. When this session declares a profile
+    /// ([`set_profile`](SerdeSession::set_profile)), the segment's must be the same; a
+    /// session without one accepts any. Each of the segment's tables is matched to a
+    /// table of this session *by name*, since registration order may differ between
+    /// writer and reader, and its entries must start exactly where the session's table
+    /// ends — the segments of a stream are pushed in order, each once. Every table
+    /// reference inside the entries is then translated from the writer's table numbering
+    /// to this session's, through the segment's table directory.
     ///
-    /// Returns the segment's main entry ([`Segment::main`]), if it names one,
-    /// translated into this session's numbering — the table's id in this session
-    /// and the position, validated to exist once the segment is absorbed — as a
-    /// `(TableId, u32)` pair; the typed position is `handle.position(index)` for the
-    /// handle whose [`id`](TableHandle::id) is the table (see
-    /// [`TableHandle::position`]). `None` for a segment naming no main entry.
+    /// The session must have no entries pending emission — nothing interned since the
+    /// last [`take_segment`](SerdeSession::take_segment) — because a segment continues
+    /// the stream the session has emitted so far.
     ///
-    /// **The segments pushed into one session must all come from one stream, in
-    /// order** — the caller's obligation. The session checks that each segment
-    /// continues its tables (the start positions), which catches a skipped or
-    /// repeated segment; it cannot recognize a segment of another stream whose
-    /// positions happen to line up, and would absorb it as a continuation (a
-    /// declared profile narrows this to streams of the same profile).
+    /// Every new entry is then rebuilt by its table's driver, table by table in
+    /// registration order and entry by entry in position order; an entry referred to
+    /// before its turn is rebuilt on demand.
     ///
-    /// On any error the session is left exactly as it was before the call — the
-    /// segment's entries are dropped, and the session stays usable — and the error
-    /// names what failed.
+    /// Returns the segment's main entry ([`Segment::main`]), if it names one, translated
+    /// into this session's numbering: the table's id in this session and the position,
+    /// validated to exist once the segment is absorbed, as a `(TableId, u32)` pair. The
+    /// typed position is `handle.position(index)` for the handle whose
+    /// [`id`](TableHandle::id) is that table (see [`TableHandle::position`]). `None` for
+    /// a segment naming no main entry.
+    ///
+    /// **The segments pushed into one session must all come from one stream, in order**
+    /// — the caller's obligation. The session checks that each segment continues its
+    /// tables (the start positions), which catches a skipped or repeated segment; it
+    /// cannot recognize a segment of another stream whose positions happen to line up,
+    /// and would absorb it as a continuation. A declared profile narrows this to streams
+    /// of the same profile.
+    ///
+    /// On any error the session is left exactly as it was before the call: the segment's
+    /// entries are dropped, the session stays usable, and the error names what failed.
     ///
     /// # Errors
     ///
@@ -656,13 +685,15 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// [`UnknownWriterTable`](DeserializeError::UnknownWriterTable) for a segment that
     /// does not fit the session (the last two also for a main entry naming a table
     /// the directory does not list, or a position beyond the table's end after the
-    /// push: [`IndexOutOfRange`](DeserializeError::IndexOutOfRange)); an entry
-    /// nesting too deep for a segment
-    /// ([`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
+    /// push: [`IndexOutOfRange`](DeserializeError::IndexOutOfRange)). An entry nesting
+    /// too deep for a segment is
+    /// [`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
     /// in [`Value`](DeserializeError::Value), wrapped in
     /// [`InEntry`](DeserializeError::InEntry) — checked without recursion before any
-    /// entry is walked; see [`SerialValue::MAX_NESTING_DEPTH`]); then, from
-    /// rebuilding the entries, a driver's failure — or a heterogeneous table's entry
+    /// entry is walked; see [`SerialValue::MAX_NESTING_DEPTH`].
+    ///
+    /// Then, from rebuilding the entries: a driver's failure — or a heterogeneous
+    /// table's entry
     /// that is not the identifier-and-data map ([`Value`](DeserializeError::Value)) —
     /// wrapped in [`InEntry`](DeserializeError::InEntry), a reference cycle
     /// ([`ReferenceCycle`](DeserializeError::ReferenceCycle)), a reference beyond a
@@ -827,19 +858,20 @@ impl<L: SerializableLang> SerdeSession<L> {
         Ok(())
     }
 
-    /// The object stored at position `index` of table `table` — the top-level entry
-    /// point of the read side ([`DeserializeContext::object`] is the same operation
-    /// from inside a deserialization call). Every entry of an absorbed segment is
-    /// rebuilt when the segment is pushed, so this is a lookup; the same position
-    /// always yields the same `Arc`.
+    /// Returns the object stored at position `index` of table `table`.
     ///
-    /// The position must be one of this session's own: a typed position carries the
-    /// [`TableId`] of the session that minted it (see [`SerialIndex`]), and a
-    /// position minted by another session — a writing session whose registration
-    /// order differs — names the wrong table here. Between sessions a position is
-    /// exchanged as its table's name and its bare `u32` index
-    /// ([`SerialIndex::index`]), and rebuilt on this side with
-    /// [`TableHandle::position`].
+    /// This is the top-level entry point of the read side;
+    /// [`DeserializeContext::object`] is the same operation from inside a
+    /// deserialization call. Every entry of an absorbed segment is rebuilt when the
+    /// segment is pushed, so this call is a lookup, and the same position always yields
+    /// the same `Arc`.
+    ///
+    /// The position must be one of this session's own: a typed position holds the
+    /// [`TableId`] of the session that minted it (see [`SerialIndex`]), so a position
+    /// minted by another session — a writing session whose registration order differs —
+    /// names the wrong table here. Between sessions a position travels as its table's
+    /// name and its bare `u32` index ([`SerialIndex::index`]), and is rebuilt on this
+    /// side with [`TableHandle::position`].
     ///
     /// # Errors
     ///

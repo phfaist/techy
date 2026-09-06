@@ -1,15 +1,18 @@
-//! The wire layer's conversion traits — [`ToSerialValue`] and [`FromSerialValue`] —
-//! and their internal derives: how the crate's own wire structs (the serialized shape
-//! of sources — [`source`], of states — [`state`], of specs and providers — [`specs`],
-//! of trees — [`tree`], of diagnostics — [`diagnostic`], of parse results —
-//! [`parse_result`]) convert to and from
-//! [`SerialValue`], unconditionally (without the `serde`
-//! cargo feature, which gates only the serde bridge for implementer payloads).
+//! The wire layer: the conversion traits [`ToSerialValue`] and [`FromSerialValue`],
+//! their internal derives, and the crate's own wire structs.
 //!
-//! Crate-private throughout (the field and variant helpers at the end are additionally
-//! reachable by the code the public `SerializableValue` / `DeserializableValue`
-//! derives generate, through `techy::__private`). A wire struct derives both traits
-//! and gives every field and variant an explicit wire name:
+//! A wire struct is the serialized shape of one kind of object — sources ([`source`]),
+//! parsing states ([`state`]), specs and providers ([`specs`]), trees ([`tree`]),
+//! diagnostics ([`diagnostic`]), parse results ([`parse_result`]) — and converts to and
+//! from [`SerialValue`] unconditionally: the `serde` cargo feature gates only the serde
+//! bridge for implementer payloads.
+//!
+//! Crate-private throughout. The field and variant helpers at the end are additionally
+//! reachable by the code the public `SerializableValue` / `DeserializableValue` derives
+//! generate, through `techy::__private`.
+//!
+//! A wire struct derives both traits and gives every field and variant an explicit wire
+//! name:
 //!
 //! ```ignore
 //! #[derive(ToSerialValue, FromSerialValue)]
@@ -22,23 +25,23 @@
 //! ```
 //!
 //! **Wire shape** — the same the serde bridge produces for the corresponding serde
-//! shapes, so a value renders identically whichever mechanism produced it: a struct
-//! is a [`SerialValue::Map`] from wire names to field values in declaration order, an
+//! shapes, so a value renders identically whichever mechanism produced it: a struct is a
+//! [`SerialValue::Map`] from wire names to field values in declaration order, an
 //! `Option` field that is `None` omitted (and read back as `None` when its key is
-//! missing, or its value is `Null`); a unit enum variant is the [`SerialValue::Str`]
-//! of its wire name; a variant with data is a one-entry map from the wire name to the
-//! data (a newtype variant's payload as is, a struct variant's fields as a map).
-//! Reads are strict: an unknown, repeated, or missing key, an unknown variant, or a
-//! value of the wrong kind is a [`SerialValueError`].
+//! missing, or its value is `Null`); a unit enum variant is the [`SerialValue::Str`] of
+//! its wire name; a variant with data is a one-entry map from the wire name to the data
+//! (a newtype variant's payload as is, a struct variant's fields as a map). Reads are
+//! strict: an unknown, repeated, or missing key, an unknown variant, or a value of the
+//! wrong kind is a [`SerialValueError`].
 //!
-//! **Field types**: `bool`; `char` (a one-character string); the integers that fit
-//! `i64` losslessly (`i8`–`i64`, `u8`–`u32`) plus `u64`, `usize`, `isize`, `i128`,
-//! `u128` (written only when they fit `i64`, an error otherwise; read with range
-//! checks); `String` and
-//! `Cow<'static, str>`; `Option<T>`; `Vec<T>` (a `Vec<u8>` is a list of integers —
-//! byte strings are the explicit [`SerialBytes`]); [`SerialValue`] itself, carried
-//! verbatim (how a wire struct holds a part encoded elsewhere, e.g. by a language's
-//! own codec); and any other type implementing the traits, wire structs included.
+//! **Field types**: `bool`; `char` (a one-character string); the integers that fit `i64`
+//! losslessly (`i8`–`i64`, `u8`–`u32`) plus `u64`, `usize`, `isize`, `i128`, `u128`
+//! (written only when they fit `i64`, an error otherwise; read with range checks);
+//! `String` and `Cow<'static, str>`; `Option<T>`; `Vec<T>` (a `Vec<u8>` is a list of
+//! integers — byte strings are the explicit [`SerialBytes`]); [`SerialValue`] itself,
+//! stored verbatim (how a wire struct holds a part encoded elsewhere, by a language's
+//! own codec for instance); and any other type implementing the traits, wire structs
+//! included.
 
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};

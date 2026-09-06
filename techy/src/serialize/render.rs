@@ -76,9 +76,12 @@ const INDEX_KEY: &str = "$index";
 
 // --- Serialize ------------------------------------------------------------------------------
 
-/// Available with the `serde` cargo feature. Renders in the canonical form through a
-/// human-readable format and in the compact form otherwise; see the type's
-/// documentation for both forms.
+/// Available with the `serde` cargo feature. Writes the canonical form through a
+/// human-readable format and the compact form through every other format; both are
+/// stated on [`SerialValue`]'s own page.
+///
+/// A map key beginning with `$` is an error: the prefix is reserved for the canonical
+/// rendering's own objects, and there is no escaping.
 impl Serialize for SerialValue {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // JSON and the common binary formats render the wrapper as its content; the
@@ -197,13 +200,15 @@ impl Serialize for CompactIndex {
 // --- Deserialize --------------------------------------------------------------------------
 
 /// Available with the `serde` cargo feature. Reads the canonical form from a
-/// human-readable format and the compact form otherwise; see the type's documentation
-/// for both forms. Everything read is untrusted input: a malformed rendering — a bad
-/// base64 text, a malformed `$index` pair, an object key beginning with `$` that is
-/// not one of the two reserved forms, a floating-point number, an integer outside
-/// `i64` — is an error, and so is a value nesting deeper than
-/// [`SerialValue::MAX_NESTING_DEPTH`] (the depth is checked as the value is read, so
-/// a malicious input cannot exhaust the stack whatever the format).
+/// human-readable format and the compact form from every other format; both are stated
+/// on [`SerialValue`]'s own page.
+///
+/// Everything read is untrusted input. A malformed rendering is an error: a bad base64
+/// text, a malformed `$index` pair, an object key beginning with `$` that is not one of
+/// the two reserved forms, a floating-point number, an integer outside `i64`. So is a
+/// value nesting deeper than [`SerialValue::MAX_NESTING_DEPTH`] — the depth is checked
+/// as the value is read, so a malicious input cannot exhaust the stack whatever the
+/// format.
 impl<'de> Deserialize<'de> for SerialValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         ValueAt { depth: 0 }.deserialize(deserializer)

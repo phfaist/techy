@@ -1,9 +1,13 @@
-//! The source driver: [`SourceSerdeDriver`], the driver of the sources table, with
-//! the caller-supplied embed-or-reference policy ([`SourceTextPolicy`],
-//! [`SourceTextForm`]) and the caller-supplied text supply and digest verification
-//! for referenced sources ([`SourceTextSupplier`], [`ReferencedSource`],
-//! [`SourceDigest`]); [`SourceIndex`], the sources table's position type; and the
-//! value conversion of spans, which refer to their source by position.
+//! The sources table: [`SourceSerdeDriver`], its driver, and [`SourceIndex`], its
+//! position type.
+//!
+//! The driver asks the caller how each source's text is written — embedded in the entry
+//! or kept outside and referenced ([`SourceTextPolicy`], [`SourceTextForm`]) — and, when
+//! a source is referenced, asks the caller for the text and for the verification of the
+//! recorded digest ([`SourceTextSupplier`], [`ReferencedSource`], [`SourceDigest`]).
+//!
+//! The value conversion of spans is here too: a span refers to its source by position in
+//! this table.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -31,12 +35,15 @@ crate::serial_index! {
     pub struct SourceIndex;
 }
 
-/// A digest of a source's text: a fixed-size fingerprint of the text computed by a
-/// hash function, named by `algorithm` (the writer's choice — `"sha256"`, say) and
-/// held as `bytes` (the function's output). The crate neither chooses nor implements
-/// any hash function: a [`SourceTextPolicy`] computes digests when it decides to
-/// reference a source, and a [`SourceTextSupplier`] verifies them when the source is
-/// read back; the crate stores the pair and asks the caller's supplier to verify it.
+/// A digest of a source's text: a fixed-size fingerprint computed by a hash function.
+///
+/// `algorithm` names the hash function — the writer's choice, `"sha256"` say — and
+/// `bytes` is that function's output for the text.
+///
+/// The crate neither chooses nor implements any hash function. A [`SourceTextPolicy`]
+/// computes digests when it decides to reference a source, and a [`SourceTextSupplier`]
+/// verifies them when the source is read back; the crate stores the pair and asks the
+/// caller's supplier to check it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceDigest {
     /// The hash function's name.
@@ -71,10 +78,11 @@ pub enum SourceTextForm {
     },
 }
 
-/// The writing side's per-source choice between embedding and referencing the text
-/// (see [`SourceTextForm`]): configured on the source driver with
-/// [`SourceSerdeDriver::with_text_policy`]. Without a policy, every source is
-/// embedded.
+/// The writing side's per-source choice between embedding and referencing the text (see
+/// [`SourceTextForm`]).
+///
+/// A policy is configured on the source driver with
+/// [`SourceSerdeDriver::with_text_policy`]. Without one, every source is embedded.
 pub trait SourceTextPolicy<O: SourceOrigin>: Send + Sync {
     /// Decide how `source`'s text is written — computing the digest here, when the
     /// text is referenced with one.
@@ -86,21 +94,24 @@ pub trait SourceTextPolicy<O: SourceOrigin>: Send + Sync {
     fn text_form(&self, source: &Source<O>) -> Result<SourceTextForm, SerializeError>;
 }
 
-/// The reading side's supply of the text of a *referenced* source (one whose entry
-/// carries no text — see [`SourceTextForm::Referenced`]) and its verification of
-/// recorded digests: configured on the source driver with
-/// [`SourceSerdeDriver::with_text_supplier`]. Without a supplier, a referenced
-/// source is an error ([`DeserializeError::NoSourceTextSupplier`]).
+/// The reading side's supply of the text of a *referenced* source — one whose entry
+/// holds no text (see [`SourceTextForm::Referenced`]) — and its verification of recorded
+/// digests.
 ///
-/// The driver calls [`source_text`](Self::source_text), checks the text's length
-/// against the recorded one ([`DeserializeError::SourceLengthMismatch`]), and, when
-/// the entry records a digest, calls [`digest_matches`](Self::digest_matches)
-/// ([`DeserializeError::SourceDigestMismatch`] on `false`) — so a text that has
-/// changed since it was serialized is an error, never a source with wrong offsets.
+/// A supplier is configured on the source driver with
+/// [`SourceSerdeDriver::with_text_supplier`]. Without one, a referenced source is an
+/// error ([`DeserializeError::NoSourceTextSupplier`]).
+///
+/// The driver calls [`source_text`](Self::source_text), checks the text's length against
+/// the recorded one ([`DeserializeError::SourceLengthMismatch`]), and, when the entry
+/// records a digest, calls [`digest_matches`](Self::digest_matches)
+/// ([`DeserializeError::SourceDigestMismatch`] on `false`). So a text that has changed
+/// since it was serialized is an error, never a source with wrong offsets.
 pub trait SourceTextSupplier<O: SourceOrigin>: Send + Sync {
-    /// The text of `source`, as it was when the source was serialized: `source`
-    /// carries everything the entry recorded about it (its origin, its provenance,
-    /// the text's length, the digest).
+    /// The text of `source`, as it was when the source was serialized.
+    ///
+    /// `source` holds everything the entry recorded about it: its origin, its
+    /// provenance, the text's length, and the digest.
     ///
     /// # Errors
     ///
@@ -120,9 +131,10 @@ pub trait SourceTextSupplier<O: SourceOrigin>: Send + Sync {
     fn digest_matches(&self, digest: &SourceDigest, text: &str) -> Result<bool, DeserializeError>;
 }
 
-/// What a source's entry records about a referenced source (one whose text is kept
-/// outside the serialized form): the argument of
-/// [`SourceTextSupplier::source_text`].
+/// What a source's entry records about a referenced source — one whose text is kept
+/// outside the serialized form.
+///
+/// This is the argument of [`SourceTextSupplier::source_text`].
 #[derive(Clone, Debug)]
 pub struct ReferencedSource<O: SourceOrigin> {
     origin: O,
@@ -169,11 +181,13 @@ impl<O: SourceOrigin> ReferencedSource<O> {
 /// The driver of the sources table (table name `sources`, one kind of object —
 /// identifier `core.source`): how a [`Source`] is serialized and rebuilt.
 ///
-/// A source's entry carries its origin (through the language's `SourceOrigin`
-/// value conversion), its provenance — a resolved or synthesized source refers to
-/// the source its triggering location lies in by position, so provenance chains are
-/// serialized as references between entries of this table — its line and column
-/// number offsets, and its text, either **embedded** or **referenced**:
+/// A source's entry records its origin (through the language's `SourceOrigin` value
+/// conversion), its provenance, its line and column number offsets, and its text. A
+/// resolved or synthesized source refers to the source its triggering location lies in
+/// by position, so provenance chains are serialized as references between entries of
+/// this table.
+///
+/// The text is written in one of two forms:
 ///
 /// - *Embedded*: the text is written into the entry, and the serialized form is
 ///   self-contained. The default for every source.

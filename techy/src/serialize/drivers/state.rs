@@ -1,6 +1,8 @@
-//! The state driver: [`StateSerdeDriver`], the driver of the states table, and
-//! [`StateIndex`], its position type; the [`SerializableObject`] /
-//! [`DeserializableObject`] impls of [`ParsingState`], which the driver delegates to.
+//! The states table: [`StateSerdeDriver`], its driver, and [`StateIndex`], its position
+//! type.
+//!
+//! The driver delegates to the [`SerializableObject`] and [`DeserializableObject`] impls
+//! of [`ParsingState`], which are also defined here.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -40,27 +42,29 @@ crate::serial_index! {
 /// The driver of the states table (table name `states`, one kind of object —
 /// identifier `core.state`): how a [`ParsingState`] is serialized and rebuilt.
 ///
-/// A state's entry carries its token rules in full — one section per feature the
-/// language declares present (whitespace, paragraphs, groups, commands, comments,
-/// specials, forbidden characters), each with its `enabled` flag (forbidden
-/// characters have none) and its rules data; a feature the language declares absent
-/// has no section — its mode and its ext (through the language's `ModeId` and
-/// `StateExt` value conversions), and its scope stack as the positions of its
-/// providers in the providers table, outermost first. The derived caches of a state
+/// A state's entry records its token rules in full, its mode and its ext (through the
+/// language's `ModeId` and `StateExt` value conversions), and its scope stack as the
+/// positions of its providers in the providers table, outermost first.
+///
+/// The token rules are written as one section per feature the language declares present
+/// — whitespace, paragraphs, groups, commands, comments, specials, forbidden characters
+/// — each with its `enabled` flag (forbidden characters have none) and its rules data. A
+/// feature the language declares absent has no section. The derived caches of a state
 /// (the delimiter prefix table, the specials trigger characters) are not written: the
 /// reading side rebuilds them when it constructs the state.
 ///
-/// Reading refuses what the language cannot hold: a section for a feature the
-/// reading language declares absent, or a non-empty scope stack for a language
-/// without the scope stack, is [`DeserializeError::FeatureAbsent`]; a missing section
-/// for a present feature reads as that feature's empty rules (every section is
-/// optional in the serialized form).
+/// Reading refuses what the language cannot hold: a section for a feature the reading
+/// language declares absent, or a non-empty scope stack for a language without the scope
+/// stack, is [`DeserializeError::FeatureAbsent`]. A missing section for a present
+/// feature reads as that feature's empty rules, since every section is optional in the
+/// serialized form.
+///
 /// A state is written once however many nodes refer to it, and read back as one
-/// `Arc<ParsingState>` — sharing survives the round trip; a state serialized on its
+/// `Arc<ParsingState>`, so sharing survives the round trip. A state serialized on its
 /// own, without any tree, is an ordinary entry.
 ///
-/// The driver delegates to `ParsingState`'s own
-/// [`SerializableObject`] and [`DeserializableObject`] impls. Registered by
+/// The driver delegates to `ParsingState`'s own [`SerializableObject`] and
+/// [`DeserializableObject`] impls. Registered by
 /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
 pub struct StateSerdeDriver<L: Lang> {
     lang: PhantomData<fn() -> L>,
@@ -253,10 +257,10 @@ fn read_group_rules<L: SerializableLang>(
     wire.into_iter().map(|rule| read_group_rule(rule, cx).map(Arc::new)).collect()
 }
 
-/// A state is rebuilt from its serialized form (see [`StateSerdeDriver`]) and frozen
-/// — its derived caches are recomputed; the language's transition customizer
-/// ([`Lang::finalize_transition`](crate::core::Lang::finalize_transition)) does not
-/// run again (the serialized data is a state that already passed it).
+/// A state is rebuilt from its serialized form (see [`StateSerdeDriver`]) and frozen:
+/// its derived caches are recomputed. The language's transition customizer
+/// ([`Lang::finalize_transition`](crate::core::Lang::finalize_transition)) does not run
+/// again, since the serialized data describes a state that already passed it.
 ///
 /// The expected group close, when the entry has one, is the same `Arc` as the
 /// value-equal rule of the rebuilt `temporary` or `rules` list when there is one

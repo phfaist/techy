@@ -1,17 +1,23 @@
-//! The drivers of the crate's own standard tables and the accessors around them: the
-//! source driver ([`SourceSerdeDriver`], with the embed-or-reference choice and the
-//! digest contract), the state driver ([`StateSerdeDriver`]), the two dispatching
-//! drivers of the spec and provider tables ([`SpecSerdeDriver`],
-//! [`ProviderSerdeDriver`]), their typed positions ([`SourceIndex`], [`StateIndex`],
-//! [`SpecIndex`], [`ProviderIndex`]), the standard-tables constructor
-//! ([`SerdeSession::new`](crate::serialize::SerdeSession::new)) with its handle bundle
-//! ([`StandardTables`]), the extension traits that intern into and read from
-//! the standard tables by kind ([`StandardTableInterning`], [`StandardTableReading`]),
-//! the tree driver ([`TreeSerdeDriver`]), the diagnostic driver
-//! ([`DiagnosticSerdeDriver`], with the [`DeserializedCondition`] a diagnostic read
-//! back carries), the parse-result driver ([`ParseResultSerdeDriver`]), and the
-//! serialization of the crate's own spec and provider types with the reading
-//! environment's provider directory ([`KnownProviders`], [`register_core_readers`]).
+//! The drivers of the crate's own standard tables, and the accessors around them.
+//!
+//! There is one driver per kind of object: [`SourceSerdeDriver`] for sources (with the
+//! choice between embedding a source's text and referencing it), [`StateSerdeDriver`]
+//! for parsing states, [`SpecSerdeDriver`] and [`ProviderSerdeDriver`] for callable
+//! specs and specs providers, [`TreeSerdeDriver`] for node trees,
+//! [`DiagnosticSerdeDriver`] for diagnostics, and [`ParseResultSerdeDriver`] for whole
+//! parse results. Each table has its own typed position type ([`SourceIndex`],
+//! [`StateIndex`], and so on).
+//!
+//! [`SerdeSession::new`](crate::serialize::SerdeSession::new) registers all seven and
+//! reports their handles as [`StandardTables`]. Objects go in and come out either
+//! through those handles or through the by-kind extension traits:
+//! [`StandardTableInterning`] and [`StandardTableReading`] for sources, states, specs,
+//! and providers, and [`TreeSerialization`], [`DiagnosticSerialization`], and
+//! [`ParseResultSerialization`] for trees, diagnostics, and parse results.
+//!
+//! Reading also needs the reading environment: [`KnownProviders`] is the directory of
+//! providers a serialized package resolves against, and [`register_core_readers`]
+//! registers the readers of the crate's own spec and provider types.
 //!
 //! Everything here is registered on the engine, which knows nothing of these object
 //! types, exactly as a framework's own tables would be: the drivers implement

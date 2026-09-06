@@ -96,7 +96,7 @@ impl<L: Lang> RestagedArgument<L> {
         &self.spec
     }
 
-    /// Whether the bundle carries a provided region.
+    /// Whether the argument was provided, as opposed to absent.
     pub fn is_provided(&self) -> bool {
         self.provided.is_some()
     }

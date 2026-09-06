@@ -1,9 +1,11 @@
-//! Test helpers for tree serialization, reachable in-crate (`crate::serialize::tree_support`)
-//! by the tree driver's own tests and, later, the preset's: a structural
-//! [`assert_trees_equivalent`] deep-compare and a [`round_trip_tree`] harness that
+//! Test helpers for tree serialization, reachable in-crate
+//! (`crate::serialize::tree_support`) by the tree driver's own tests and, later, the
+//! preset's.
+//!
+//! [`assert_trees_equivalent`] compares two trees structurally. [`round_trip_tree`]
 //! serializes a tree into a fresh session, (under the `serde` feature) encodes the
-//! segment to JSON and back, absorbs it into a second session, reads the tree back,
-//! and deep-compares it against the original.
+//! segment to JSON and back, absorbs it into a second session, reads the tree back, and
+//! compares it against the original.
 
 #![cfg(test)]
 

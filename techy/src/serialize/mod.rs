@@ -30,11 +30,13 @@
 //!   implements [`SerializableLang`]. That trait has no items of its own; its bounds
 //!   require the two value traits of every type the language supplies to a parse, so
 //!   implementing it is what makes the language's own data convertible.
-//! - **The session.** A [`SerdeSession`] holds the tables, one per kind of object, and
-//!   writes each object into its table once. [`SerdeSession::new`] registers the seven
-//!   standard tables — sources, states, specs, providers, trees, diagnostics, and parse
-//!   results — and a session emits what is new in them as a [`Segment`] and absorbs the
-//!   segments another session wrote.
+//! - **The session.** A [`SerdeSession`] holds the tables, one per kind of object.
+//!   *Interning* an object writes it into its table and returns its position;
+//!   interning the same object again returns the same position, which is how the
+//!   sharing a parse relies on survives a round trip. [`SerdeSession::new`] registers
+//!   the seven standard tables — sources, states, specs, providers, trees, diagnostics,
+//!   and parse results — and a session emits what is new in them as a [`Segment`] and
+//!   absorbs the segments another session wrote.
 //! - **Rendering is the only optional part.** Everything above is plain Rust with no
 //!   external dependency and no cargo feature. The optional `serde` cargo feature adds
 //!   a rendering layer on top: `Serialize`/`Deserialize` impls for [`SerialValue`] and

@@ -1,9 +1,11 @@
 //! The serialized shape of a [`ParseResult`](crate::core::ParseResult):
-//! [`WireParseResult`] — the tree's position in the trees table, the diagnostics
-//! collection ([`WireDiagnostics`]: the retained diagnostics' positions in the
-//! diagnostics table plus the collection's retention cap and counts), and the session
-//! extension in the language's own form. Written and read by the crate's parse-result
-//! driver ([`ParseResultSerdeDriver`](crate::serialize::ParseResultSerdeDriver)).
+//! [`WireParseResult`].
+//!
+//! A parse result is its tree's position in the trees table, its diagnostics collection
+//! ([`WireDiagnostics`]: the retained diagnostics' positions in the diagnostics table
+//! plus the collection's retention cap and counts), and its session extension in the
+//! language's own form. Written and read by the crate's parse-result driver
+//! ([`ParseResultSerdeDriver`](crate::serialize::ParseResultSerdeDriver)).
 
 use alloc::vec::Vec;
 

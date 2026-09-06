@@ -206,7 +206,7 @@ pub struct RestageContext<'t, L: Lang, A, B> {
     /// input trees never collide.
     replaced: HashMap<NodeId, Replaced>,
     /// The run's descent guard, consulted by every [`drive`] — the re-entrant
-    /// region ops included, since they drive through this same context.
+    /// region operations included, since they drive through this same context.
     descent_guard: StdDescentGuard,
     /// The run's frozen input tree, present only to anchor the type and lifetime
     /// parameters: the context itself stores no borrow of it, since the operations
@@ -283,8 +283,8 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
     /// [`restage_invocation`](RestageContext::restage_invocation).
     ///
     /// The nodes of the argument's region go through the visitor like the children
-    /// of a node the driver descended into, and the record's spec, presence, and
-    /// content designation are reproduced against the staged nodes. An argument
+    /// of a node the driver descended into, and the record's spec, presence, ext,
+    /// and content designation are reproduced against the staged nodes. An argument
     /// that was not provided in the input is returned as
     /// [`RestagedArgument::absent`]; that is not an error, it is how presence is
     /// preserved.
@@ -904,7 +904,7 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
     }
 }
 
-/// The callable payload of `node`, or the op-misuse error.
+/// The callable payload of `node`, or the error for a misused operation.
 fn callable_data<'n, L: Lang, A, E>(
     node: NodeRef<'n, L, A>,
 ) -> Result<&'n CallableData<L>, RestageError<E>> {

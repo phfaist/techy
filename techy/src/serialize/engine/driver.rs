@@ -1,4 +1,4 @@
-//! [`ObjectSerdeDriver`] — the per-table driver: how the objects of one table are
+//! The per-table driver [`ObjectSerdeDriver`] — how the objects of one table are
 //! serialized and deserialized — and [`TableHandle`], the typed handle a session
 //! returns for a registered table.
 
@@ -13,24 +13,29 @@ use super::super::object::SerializableLang;
 use super::super::value::{SerialEntry, SerialIndex, TableId};
 use super::context::{DeserializeContext, SerializeContext};
 
-/// The driver of one table of a [`SerdeSession`](crate::serialize::SerdeSession):
-/// how the objects the table holds are serialized into entries and rebuilt from
-/// them. Registered with
-/// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table);
-/// the session calls the driver for every object interned into the table and for
-/// every entry read back from a segment.
+/// How the objects of one table are serialized into entries and rebuilt from them.
 ///
-/// One driver type per kind of table; the method names are the same for every kind
-/// (they mirror the object-level [`SerializableObject::serialize_object`](crate::serialize::SerializableObject::serialize_object)
-/// and [`DeserializableObject::deserialize_object`](crate::serialize::DeserializableObject::deserialize_object):
-/// the same operation at the table level). A table holding objects of one kind only
-/// (a *homogeneous* table) implements the trait directly, doing the work itself; a
-/// table holding trait objects of several concrete types (a *heterogeneous* table)
-/// uses [`DispatchingSerdeDriver`](crate::serialize::DispatchingSerdeDriver), which
-/// dispatches on the object (writing) and on the entry's identifier (reading).
+/// A driver is what a table of a [`SerdeSession`](crate::serialize::SerdeSession) is
+/// registered with
+/// ([`register_table`](crate::serialize::SerdeSession::register_table)); the session
+/// calls it for every object interned into the table and for every entry read back from
+/// a segment.
 ///
-/// `Send + Sync + 'static`: the session shares the driver behind an `Arc` and calls
-/// it re-entrantly (an object's serialization may intern further objects of the same
+/// There is one driver type per kind of table, and the method names are the same for
+/// every kind: they mirror the object-level
+/// [`SerializableObject::serialize_object`](crate::serialize::SerializableObject::serialize_object)
+/// and
+/// [`DeserializableObject::deserialize_object`](crate::serialize::DeserializableObject::deserialize_object),
+/// the same operation at the table level.
+///
+/// A table holding objects of one kind only (a *homogeneous* table) implements the trait
+/// directly, doing the work itself. A table holding trait objects of several concrete
+/// types (a *heterogeneous* table) uses
+/// [`DispatchingSerdeDriver`](crate::serialize::DispatchingSerdeDriver), which dispatches
+/// on the object when writing and on the entry's identifier when reading.
+///
+/// `Send + Sync + 'static`: the session shares the driver behind an `Arc` and calls it
+/// re-entrantly (an object's serialization may intern further objects of the same
 /// table).
 pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
     /// The kind of object the table holds — a concrete type, or a trait object type
@@ -42,24 +47,29 @@ pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
     /// [`serial_index!`](crate::serialize::serial_index).
     type Index: SerialIndex;
 
-    /// The table's name: how a segment identifies the table, so that a reading
-    /// session with a different registration order finds it. A deliberately chosen,
-    /// stable string owned by whoever defines the driver — the same stability
-    /// obligation as an identifier.
+    /// The table's name: how a segment identifies the table, so that a reading session
+    /// with a different registration order finds it.
+    ///
+    /// The name is a deliberately chosen, stable string owned by whoever defines the
+    /// driver — the same stability obligation as an identifier.
     fn table_name(&self) -> &'static str;
 
-    /// For a homogeneous table, `Some(identifier)`: the identifier every entry of the
-    /// table carries, which the table then does not write out (the table implies the
-    /// kind of object) — the driver's [`serialize_object`](Self::serialize_object)
-    /// still returns it in every entry, and the session reports a different one as an
-    /// error. `None` for a heterogeneous table, whose entries carry their identifier
-    /// on the wire. `Some("")` is not an identifier: the session refuses to register
-    /// such a driver ([`RegistrationError::EmptyHomogeneousIdentifier`](crate::serialize::RegistrationError::EmptyHomogeneousIdentifier)).
+    /// `Some(identifier)` for a homogeneous table, `None` for a heterogeneous one.
+    ///
+    /// The identifier is the one every entry of a homogeneous table has, which the table
+    /// then does not write out, since the table itself implies the kind of object. The
+    /// driver's [`serialize_object`](Self::serialize_object) still returns it in every
+    /// entry, and the session reports a different one as an error. A heterogeneous
+    /// table's entries record their identifier on the wire instead.
+    ///
+    /// `Some("")` is not an identifier: the session refuses to register such a driver
+    /// ([`RegistrationError::EmptyHomogeneousIdentifier`](crate::serialize::RegistrationError::EmptyHomogeneousIdentifier)).
     fn homogeneous_identifier(&self) -> Option<&'static str>;
 
-    /// Produce the entry for `object`. `cx` gives access to the session: interning
-    /// the objects this one refers to ([`SerializeContext::intern`]) and the caller's
-    /// user data.
+    /// Produces the entry for `object`.
+    ///
+    /// `cx` gives access to the session: interning the objects this one refers to
+    /// ([`SerializeContext::intern`]) and the caller's user data.
     ///
     /// # Errors
     ///
@@ -73,10 +83,12 @@ pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
         cx: &mut SerializeContext<'_, L>,
     ) -> Result<SerialEntry, SerializeError>;
 
-    /// Rebuild the object of `entry`. `entry.identifier` is the entry's identifier
-    /// (the fixed one, for a homogeneous table); `entry.data` its data. `cx` gives
-    /// access to the session: reading the objects this one refers to
-    /// ([`DeserializeContext::object`]) and the caller's user data.
+    /// Rebuilds the object of `entry`.
+    ///
+    /// `entry.identifier` is the entry's identifier (the fixed one, for a homogeneous
+    /// table) and `entry.data` its data. `cx` gives access to the session: reading the
+    /// objects this one refers to ([`DeserializeContext::object`]) and the caller's user
+    /// data.
     ///
     /// # Errors
     ///
@@ -91,19 +103,24 @@ pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
 }
 
 /// The typed handle of a table registered in a
-/// [`SerdeSession`](crate::serialize::SerdeSession): the table's [`TableId`] together
-/// with its driver type, so that interning and reading through it are typed
-/// (`D::Object`, `D::Index`). Returned by
-/// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table);
-/// `Copy`, and meaningful only for the session that issued it (a session validates
-/// every handle it is given: the table at that id must be registered with driver type
-/// `D`, else the call fails with the `UnknownTable` error of its kind).
+/// [`SerdeSession`](crate::serialize::SerdeSession).
+///
+/// A handle pairs the table's [`TableId`] with its driver type, so that interning into
+/// and reading from the table are typed (`D::Object`, `D::Index`). It is returned by
+/// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table) and
+/// found again by name with
+/// [`SerdeSession::table_handle`](crate::serialize::SerdeSession::table_handle).
+///
+/// A handle is `Copy`, and meaningful only for the session that issued it: a session
+/// validates every handle it is given — the table at that id must be registered with
+/// driver type `D` — and otherwise fails the call with the `UnknownTable` error of its
+/// kind.
 ///
 /// The handle is also where a typed position is rebuilt from its bare `u32` index
-/// ([`position`](TableHandle::position)): typed positions are scoped to the session
-/// that minted them, so a position received from another session — whose table
-/// numbering may differ — travels as its table's name and its `u32` index and is
-/// rebuilt on this side (see [`SerialIndex`]).
+/// ([`position`](TableHandle::position)): typed positions are scoped to the session that
+/// minted them, so a position received from another session — whose table numbering may
+/// differ — travels as its table's name and its `u32` index and is rebuilt on this side
+/// (see [`SerialIndex`]).
 pub struct TableHandle<D> {
     id: TableId,
     driver: PhantomData<fn() -> D>,
@@ -120,20 +137,22 @@ impl<D> TableHandle<D> {
         self.id
     }
 
-    /// The typed position `index` of this table, in the numbering of the session the
-    /// handle belongs to — how a position received from elsewhere (a writing session
-    /// whose registration order may differ, a stored `u32`) is rebuilt for use with
-    /// this session: `session.object(handle, handle.position(index))`. Positions
-    /// travel between sessions as `(table name, u32)` — [`SerialIndex::index`] on the
-    /// sending side, this method on the receiving side — never as typed positions,
-    /// which carry the minting session's [`TableId`].
+    /// Returns the typed position `index` of this table, in the numbering of the session
+    /// the handle belongs to.
     ///
-    /// No bounds check: the position is validated when it is used (an index beyond
-    /// the table's end is [`DeserializeError::IndexOutOfRange`] there).
+    /// This is how a position received from elsewhere — from a writing session whose
+    /// registration order may differ, or from a stored `u32` — is rebuilt for use with
+    /// this session: `session.object(handle, handle.position(index))`. Positions travel
+    /// between sessions as `(table name, u32)`, with [`SerialIndex::index`] on the
+    /// sending side and this method on the receiving side, never as typed positions,
+    /// which hold the minting session's [`TableId`].
+    ///
+    /// There is no bounds check here: the position is validated when it is used, where an
+    /// index beyond the table's end is [`DeserializeError::IndexOutOfRange`].
     ///
     /// The language parameter `L` is inferred from the driver type's
-    /// [`ObjectSerdeDriver`] impl (a driver implementing it for several languages
-    /// needs it spelled out).
+    /// [`ObjectSerdeDriver`] impl; a driver implementing it for several languages needs
+    /// it spelled out.
     pub fn position<L: SerializableLang>(self, index: u32) -> D::Index
     where
         D: ObjectSerdeDriver<L>,

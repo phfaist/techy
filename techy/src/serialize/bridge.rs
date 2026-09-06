@@ -1,19 +1,26 @@
-//! The serde bridge (cargo feature `serde`): [`SerialValue`] as a serde data format of
-//! its own, so that any type implementing serde's `Serialize` converts to a
-//! `SerialValue` ([`to_value`]) and any type implementing `Deserialize` is read from
-//! one ([`from_value`]) — the `serde_json::Value` pattern. The bridge is where the
-//! value model's policy is enforced mechanically: floating-point numbers, integers
-//! outside `i64`, maps with non-string keys, and map keys beginning with `$` (the
-//! reserved prefix) are errors.
+//! The serde bridge, available with the `serde` cargo feature: [`SerialValue`] as a
+//! serde data format of its own.
+//!
+//! Any type implementing serde's `Serialize` converts to a `SerialValue`
+//! ([`to_value`]), and any type implementing `Deserialize` is read from one
+//! ([`from_value`]) — the `serde_json::Value` pattern. This is a rendering route, not a
+//! new capability: it changes nothing about which objects the crate can serialize, only
+//! how a payload that is already a serde type is converted. Enabling the feature adds
+//! no obligation to any implementer of the module's traits.
+//!
+//! The bridge is where the value model's policy is enforced mechanically:
+//! floating-point numbers, integers outside `i64`, maps with non-string keys, and map
+//! keys beginning with `$` (the reserved prefix) are errors.
 //!
 //! Two kinds of data have dedicated variants that serde has no native notion of, and
-//! the bridge intercepts them: byte strings travel through serde's own
-//! `serialize_bytes` / `deserialize_bytes` methods (which derived types reach with the
-//! [`serial_bytes`] helper) and become [`SerialValue::Bytes`]; table positions travel
+//! the bridge intercepts them. Byte strings travel through serde's own
+//! `serialize_bytes` / `deserialize_bytes` methods — which derived types reach with the
+//! [`serial_bytes`] helper — and become [`SerialValue::Bytes`]. Table positions travel
 //! as one fixed sentinel newtype struct ([`INDEX_SENTINEL`], written and read by
 //! [`serialize_index`] / [`deserialize_index`]) and become [`SerialValue::Index`].
-//! `SerialValue`'s own `Serialize`/`Deserialize` impls (see `render.rs`) are
-//! intercepted the same way, so a `SerialValue` converts to itself unchanged.
+//!
+//! `SerialValue`'s own `Serialize`/`Deserialize` impls (in `render.rs`) are intercepted
+//! the same way, so a `SerialValue` converts to itself unchanged.
 
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
@@ -136,13 +143,13 @@ pub fn deserialize_index<'de, D: Deserializer<'de>>(
 
 // --- the bytes helper -------------------------------------------------------------------------
 
-/// Serialize a byte string field as [`SerialValue::Bytes`] rather than as a list of
-/// integers: the `#[serde(with = "…")]` helper for byte-string fields of payload
-/// types.
+/// The `#[serde(with = "…")]` helper that renders a byte-string field as
+/// [`SerialValue::Bytes`] rather than as a list of integers (available with the `serde`
+/// cargo feature).
 ///
-/// A plain `Vec<u8>` field is, to serde, a sequence of integers, and the bridge
-/// converts it to a [`SerialValue::List`] of [`SerialValue::Int`] accordingly. To make
-/// it a byte string — rendered compactly (as base64 text in JSON) — mark the field:
+/// A plain `Vec<u8>` field is, to serde, a sequence of integers, and the bridge converts
+/// it to a [`SerialValue::List`] of [`SerialValue::Int`] accordingly. To make it a byte
+/// string — rendered compactly, as base64 text in JSON — mark the field:
 ///
 /// ```
 /// use serde::{Deserialize, Serialize};
@@ -168,8 +175,8 @@ pub fn deserialize_index<'de, D: Deserializer<'de>>(
 /// # Ok::<(), techy::serialize::SerialValueError>(())
 /// ```
 ///
-/// The functions use serde's `serialize_bytes` / `deserialize_byte_buf` methods;
-/// through any serde format other than the bridge, the field takes that format's
+/// The functions use serde's `serialize_bytes` / `deserialize_byte_buf` methods, so
+/// through any serde format other than the bridge the field takes that format's
 /// byte-string form. Reading accepts a byte string only, never a list of integers.
 pub mod serial_bytes {
     use alloc::vec::Vec;
@@ -220,43 +227,55 @@ pub mod serial_bytes {
 
 // --- to_value: the Serializer -------------------------------------------------------------
 
-/// Convert any serializable value to a [`SerialValue`] (available with the `serde`
-/// cargo feature).
+/// Convert any serializable value to a [`SerialValue`] (available with the `serde` cargo
+/// feature).
 ///
-/// The mapping: booleans → [`Bool`](SerialValue::Bool); integers of every width →
-/// [`Int`](SerialValue::Int) (a value outside `i64` is an error); `char`, strings →
-/// [`Str`](SerialValue::Str); byte strings (serde's `serialize_bytes`, reached with
-/// [`serial_bytes`]) → [`Bytes`](SerialValue::Bytes); `()`, unit structs, and `None` →
-/// [`Null`](SerialValue::Null); `Some(x)` → `x`; sequences and tuples →
-/// [`List`](SerialValue::List); structs → [`Map`](SerialValue::Map) in field order;
-/// maps → `Map` (keys must be strings — `char` keys, unit enum variants, and newtype
-/// structs wrapping a string count as their string form; anything else is an error —
-/// and no key, field name, or variant name used as a map key may begin with `$`, the
-/// value model's reserved prefix — a unit variant, rendered as a string *value*, is
-/// unrestricted);
-/// newtype structs → their content (except the table-position sentinel, which becomes
-/// [`Index`](SerialValue::Index)); enums in serde's externally tagged form (the
-/// variant name, then its data) — a unit variant → `Str` of the variant name, a
-/// variant with data → a one-entry `Map` from the variant name to the data. A
-/// `SerialValue` converts to itself unchanged.
+/// This is the route for a payload that already implements serde's `Serialize`; a
+/// language's own value and ext types implement the crate's value traits instead, without
+/// the feature. The reverse conversion is [`from_value`].
 ///
-/// Two cautions for payload types that hold typed table positions: a position cannot
-/// cross a `#[serde(flatten)]` or `#[serde(untagged)]` boundary (serde buffers such
+/// The mapping:
+///
+/// - booleans → [`Bool`](SerialValue::Bool);
+/// - integers of every width → [`Int`](SerialValue::Int), a value outside `i64` being an
+///   error;
+/// - `char` and strings → [`Str`](SerialValue::Str);
+/// - byte strings (serde's `serialize_bytes`, reached with [`serial_bytes`]) →
+///   [`Bytes`](SerialValue::Bytes);
+/// - `()`, unit structs, and `None` → [`Null`](SerialValue::Null); `Some(x)` → `x`;
+/// - sequences and tuples → [`List`](SerialValue::List);
+/// - structs → [`Map`](SerialValue::Map), in field order;
+/// - maps → `Map`, whose keys must be strings — a `char` key, a unit enum variant, and a
+///   newtype struct wrapping a string count as their string form, anything else is an
+///   error;
+/// - newtype structs → their content, except the table-position sentinel, which becomes
+///   [`Index`](SerialValue::Index);
+/// - enums in serde's externally tagged form: a unit variant → `Str` of the variant name,
+///   a variant with data → a one-entry `Map` from the variant name to the data.
+///
+/// A `SerialValue` converts to itself unchanged.
+///
+/// No string used as a map key may begin with `$`, the value model's reserved prefix —
+/// that covers map keys, struct field names, and the variant names of variants with data.
+/// A unit variant, rendered as a string *value*, is unrestricted.
+///
+/// Two cautions for payload types that hold typed table positions. A position cannot
+/// cross a `#[serde(flatten)]` or `#[serde(untagged)]` boundary: serde buffers such
 /// content through `deserialize_any`, where an `Index` is a
-/// [`TypeMismatch`](SerialValueError::TypeMismatch)); and an `Option` field should
-/// carry `#[serde(skip_serializing_if = "Option::is_none")]` (with
-/// `#[serde(default)]` for reading) so that an absent value is an omitted key, as the
-/// crate's own serialized structures render it — a bare `None` field is otherwise
-/// written as an explicit `Null` value.
+/// [`TypeMismatch`](SerialValueError::TypeMismatch). And an `Option` field should carry
+/// `#[serde(skip_serializing_if = "Option::is_none")]` (with `#[serde(default)]` for
+/// reading) so that an absent value is an omitted key, as the crate's own serialized
+/// structures render it; a bare `None` field is otherwise written as an explicit `Null`
+/// value.
 ///
 /// # Errors
 ///
-/// [`SerialValueError::FloatRejected`] for `f32`/`f64`;
-/// [`SerialValueError::IntegerOutOfRange`] for an integer outside `i64`;
-/// [`SerialValueError::NonStringMapKey`] for a map key that is not a string;
-/// [`SerialValueError::ReservedMapKey`] for a map key, field name, or variant name
-/// used as a map key beginning with `$`; a
-/// [`SerialValueError::Custom`] for whatever the type's own `Serialize` impl reports.
+/// - [`SerialValueError::FloatRejected`] for an `f32` or `f64`;
+/// - [`SerialValueError::IntegerOutOfRange`] for an integer outside `i64`;
+/// - [`SerialValueError::NonStringMapKey`] for a map key that is not a string;
+/// - [`SerialValueError::ReservedMapKey`] for a map key, field name, or variant name used
+///   as a map key that begins with `$`;
+/// - [`SerialValueError::Custom`] for whatever the type's own `Serialize` impl reports.
 pub fn to_value<T: Serialize + ?Sized>(value: &T) -> Result<SerialValue, SerialValueError> {
     value.serialize(ValueSerializer { human_readable: true })
 }
@@ -762,21 +781,23 @@ impl Serializer for MapKeySerializer {
 
 // --- from_value: the Deserializer ----------------------------------------------------------
 
-/// Read any deserializable value from a [`SerialValue`] (available with the `serde`
-/// cargo feature): the reverse of [`to_value`], with the same mapping. The value is
-/// borrowed, so strings and byte strings can be borrowed from it (`&'de str`,
-/// `&'de [u8]`).
+/// Read any deserializable value from a [`SerialValue`] (available with the `serde` cargo
+/// feature).
+///
+/// The reverse of [`to_value`], with the same mapping. The value is borrowed, so strings
+/// and byte strings can be borrowed from it (`&'de str`, `&'de [u8]`).
 ///
 /// # Errors
 ///
-/// [`SerialValueError::TypeMismatch`] when the value's kind is not what the type
-/// reads (a `Str` where a struct's `Map` is needed, a `List` where a byte string is
-/// needed, an `Index` read as anything but a typed table position);
-/// [`SerialValueError::FloatRejected`] for an `f32`/`f64` target;
-/// [`SerialValueError::IntegerOutOfRange`] when an `Int` does not fit the target
-/// integer type; the field and variant errors ([`MissingField`], [`UnknownField`],
-/// [`DuplicateField`], [`UnknownVariant`]) as the type's `Deserialize` impl reports
-/// them; a [`Custom`] for anything else it reports.
+/// - [`SerialValueError::TypeMismatch`] when the value's kind is not what the type reads:
+///   a `Str` where a struct's `Map` is needed, a `List` where a byte string is needed, an
+///   `Index` read as anything but a typed table position;
+/// - [`SerialValueError::FloatRejected`] for an `f32` or `f64` target;
+/// - [`SerialValueError::IntegerOutOfRange`] when an `Int` does not fit the target
+///   integer type;
+/// - the field and variant errors ([`MissingField`], [`UnknownField`], [`DuplicateField`],
+///   [`UnknownVariant`]) as the type's `Deserialize` impl reports them;
+/// - a [`Custom`] for anything else it reports.
 ///
 /// [`MissingField`]: SerialValueError::MissingField
 /// [`UnknownField`]: SerialValueError::UnknownField

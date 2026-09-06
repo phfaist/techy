@@ -182,12 +182,16 @@ impl SerialValue {
 
 /// The result of serializing one object: the object's identifier and its data.
 ///
+/// This is what a
+/// [`SerializableObject::serialize_object`](crate::serialize::SerializableObject::serialize_object)
+/// call returns, and what a table stores for each object it holds.
+///
 /// The `identifier` names the kind of object `data` describes: a deliberately chosen,
-/// stable string owned by whoever defines the object type — never a Rust type name.
-/// A `Cow<'static, str>` so that the common case, a string literal, costs nothing,
-/// while a type whose identifier depends on the instance can supply an owned string.
-/// Some tables hold objects of one kind only and do not write the identifier out;
-/// even then the entry carries a real, non-empty identifier.
+/// stable string owned by whoever defines the object type — never a Rust type name. It
+/// is a `Cow<'static, str>`, so that a fixed identifier can be a string literal while a
+/// type whose identifier depends on the instance supplies an owned string. A table that
+/// holds objects of one kind only does not write the identifier out; even then the
+/// entry has a real, non-empty identifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SerialEntry {
     /// The identifier of the kind of object `data` describes.
@@ -198,15 +202,17 @@ pub struct SerialEntry {
 
 /// The ordinal of a table: which numbered table a [`SerialValue::Index`] refers to.
 ///
-/// Tables are numbered in the order they are registered with a
-/// [`SerdeSession`](crate::serialize::SerdeSession), deterministically; user code
-/// receives `TableId`s (inside typed table positions and on
-/// [`TableHandle`](crate::serialize::TableHandle)s) and passes them along but never
-/// mints them. A `TableId` is meaningful only relative to the session that assigned
-/// it — two sessions that register the same tables in different orders number them
-/// differently. Inside a segment, table references carry the writing session's ids
-/// and are translated by table *name* when another session absorbs the segment (see
-/// [`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)); a
+/// Tables are numbered deterministically, in the order they are registered with a
+/// [`SerdeSession`](crate::serialize::SerdeSession). User code receives `TableId`s —
+/// inside typed table positions and on
+/// [`TableHandle`](crate::serialize::TableHandle)s — and passes them along, but never
+/// creates them.
+///
+/// A `TableId` is meaningful only relative to the session that assigned it: two
+/// sessions that register the same tables in different orders number them differently.
+/// Inside a segment, table references use the writing session's ids and are translated
+/// by table *name* when another session absorbs the segment (see
+/// [`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)). A
 /// typed position held in Rust code is not translated, so it is exchanged between
 /// sessions as its table's name and its `u32` index (see
 /// [`SerialIndex`](crate::serialize::SerialIndex)).
@@ -227,31 +233,33 @@ impl TableId {
     }
 }
 
-/// The bound satisfied by every typed table position — the `Index` type of an
-/// [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver): a `Copy` value
-/// carrying both the [`TableId`] of its table and the `u32` position within it, the
-/// same two parts a [`SerialValue::Index`] holds, so that a position in one table
-/// cannot be mistaken for a position in another and so that its serialized form
-/// needs no further context.
+/// The bound every typed table position satisfies: a `Copy` value holding both the
+/// [`TableId`] of its table and the `u32` position within it.
+///
+/// A typed position is the `Index` type of an
+/// [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver). It holds the same two
+/// parts as a [`SerialValue::Index`], so that a position in one table cannot be mistaken
+/// for a position in another and its serialized form needs no further context.
 ///
 /// Position types are defined with the [`serial_index!`](crate::serialize::serial_index)
 /// macro, which supplies this impl together with the conversions to and from the
 /// serialized form; each kind of table has its own position type, defined next to
-/// the driver of that table. Positions are minted by the session (a
+/// the driver of that table. Positions are created by the session (a
 /// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern) call
 /// returns one) or rebuilt from a bare index with
 /// [`TableHandle::position`](crate::serialize::TableHandle::position); on the
 /// reading side, the session validates both parts.
 ///
-/// **A typed position is scoped to the session that minted it.** Its `TableId` is
-/// that session's, and two sessions that register the same tables in different
-/// orders number them differently: a position minted by a writing session, handed as
-/// it is to a reading session, names the wrong table there
+/// **A typed position is scoped to the session that created it.** Its `TableId` is that
+/// session's, and two sessions that register the same tables in different orders number
+/// them differently: a position from a writing session, passed unchanged to a reading
+/// session, names the wrong table there
 /// ([`DeserializeError::WrongTable`](crate::serialize::DeserializeError::WrongTable)).
-/// Inside a segment, positions are `u32` indices scoped to the stream, with table
-/// references the reading session translates by table name — that is why references
-/// inside entries need no care; a position held in Rust code and passed from one
-/// session to another is exchanged as its table's name
+///
+/// References *inside* entries need no such care: a segment stores positions as `u32`
+/// indices scoped to the stream, and the reading session translates the table
+/// references by table name. A position held in Rust code and passed from one session
+/// to another is exchanged as its table's name
 /// ([`ObjectSerdeDriver::table_name`](crate::serialize::ObjectSerdeDriver::table_name))
 /// and its `u32` index ([`index`](SerialIndex::index)), and rebuilt on the receiving
 /// side with `TableHandle::position`.

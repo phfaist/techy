@@ -1,21 +1,25 @@
-//! The serialized shape of a [`NodeTree`](crate::core::node::NodeTree): [`WireTree`] and its
-//! parts — the nodes in storage order, each a [`WireNode`] with its structural kind
-//! ([`WireNodeKind`]), span, state position, ext, and children range, and the
-//! per-node annotations (omitted for the unit annotation). Written and read by the
-//! crate's tree driver ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)); the
-//! language-typed parts (a group's or a callable's type, a node's ext, an invocation
-//! syntax) are carried as [`SerialValue`]s produced by the language's own conversions,
-//! and the argument/slot regions are stored in a builder-ready form the reader
+//! The serialized shape of a [`NodeTree`](crate::core::node::NodeTree): [`WireTree`]
+//! and its parts.
+//!
+//! A tree is its nodes in storage order, each a [`WireNode`] with its structural kind
+//! ([`WireNodeKind`]), span, state position, ext, and children range, plus the per-node
+//! annotations (omitted for the unit annotation). Written and read by the crate's tree
+//! driver ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)).
+//!
+//! The language-typed parts (a group's or a callable's type, a node's ext, an invocation
+//! syntax) are stored as [`SerialValue`]s produced by the language's own conversions,
+//! and the argument and slot regions are stored in a builder-ready form the reader
 //! re-resolves.
 //!
-//! The tree layout tag and the parent table are never written: the reader mints a
-//! fresh tag and recomputes the parent table when it rebuilds the tree through the
-//! node builder (see [`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)).
-//! Language-typed parts carry no span-backed text: the writer materializes the
-//! invocation syntax against the node's source before converting it, and
-//! `TextContent`'s value conversion is owned-only — only the node's own text
-//! payloads below (`Chars`, `Group`, `Comment`) are span-backed on the wire, and the
-//! reader validates their ranges against the node's source.
+//! The tree layout tag and the parent table are never written: the reader mints a fresh
+//! tag and recomputes the parent table when it rebuilds the tree through the node
+//! builder.
+//!
+//! Language-typed parts hold no span-backed text: the writer materializes the invocation
+//! syntax against the node's source before converting it, and `TextContent`'s value
+//! conversion is owned-only. Only the node's own text payloads below (`Chars`, `Group`,
+//! `Comment`) are span-backed on the wire, and the reader validates their ranges against
+//! the node's source.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -130,8 +134,8 @@ pub(crate) struct WireTree {
     /// The nodes in storage order.
     #[serial(name = "nodes")]
     pub(crate) nodes: Vec<WireNode>,
-    /// The per-node annotations, in storage order — one value per node. Omitted (the
-    /// unit annotation), or one value per node.
+    /// The per-node annotations, in storage order: one value per node, or omitted for the
+    /// unit annotation.
     #[serial(name = "annotations")]
     pub(crate) annotations: Option<Vec<SerialValue>>,
 }
@@ -260,11 +264,9 @@ pub(crate) struct WireSlot {
     pub(crate) ext: SerialValue,
 }
 
-/// One argument's or slot's child region in the builder-ready form the reader
-/// re-resolves: the region's node offsets within the callable's child list, and the
-/// content designation ([`WireContent`]).
-///
-/// `children` are offsets into the callable's own child list `[0, child_count)`.
+/// One argument's or slot's child region, in the builder-ready form the reader
+/// re-resolves: the region's node offsets within the callable's own child list
+/// `[0, child_count)`, and the content designation ([`WireContent`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireRegion {
     /// The region's node offsets within the callable's child list.

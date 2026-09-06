@@ -64,6 +64,10 @@
 //! through `Arc`, with fresh node ids — and a node a separator cut through
 //! becomes a new `Chars` node holding the piece of that node's own content.
 //!
+//! A copied node keeps the language extension data it already had; the newly
+//! created nodes — the cut pieces, the `List` wrappers, the root — get theirs from
+//! [`Lang::make_node_ext`], as during a parse.
+//!
 //! Segments and values are then ordinary [`NodeSlice`] views into that result,
 //! which is what makes the helpers compose with each other and with the rest of
 //! the crate: a segment can be split again, flattened with
@@ -661,25 +665,36 @@ fn stage_segment_list<'t, L: Lang, A, B>(
 
 // --- split_at_chars ---------------------------------------------------------------------
 
-/// Split a run of sibling nodes into segments delimited by `sep` occurrences in
-/// **top-level chars nodes** — pylatexenc's `LatexNodeList.split_at_chars`. Grouped
-/// content protects its interior: splitting the argument of
-/// `\cite{key1,key2,my{special,key},keyN}` at `","` yields four segments, the third
-/// being the chars piece `my` followed by the whole `{special,key}` group. Empty
-/// segments (adjacent, leading, or trailing separators) are dropped, matching
-/// pylatexenc's default.
+/// Splits a run of sibling nodes into segments at occurrences of `sep`.
 ///
-/// The segments live in one new tree owned by the returned [`SplitAtChars`] (module
-/// docs: copies plus fresh boundary partials, span-backed with exact sub-spans where
-/// the node they were cut from is); access them as
-/// [`NodeSlice`]s via [`SplitAtChars::segment`]/[`SplitAtChars::segments`].
+/// Only the text of **top-level chars nodes** is searched for `sep`. Every other
+/// node — a group, a callable, a comment — is kept whole and protects its interior:
+/// splitting the argument of `\cite{key1,key2,my{special,key},keyN}` at `","` gives
+/// four segments, the third being the chars piece `my` followed by the whole
+/// `{special,key}` group.
 ///
-/// `annotate` mints every output node's annotation from its
-/// [`SplitAtCharsPart`] facts (module docs; annotation minting only — node
-/// edits are [`techy::transform`](crate::transform)'s job). The input may carry
-/// any annotation type; the shorthands are
-/// [`split_at_chars_drop_annotations`] (`B = ()`) and
-/// [`split_at_chars_keep_annotations`] (`A → A` clone-through).
+/// Nothing is trimmed, so a separator surrounded by spaces leaves those spaces in
+/// the neighboring segments. A run with no occurrence of `sep` at all gives one
+/// segment holding the whole run, and an empty run gives no segments. Empty segments
+/// are dropped, as pylatexenc does by default: `a,,b` gives two segments, `,a,` one,
+/// and `,,` none.
+///
+/// The segments are stored in one new tree owned by the returned [`SplitAtChars`],
+/// and read back as [`NodeSlice`]s through [`segment`](SplitAtChars::segment) and
+/// [`segments`](SplitAtChars::segments). Being ordinary node lists, they feed every
+/// other helper: [`content_as_chars`] flattens a segment, and `split_at_chars`
+/// splits one again at a second separator.
+///
+/// `annotate` supplies the annotation of each output node from its
+/// [`SplitAtCharsPart`] (module docs); it supplies annotations only, since changing
+/// nodes is what [`transform`](crate::transform) is for. The input's own annotation
+/// type is unconstrained. Two fixed choices ship as separate functions:
+/// [`split_at_chars_drop_annotations`] (every output node gets `()`) and
+/// [`split_at_chars_keep_annotations`] (each keeps its original node's annotation).
+///
+/// This is pylatexenc's `LatexNodeList.split_at_chars`.
+///
+/// # Examples
 ///
 /// ```
 /// use techy::core::{Language, ParsingState};
@@ -706,8 +721,12 @@ fn stage_segment_list<'t, L: Lang, A, B>(
 /// assert_eq!(*split.tree().root().annotation(), None::<NodeId>);
 /// ```
 ///
-/// Errors: [`ExtractError::EmptySeparator`] for an empty `sep`;
-/// [`ExtractError::Build`] if result-tree construction fails.
+/// # Errors
+///
+/// [`ExtractError::EmptySeparator`] if `sep` is empty: the empty string has no
+/// occurrences to split at.
+///
+/// [`ExtractError::Build`] if building the result tree fails.
 ///
 /// # Panics
 ///
@@ -751,7 +770,10 @@ pub fn split_at_chars<'t, L: Lang, A, B>(
     Ok(SplitAtChars { tree: builder.finish(root)? })
 }
 
-/// [`split_at_chars`] with unit output annotations (`B = ()`).
+/// [`split_at_chars`] with `()` as every output node's annotation.
+///
+/// The form to reach for when the result's annotations are of no interest — which
+/// is most of the time.
 pub fn split_at_chars_drop_annotations<L: Lang, A>(
     nodes: NodeSlice<'_, L, A>,
     sep: &str,
@@ -759,10 +781,12 @@ pub fn split_at_chars_drop_annotations<L: Lang, A>(
     split_at_chars(nodes, sep, |_| ())
 }
 
-/// [`split_at_chars`] cloning annotations through: every copy and partial keeps
-/// its [`original()`](SplitAtCharsPart::original) node's annotation; synthesized
-/// nodes get `A::default()`. (The `Clone + Default` demand lives only here —
-/// the general form has no annotation bounds.)
+/// [`split_at_chars`] keeping the input's annotations.
+///
+/// Each output node takes the annotation of the input node it came from; the
+/// segment `List`s and the root, which come from no input node, get
+/// `A::default()`. This is the only form of the three that requires anything of the
+/// annotation type.
 pub fn split_at_chars_keep_annotations<L: Lang, A: Clone + Default>(
     nodes: NodeSlice<'_, L, A>,
     sep: &str,
@@ -770,46 +794,57 @@ pub fn split_at_chars_keep_annotations<L: Lang, A: Clone + Default>(
     split_at_chars(nodes, sep, keep_annotation)
 }
 
-/// The `_keep_annotations` mint: clone through, default for synthesized nodes.
+/// The callback `_keep_annotations` supplies: clone the original node's annotation,
+/// or use the default for a synthesized node.
 fn keep_annotation<'t, L: Lang, A: Clone + Default>(part: &SplitAtCharsPart<'t, L, A>) -> A {
     part.original().map(|node| node.annotation().clone()).unwrap_or_default()
 }
 
-/// The result of [`split_at_chars`]: the split segments, backed by one owned
-/// [`NodeTree`] (root `List`, one `List` child per segment; annotations `B`
-/// minted by the producer's callback).
+/// The segments produced by [`split_at_chars`].
+///
+/// The segments are stored in one owned [`NodeTree`] — a root `List` with one `List`
+/// child per segment — whose annotation type `B` is whatever the `annotate` callback
+/// returned. Read the segments with [`segment`](Self::segment) and
+/// [`segments`](Self::segments); they are ordinary [`NodeSlice`]s and can be fed
+/// back to any helper of this module.
 pub struct SplitAtChars<L: Lang, B = ()> {
     tree: NodeTree<L, B>,
 }
 
 impl<L: Lang, B> SplitAtChars<L, B> {
-    /// The number of segments.
+    /// Returns the number of segments.
     pub fn len(&self) -> usize {
         self.tree.root().child_count()
     }
 
-    /// Whether there are no segments.
+    /// Returns whether there are no segments, which happens when the input run was
+    /// empty or consisted only of separators.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Segment `i`'s nodes.
+    /// Returns the nodes of segment `i`, counting from `0` in source order, or
+    /// `None` if there is no such segment.
     pub fn segment(&self, i: usize) -> Option<NodeSlice<'_, L, B>> {
         Some(self.tree.root().child(i)?.children())
     }
 
-    /// The segments, in source order.
+    /// Returns the segments in source order.
     pub fn segments(&self) -> impl Iterator<Item = NodeSlice<'_, L, B>> {
         self.tree.root().children().iter().map(|list| list.children())
     }
 
-    /// The backing tree: root `List` with one `List` child per segment. A derived
-    /// view-tree — sibling spans do not tile (separators are omitted; module docs).
+    /// Returns the tree the segments are stored in: a root `List` with one `List`
+    /// child per segment.
+    ///
+    /// It is a derived tree, so its sibling spans do not tile their parent's
+    /// interior — the separators are left out of it (module docs).
     pub fn tree(&self) -> &NodeTree<L, B> {
         &self.tree
     }
 
-    /// Consume into the backing tree.
+    /// Consumes this value and returns the tree the segments are stored in (see
+    /// [`tree`](Self::tree)).
     pub fn into_tree(self) -> NodeTree<L, B> {
         self.tree
     }
@@ -823,26 +858,47 @@ impl<L: Lang, B> fmt::Debug for SplitAtChars<L, B> {
 
 // --- parse_keyval -----------------------------------------------------------------------
 
-/// Parse a run of sibling nodes as `key1=<value1>,key2=<value2>,…` content —
-/// pylatexenc's `parse_keyval_content`. Pairs split at top-level `,`; within a pair the
-/// first top-level `=` separates the key from the value; grouped content protects both
-/// (`legend={a,b}`). Keys flatten via [`content_as_chars`] and are
-/// **whitespace-trimmed** (a deliberate deviation from pylatexenc, which keeps `" a "`
-/// verbatim: LaTeX's keyval packages trim, and pylatexenc's untrimmed keys are a
-/// recurring source of user mistakes). Values are recorded **raw and in source order, duplicates
-/// preserved** — deliberately, with no aggregation options: pylatexenc's `repeated_key_aggregate_action`
-/// policies are one-line derivations over [`iter`](KeyVals::iter), and
-/// [`get`](KeyVals::get) answers the common "effective value" question (last wins —
-/// LaTeX override semantics). A key with `=` and nothing after it gets an empty value;
-/// a key with no `=` gets none ([`KeyValEntry::value`] is `None` — sharper than
-/// pylatexenc, which conflates the two).
+/// Reads a run of sibling nodes as `key1=value1,key2=value2,…` content.
 ///
-/// Errors: [`ExtractError::NonCharsContent`] when a key does not flatten to characters;
-/// [`ExtractError::Build`] if result-tree construction fails.
+/// Pairs are separated by top-level `,`, and within a pair the first top-level `=`
+/// separates the key from the value; a later `=` stays in the value. Grouped content
+/// protects both, so `legend={a,b}` is one pair whose value is the group.
 ///
-/// `annotate` mints every output node's annotation from its [`KeyValsPart`]
-/// facts (module docs); the shorthands are [`parse_keyval_drop_annotations`]
-/// and [`parse_keyval_keep_annotations`].
+/// Keys are flattened with [`content_as_chars`] and whitespace-trimmed. Values are
+/// recorded raw — not trimmed, in source order, duplicate keys preserved.
+///
+/// The two ways a key can come without a value stay distinct, where pylatexenc
+/// conflates them: `key=` records an empty value (an empty [`NodeSlice`]), and a
+/// bare `key` with no `=` records no value at all ([`KeyValEntry::value`] is
+/// `None`).
+///
+/// Empty pairs are dropped, so `a,,b` reads as two entries and a trailing comma adds
+/// none; an empty run reads as no entries. A pair holding only whitespace is still an
+/// entry, with the empty string as its key.
+///
+/// Duplicate keys are kept on purpose, and there are no aggregation settings:
+/// [`get`](KeyVals::get) answers the everyday "which value is in effect" question
+/// with the last occurrence, matching LaTeX's override behavior;
+/// [`get_combined_with`](KeyVals::get_combined_with) joins them all; and
+/// [`iter`](KeyVals::iter) gives them in source order, which is all pylatexenc's
+/// `repeated_key_aggregate_action` policies need to be written as one-liners.
+///
+/// Trimming keys is a deliberate difference from pylatexenc, which keeps `" a "` as
+/// written: LaTeX's keyval packages trim, and untrimmed keys are a recurring source
+/// of mistakes.
+///
+/// `annotate` supplies the annotation of each output node from its [`KeyValsPart`]
+/// (module docs); the fixed forms are [`parse_keyval_drop_annotations`] and
+/// [`parse_keyval_keep_annotations`].
+///
+/// This is pylatexenc's `parse_keyval_content`.
+///
+/// # Errors
+///
+/// [`ExtractError::NonCharsContent`] if a key does not flatten to characters — a
+/// callable standing in the key position, say.
+///
+/// [`ExtractError::Build`] if building the result tree fails.
 ///
 /// # Panics
 ///
@@ -886,28 +942,28 @@ pub fn parse_keyval<'t, L: Lang, A, B>(
     finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state, &mut mint)
 }
 
-/// [`parse_keyval`] with unit output annotations (`B = ()`).
+/// [`parse_keyval`] with `()` as every output node's annotation.
 pub fn parse_keyval_drop_annotations<L: Lang, A>(
     nodes: NodeSlice<'_, L, A>,
 ) -> Result<KeyVals<L>, ExtractError> {
     parse_keyval(nodes, |_| ())
 }
 
-/// [`parse_keyval`] cloning annotations through (`A: Clone + Default`,
-/// bound only here): copies and partials keep their original node's annotation,
-/// synthesized nodes get `A::default()`.
+/// [`parse_keyval`] keeping the input's annotations: each output node takes the
+/// annotation of the input node it came from, and the synthesized nodes get
+/// `A::default()`.
 pub fn parse_keyval_keep_annotations<L: Lang, A: Clone + Default>(
     nodes: NodeSlice<'_, L, A>,
 ) -> Result<KeyVals<L, A>, ExtractError> {
     parse_keyval(nodes, keep_keyval_annotation)
 }
 
-/// The keyval-family `_keep_annotations` mint.
+/// The callback the keyval-family `_keep_annotations` forms supply.
 fn keep_keyval_annotation<'t, L: Lang, A: Clone + Default>(part: &KeyValsPart<'t, L, A>) -> A {
     part.original().map(|node| node.annotation().clone()).unwrap_or_default()
 }
 
-/// Assemble a [`KeyVals`] from staged value lists and a `(key, value-list index)`
+/// Assembles a [`KeyVals`] from the staged value lists and a `(key, value-list index)`
 /// table — the shared tail of [`parse_keyval`], [`split_embellishments`], and
 /// [`split_tack_on_fields`].
 fn finish_keyvals<'t, L: Lang, A, B>(
@@ -935,8 +991,9 @@ fn finish_keyvals<'t, L: Lang, A, B>(
 
 // --- split_embellishments / split_tack_on_fields ----------------------------------------
 
-/// Whether `node` is skippable run noise — a comment, or a whitespace-only chars node
-/// (the staged form of pre-entry whitespace in argument regions).
+/// Whether `node` is ignorable filler in a run — a comment, or a whitespace-only
+/// chars node, which is how whitespace before an entry is stored in an argument
+/// region.
 fn is_run_noise<L: Lang, A>(node: &NodeRef<'_, L, A>) -> bool {
     match node.kind() {
         NodeKind::Comment { .. } => true,
@@ -947,24 +1004,37 @@ fn is_run_noise<L: Lang, A>(node: &NodeRef<'_, L, A>) -> bool {
     }
 }
 
-/// Read an embellishments argument's content run
-/// ([`EmbellishmentsArgumentParser`](crate::constructs::EmbellishmentsArgumentParser))
-/// as [`KeyVals`]: one entry per matched embellishment in source order, the **marker**
-/// as the key (the wrapper group's opening delimiter — `"^"`, `"_"`, …) and the
-/// embellishment's argument nodes as the value, noise-free (the whitespace node a
-/// `^ {a}`-style pair stages inside its wrapper is filtered out). Noise between
-/// embellishments (whitespace, comments) is skipped; any node that is neither noise
-/// nor a group is [`ExtractError::UnexpectedContent`] — feed this helper the
-/// argument's *content* nodes ([`NodeRef::argument_content_nodes`]).
+/// Reads the content run of an embellishments argument as [`KeyVals`].
 ///
-/// The [`KeyVals`] grammar fits embellishments exactly: duplicate keys preserved in
-/// order, [`get`](KeyVals::get) = last occurrence, and
+/// Give it the *content* nodes of an argument parsed by
+/// [`EmbellishmentsArgumentParser`](crate::core::constructs::EmbellishmentsArgumentParser)
+/// — [`NodeRef::argument_content_nodes`] returns them. Each embellishment becomes
+/// one entry, in source order: the key is the marker that introduced it, which is
+/// the opening delimiter of its wrapper group (`"^"`, `"_"`, …), and the value is
+/// the embellishment's own nodes with filler removed, so the whitespace node that a
+/// `^ {a}`-style pair stores inside its wrapper does not appear.
+///
+/// Whitespace and comments between embellishments are skipped. An empty run, or one
+/// holding nothing but those, reads as no entries. Every entry has a value, possibly
+/// an empty one — unlike [`split_tack_on_fields`], this helper never records an
+/// entry without a value.
+///
+/// [`KeyVals`] fits embellishments closely: duplicate markers stay in source order,
+/// [`get`](KeyVals::get) answers with the last occurrence, and
 /// [`value_content`](KeyValEntry::value_content) unwraps the usual lone `{…}` value
-/// group (`^{ab}` → the `ab` content).
-/// `annotate` mints every output node's annotation from its [`KeyValsPart`]
-/// facts (module docs); the shorthands are
-/// [`split_embellishments_drop_annotations`] and
+/// group, turning `^{ab}` into the `ab` content.
+///
+/// `annotate` supplies the annotation of each output node from its [`KeyValsPart`]
+/// (module docs); the fixed forms are [`split_embellishments_drop_annotations`] and
 /// [`split_embellishments_keep_annotations`].
+///
+/// # Errors
+///
+/// [`ExtractError::UnexpectedContent`] if the run holds a node that is neither
+/// whitespace, a comment, nor a group — the sign that the input was not an
+/// embellishments argument's content run.
+///
+/// [`ExtractError::Build`] if building the result tree fails.
 ///
 /// # Panics
 ///
@@ -1007,42 +1077,54 @@ pub fn split_embellishments<'t, L: Lang, A, B>(
     finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state, &mut mint)
 }
 
-/// [`split_embellishments`] with unit output annotations (`B = ()`).
+/// [`split_embellishments`] with `()` as every output node's annotation.
 pub fn split_embellishments_drop_annotations<L: Lang, A>(
     nodes: NodeSlice<'_, L, A>,
 ) -> Result<KeyVals<L>, ExtractError> {
     split_embellishments(nodes, |_| ())
 }
 
-/// [`split_embellishments`] cloning annotations through (`A: Clone + Default`,
-/// bound only here).
+/// [`split_embellishments`] keeping the input's annotations: each output node takes
+/// the annotation of the input node it came from, and the synthesized nodes get
+/// `A::default()`.
 pub fn split_embellishments_keep_annotations<L: Lang, A: Clone + Default>(
     nodes: NodeSlice<'_, L, A>,
 ) -> Result<KeyVals<L, A>, ExtractError> {
     split_embellishments(nodes, keep_keyval_annotation)
 }
 
-/// Read a tack-on fields argument's content run
-/// ([`TackOnFieldsArgumentParser`](crate::constructs::TackOnFieldsArgumentParser)) as
-/// [`KeyVals`]: one entry per absorbed field invocation in source order, the field's
-/// **command name** as the key (`"label"`) and the invocation's argument content as
-/// the value, noise-free — the content nodes of every *provided* argument,
-/// concatenated in invocation order (for the dominant one-argument field shape:
-/// exactly that argument's content). A field invocation providing no argument at all
-/// (a zero-argument flag field, or every argument absent) records no value
-/// ([`KeyValEntry::value`] is `None`) — sharper than an explicitly empty `\label{}`,
-/// whose value is an empty slice, mirroring the keyval `draft` vs. `label=`
-/// distinction.
+/// Reads the content run of a tack-on fields argument as [`KeyVals`].
 ///
-/// Noise between fields is skipped; any node that is neither noise nor a callable is
-/// [`ExtractError::UnexpectedContent`] — feed this helper the argument's *content*
-/// nodes ([`NodeRef::argument_content_nodes`]). Duplicate fields (repeatable `\label`s)
-/// are preserved in order; [`get`](KeyVals::get) answers with the last,
-/// [`get_combined_with`](KeyVals::get_combined_with) collects them all.
-/// `annotate` mints every output node's annotation from its [`KeyValsPart`]
-/// facts (module docs); the shorthands are
-/// [`split_tack_on_fields_drop_annotations`] and
+/// Give it the *content* nodes of an argument parsed by
+/// [`TackOnFieldsArgumentParser`](crate::core::constructs::TackOnFieldsArgumentParser)
+/// — [`NodeRef::argument_content_nodes`] returns them. Each absorbed field invocation
+/// becomes one entry, in source order: the key is the field's command name
+/// (`"label"`), and the value is the content nodes of every argument the invocation
+/// actually supplied, concatenated in argument order. For the common one-argument
+/// field that is exactly that argument's content.
+///
+/// An invocation that supplied no argument at all — a flag field taking none, or one
+/// whose arguments were all absent — records no value ([`KeyValEntry::value`] is
+/// `None`), which keeps it distinct from an explicitly empty `\label{}`, whose value
+/// is an empty slice. It is the same distinction [`parse_keyval`] draws between
+/// `draft` and `label=`.
+///
+/// Whitespace and comments between fields are skipped. An empty run, or one holding
+/// nothing but those, reads as no entries. Repeated fields — several `\label`s, say —
+/// stay in source order: [`get`](KeyVals::get) answers with the last, and
+/// [`get_combined_with`](KeyVals::get_combined_with) joins them all.
+///
+/// `annotate` supplies the annotation of each output node from its [`KeyValsPart`]
+/// (module docs); the fixed forms are [`split_tack_on_fields_drop_annotations`] and
 /// [`split_tack_on_fields_keep_annotations`].
+///
+/// # Errors
+///
+/// [`ExtractError::UnexpectedContent`] if the run holds a node that is neither
+/// whitespace, a comment, nor a callable invocation with arguments — the sign that
+/// the input was not a tack-on fields argument's content run.
+///
+/// [`ExtractError::Build`] if building the result tree fails.
 ///
 /// # Panics
 ///
@@ -1091,15 +1173,16 @@ pub fn split_tack_on_fields<'t, L: Lang, A, B>(
     finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state, &mut mint)
 }
 
-/// [`split_tack_on_fields`] with unit output annotations (`B = ()`).
+/// [`split_tack_on_fields`] with `()` as every output node's annotation.
 pub fn split_tack_on_fields_drop_annotations<L: Lang, A>(
     nodes: NodeSlice<'_, L, A>,
 ) -> Result<KeyVals<L>, ExtractError> {
     split_tack_on_fields(nodes, |_| ())
 }
 
-/// [`split_tack_on_fields`] cloning annotations through (`A: Clone + Default`,
-/// bound only here).
+/// [`split_tack_on_fields`] keeping the input's annotations: each output node takes
+/// the annotation of the input node it came from, and the synthesized nodes get
+/// `A::default()`.
 pub fn split_tack_on_fields_keep_annotations<L: Lang, A: Clone + Default>(
     nodes: NodeSlice<'_, L, A>,
 ) -> Result<KeyVals<L, A>, ExtractError> {
@@ -1108,55 +1191,76 @@ pub fn split_tack_on_fields_keep_annotations<L: Lang, A: Clone + Default>(
 
 struct KeyValEntryData {
     key: Box<str>,
-    /// The value `List` node in the backing tree; `None` = the key came without `=`.
+    /// The value `List` node in the backing tree; `None` when the entry has no
+    /// value.
     value: Option<NodeId>,
 }
 
-/// The result of [`parse_keyval`]: the entries **in source order, duplicates
-/// preserved**, with dict-style by-name access ([`get`](KeyVals::get), last occurrence
-/// wins) — values are backed by one owned [`NodeTree`] (annotations `B` minted by
-/// the producer's callback). Lookup scans the entries
-/// (keyval lists are small; the `ParsedArguments` no-name-map precedent).
+/// A list of key/value entries, as produced by [`parse_keyval`],
+/// [`split_embellishments`], or [`split_tack_on_fields`].
+///
+/// The entries are in source order with duplicate keys preserved, reachable by
+/// position with [`keyval`](Self::keyval), in order with [`iter`](Self::iter), and by
+/// name with [`get`](Self::get), which answers with the last entry of that name.
+///
+/// The values are [`NodeSlice`]s into one owned [`NodeTree`] held here, whose
+/// annotation type `B` is whatever the `annotate` callback returned. A lookup by name
+/// scans the entries, which are few in the lists these helpers read.
 pub struct KeyVals<L: Lang, B = ()> {
     tree: NodeTree<L, B>,
     entries: Vec<KeyValEntryData>,
 }
 
 impl<L: Lang, B> KeyVals<L, B> {
-    /// The number of entries (duplicates included).
+    /// Returns the number of entries, counting duplicate keys separately.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Whether there are no entries.
+    /// Returns whether there are no entries at all.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Entry `i`, in source order.
+    /// Returns entry `i`, counting from `0` in source order, or `None` if there is
+    /// no such entry.
     pub fn keyval(&self, i: usize) -> Option<KeyValEntry<'_, L, B>> {
         self.entries.get(i).map(|entry| self.view(entry))
     }
 
-    /// The **last** entry named `key` — the effective value under LaTeX keyval override
-    /// semantics. Earlier occurrences remain reachable through [`iter`](KeyVals::iter).
+    /// Returns the **last** entry named `key`, or `None` if there is none.
+    ///
+    /// The last one is the value in effect under LaTeX's keyval override behavior.
+    /// Earlier occurrences of the same key are still reachable through
+    /// [`iter`](Self::iter), and [`get_combined_with`](Self::get_combined_with) joins
+    /// them all into one node run.
     pub fn get(&self, key: &str) -> Option<KeyValEntry<'_, L, B>> {
         self.entries.iter().rev().find(|entry| &*entry.key == key).map(|entry| self.view(entry))
     }
 
-    /// The entries, in source order (duplicates included).
+    /// Returns the entries in source order, duplicate keys included.
     pub fn iter(&self) -> impl Iterator<Item = KeyValEntry<'_, L, B>> {
         self.entries.iter().map(|entry| self.view(entry))
     }
 
-    /// All values recorded under `key` (every occurrence, source order), concatenated
-    /// into one new tree with a synthesized separator chars node carrying `sep` between
-    /// consecutive values — "collect the values" for cumulative keys. Occurrences
-    /// without a value contribute nothing; an empty `sep` omits the separator nodes.
-    /// `Ok(None)` when no entry at all is named `key`. The returned tree's root `List`
-    /// holds the combined run — read it with `tree.root().children()`. The combined
-    /// tree is annotation-free (`()`): this is a reader convenience, not one of the
-    /// annotation-minting producers.
+    /// Joins every value recorded under `key` into one new tree.
+    ///
+    /// The values are copied in source order, with a synthesized chars node holding
+    /// `sep` between consecutive ones — the answer for a key meant to accumulate
+    /// rather than to override, which is what [`get`](Self::get) assumes. Read the
+    /// combined run from the returned tree with `tree.root().children()`.
+    ///
+    /// Occurrences of `key` that have no value contribute nothing, and an empty `sep`
+    /// leaves the separator nodes out. `Ok(None)` means no entry is named `key` at
+    /// all; a key whose every occurrence lacks a value gives an empty run rather than
+    /// `None`.
+    ///
+    /// The combined tree's nodes have no annotations (`B` becomes `()`): this is a
+    /// reading convenience rather than one of the annotation-supplying helpers.
+    ///
+    /// # Errors
+    ///
+    /// [`ExtractError::Build`] if building the combined tree fails.
     pub fn get_combined_with(
         &self,
         key: &str,
@@ -1202,13 +1306,20 @@ impl<L: Lang, B> KeyVals<L, B> {
         Ok(Some(builder.finish(root)?))
     }
 
-    /// The backing tree: root `List` with one `List` child per value-bearing entry. A
-    /// derived view-tree (module docs).
+    /// Returns the tree the values are stored in: a root `List` with one `List` child
+    /// per entry that has a value.
+    ///
+    /// It is a derived tree, so its sibling spans do not tile their parent's interior
+    /// (module docs).
     pub fn tree(&self) -> &NodeTree<L, B> {
         &self.tree
     }
 
-    /// Consume into the backing tree. The entry table is dropped — extract keys first.
+    /// Consumes this value and returns the tree the values are stored in (see
+    /// [`tree`](Self::tree)).
+    ///
+    /// The keys are dropped along with the entry table, so read whichever ones are
+    /// needed first.
     pub fn into_tree(self) -> NodeTree<L, B> {
         self.tree
     }
@@ -1231,28 +1342,41 @@ impl<L: Lang, B> fmt::Debug for KeyVals<L, B> {
     }
 }
 
-/// One [`KeyVals`] entry, viewed: the trimmed key and the raw value nodes.
+/// One entry of a [`KeyVals`]: its key and, when it has one, its value nodes.
+///
+/// Obtained from [`KeyVals::get`], [`KeyVals::keyval`], or [`KeyVals::iter`].
 pub struct KeyValEntry<'k, L: Lang, B = ()> {
     key: &'k str,
     value: Option<NodeSlice<'k, L, B>>,
 }
 
 impl<'k, L: Lang, B> KeyValEntry<'k, L, B> {
-    /// The key (whitespace-trimmed; see [`parse_keyval`]).
+    /// Returns the key.
+    ///
+    /// [`parse_keyval`] trims whitespace off it; for the run readers it is the
+    /// embellishment marker or the field's command name.
     pub fn key(&self) -> &'k str {
         self.key
     }
 
-    /// The raw value nodes: `None` = the key came without `=`; an empty slice = `key=`
-    /// with an explicitly empty value.
+    /// Returns the value nodes exactly as recorded, or `None` when the entry has no
+    /// value at all.
+    ///
+    /// The two are different: for [`parse_keyval`], `None` is a bare `key` written
+    /// without `=`, while an empty slice is `key=` with an explicitly empty value.
+    /// [`value_content`](Self::value_content) applies the usual convention of
+    /// unwrapping a lone group.
     pub fn value(&self) -> Option<NodeSlice<'k, L, B>> {
         self.value
     }
 
-    /// The value with the documented LaTeX keyval convention applied: when the value is
-    /// exactly one group node (`legend={a,b}`), its contents; otherwise the raw value.
-    /// This is pylatexenc's `extract_value_group_contents=True` as an accessor instead
-    /// of a parse-time setting — [`value`](KeyValEntry::value) always keeps the raw shape.
+    /// Returns the value with LaTeX's usual keyval convention applied: when the value
+    /// is exactly one group node, as in `legend={a,b}`, its contents; otherwise the
+    /// value unchanged.
+    ///
+    /// This is pylatexenc's `extract_value_group_contents=True`, offered as an
+    /// accessor rather than as a setting fixed when the content was read;
+    /// [`value`](Self::value) always reports the shape as recorded.
     pub fn value_content(&self) -> Option<NodeSlice<'k, L, B>> {
         let value = self.value?;
         if value.len() == 1 {

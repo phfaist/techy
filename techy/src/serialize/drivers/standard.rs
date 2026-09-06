@@ -1,8 +1,9 @@
-//! The standard tables as a whole: the spec and provider tables' drivers
-//! ([`SpecSerdeDriver`], [`ProviderSerdeDriver`]) and positions ([`SpecIndex`],
-//! [`ProviderIndex`]), the standard-tables constructor
-//! ([`SerdeSession::new`]) with its handle bundle ([`StandardTables`]), and the
-//! extension traits [`StandardTableInterning`] and [`StandardTableReading`].
+//! The standard tables as a whole: the constructor that registers them
+//! ([`SerdeSession::new`]) with its handle bundle ([`StandardTables`]), the extension
+//! traits that intern into and read from them by kind ([`StandardTableInterning`],
+//! [`StandardTableReading`]), and the drivers and positions of the spec and provider
+//! tables ([`SpecSerdeDriver`], [`ProviderSerdeDriver`], [`SpecIndex`],
+//! [`ProviderIndex`]).
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -41,21 +42,23 @@ crate::serial_index! {
     pub struct ProviderIndex;
 }
 
-/// The driver of the specs table (table name `specs`): the
-/// [`DispatchingSerdeDriver`] over `dyn CallableSpec<L>` — every spec type
-/// serializes itself through its own
+/// The driver of the specs table (table name `specs`): the [`DispatchingSerdeDriver`]
+/// over `dyn CallableSpec<L>`.
+///
+/// Every spec type serializes itself through its own
 /// [`SerializableObject::serialize_object`](crate::serialize::SerializableObject::serialize_object)
-/// (a supertrait of [`CallableSpec`]), and reading dispatches on the entry's
+/// (a supertrait method of [`CallableSpec`]), and reading dispatches on the entry's
 /// identifier through the readers and resolvers registered on the table's handle
 /// ([`TableHandle::register_type`] and its siblings). Registered by
 /// [`SerdeSession::new`].
 pub type SpecSerdeDriver<L> = DispatchingSerdeDriver<L, dyn CallableSpec<L>, SpecIndex>;
 
 /// The driver of the providers table (table name `providers`): the
-/// [`DispatchingSerdeDriver`] over `dyn SpecsProvider<L>` — every provider type
-/// serializes itself through its own
+/// [`DispatchingSerdeDriver`] over `dyn SpecsProvider<L>`.
+///
+/// Every provider type serializes itself through its own
 /// [`SerializableObject::serialize_object`](crate::serialize::SerializableObject::serialize_object)
-/// (a supertrait of [`SpecsProvider`]), and reading dispatches on the entry's
+/// (a supertrait method of [`SpecsProvider`]), and reading dispatches on the entry's
 /// identifier through the readers and resolvers registered on the table's handle
 /// ([`TableHandle::register_type`] and its siblings). Registered by
 /// [`SerdeSession::new`].
@@ -105,40 +108,48 @@ impl<L: SerializableLang> fmt::Debug for StandardTables<L> {
 }
 
 impl<L: SerializableLang> SerdeSession<L> {
-    /// A session with the crate's standard tables registered, in this order: the
-    /// sources table ([`SourceSerdeDriver`], with its defaults — every source
-    /// embedded, no supplier of referenced source text), the states table
-    /// ([`StateSerdeDriver`]), the specs table ([`SpecSerdeDriver`]), the providers
-    /// table ([`ProviderSerdeDriver`]), the trees table ([`TreeSerdeDriver`], with the
-    /// unit annotation pre-registered), the diagnostics table
-    /// ([`DiagnosticSerdeDriver`]), and the parse-results table
-    /// ([`ParseResultSerdeDriver`]). Their handles are
-    /// [`standard_tables`](SerdeSession::standard_tables); the interning and reading
-    /// accessors by kind are the [`StandardTableInterning`] and
-    /// [`StandardTableReading`] extension traits, and, for trees, diagnostics, and
-    /// parse results, the [`TreeSerialization`](crate::serialize::TreeSerialization),
+    /// Creates a session with the crate's standard tables registered.
+    ///
+    /// The tables, in registration order: sources ([`SourceSerdeDriver`], with its
+    /// defaults — every source embedded, no supplier of referenced source text), states
+    /// ([`StateSerdeDriver`]), specs ([`SpecSerdeDriver`]), providers
+    /// ([`ProviderSerdeDriver`]), trees ([`TreeSerdeDriver`], with the unit annotation
+    /// pre-registered), diagnostics ([`DiagnosticSerdeDriver`]), and parse results
+    /// ([`ParseResultSerdeDriver`]).
+    ///
+    /// Their handles are [`standard_tables`](SerdeSession::standard_tables). Objects go
+    /// in and come out either through those handles or through the by-kind extension
+    /// traits: [`StandardTableInterning`] and [`StandardTableReading`] for sources,
+    /// states, specs, and providers, and
+    /// [`TreeSerialization`](crate::serialize::TreeSerialization),
     /// [`DiagnosticSerialization`](crate::serialize::DiagnosticSerialization), and
-    /// [`ParseResultSerialization`](crate::serialize::ParseResultSerialization)
-    /// extension traits. To configure the source driver, use
+    /// [`ParseResultSerialization`](crate::serialize::ParseResultSerialization) for
+    /// trees, diagnostics, and parse results.
+    ///
+    /// To configure the source driver, use
     /// [`with_source_driver`](SerdeSession::with_source_driver); to compose a session
     /// from other tables, [`empty`](SerdeSession::empty).
     ///
-    /// The readers of the specs and providers tables (heterogeneous tables) are not
-    /// registered here — writing needs none, and a reading session registers them
-    /// once: the crate's own with
+    /// The readers of the specs and providers tables, which are heterogeneous, are not
+    /// registered here: writing needs none, and a reading session registers them once —
+    /// the crate's own with
     /// [`register_core_readers`](crate::serialize::register_core_readers), a language's
-    /// with its own helper (which calls the crate's — the latexlike preset's
-    /// [`latexlike::serialize::register`](crate::latexlike::serialize::register)), a
-    /// framework's own or its resolver on the handles ([`TableHandle::register_type`]
-    /// and its siblings). The trees table has the unit annotation registered; other
-    /// annotation types are registered with [`TableHandle::register_annotation`].
+    /// with its own helper (which calls the crate's — for the latexlike preset,
+    /// [`latexlike::serialize::register`](crate::latexlike::serialize::register)), and a
+    /// framework's own readers or its resolver on the handles
+    /// ([`TableHandle::register_type`] and its siblings). The trees table has the unit
+    /// annotation registered; other annotation types are registered with
+    /// [`TableHandle::register_annotation`].
     pub fn new() -> SerdeSession<L> {
         SerdeSession::with_source_driver(SourceSerdeDriver::new())
     }
 
-    /// [`new`](SerdeSession::new) with the given source driver in place of the
-    /// default one — how the source text policy and supplier are configured
-    /// ([`SourceSerdeDriver::with_text_policy`], [`SourceSerdeDriver::with_text_supplier`]).
+    /// [`new`](SerdeSession::new) with the given source driver in place of the default
+    /// one.
+    ///
+    /// This is how the source text policy and supplier are configured (see
+    /// [`SourceSerdeDriver::with_text_policy`] and
+    /// [`SourceSerdeDriver::with_text_supplier`]).
     pub fn with_source_driver(sources: SourceSerdeDriver<L>) -> SerdeSession<L> {
         let mut session = SerdeSession::empty();
         // Invariant: an empty session accepts the seven standard tables — their names
@@ -181,11 +192,13 @@ impl<L: SerializableLang> Default for SerdeSession<L> {
     }
 }
 
-/// Interning into the standard tables by kind — `intern_source`, `intern_state`,
-/// `intern_spec`, `intern_provider` — on a [`SerdeSession`] and, from inside a
-/// serialization call, on its [`SerializeContext`]: each finds the standard table by
-/// name in the session and interns through it (the general operation is
-/// [`SerdeSession::intern`] / [`SerializeContext::intern`] with a table handle).
+/// Interning into the standard tables by kind: `intern_source`, `intern_state`,
+/// `intern_spec`, and `intern_provider`.
+///
+/// The trait is implemented for [`SerdeSession`] and, so that a serialization call can
+/// use the same methods, for [`SerializeContext`]. Each method finds the standard table
+/// by name in the session and interns through it; the general operation is
+/// [`SerdeSession::intern`] / [`SerializeContext::intern`] with a table handle.
 ///
 /// An extension trait: bring it into scope with `use techy::serialize::StandardTableInterning;`.
 pub trait StandardTableInterning<L: SerializableLang> {
@@ -230,12 +243,14 @@ pub trait StandardTableInterning<L: SerializableLang> {
     fn intern_provider(&mut self, provider: &Arc<dyn SpecsProvider<L>>) -> Result<ProviderIndex, SerializeError>;
 }
 
-/// Reading objects back from the standard tables by kind — `source`, `state`,
-/// `spec`, `provider` — on a [`SerdeSession`] and, from inside a deserialization
-/// call, on its [`DeserializeContext`]: each finds the standard table by name in the
-/// session and reads through it (the general operation is [`SerdeSession::object`] /
-/// [`DeserializeContext::object`] with a table handle). The same position always
-/// yields the same `Arc`.
+/// Reading objects back from the standard tables by kind: `source`, `state`, `spec`,
+/// and `provider`.
+///
+/// The trait is implemented for [`SerdeSession`] and, so that a deserialization call can
+/// use the same methods, for [`DeserializeContext`]. Each method finds the standard
+/// table by name in the session and reads through it; the general operation is
+/// [`SerdeSession::object`] / [`DeserializeContext::object`] with a table handle. The
+/// same position always yields the same `Arc`.
 ///
 /// An extension trait: bring it into scope with `use techy::serialize::StandardTableReading;`.
 pub trait StandardTableReading<L: SerializableLang> {

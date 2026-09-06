@@ -1,5 +1,6 @@
-//! [`Segment`]: the unit a session emits and absorbs — the entries new since the
-//! previous emission, table by table — and its serialized form.
+//! The unit of exchange between sessions: [`Segment`], the entries a session has
+//! interned since its previous emission, and the serialized form a segment converts to
+//! and from.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -9,57 +10,72 @@ use super::super::error::SerialValueError;
 use super::super::value::{SerialValue, TableId};
 use super::super::wire::{index_from_serial_value, FromSerialValue, ToSerialValue};
 
-/// A segment: what one [`take_segment`](crate::serialize::SerdeSession::take_segment)
-/// call emits and one [`push_segment`](crate::serialize::SerdeSession::push_segment)
-/// call absorbs — for every table of the emitting session, the entries interned into
-/// it since the previous emission, together with the position they start at. A
-/// *stream* is the sequence of segments one session emits; positions are scoped to
-/// the stream, so a later segment's entries refer to earlier segments' entries by
-/// position, and a reading session absorbs the segments of one stream only, in
-/// order (the session checks that each segment continues its tables, but it cannot
-/// tell a foreign stream's segment apart from the right one when the positions
-/// happen to line up — the obligation is the caller's). Inside a segment a position
-/// is a `u32` index scoped to the stream, paired with the writer's [`TableId`],
-/// which the reading session translates by table name; a typed position in Rust
-/// code (a [`SerialIndex`](crate::serialize::SerialIndex) value) is scoped further,
-/// to the session holding it.
+/// One package of serialized entries: what a session emits and another session absorbs.
 ///
-/// Every segment is self-describing: it carries the [`version`](Segment::version)
-/// of the layout it uses (a reading session accepts exactly
-/// [`VERSION`](Segment::VERSION)), its [`meta`](Segment::meta) — information about
-/// the segment as a whole, today the emitting session's *profile* (see
-/// [`SegmentMeta`]) — and its *table directory* — every table of the
-/// emitting session, in registration order, by name (how the reading session finds
-/// its own table, whatever its registration order), with the writer's table id (how
-/// the table references inside the entries are translated) and the start position.
-/// A segment may also name its [`main`](Segment::main) entry: the position of the
-/// one entry the segment is about (the parse result of a line in a stream of parse
-/// results, say), so that a reader need not know the layout of the tables to find
-/// it — [`push_segment`](crate::serialize::SerdeSession::push_segment) returns it
-/// translated into the reading session's numbering. The segments of a stream are
-/// independently valid values, so a stream can be stored or sent as one segment per
-/// file, message, or line.
+/// A segment is an envelope with four parts:
+///
+/// - a *version* ([`version`](Segment::version)) — the layout the segment uses; a
+///   reading session accepts exactly [`VERSION`](Segment::VERSION);
+/// - *metadata* ([`meta`](Segment::meta)) about the segment as a whole — today the
+///   emitting session's *profile* (see [`SegmentMeta`]);
+/// - a *table directory* — every table of the emitting session, in registration order,
+///   by name (how the reading session finds its own table, whatever its registration
+///   order) and with the writer's table id (how the table references inside the entries
+///   are translated);
+/// - under each table, the *entries* interned into it since the previous emission,
+///   together with the position they start at.
+///
+/// A segment may also name its [`main`](Segment::main) entry: the position of the one
+/// entry the segment is about — the parse result of a line in a stream of parse results,
+/// say — so that a reader finds it without knowing the layout of the tables.
+/// [`push_segment`](crate::serialize::SerdeSession::push_segment) returns it translated
+/// into the reading session's numbering.
+///
+/// [`take_segment`](crate::serialize::SerdeSession::take_segment) emits a segment;
+/// [`push_segment`](crate::serialize::SerdeSession::push_segment) absorbs one.
+///
+/// # Streams and positions
+///
+/// A *stream* is the sequence of segments one session emits. Positions are scoped to the
+/// stream, so a later segment's entries refer to earlier segments' entries by position,
+/// and a reading session absorbs the segments of one stream only, in order. The session
+/// checks that each segment continues its tables, but it cannot tell a foreign stream's
+/// segment apart from the right one when the positions happen to line up — that
+/// obligation is the caller's.
+///
+/// Inside a segment a position is a `u32` index scoped to the stream, paired with the
+/// writer's [`TableId`], which the reading session translates by table name; a typed
+/// position in Rust code (a [`SerialIndex`](crate::serialize::SerialIndex) value) is
+/// scoped further, to the session holding it.
+///
+/// The segments of a stream are independently valid values, so a stream can be stored or
+/// sent as one segment per file, message, or line.
 ///
 /// # Serialized form
 ///
-/// [`to_serial_value`](Segment::to_serial_value) / [`from_serial_value`](Segment::from_serial_value)
-/// convert a segment to and from a [`SerialValue`] — the map `{"version": <int>,
-/// "meta": {"profile"?: <str>}, "tables": [<table>, …], "main"?: <position>}`
-/// (`meta` always present, its keys optional; `main` a table position, omitted when
-/// none), each table the map `{"name": <str>, "table": <int>, "start": <int>,
-/// "entries": [<value>, …]}` (`table` being the writer's table id, the ordinal every
-/// table reference inside the entries uses) — key names not yet frozen, see
-/// "Stability of the serialized form" in the [module documentation](crate::serialize). An entry of
-/// a table holding objects of one kind only is the entry's data itself; an entry of
-/// any other table is the map `{"identifier": <identifier>, "data": <value>}`. With the
-/// `serde` cargo feature the type implements `Serialize` and `Deserialize` by
-/// rendering that `SerialValue` (see [`SerialValue`]'s rendering), so a segment
-/// encodes through any serde format; in JSON, one segment per line is the canonical
-/// stream rendering (each line an independently valid segment; the stream ends with
-/// the input). The serialized form is one value and is bounded like every value: it
-/// nests at most [`SerialValue::MAX_NESTING_DEPTH`] levels, its own four levels (the
-/// segment map, `tables`, a table's map, `entries`) counted — the session refuses to
-/// intern an entry that would exceed the bound, and to absorb one.
+/// [`to_serial_value`](Segment::to_serial_value) and
+/// [`from_serial_value`](Segment::from_serial_value) convert a segment to and from a
+/// [`SerialValue`]: the map `{"version": <int>, "meta": {"profile"?: <str>}, "tables":
+/// [<table>, …], "main"?: <position>}` — `meta` always present with its keys optional,
+/// `main` a table position, omitted when none — with each table the map `{"name":
+/// <str>, "table": <int>, "start": <int>, "entries": [<value>, …]}`, where `table` is
+/// the writer's table id, the ordinal every table reference inside the entries uses. The
+/// key names are not yet frozen; see "Stability of the serialized form" in the
+/// [module documentation](crate::serialize).
+///
+/// An entry of a table holding objects of one kind only is the entry's data itself; an
+/// entry of any other table is the map `{"identifier": <identifier>, "data": <value>}`.
+///
+/// With the `serde` cargo feature the type implements `Serialize` and `Deserialize` by
+/// rendering that `SerialValue` (see [`SerialValue`]'s rendering), so a segment encodes
+/// through any serde format. In JSON, one segment per line is the canonical stream
+/// rendering: each line an independently valid segment, and the stream ends with the
+/// input.
+///
+/// The serialized form is one value and is bounded like every value: it nests at most
+/// [`SerialValue::MAX_NESTING_DEPTH`] levels, counting its own four levels (the segment
+/// map, `tables`, a table's map, `entries`). The session refuses to intern an entry that
+/// would exceed the bound, and to absorb one.
 #[derive(Clone, Debug, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub struct Segment {
     #[serial(name = "version")]
@@ -72,12 +88,15 @@ pub struct Segment {
     main: Option<WireMain>,
 }
 
-/// What a [`Segment`] says about itself as a whole, as opposed to its entries: today
-/// the emitting session's *profile* — the caller-chosen string naming what can read
-/// the stream fully (see [`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile)),
-/// when the session declared one. The object is always present in a segment's
-/// serialized form (empty when nothing is set), so that later layouts can add
-/// segment-wide information to it.
+/// What a [`Segment`] says about itself as a whole, as opposed to about its entries.
+///
+/// Today that is the emitting session's *profile*: the caller-chosen string naming the
+/// configuration that can read the stream fully (see
+/// [`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile)), when the
+/// session declared one.
+///
+/// The metadata object is always present in a segment's serialized form, empty when
+/// nothing is set, so that later layouts can add segment-wide information to it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub struct SegmentMeta {
     #[serial(name = "profile")]
@@ -85,7 +104,7 @@ pub struct SegmentMeta {
 }
 
 impl SegmentMeta {
-    /// Segment metadata carrying `profile` (the session builds it).
+    /// Segment metadata recording `profile` (the session builds it).
     pub(super) fn new(profile: Option<String>) -> SegmentMeta {
         SegmentMeta { profile }
     }
@@ -196,16 +215,18 @@ impl Segment {
     }
 
     /// The segment's main entry, when the emitting session named one
-    /// ([`take_segment_with_main`](crate::serialize::SerdeSession::take_segment_with_main)):
-    /// the entry's table id **in the emitting session's numbering** (the same numbering
-    /// as the directory's `table` ids and the references inside the entries) and its
-    /// position — as the segment carries it, untranslated. A reading session gets the
-    /// translated pair from [`push_segment`](crate::serialize::SerdeSession::push_segment).
+    /// ([`take_segment_with_main`](crate::serialize::SerdeSession::take_segment_with_main)).
+    ///
+    /// The table id is the one **in the emitting session's numbering** — the same
+    /// numbering as the directory's `table` ids and the references inside the entries —
+    /// and the position is untranslated, as the segment stores them. A reading session
+    /// gets the translated pair from
+    /// [`push_segment`](crate::serialize::SerdeSession::push_segment).
     pub fn main(&self) -> Option<(TableId, u32)> {
         self.main.map(|main| (main.table, main.index))
     }
 
-    /// Whether the segment carries no entries at all (every table empty).
+    /// Whether the segment holds no entries at all (every table empty).
     pub fn is_empty(&self) -> bool {
         self.tables.iter().all(|table| table.entries.is_empty())
     }
@@ -218,12 +239,16 @@ impl Segment {
             .expect("a segment's fields (u32s, strings, lists, values) always convert to a SerialValue")
     }
 
-    /// Read a segment from its serialized form (see the type documentation). The value
-    /// is untrusted input: a value of the wrong shape is an error, and so is a value
-    /// nesting deeper than [`SerialValue::MAX_NESTING_DEPTH`] (checked first, without
-    /// recursion, so that a malicious depth is refused before anything walks the value).
-    /// Reading validates the shape and the depth only; the version and the contents
-    /// are validated when the segment is pushed into a session.
+    /// Reads a segment from its serialized form (see the type documentation).
+    ///
+    /// The value is untrusted input: a value of the wrong shape is an error, and so is a
+    /// value nesting deeper than [`SerialValue::MAX_NESTING_DEPTH`], which is checked
+    /// first and without recursion, so that an abusive depth is refused before anything
+    /// walks the value.
+    ///
+    /// Reading validates the shape and the depth only. The version and the contents are
+    /// validated when the segment is pushed into a session
+    /// ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)).
     ///
     /// # Errors
     ///

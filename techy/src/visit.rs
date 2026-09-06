@@ -86,7 +86,7 @@
 //! run belongs in the visitor's own `&mut self` fields, which stay owned by the
 //! caller and can be read back after [`walk`](TreeWalker::walk) returns.
 //!
-//! A pass that instead needs state handed *down* to the nodes below a given
+//! A pass that instead needs state passed *down* to the nodes below a given
 //! node is a [`Recomposer`](crate::recompose::Recomposer) with `Piece = ()`:
 //! its state parameter `S` is threaded down the tree that way.
 
@@ -433,7 +433,7 @@ where
 /// Yields `node`'s structural children in order, skipping children that lie in
 /// an [`Attached`](SlotRole::Attached) slot region (unless `include_attached`)
 /// or a [`Hidden`](SlotRole::Hidden) slot region (unless `include_hidden`).
-/// Only callables carry slots; every other kind yields all children.
+/// Only callables have slots; every other kind yields all children.
 pub(crate) fn scoped_children<'t, L: Lang, A>(
     node: NodeRef<'t, L, A>,
     include_attached: bool,

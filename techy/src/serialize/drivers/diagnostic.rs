@@ -1,20 +1,23 @@
-//! The diagnostic driver: [`DiagnosticSerdeDriver`], the driver of the diagnostics
-//! table, and [`DiagnosticIndex`], its position type; the [`SerializableObject`] /
-//! [`DeserializableObject`] impls of [`Diagnostic`], which the driver delegates to;
-//! [`DeserializedCondition`], the condition a diagnostic read back from serialized
-//! data carries; the [`DiagnosticSerialization`] extension trait
-//! (`serialize_diagnostic` / `diagnostic`); the embedding of [`DiagnosticValue`] into
-//! [`SerialValue`] and the value conversions of [`Severity`].
+//! The diagnostics table: [`DiagnosticSerdeDriver`], its driver, and
+//! [`DiagnosticIndex`], its position type.
 //!
-//! A diagnostic's entry carries its severity, the condition's identifier and
+//! The driver delegates to the [`SerializableObject`] and [`DeserializableObject`] impls
+//! of [`Diagnostic`], which are defined here, and [`DiagnosticSerialization`] holds the
+//! by-kind methods (`serialize_diagnostic` and `diagnostic`). The embedding of
+//! [`DiagnosticValue`] into [`SerialValue`] and the value conversions of [`Severity`]
+//! are here too.
+//!
+//! A diagnostic's entry records its severity, the condition's identifier and
 //! serialization projection ([`DiagnosticInfo::serializable_data`]), the message as
-//! rendered when the diagnostic was written, its span, and its traceback frames (each
-//! a rendered title and a span); the spans refer to their sources by position, so a
-//! diagnostic shares its sources with the tree it belongs to. Reading rebuilds the
-//! diagnostic with a [`DeserializedCondition`] as its condition: the concrete condition
-//! type is not rebuilt (nothing registers condition types), so consumers of a
-//! deserialized diagnostic match on [`identifier()`](Diagnostic::identifier) — the wire
-//! identity — and read the projection, never downcast to the original type.
+//! rendered when the diagnostic was written, its span, and its traceback frames (each a
+//! rendered title and a span). The spans refer to their sources by position, so a
+//! diagnostic shares its sources with the tree it belongs to.
+//!
+//! Reading rebuilds the diagnostic with a [`DeserializedCondition`] as its condition:
+//! the concrete condition type is not rebuilt, since nothing registers condition types.
+//! Consumers of a deserialized diagnostic therefore match on
+//! [`identifier()`](Diagnostic::identifier) — the wire identity — and read the
+//! projection, rather than downcasting to the original type.
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -49,14 +52,16 @@ crate::serial_index! {
 /// The driver of the diagnostics table (table name `diagnostics`, one kind of object
 /// — identifier `core.diagnostic`): how a [`Diagnostic`] is serialized and rebuilt.
 ///
-/// A diagnostic's entry carries its severity, its condition's identifier
+/// A diagnostic's entry records its severity, its condition's identifier
 /// ([`Diagnostic::identifier`]) and serialization projection
 /// ([`DiagnosticInfo::serializable_data`], a [`DiagnosticValue`] embedded as a
 /// [`SerialValue`]), its message as rendered when it was written
 /// ([`Diagnostic::message`]), its span, and its traceback frames (rendered titles and
-/// spans). Every span refers to its source by position in the sources table, so the
-/// diagnostics of a parse share their sources with the tree of that parse when both
-/// are written into one stream.
+/// spans).
+///
+/// Every span refers to its source by position in the sources table, so the diagnostics
+/// of a parse share their sources with the tree of that parse when both are written into
+/// one stream.
 ///
 /// **Reading rebuilds the condition as a [`DeserializedCondition`].** The concrete
 /// condition type that was written is not rebuilt — the diagnostics table registers no
@@ -68,10 +73,12 @@ crate::serial_index! {
 /// condition type answers `None`: the identifier is the contract across a
 /// serialization boundary, exactly as [`DiagnosticInfo::IDENTIFIER`] documents.
 ///
-/// A diagnostic is a value: every call writes a new entry (unlike a source or a
-/// state, which is written once and shared); the convenience methods are the
+/// A diagnostic is a value: every call writes a new entry, unlike a source or a state,
+/// which is written once and shared. The by-kind methods are the
 /// [`DiagnosticSerialization`] extension trait's `serialize_diagnostic` and
-/// `diagnostic`. The driver delegates to `Diagnostic`'s own [`SerializableObject`] and
+/// `diagnostic`.
+///
+/// The driver delegates to `Diagnostic`'s own [`SerializableObject`] and
 /// [`DeserializableObject`] impls. Registered by
 /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
 ///
@@ -185,13 +192,15 @@ impl<L: SerializableLang> DeserializableObject<L> for Diagnostic<L::SourceOrigin
 
 // --- the deserialized condition -------------------------------------------------------
 
-/// The condition a diagnostic read back from serialized data carries: the written
-/// condition's identifier, serialization projection, and rendered message, held as
-/// values. Implements [`DiagnosticInfo`] as an adapter type — the exceptional per-instance
-/// [`identifier()`](DiagnosticInfo::identifier) override that trait documents: the
-/// instance answers the identifier it holds (the written condition's), while the type's
-/// own [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER), `core.serialization.deserialized-condition`,
-/// names the adapter itself for type-keyed uses.
+/// The condition of a diagnostic read back from serialized data: the written condition's
+/// identifier, serialization projection, and rendered message, held as plain values.
+///
+/// It implements [`DiagnosticInfo`] as an adapter type, using the exceptional
+/// per-instance [`identifier()`](DiagnosticInfo::identifier) override that trait
+/// documents: the instance answers the identifier it holds, the written condition's,
+/// while the type's own [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER),
+/// `core.serialization.deserialized-condition`, names the adapter itself for type-keyed
+/// uses.
 ///
 /// So a diagnostic read back ([`DiagnosticSerialization::diagnostic`], or inside a
 /// deserialized [`ParseResult`](crate::core::ParseResult)) answers the same
@@ -371,22 +380,24 @@ impl<L: Lang> DeserializableValue<L> for Severity {
     }
 }
 
-// --- the sugar -------------------------------------------------------------------------
+// --- the by-kind methods ----------------------------------------------------------------
 
-/// Serializing a diagnostic into and reading one back from a session's diagnostics
-/// table by kind — `serialize_diagnostic` and `diagnostic` — on a [`SerdeSession`]:
-/// the convenience methods over the general
+/// Serializing a diagnostic into a session's diagnostics table and reading one back:
+/// `serialize_diagnostic` and `diagnostic` on a [`SerdeSession`].
+///
+/// These are the convenience methods over the general
 /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern) /
-/// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the
-/// diagnostics table handle.
+/// [`SerdeSession::object`](crate::serialize::SerdeSession::object) with the diagnostics
+/// table handle.
 ///
 /// An extension trait: bring it into scope with `use techy::serialize::DiagnosticSerialization;`.
 pub trait DiagnosticSerialization<L: SerializableLang> {
-    /// Serialize `diagnostic` into the diagnostics table, returning its position.
-    /// Every call is a new entry: a diagnostic is a value, written in full, so two
-    /// calls with equal diagnostics produce two entries (unlike an interned source or
-    /// state, which is written once and shared); its spans' sources are interned into
-    /// the sources table.
+    /// Serializes `diagnostic` into the diagnostics table, returning its position.
+    ///
+    /// Every call writes a new entry: a diagnostic is a value, written in full, so two
+    /// calls with equal diagnostics produce two entries — unlike an interned source or
+    /// state, which is written once and shared. The sources of its spans are interned
+    /// into the sources table.
     ///
     /// # Errors
     ///

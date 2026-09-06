@@ -3,10 +3,32 @@
 //! macro is exported at the crate root (as every `macro_rules!` macro is) and
 //! documented at its canonical path, `techy::serialize::serial_index`.
 
-/// Define a typed table position type — the `Index` type of an
-/// [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver): a `Copy` value
-/// carrying the [`TableId`](crate::serialize::TableId) of its table and the `u32`
-/// position within it, implementing [`SerialIndex`](crate::serialize::SerialIndex).
+/// Defines a typed table position type: a `Copy` value naming a table and a position
+/// within it.
+///
+/// Such a type is the `Index` type of an
+/// [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver). It holds the
+/// [`TableId`](crate::serialize::TableId) of its table and the `u32` position within it,
+/// and it implements [`SerialIndex`](crate::serialize::SerialIndex). Each kind of table
+/// has its own position type, so that a position in one table cannot be passed where a
+/// position in another is expected.
+///
+/// # Syntax
+///
+/// One invocation defines one type, written as a unit struct declaration with a
+/// trailing semicolon:
+///
+/// ```text
+/// serial_index! {
+///     <attributes, doc comments included>
+///     <visibility> struct <Name>;
+/// }
+/// ```
+///
+/// No other form is accepted: no fields, no generic parameters, and no second struct in
+/// the same invocation.
+///
+/// # Examples
 ///
 /// ```
 /// use techy::serialize::{SerialIndex, TableId};
@@ -23,21 +45,29 @@
 /// }
 /// ```
 ///
-/// The macro defines the struct with the given attributes (documentation included)
-/// and visibility, derives `Copy`, `Clone`, `Debug`, `PartialEq`, `Eq`, `Hash`,
-/// `PartialOrd`, and `Ord`, implements `SerialIndex`, the crate's own conversions to
-/// and from a [`SerialValue::Index`](crate::serialize::SerialValue::Index) (so the
-/// type can be a field of the crate's serialized structures), and — with the `serde`
-/// cargo feature — serde's `Serialize` and `Deserialize`, through which the type
-/// converts to and from a `SerialValue::Index` in the bridge (`to_value` /
-/// `from_value`) and renders as the two-integer pair `(table ordinal, index)` in any
-/// other format.
-/// A position type has no other constructor than
-/// [`SerialIndex::from_parts`](crate::serialize::SerialIndex::from_parts); the
-/// session mints positions when objects are interned, and
-/// [`TableHandle::position`](crate::serialize::TableHandle::position) rebuilds one
-/// from a bare `u32` index (typed positions are scoped to the session that minted
-/// them — see `SerialIndex`).
+/// # What it generates
+///
+/// - the struct, with the given attributes (documentation included) and visibility, and
+///   its two parts as private fields;
+/// - the derives `Copy`, `Clone`, `Debug`, `PartialEq`, `Eq`, `Hash`, `PartialOrd`, and
+///   `Ord`;
+/// - the `SerialIndex` impl, whose
+///   [`from_parts`](crate::serialize::SerialIndex::from_parts) is the type's only
+///   constructor and whose [`table`](crate::serialize::SerialIndex::table) and
+///   [`index`](crate::serialize::SerialIndex::index) are its only accessors;
+/// - the crate's own conversions to and from a
+///   [`SerialValue::Index`](crate::serialize::SerialValue::Index), so that the type can
+///   be a field of the crate's serialized structures;
+/// - with the `serde` cargo feature, serde's `Serialize` and `Deserialize`, through
+///   which the type converts to and from a `SerialValue::Index` in the bridge
+///   (`to_value` / `from_value`) and renders as the two-integer pair
+///   `(table ordinal, index)` in any other format.
+///
+/// A program does not normally build positions itself: the session returns one when an
+/// object is interned, and
+/// [`TableHandle::position`](crate::serialize::TableHandle::position) rebuilds one from
+/// a bare `u32` index. A typed position is scoped to the session that produced it — see
+/// [`SerialIndex`](crate::serialize::SerialIndex).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! serial_index {

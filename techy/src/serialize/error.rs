@@ -53,6 +53,9 @@ impl fmt::Display for OriginLabel<'_> {
 /// [`InNode`](SerializeError::InNode) the tree node. Their innermost `cause` is the
 /// failure itself.
 ///
+/// The read side's counterpart is [`DeserializeError`]; the guide chapter
+/// [Serializing parses](crate::guide::serialize) introduces both paths.
+///
 /// The type is not `PartialEq`, because [`Failed`](SerializeError::Failed) can hold an
 /// arbitrary underlying error.
 #[derive(Clone, Debug)]
@@ -111,7 +114,7 @@ pub enum SerializeError {
     /// a driver of a different type. A [`TableHandle`](crate::serialize::TableHandle) is
     /// valid only for the session that registered its table.
     UnknownTable {
-        /// The id the handle carries.
+        /// The id the handle holds.
         table: TableId,
     },
     /// The session has no table of that name registered with the expected driver type.
@@ -178,9 +181,9 @@ pub enum SerializeError {
     UnexpectedIdentifier {
         /// The table's name.
         table: &'static str,
-        /// The identifier every entry of the table must carry.
+        /// The identifier every entry of the table must have.
         expected: &'static str,
-        /// The identifier the entry carried.
+        /// The identifier the entry had instead.
         found: String,
     },
     /// A spec that can only be serialized by identity has no provenance stamp.
@@ -387,76 +390,106 @@ impl core::error::Error for SerializeError {
     }
 }
 
-/// Error of the read side: what a
-/// [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object)
-/// call, a
-/// [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec)
-/// call, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), an
-/// [`IdentifierResolver`](crate::serialize::IdentifierResolver), or the session
-/// driving them ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment),
-/// [`SerdeSession::object`](crate::serialize::SerdeSession::object),
-/// [`DeserializeContext::object`](crate::serialize::DeserializeContext::object))
-/// can report. Everything read is untrusted input: a malformed value, an index out of
-/// range, a reference cycle, or an unknown identifier is an error naming what failed,
-/// never a panic. A failure inside a nested call is wrapped in
-/// [`InEntry`](DeserializeError::InEntry) with the entry it happened in, and a failure
-/// while rebuilding one node of a tree in [`InNode`](DeserializeError::InNode) with
-/// the node's position.
+/// What can go wrong while reading serialized data back.
 ///
-/// Not `PartialEq`: [`Failed`](DeserializeError::Failed) carries an arbitrary
-/// underlying error.
+/// Every read-side call reports this type: the
+/// [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object) of
+/// the type being rebuilt, the
+/// [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec)
+/// of a callable spec, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), an
+/// [`IdentifierResolver`](crate::serialize::IdentifierResolver), and the session driving
+/// them ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment),
+/// [`SerdeSession::object`](crate::serialize::SerdeSession::object),
+/// [`DeserializeContext::object`](crate::serialize::DeserializeContext::object)).
+///
+/// Everything read is untrusted input: a malformed value, an index out of range, a
+/// reference cycle, or an unknown identifier is one of these values naming what failed,
+/// never a panic.
+///
+/// Several variants mean the data was written by a program the reading one does not
+/// match — another version of this crate
+/// ([`UnsupportedVersion`](DeserializeError::UnsupportedVersion)), another configuration
+/// ([`ProfileMismatch`](DeserializeError::ProfileMismatch)), another language
+/// ([`FeatureAbsent`](DeserializeError::FeatureAbsent)), or another set of packages
+/// ([`MissingProvider`](DeserializeError::MissingProvider),
+/// [`MissingDefinition`](DeserializeError::MissingDefinition)). Others mean the reading
+/// program has not registered or supplied what the data needs
+/// ([`UnknownIdentifier`](DeserializeError::UnknownIdentifier),
+/// [`UnknownTableName`](DeserializeError::UnknownTableName),
+/// [`NoSourceTextSupplier`](DeserializeError::NoSourceTextSupplier)).
+///
+/// A failure inside a nested call is wrapped in [`InEntry`](DeserializeError::InEntry)
+/// with the entry it happened in, and a failure while rebuilding one node of a tree in
+/// [`InNode`](DeserializeError::InNode) with the node's position.
+///
+/// The write side's counterpart is [`SerializeError`]; the guide chapter
+/// [Serializing parses](crate::guide::serialize) introduces both paths.
+///
+/// The type is not `PartialEq`, because [`Failed`](DeserializeError::Failed) can hold an
+/// arbitrary underlying error.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum DeserializeError {
-    /// A serialized argument refers to its callable spec's declared argument spec by
-    /// index, and the index is beyond the `count` argument specs the callable spec
-    /// declares in the reading environment (the live objects the deserializing
-    /// program already holds — here, the callable spec that was rebuilt or looked
-    /// up for the serialized one).
+    /// A serialized argument names a declared argument spec by an index the reading side's
+    /// callable spec does not have.
+    ///
+    /// The callable spec that was rebuilt or looked up for the serialized one declares
+    /// `count` argument specs, and the argument names index `index`: the reading program's
+    /// callable spec is not the one the data was written with.
     ArgumentIndexOutOfRange {
         /// The serialized argument's index in invocation order.
         index: usize,
         /// The number of argument specs the callable spec declares.
         count: usize,
     },
-    /// A serialized argument carries a description of its argument spec — written by
-    /// a callable spec that overrides
-    /// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
-    /// — but the callable spec it is read against uses the default
+    /// A serialized argument describes its own argument spec, but the callable spec it is
+    /// read against reads no such description.
+    ///
+    /// The description was written by a callable spec that overrides
+    /// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec),
+    /// while the one reading it uses the default
     /// [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec),
-    /// which reads no such description: the reading environment's callable spec is
-    /// not of the type that wrote the argument.
+    /// which reads only the index of a declared argument spec. The reading environment's
+    /// callable spec is not of the type that wrote the argument.
     UnexpectedArgumentSpecPayload {
         /// The serialized argument's index in invocation order.
         index: usize,
     },
-    /// An implementation — a
-    /// [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object),
-    /// a driver, or a resolver — could not rebuild the object, for a reason of its own
-    /// (an object the reading environment lacks, a definition that could not be
-    /// obtained, …): `detail` says which, in words; `cause` optionally carries the
-    /// underlying error (the shape of [`HookFailed`](crate::error::HookFailed); the
-    /// `Arc` keeps the error `Clone`). Construct with
-    /// [`failed`](DeserializeError::failed) and [`with_cause`](DeserializeError::with_cause).
+    /// An implementation could not rebuild the object, for a reason of its own.
+    ///
+    /// Reported by a
+    /// [`deserialize_object`](crate::serialize::DeserializableObject::deserialize_object), a
+    /// driver, or a resolver — an object the reading environment lacks, a definition that
+    /// could not be obtained, and so on. `detail` describes the failure in words, and `cause`
+    /// holds the underlying error when the implementation has one to attach (an `Arc`, so
+    /// that the error stays `Clone`, reachable through
+    /// [`Error::source`](core::error::Error::source)).
+    ///
+    /// Build one with [`failed`](DeserializeError::failed) and
+    /// [`with_cause`](DeserializeError::with_cause).
     Failed {
         /// Human-readable description of the failure.
         detail: String,
         /// The underlying error, if the implementation has one to attach.
         cause: Option<SharedCause>,
     },
-    /// A serialized value has the wrong shape — a value of the wrong kind, a missing,
-    /// unknown, or repeated key, an integer that does not fit, an unknown variant, a
-    /// value nesting deeper than the bound (the [`SerialValueError`] says which).
+    /// A serialized value has the wrong shape.
+    ///
+    /// The [`SerialValueError`] says which: a value of the wrong kind, a missing, unknown, or
+    /// repeated key, an integer that does not fit, an unknown variant, or a value nesting
+    /// deeper than the bound.
     Value(SerialValueError),
-    /// The table handle names no table of the session it was used with — it comes
-    /// from another session, or the table at that ordinal is registered with a
-    /// different driver type.
+    /// The table handle names no table of the session it was used with.
+    ///
+    /// The handle comes from another session, or the table at that ordinal is registered with
+    /// a driver of a different type. A [`TableHandle`](crate::serialize::TableHandle) is
+    /// valid only for the session that registered its table.
     UnknownTable {
-        /// The id the handle carries.
+        /// The id the handle holds.
         table: TableId,
     },
-    /// A reference points beyond the end of its table: position `index` of table
-    /// `table`, which holds `len` entries.
+    /// A reference points past the end of its table: position `index` of table `table`, which
+    /// holds `len` entries.
     IndexOutOfRange {
         /// The table's name.
         table: &'static str,
@@ -465,21 +498,24 @@ pub enum DeserializeError {
         /// The number of entries the table holds.
         len: u32,
     },
-    /// A typed table position was read through the handle of a table other than its
-    /// own: the position carries table id `found`, the handle names table `expected`.
-    /// A position minted by another session — one whose registration order differs —
-    /// has this effect: typed positions are scoped to the session that minted them
-    /// (see [`SerialIndex`](crate::serialize::SerialIndex)).
+    /// A typed table position was read through the handle of a table other than its own: the
+    /// position names table id `found`, the handle names table `expected`.
+    ///
+    /// Typed positions ([`SerialIndex`](crate::serialize::SerialIndex)) are scoped to the
+    /// session that minted them, so a position minted by a session whose registration order
+    /// differs names another table here.
     WrongTable {
         /// The name of the table the handle names.
         expected: &'static str,
-        /// The table id the position carries.
+        /// The table id stored in the position.
         found: TableId,
     },
-    /// The serialized reference graph is cyclic: while entry `referrer_index` of table
-    /// `referrer_table` was being deserialized, entry `index` of table `table` — whose
-    /// own deserialization is still in progress — was read again. Objects are rebuilt
-    /// from their references, which is impossible for a cycle.
+    /// The serialized reference graph is cyclic.
+    ///
+    /// While entry `referrer_index` of table `referrer_table` was being deserialized, entry
+    /// `index` of table `table` — whose own deserialization is still in progress — was read
+    /// again. Objects are rebuilt from the objects they refer to, which is impossible for a
+    /// cycle.
     ReferenceCycle {
         /// The table of the entry whose deserialization was still in progress.
         table: &'static str,
@@ -490,25 +526,35 @@ pub enum DeserializeError {
         /// The position of that entry.
         referrer_index: u32,
     },
-    /// The session's descent guard refused to go one level deeper (the entries refer
-    /// to one another more deeply than the configured limit): the call is abandoned.
-    /// Configure the limit with
+    /// The entries refer to one another more deeply than the session's descent limit allows,
+    /// and the call is abandoned.
+    ///
+    /// `detail` says which limit was hit and how to configure it; the limit is set with
     /// [`SerdeSession::with_descent_guard_init`](crate::serialize::SerdeSession::with_descent_guard_init).
     DescentLimitExceeded {
         /// Which limit was hit and how to configure it.
         detail: String,
     },
-    /// No registered reader and no resolver of table `table` recognizes the
-    /// identifier: the reading environment does not know how to rebuild objects of
-    /// that kind (nothing was registered for it, or the resolvers registered for its
-    /// identifier prefix declined).
+    /// Nothing in the reading session knows how to rebuild an entry carrying that identifier.
+    ///
+    /// No reader is registered for `identifier` in table `table`, and the resolvers
+    /// registered for its identifier prefix declined it — the reading program never declared
+    /// how objects of that kind are rebuilt. Register the reading type with
+    /// [`TableHandle::register_type`](crate::serialize::TableHandle::register_type) (for a
+    /// tree's annotations,
+    /// [`register_annotation`](crate::serialize::TableHandle::register_annotation)); the
+    /// crate's own and the preset's identifiers are covered by
+    /// [`latexlike::serialize::register`](crate::latexlike::serialize::register).
     UnknownIdentifier {
         /// The table's name.
         table: &'static str,
         /// The identifier no reader is registered for.
         identifier: String,
     },
-    /// The segment's version is not the one this crate reads
+    /// The segment's layout version is not the one this crate reads.
+    ///
+    /// The data was written by another version of the crate: the segment declares version
+    /// `found`, this one reads `expected`
     /// ([`Segment::VERSION`](crate::serialize::Segment::VERSION)).
     UnsupportedVersion {
         /// The version the segment declares.
@@ -516,30 +562,32 @@ pub enum DeserializeError {
         /// The version this crate reads.
         expected: u32,
     },
-    /// The segment's profile is not the one this session declares
-    /// ([`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile)):
-    /// the segment carries `found` (`None`: no profile at all), the session requires
-    /// `expected`. The stream was written for another configuration than the one
-    /// reading it; the mismatch is reported before any entry is absorbed.
+    /// The segment's profile is not the one this session declares.
+    ///
+    /// The segment names `found` (`None`: no profile at all) and the session requires
+    /// `expected`, so the stream was written for another configuration than the one reading
+    /// it. The mismatch is reported before any entry is absorbed. A session's profile is set
+    /// with [`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile).
     ProfileMismatch {
         /// The profile this session declares.
         expected: String,
-        /// The profile the segment carries, if any.
+        /// The profile the segment declares, if any.
         found: Option<String>,
     },
-    /// A table was looked up by a name the session has not registered (with the
-    /// expected driver type): the segment being absorbed lists such a table, or an
-    /// accessor of the crate's standard tables (see
-    /// [`StandardTableReading`](crate::serialize::StandardTableReading)) was used on a
-    /// session that lacks the table — one built with
+    /// A table was looked up by a name the session has not registered with the expected
+    /// driver type.
+    ///
+    /// Either the segment being absorbed lists such a table, or an accessor of the crate's
+    /// standard tables (see [`StandardTableReading`](crate::serialize::StandardTableReading))
+    /// was used on a session that lacks it — one built with
     /// [`SerdeSession::empty`](crate::serialize::SerdeSession::empty) rather than
     /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
     UnknownTableName {
         /// The table's name.
         name: String,
     },
-    /// A serialized span does not fit its source: the byte range `start..end` is not
-    /// within the source's `len` bytes (or `start > end`).
+    /// A serialized span does not fit its source: the byte range `start..end` is not within
+    /// the source's `len` bytes, or `start > end`.
     SpanOutOfBounds {
         /// The span's start (byte offset, inclusive).
         start: usize,
@@ -548,35 +596,41 @@ pub enum DeserializeError {
         /// The source's length in bytes.
         len: usize,
     },
-    /// A serialized span's `start` or `end` byte offset falls inside a multi-byte
-    /// character of its source: the range cannot delimit text.
+    /// A serialized span's `start` or `end` byte offset falls inside a multi-byte character
+    /// of its source, so the range cannot delimit text.
     SpanNotOnCharBoundary {
         /// The span's start (byte offset, inclusive).
         start: usize,
         /// The span's end (byte offset, exclusive).
         end: usize,
     },
-    /// The serialized data uses a parsing feature the reading language declares
-    /// absent ([`Lang::Features`](crate::core::Lang::Features)): a state's rules carry
-    /// the section of that feature, or its scope stack is non-empty for a language
-    /// without the scope stack. The language reading the data is not the one that
-    /// wrote it — or not one with the same feature declarations.
+    /// The serialized data uses a parsing feature the reading language declares absent.
+    ///
+    /// A state's rules hold the section of the feature `feature` names, or its scope stack is
+    /// non-empty for a language without the scope stack, while the reading language's
+    /// [`Lang::Features`](crate::core::Lang::Features) declares that feature absent. The
+    /// language reading the data is not the one that wrote it, or not one with the same
+    /// feature declarations.
     FeatureAbsent {
         /// The feature's name (`whitespace`, `paragraphs`, `groups`, `commands`,
         /// `comments`, `specials`, `forbidden_chars`, `scopes`).
         feature: &'static str,
     },
-    /// A source's entry describes the source by reference — its text is not embedded
-    /// — but the session's source driver has no supplier of referenced source text
-    /// configured
-    /// ([`SourceSerdeDriver::with_text_supplier`](crate::serialize::SourceSerdeDriver::with_text_supplier)),
-    /// so the text cannot be obtained.
+    /// A source's text is not embedded in the data, and no supplier of referenced source text
+    /// is configured.
+    ///
+    /// The entry describes the source by reference — its length and optional digest — so its
+    /// text has to come from the reading program. Configure a supplier with
+    /// [`SourceSerdeDriver::with_text_supplier`](crate::serialize::SourceSerdeDriver::with_text_supplier).
     NoSourceTextSupplier {
         /// The source's origin label, when it has one.
         origin: Option<String>,
     },
-    /// The text supplied for a referenced source has a length other than the one its
-    /// entry records: the text is not the one that was serialized (a changed file).
+    /// The text supplied for a referenced source is not the text that was serialized: it is
+    /// `found` bytes long, and the entry records `expected`.
+    ///
+    /// The text behind the source — a file, typically — has changed since the data was
+    /// written.
     SourceLengthMismatch {
         /// The source's origin label, when it has one.
         origin: Option<String>,
@@ -585,25 +639,28 @@ pub enum DeserializeError {
         /// The length in bytes of the text supplied.
         found: usize,
     },
-    /// The text supplied for a referenced source does not match the digest its entry
-    /// records (the supplier's
-    /// [`digest_matches`](crate::serialize::SourceTextSupplier::digest_matches)
-    /// answered no): the text is not the one that was serialized (a changed file).
+    /// The text supplied for a referenced source does not match the digest its entry records:
+    /// the supplier's
+    /// [`digest_matches`](crate::serialize::SourceTextSupplier::digest_matches) answered no.
+    ///
+    /// The text behind the source — a file, typically — has changed since the data was
+    /// written. `algorithm` is the digest's algorithm name, as the entry records it.
     SourceDigestMismatch {
         /// The source's origin label, when it has one.
         origin: Option<String>,
         /// The digest's algorithm name, as the entry records it.
         algorithm: String,
     },
-    /// The segment lists the same table twice, or two of its tables carry the same
-    /// writer-side table id.
+    /// The segment lists the same table twice, or two of its tables share one writer-side
+    /// table id.
     DuplicateSegmentTable {
         /// The table's name.
         name: String,
     },
-    /// The segment's entries for table `table` do not continue where the session's
-    /// table ends: the segment says they start at position `found`, the table holds
-    /// `expected` entries. Segments of a stream must be pushed in order, each exactly
+    /// The segment does not continue the stream the session has absorbed so far.
+    ///
+    /// Its entries for table `table` would start at position `found`, but the table holds
+    /// `expected` entries. The segments of a stream must be pushed in order, each exactly
     /// once, into a session that has absorbed every earlier one.
     SegmentOutOfOrder {
         /// The table's name.
@@ -613,18 +670,18 @@ pub enum DeserializeError {
         /// The position the segment declares.
         found: u32,
     },
-    /// The session has entries in table `table` that were interned since its last
-    /// emission and not yet emitted with
-    /// [`take_segment`](crate::serialize::SerdeSession::take_segment): a segment
-    /// continues the stream the session has emitted so far, so pending entries must be
-    /// emitted first.
+    /// The session has entries interned since its last emission, so it cannot absorb a
+    /// segment yet.
+    ///
+    /// A segment continues the stream the session has emitted so far, so the pending entries
+    /// of table `table` must be emitted first, with
+    /// [`take_segment`](crate::serialize::SerdeSession::take_segment).
     UnemittedEntries {
         /// The table's name.
         table: &'static str,
     },
-    /// A reference in the segment names a writer-side table id that the segment's
-    /// table directory does not list, so it cannot be translated to a table of the
-    /// reading session.
+    /// A reference in the segment names a writer-side table id the segment's table directory
+    /// does not list, so it cannot be translated to a table of the reading session.
     UnknownWriterTable {
         /// The writer-side table id.
         table: TableId,
@@ -634,27 +691,31 @@ pub enum DeserializeError {
         /// The table's name.
         table: &'static str,
     },
-    /// A check the session runs on its own bookkeeping failed: a bug in this crate,
-    /// not in the input and not in an implementation — `detail` says what was found.
-    /// Reported as an error rather than a panic; the operation that found it has
-    /// been undone (a segment being absorbed is dropped) and the session stays
-    /// usable.
+    /// A check the session runs on its own bookkeeping failed: a bug in this crate, neither
+    /// in the input nor in an implementation.
+    ///
+    /// `detail` says what the check found, naming the entry. It is reported as an error
+    /// rather than a panic: the operation that found it has been undone (a segment being
+    /// absorbed is dropped) and the session stays usable.
     Internal {
         /// What the check found, in words, naming the entry.
         detail: String,
     },
-    /// A serialized provider refers, by name, to a provider the reading environment
-    /// does not hold: the session's [`KnownProviders`](crate::serialize::KnownProviders)
-    /// (in its user data) has neither a provider nor a recipe of that name — or no
-    /// `KnownProviders` value was set at all.
+    /// The data refers to a provider, by name, that the reading environment does not hold.
+    ///
+    /// The session's [`KnownProviders`](crate::serialize::KnownProviders) — its user data —
+    /// has neither a provider nor a recipe named `name`, or no `KnownProviders` value was set
+    /// at all. Add the package the parse used, or a recipe that builds it, before reading.
     MissingProvider {
         /// The provider's name.
         name: String,
     },
-    /// A serialized spec refers, by identity, to a definition its provider does not
-    /// hold in the reading environment: the provider named `provider` (a package the
-    /// reading environment supplied) has no definition under that callable type and
-    /// key — the environment's package differs from the writer's.
+    /// The data refers to a definition, by identity, that its provider does not hold in the
+    /// reading environment.
+    ///
+    /// The provider named `provider` — a package the reading program supplied — has no
+    /// definition under the invocation form `callable_type` with the key `key`: that package
+    /// is not the one the data was written with.
     MissingDefinition {
         /// The provider's name.
         provider: String,
@@ -663,11 +724,16 @@ pub enum DeserializeError {
         /// The key the spec was defined under.
         key: DefinitionKey,
     },
-    /// A serialized diagnostic's condition projection (its `data`) holds a value of a
-    /// kind a [`DiagnosticValue`](crate::error::DiagnosticValue) cannot hold — a byte
-    /// string or a table position — somewhere inside it: the projection is not one a
-    /// condition's [`serializable_data`](crate::error::DiagnosticInfo::serializable_data)
-    /// could have produced.
+    /// A serialized diagnostic's condition projection (its `data`) holds a value a
+    /// [`DiagnosticValue`](crate::error::DiagnosticValue) cannot hold.
+    ///
+    /// A byte string or a table position — `kind` says which — sits somewhere inside the
+    /// projection, so the projection is not one a condition's
+    /// [`serializable_data`](crate::error::DiagnosticInfo::serializable_data) could have
+    /// produced.
+    ///
+    /// `path` locates it: the map keys and list positions from the projection's root, as
+    /// `error.cause_chain[2]`; it is empty when the projection itself is the offending value.
     UnrepresentableDiagnosticValue {
         /// The kind of the offending value: `bytes` or `index`.
         kind: &'static str,
@@ -676,13 +742,14 @@ pub enum DeserializeError {
         /// projection itself is the offending value.
         path: String,
     },
-    /// A serialized diagnostics collection's counts contradict one another: `retained`
-    /// diagnostics were listed, `retained_errors` of them of error severity, under a
-    /// retention cap of `limit` with `suppressed` pushes beyond it and `error_count`
-    /// error-severity pushes in all — but a live collection always has
-    /// `retained <= limit`, `suppressed > 0` only when `retained == limit`, and
-    /// `retained_errors <= error_count <= retained_errors + suppressed`
-    /// (the invariants [`Diagnostics::push`](crate::error::Diagnostics::push) maintains).
+    /// A serialized diagnostics collection's counts contradict one another.
+    ///
+    /// `retained` diagnostics were listed, `retained_errors` of them of error severity, under
+    /// a retention cap of `limit`, with `suppressed` pushes beyond the cap and `error_count`
+    /// error-severity pushes in all. A live collection always has `retained <= limit`, has
+    /// `suppressed > 0` only when `retained == limit`, and has
+    /// `retained_errors <= error_count <= retained_errors + suppressed` — the invariants
+    /// [`Diagnostics::push`](crate::error::Diagnostics::push) maintains.
     InconsistentDiagnosticCounts {
         /// The number of diagnostics listed.
         retained: usize,
@@ -695,14 +762,17 @@ pub enum DeserializeError {
         /// The recorded number of error-severity pushes.
         error_count: usize,
     },
-    /// The failure happened while deserializing entry `index` of table `table`, whose
-    /// identifier is `identifier` when it is known (a table holding one kind of object
-    /// has a fixed identifier; an entry of any other table carries its own, unless the
-    /// entry's shape itself was malformed): the location wrapper the session adds
-    /// around a driver's failure. Only the innermost entry location is recorded — a
-    /// `cause` is never itself an `InEntry`. It may be an
-    /// [`InNode`](DeserializeError::InNode) whose own cause is the `InEntry` of another
-    /// table: the failure of an object a tree node refers to (its state, say).
+    /// Where a failure happened: while deserializing entry `index` of table `table`.
+    ///
+    /// The session adds this wrapper around a driver's failure, which `cause` holds.
+    /// `identifier` is the entry's identifier when it is known — a table holding one kind of
+    /// object has a fixed identifier, and an entry of any other table carries its own, unless
+    /// the entry's shape itself was malformed.
+    ///
+    /// Only the innermost entry is recorded, so a `cause` is never itself an `InEntry`; it
+    /// may be an [`InNode`](DeserializeError::InNode) whose own cause is the `InEntry` of
+    /// another table — the failure of an object a tree node refers to, its state for
+    /// instance.
     InEntry {
         /// The table's name.
         table: &'static str,
@@ -713,14 +783,16 @@ pub enum DeserializeError {
         /// The failure.
         cause: Box<DeserializeError>,
     },
-    /// The failure happened while rebuilding node `node` of a tree — its structure,
-    /// its payload, or an object it refers to: the location wrapper the tree driver
-    /// ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)) adds around a per-node
-    /// failure, itself wrapped in the [`InEntry`](DeserializeError::InEntry) of the
-    /// tree's entry. `node` is the node's position in the serialized node list (the
-    /// tree's storage order, root first); `callable` is the invocation name when the
-    /// node is a callable. Only the innermost node is recorded — a `cause` is never
-    /// itself an `InNode`.
+    /// Where a failure happened: while rebuilding node `node` of a tree — its structure, its
+    /// payload, or an object it refers to.
+    ///
+    /// The tree driver ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)) adds this
+    /// wrapper around a per-node failure, and the session wraps the result in the
+    /// [`InEntry`](DeserializeError::InEntry) of the tree's entry. Only the innermost node is
+    /// recorded, so a `cause` is never itself an `InNode`.
+    ///
+    /// `node` is the node's position in the serialized node list (the tree's storage order,
+    /// root first); `callable` is the invocation name when the node is a callable.
     InNode {
         /// The node's position in the serialized node list.
         node: u32,
@@ -732,17 +804,19 @@ pub enum DeserializeError {
 }
 
 impl DeserializeError {
-    /// An implementation's own failure ([`Failed`](DeserializeError::Failed)) with the
-    /// given description and no underlying error; attach one with
-    /// [`with_cause`](DeserializeError::with_cause).
+    /// An implementation's own failure ([`Failed`](DeserializeError::Failed)) with the given
+    /// description and no underlying error.
+    ///
+    /// Attach one with [`with_cause`](DeserializeError::with_cause).
     pub fn failed(detail: impl Into<String>) -> DeserializeError {
         DeserializeError::Failed { detail: detail.into(), cause: None }
     }
 
-    /// Attach the underlying error to a [`Failed`](DeserializeError::Failed) (any
-    /// other variant is returned unchanged): the error is shared internally (`Arc`)
-    /// so that the value stays `Clone`, and reachable through
-    /// [`Error::source`](core::error::Error::source).
+    /// Attach the underlying error to a [`Failed`](DeserializeError::Failed); any other
+    /// variant is returned unchanged.
+    ///
+    /// The error is stored in an `Arc`, so that the value stays `Clone`, and is reachable
+    /// through [`Error::source`](core::error::Error::source).
     pub fn with_cause(self, cause: impl core::error::Error + Send + Sync + 'static) -> DeserializeError {
         match self {
             DeserializeError::Failed { detail, .. } => {
@@ -979,12 +1053,16 @@ impl core::error::Error for DeserializeError {
     }
 }
 
-/// Error of setting up a [`SerdeSession`](crate::serialize::SerdeSession):
-/// registering a table ([`register_table`](crate::serialize::SerdeSession::register_table))
-/// or the readers and resolvers of a table
-/// ([`TableHandle::register_type`](crate::serialize::TableHandle::register_type) and
-/// its siblings). Every variant is a contract violation by the calling code, reported
-/// as an error rather than a panic.
+/// What can go wrong while setting a [`SerdeSession`](crate::serialize::SerdeSession) up.
+///
+/// Reported by [`register_table`](crate::serialize::SerdeSession::register_table) and by
+/// the registration of a table's readers and resolvers
+/// ([`TableHandle::register_type`](crate::serialize::TableHandle::register_type) and its
+/// siblings). Every variant is a contract violation by the calling code, reported as an
+/// error rather than a panic.
+///
+/// Registration happens before anything is written or read; the failures of those two
+/// phases are [`SerializeError`] and [`DeserializeError`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RegistrationError {
@@ -995,17 +1073,19 @@ pub enum RegistrationError {
     },
     /// The session already has `u32::MAX` tables.
     TooManyTables,
-    /// The table handle names no table of the session it was used with — it comes
-    /// from another session, or the table at that ordinal is registered with a
-    /// different driver type.
+    /// The table handle names no table of the session it was used with.
+    ///
+    /// The handle comes from another session, or the table at that ordinal is registered with
+    /// a driver of a different type.
     UnknownTable {
-        /// The id the handle carries.
+        /// The id the handle holds.
         table: TableId,
     },
-    /// The session has no table of that name registered with the expected driver
-    /// type: a registration helper that finds the crate's standard tables by name
-    /// ([`register_core_readers`](crate::serialize::register_core_readers)) was used
-    /// on a session that lacks one of them.
+    /// The session has no table of that name registered with the expected driver type.
+    ///
+    /// A registration helper that finds the crate's standard tables by name
+    /// ([`register_core_readers`](crate::serialize::register_core_readers)) was used on a
+    /// session that lacks one of them.
     UnknownTableName {
         /// The table's name.
         name: String,
@@ -1018,18 +1098,20 @@ pub enum RegistrationError {
         /// The identifier.
         identifier: String,
     },
-    /// The driver's
-    /// [`homogeneous_identifier`](crate::serialize::ObjectSerdeDriver::homogeneous_identifier)
-    /// is `Some("")`: an identifier is a real, non-empty string, and a homogeneous
-    /// table's entries all carry it (a heterogeneous table answers `None`).
+    /// The table's driver declares the empty string as its
+    /// [`homogeneous_identifier`](crate::serialize::ObjectSerdeDriver::homogeneous_identifier).
+    ///
+    /// An identifier is a real, non-empty string, carried by every entry of a table that
+    /// holds objects of one kind; a table holding several kinds answers `None` instead.
     EmptyHomogeneousIdentifier {
         /// The table's name.
         table: &'static str,
     },
-    /// That tree annotation type is already registered in the trees table
-    /// ([`TableHandle::register_annotation`](crate::serialize::TableHandle::register_annotation)):
-    /// a tree annotation type is registered once (the unit annotation is
-    /// pre-registered).
+    /// That tree annotation type is already registered in the trees table.
+    ///
+    /// Each annotation type is registered once with
+    /// [`TableHandle::register_annotation`](crate::serialize::TableHandle::register_annotation),
+    /// and the unit annotation is registered from the start.
     DuplicateAnnotationType {
         /// The trees table's name.
         table: &'static str,
@@ -1077,18 +1159,26 @@ impl fmt::Display for RegistrationError {
 
 impl core::error::Error for RegistrationError {}
 
-/// Error of converting plain data to or from a
-/// [`SerialValue`](crate::serialize::SerialValue): what the serde bridge
-/// (`to_value`/`from_value`, available with the `serde` cargo feature) and the crate's
-/// own conversions of its wire structures report. Writes fail on data the value model
-/// cannot hold — floating-point numbers, integers outside `i64`, maps with non-string
-/// keys or with keys beginning with `$` (`to_value` itself does not check nesting
-/// depth; a session refuses to intern a value nesting deeper than the bound, and
-/// reports that as this type's [`NestingTooDeep`](SerialValueError::NestingTooDeep)).
-/// Reads treat the value as untrusted input: a value of the wrong kind, an unknown,
-/// missing, or repeated map key, an unknown enum variant, or a value nesting deeper
-/// than the bound is an error, never a panic. The type is available without the
-/// `serde` feature: the crate's own conversions use it too.
+/// What can go wrong while converting plain data to or from a
+/// [`SerialValue`](crate::serialize::SerialValue).
+///
+/// Reported by the crate's own conversions of its serialized structures and, with the
+/// `serde` cargo feature, by the bridge (`to_value` and `from_value`). The type itself
+/// is available without the feature, since the crate's own conversions use it too.
+///
+/// Writing fails on data the value model cannot hold: floating-point numbers, integers
+/// outside `i64`, maps with non-string keys, and map keys beginning with `$`.
+///
+/// Reading treats the value as untrusted input: a value of the wrong kind, an unknown,
+/// missing, or repeated map key, an unknown enum variant, or a value nesting deeper than
+/// the bound is one of these errors, never a panic.
+///
+/// `to_value` itself does not check nesting depth: a session refuses to intern a value
+/// nesting deeper than the bound, and reports that as
+/// [`NestingTooDeep`](SerialValueError::NestingTooDeep).
+///
+/// A conversion failure met during a serialization or a deserialization is passed on as
+/// [`SerializeError::Value`] or [`DeserializeError::Value`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SerialValueError {
@@ -1098,9 +1188,14 @@ pub enum SerialValueError {
     /// A map key that is not a string was to be written; the value model's maps are
     /// string-keyed.
     NonStringMapKey,
-    /// A map key beginning with `$` was to be written or read: the value model
-    /// reserves that prefix for the canonical rendering's own objects (`$bytes`,
-    /// `$index`), and no map key may begin with it.
+    /// A map key beginning with `$` was to be written: the value model reserves that
+    /// prefix for the canonical rendering's own objects (`$bytes`, `$index`), and no
+    /// map key may begin with it.
+    ///
+    /// A reserved key met while a serialized value is *read* is refused just as firmly,
+    /// but the error then arrives as the reading format's own error type — for a format
+    /// whose error is not this type, as its `custom` error carrying this variant's
+    /// message.
     ReservedMapKey {
         /// The offending key.
         key: String,
@@ -1148,17 +1243,18 @@ pub enum SerialValueError {
         /// The variant names the enum has.
         expected: &'static [&'static str],
     },
-    /// A value nests deeper than the value model allows: more than `limit` lists and
-    /// maps enclose some part of it (see
-    /// [`SerialValue::MAX_NESTING_DEPTH`](crate::serialize::SerialValue::MAX_NESTING_DEPTH),
-    /// which is `limit`, and how a segment's own structure counts). Reported as this
-    /// variant when a segment is converted from its serialized form or absorbed by a
-    /// session, and when a session interns an object whose entry would exceed the
-    /// bound. When a value is read through serde (the `Deserialize` impls of
-    /// `SerialValue` and `Segment`, with the `serde` feature), the same check runs,
-    /// but the error then arrives as the format's own error type — for a format whose
-    /// error is not this type, as its `custom` error carrying this variant's message —
-    /// not as this variant.
+    /// A value nests deeper than the value model allows: more than `limit` lists and maps
+    /// enclose some part of it.
+    ///
+    /// `limit` is [`SerialValue::MAX_NESTING_DEPTH`](crate::serialize::SerialValue::MAX_NESTING_DEPTH),
+    /// whose documentation also says how a segment's own structure counts against it.
+    ///
+    /// This variant is reported when a segment is converted from its serialized form or
+    /// absorbed by a session, and when a session interns an object whose entry would exceed
+    /// the bound. When a value is read through serde — the `Deserialize` impls of
+    /// `SerialValue` and `Segment`, with the `serde` feature — the same check runs, but the
+    /// error arrives as the format's own error type: for a format whose error is not this
+    /// type, as its `custom` error carrying this variant's message.
     NestingTooDeep {
         /// The bound: the greatest nesting depth allowed.
         limit: usize,

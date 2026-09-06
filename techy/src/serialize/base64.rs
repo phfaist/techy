@@ -1,10 +1,12 @@
 //! Base64 for the JSON rendering of [`SerialValue::Bytes`](super::SerialValue::Bytes):
 //! a hand-written encoder and a strict decoder, so that the rendering layer needs no
-//! dependency beyond serde. Standard alphabet (`A–Z a–z 0–9 + /`), `=` padding, no
-//! line breaks; the decoder accepts exactly the encoder's output (rejects characters
-//! outside the alphabet, lengths that are not a multiple of four, padding anywhere but
-//! at the end, and non-zero unused bits before the padding), so every byte string has
-//! one text form and every accepted text has one byte string.
+//! dependency beyond serde.
+//!
+//! Standard alphabet (`A–Z a–z 0–9 + /`), `=` padding, no line breaks. The decoder
+//! accepts exactly the encoder's output — it rejects characters outside the alphabet,
+//! lengths that are not a multiple of four, padding anywhere but at the end, and
+//! non-zero unused bits before the padding — so every byte string has one text form and
+//! every accepted text has one byte string.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -117,8 +119,8 @@ pub(crate) fn decode(text: &str) -> Result<Vec<u8>, Base64Error> {
     Ok(out)
 }
 
-/// The six-bit value of one alphabet character; `=` is not part of the alphabet here
-/// (padding is handled by the caller at the final positions only).
+// The six-bit value of one alphabet character; `=` is not part of the alphabet here
+// (padding is handled by the caller at the final positions only).
 fn sextet(c: u8, offset: usize) -> Result<u32, Base64Error> {
     let v = match c {
         b'A'..=b'Z' => c - b'A',

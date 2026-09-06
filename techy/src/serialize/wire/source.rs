@@ -1,7 +1,9 @@
 //! The serialized shape of a [`Source`](crate::source::Source): [`WireSource`] and its
-//! parts. Written and read by the crate's source driver
+//! parts.
+//!
+//! Written and read by the crate's source driver
 //! ([`SourceSerdeDriver`](crate::serialize::SourceSerdeDriver)); the origin value is
-//! carried as a [`SerialValue`] produced by the language's own conversion.
+//! stored as a [`SerialValue`] produced by the language's own conversion.
 
 use alloc::string::String;
 

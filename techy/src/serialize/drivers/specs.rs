@@ -1,26 +1,30 @@
-//! The serialization of the crate's own callable specs and providers — the
-//! [`SerializableObject`] / [`DeserializableObject`] impls of [`Package`] (by
-//! identity: its name), [`Scope`] and [`FallbackProvider`] (in full: their
-//! definitions as spec positions), [`ErrorCallableSpec`] (its self-contained form),
-//! [`SpecProvenance`] (the identity form of a stamped spec: provider position plus
-//! key) and [`StdCallableSpec`] (identity through its stamp) — the reading
-//! environment's provider directory [`KnownProviders`] with its [`ProviderRecipe`]s,
-//! and [`register_core_readers`], which registers the readers of all of the above.
+//! The serialization of the crate's own callable specs and specs providers.
 //!
-//! **Identity and self-contained forms.** A provider or spec is serialized either by
-//! *identity* — a reference the reading side resolves against the live objects it
-//! already holds — or in a *self-contained* form the reading side rebuilds an
-//! equivalent object from. A package is part of the reading program's own
-//! configuration: identity by name. A package's
-//! specs hold argument parsers, which have no serialized form: identity through the
-//! provenance stamp the (shared) package handed out — a reference to the package's
-//! own entry plus the definition key, resolved by looking the key up in the reading
-//! side's package of that name. Scopes hold definitions made during the parse:
-//! written in full, each definition's spec as a position in the specs table (where
-//! the spec is whatever it is — an identity or a self-contained entry). Fallback
-//! providers likewise. The error spec is plain data. Every read validates its input
-//! and names what is missing ([`DeserializeError::MissingProvider`],
-//! [`DeserializeError::MissingDefinition`]).
+//! Here are the [`SerializableObject`] and [`DeserializableObject`] impls of
+//! [`Package`], [`Scope`], [`FallbackProvider`], [`ErrorCallableSpec`],
+//! [`SpecProvenance`], and [`StdCallableSpec`]; the reading environment's provider
+//! directory [`KnownProviders`] with its [`ProviderRecipe`]s; and
+//! [`register_core_readers`], which registers the readers of all of the above.
+//!
+//! # Identity and self-contained forms
+//!
+//! A provider or spec is serialized either by *identity* — a reference the reading side
+//! resolves against the live objects it already holds — or in a *self-contained* form
+//! the reading side rebuilds an equivalent object from.
+//!
+//! A package is part of the reading program's own configuration, so it is written by
+//! identity: its name. A package's specs hold argument parsers, which have no serialized
+//! form, so they too are written by identity, through the provenance stamp the shared
+//! package handed out: a reference to the package's own entry plus the definition key,
+//! resolved by looking that key up in the reading side's package of the same name.
+//!
+//! Scopes hold definitions made during the parse, so they are written in full, each
+//! definition's spec as a position in the specs table — where that spec is in turn
+//! whatever it is, an identity or a self-contained entry. Fallback providers are written
+//! the same way. The error spec is plain data.
+//!
+//! Every read validates its input and names what is missing
+//! ([`DeserializeError::MissingProvider`], [`DeserializeError::MissingDefinition`]).
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -58,16 +62,17 @@ use super::{
 // --- the reading environment: KnownProviders ------------------------------------------
 
 /// A way to build a provider the reading environment does not hold yet: what
-/// [`KnownProviders::register_recipe`] takes. A recipe's provider is built at most
-/// once per serialized provider entry — the built provider is stored in the session's
-/// providers table, and every reference to that entry yields it — but a second
-/// session, or a second entry naming the same provider (a writer holding two distinct
-/// providers of one name), builds it again.
+/// [`KnownProviders::register_recipe`] takes.
+///
+/// A recipe's provider is built at most once per serialized provider entry — the built
+/// provider is stored in the session's providers table, and every reference to that
+/// entry yields it. A second session, or a second entry naming the same provider (a
+/// writer holding two distinct providers of one name), builds it again.
 ///
 /// Any `Fn() -> P` closure or function whose `P` converts into a shared provider
 /// ([`IntoSpecsProvider`]) is a recipe: `known.register_recipe("minilatex",
-/// minilatex_package::<Latexlike>)`. A recipe that can fail (building a package from a
-/// file, say) implements the trait itself and reports through `build`'s `Result`.
+/// minilatex_package::<Latexlike>)`. A recipe that can fail — building a package from a
+/// file, say — implements the trait itself and reports through `build`'s `Result`.
 pub trait ProviderRecipe<L: Lang>: Send + Sync {
     /// Build the provider.
     ///
@@ -88,27 +93,29 @@ where
     }
 }
 
-/// The providers of the reading environment, by name: what a serialized
-/// [`Package`] entry (identity by name) resolves against — a provider directory the
-/// deserializing program fills with the providers it already holds
-/// ([`insert`](KnownProviders::insert)) and, for providers it does not hold but
-/// knows how to build, with [`ProviderRecipe`]s
-/// ([`register_recipe`](KnownProviders::register_recipe)). Set on the session as
-/// its user data ([`SerdeSession::set_user_data`]); the package reader looks it up
-/// through the context.
+/// The providers of the reading environment, by name: what a serialized [`Package`]
+/// entry, which names its package by identity, resolves against.
 ///
-/// Resolution ([`resolve`](KnownProviders::resolve)): the provider inserted under
-/// the name takes precedence; else the recipe registered under the name is built
-/// (once per serialized entry — the session keeps the built provider in its table);
-/// else the name is unknown ([`DeserializeError::MissingProvider`] at the reading
-/// site).
-/// Names need not be unique across a parse's providers in general
-/// ([`SpecsProvider::name`]); here they are the keys — the deserializing program
+/// The deserializing program fills the directory with the providers it already holds
+/// ([`insert`](KnownProviders::insert)) and, for providers it does not hold but knows
+/// how to build, with [`ProviderRecipe`]s
+/// ([`register_recipe`](KnownProviders::register_recipe)). It is then set on the session
+/// as its user data ([`SerdeSession::set_user_data`]), and the package reader looks it
+/// up through the context.
+///
+/// [`resolve`](KnownProviders::resolve) answers with the provider inserted under the
+/// name if there is one; else with the provider the recipe registered under the name
+/// builds (built once per serialized entry — the session keeps the built provider in its
+/// table); else the name is unknown, which is
+/// [`DeserializeError::MissingProvider`] at the reading site.
+///
+/// Provider names need not be unique across a parse in general
+/// ([`SpecsProvider::name`]); here they are the keys, and the deserializing program
 /// decides which provider each name means in its environment.
 ///
 /// A language's `serialize::register` helper typically fills in the recipes of the
-/// language's own packages (for the latexlike preset:
-/// [`latexlike::serialize::register_package_recipes`](crate::latexlike::serialize::register_package_recipes)).
+/// language's own packages; for the latexlike preset that is
+/// [`latexlike::serialize::register_package_recipes`](crate::latexlike::serialize::register_package_recipes).
 ///
 /// ```
 /// use techy::core::specs::Package;
@@ -159,12 +166,15 @@ impl<L: Lang> KnownProviders<L> {
         self.providers.get(name)
     }
 
-    /// Register `recipe` as the way to build the provider named `name` when no
-    /// provider is held under that name. The provider the recipe builds must answer
-    /// `name` as its own [`name()`](crate::core::specs::SpecsProvider::name):
-    /// [`resolve`](KnownProviders::resolve) checks it and reports a recipe that builds
-    /// a provider of another name as an error. Returns the recipe previously
-    /// registered under `name`, if any (replaced).
+    /// Registers `recipe` as the way to build the provider named `name` when no provider
+    /// is held under that name.
+    ///
+    /// The provider the recipe builds must answer `name` as its own
+    /// [`name()`](crate::core::specs::SpecsProvider::name):
+    /// [`resolve`](KnownProviders::resolve) checks this and reports a recipe that builds
+    /// a provider of another name as an error.
+    ///
+    /// Returns the recipe previously registered under `name`, if any (replaced).
     pub fn register_recipe(
         &mut self,
         name: impl Into<String>,
@@ -234,13 +244,17 @@ impl<L: Lang> fmt::Debug for KnownProviders<L> {
 
 // --- registration ---------------------------------------------------------------------
 
-/// Register the readers of the crate's own spec and provider types on `session`'s
-/// specs and providers tables (the standard tables, found by name): the identity
-/// form of stamped specs ([`SpecProvenance`]), the error spec, packages (by
-/// name, resolved through [`KnownProviders`]), scopes, and fallback providers. Call
-/// it once per reading session — a language's own `serialize::register` helper does
-/// (the latexlike preset's [`latexlike::serialize::register`](crate::latexlike::serialize::register)),
-/// so a session prepared with such a helper needs no separate call.
+/// Registers the readers of the crate's own spec and provider types on `session`'s
+/// specs and providers tables, which are found by name.
+///
+/// The readers registered are those of the identity form of stamped specs
+/// ([`SpecProvenance`]), the error spec, packages (by name, resolved through
+/// [`KnownProviders`]), scopes, and fallback providers.
+///
+/// Call this once per reading session. A language's own `serialize::register` helper
+/// calls it — for the latexlike preset,
+/// [`latexlike::serialize::register`](crate::latexlike::serialize::register) — so a
+/// session prepared with such a helper needs no separate call.
 ///
 /// # Errors
 ///
@@ -291,11 +305,13 @@ pub(crate) fn spec_and_provider_tables<L: SerializableLang>(
 // --- SpecProvenance: the identity form of a stamped spec ------------------------------
 
 /// The identity form of a stamped spec (identifier `core.provider-spec-identity`):
-/// `{provider, callable_type, definition}` — the defining provider's position in the
-/// providers table (interned here: the provider is written once, wherever it is
-/// referred to from), the callable type (`CallableTypeId`, in the language's own
-/// value form), and the definition key (`{name: …}` or `{trigger: …}`). This is what
-/// a stamped spec's own `serialize_object` delegates to.
+/// `{provider, callable_type, definition}`.
+///
+/// The parts are the defining provider's position in the providers table (interned here,
+/// so that the provider is written once wherever it is referred to from), the callable
+/// type (`CallableTypeId`, in the language's own value form), and the definition key
+/// (`{name: …}` or `{trigger: …}`). This is what a stamped spec's own
+/// `serialize_object` delegates to.
 impl<L: Lang> SerializableObject<L> for SpecProvenance<L> {
     /// # Errors
     ///
@@ -322,13 +338,16 @@ impl<L: Lang> SerializableObject<L> for SpecProvenance<L> {
     }
 }
 
-/// Resolves the identity form against the reading environment: the provider at the
-/// entry's position (read through the providers table — a package the environment
-/// supplied, see [`KnownProviders`]) must be a [`Package`], and the spec is the one
-/// it holds under the key ([`Package::get`] for a name, [`Package::get_specials`] for
-/// a trigger) — the very instance, so specs shared between nodes and the package stay
-/// shared. A provider of another type is not resolved here: a custom provider type
-/// that stamps its specs registers its own reader for its own spec entries.
+/// Resolves the identity form against the reading environment.
+///
+/// The provider at the entry's position — read through the providers table, so a package
+/// the environment supplied, see [`KnownProviders`] — must be a [`Package`], and the
+/// spec is the one it holds under the key ([`Package::get`] for a name,
+/// [`Package::get_specials`] for a trigger). It is the very instance the package holds,
+/// so specs shared between nodes and the package stay shared.
+///
+/// A provider of another type is not resolved here: a custom provider type that stamps
+/// its specs registers its own reader for its own spec entries.
 impl<L: SerializableLang> DeserializableObject<L> for SpecProvenance<L> {
     type Output = Arc<dyn CallableSpec<L>>;
 
@@ -371,7 +390,7 @@ impl<L: SerializableLang> DeserializableObject<L> for SpecProvenance<L> {
 }
 
 /// The identity form of a stamped spec, or the error naming the spec's type when the
-/// spec carries no stamp — the shared body of the crate's identity-only spec types'
+/// spec has no stamp — the shared body of the crate's identity-only spec types'
 /// `serialize_object`.
 pub(crate) fn serialize_stamped_spec<L: SerializableLang>(
     provenance: Option<&SpecProvenance<L>>,
@@ -435,8 +454,8 @@ impl<L: Lang> SerializableObject<L> for Package<L> {
 }
 
 /// Resolved against the reading environment: the [`KnownProviders`] in the session's
-/// user data — the provider held under the name, else the one its recipe builds
-/// (kept by the session for every reference to this entry).
+/// user data supplies the provider held under the name, or else the one its recipe
+/// builds, which the session keeps for every reference to this entry.
 impl<L: SerializableLang> DeserializableObject<L> for Package<L> {
     type Output = Arc<dyn SpecsProvider<L>>;
 
