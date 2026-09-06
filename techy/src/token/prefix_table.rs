@@ -1,7 +1,12 @@
-//! The delimiter prefix table derived from [`TokenRules`].
+//! The group-delimiter matching table a parsing state derives from its [`TokenRules`].
 //!
-//! Rebuilt only at state transitions (the parsing state caches it per instance),
-//! so the hot token-reading path scans a small pre-sorted table.
+//! [`PrefixTable`] is a cache, not something to configure. Every
+//! [`ParsingState`](crate::core::ParsingState) builds one from its own group rules when
+//! it is created and answers it from
+//! [`prefix_table`](crate::core::ParsingState::prefix_table); to change what a table
+//! contains, change the group rules. Read one to find out how a delimiter string will be
+//! matched: [`PrefixTable::match_at`] answers with the [`PrefixEntry`] for a piece of
+//! text.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -14,13 +19,14 @@ use crate::state::{FeaturePresence, Lang, LangFeatures};
 
 use super::rules::{GroupRule, TokenRules};
 
-/// One delimiter string and the group rules it may open and/or close.
+/// One delimiter string, with the group rule it opens and the group rule it closes.
 ///
-/// A single string may be both an opener and a closer — of the same rule (`$…$`) or of
-/// different ones. The table merges those into one entry (the WIP's "open-or-close"
-/// ambiguity merging); [`StdTokenReader`](super::StdTokenReader) resolves the direction:
-/// an expected close (per [`TokenRules::expecting_group_close`]) wins, otherwise the open
-/// interpretation does.
+/// A single string may do both — for the same rule (`$…$`) or for two different ones —
+/// and the table merges those claims into one entry.
+/// [`StdTokenReader`](super::StdTokenReader) settles the direction when it matches such
+/// an entry: a close the state is waiting for
+/// ([`TokenRules::expecting_group_close`]) wins, and otherwise the string is read as an
+/// opening delimiter.
 pub struct PrefixEntry<L: Lang> {
     delim: String,
     open: Option<Arc<GroupRule<L>>>,
@@ -44,29 +50,42 @@ impl<L: Lang> PrefixEntry<L> {
     }
 }
 
-/// Sorted delimiter-matching table derived from a [`TokenRules`] value.
+/// The group-delimiter matching table of one parsing state, derived from its
+/// [`TokenRules`].
 ///
-/// Entries are sorted longest-first so matching is greedy (`$$` before `$`); entries of
-/// equal length keep the declaration order — [`TokenRules::temporary_group_rules`]
-/// before [`TokenRules::group_rules`], each in list order. When two rules claim the same
-/// delimiter string in the same direction, the earlier entry wins.
+/// You do not normally build one:
+/// [`ParsingState`](crate::core::ParsingState) derives its own table from its group
+/// rules and answers it from
+/// [`prefix_table`](crate::core::ParsingState::prefix_table). Ask it what a delimiter at
+/// a position resolves to with [`match_at`](Self::match_at), or read the whole table
+/// with [`entries`](Self::entries).
+///
+/// Entries are sorted longest delimiter first, so matching is greedy: with `$…$` and
+/// `$$…$$` both declared, `$$` matches as one `$$` delimiter rather than twice as `$`.
+/// Entries of equal length keep declaration order — [`TokenRules::temporary_group_rules`]
+/// before [`TokenRules::group_rules`], each in list order — and when two rules claim the
+/// same delimiter string in the same direction, the earlier one wins.
 pub struct PrefixTable<L: Lang> {
     entries: Vec<PrefixEntry<L>>,
 }
 
 impl<L: Lang> PrefixTable<L> {
-    /// Build the table for the group rules of `rules` —
-    /// [`temporary_group_rules`](TokenRules::temporary_group_rules) first, then
-    /// [`group_rules`](TokenRules::group_rules), so temporary rules win same-spelling
-    /// ties (the
-    /// minted-rule "prepended wins" semantics). Empty delimiter strings are ignored.
-    /// With [`TokenRules::groups_enabled`] off the table is empty — the setting is
-    /// applied here (per state, at freeze time) so the token-scanning loop never
-    /// branches on it;
-    /// the expected group close is checked separately by the reader and is *not* gated.
-    /// A language that declares the groups feature absent
-    /// ([`LangFeatures::Groups`]) gets the empty table too: no group rules data
-    /// exists for it that could contribute entries.
+    /// Builds the table for the group rules of `rules`.
+    ///
+    /// A parsing state calls this for you when it is created; call it directly only to
+    /// inspect what a given rules value would produce.
+    ///
+    /// [`temporary_group_rules`](TokenRules::temporary_group_rules) are added first,
+    /// then [`group_rules`](TokenRules::group_rules), so a temporary rule wins a tie
+    /// against a permanent rule spelled the same way. Empty delimiter strings contribute
+    /// no entry.
+    ///
+    /// The table is empty when [`TokenRules::groups_enabled`] is off, and empty as well
+    /// for a language that declares the groups feature absent
+    /// ([`LangFeatures::Groups`]), which has no group rules data at all. Applying the
+    /// gate here, once per state, is what keeps it out of the token-scanning loop. The
+    /// expected group close ([`TokenRules::expecting_group_close`]) is not part of the
+    /// table and not gated: the reader checks it separately.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
         if !<L::Features as LangFeatures>::Groups::PRESENT || !rules.groups_enabled() {
@@ -101,7 +120,11 @@ impl<L: Lang> PrefixTable<L> {
         PrefixTable { entries }
     }
 
-    /// The longest entry whose delimiter is a prefix of `rest`, if any.
+    /// Returns the entry with the longest delimiter that `rest` starts with, if any.
+    ///
+    /// `rest` is the text from the position being examined onward, so a match is always
+    /// at its very beginning. The answer says which rule the delimiter opens and which
+    /// it closes; the caller decides the direction.
     pub fn match_at(&self, rest: &str) -> Option<&PrefixEntry<L>> {
         self.entries.iter().find(|e| rest.starts_with(e.delim.as_str()))
     }

@@ -1,22 +1,29 @@
-//! The [`TokenReader`] trait and the standard rules-driven implementation,
-//! [`StdTokenReader`].
+//! The [`TokenReader`] trait and its standard implementation, [`StdTokenReader`].
 //!
-//! `StdTokenReader` follows pylatexenc's proven `LatexTokenReader` protocol: `peek` parses
-//! the token at the current position without advancing; `move_to` repositions at a named
-//! edge of a token; `move_to_position` repositions at a position the reader handed out
-//! earlier; `next` = peek + move past the token. The scanning core,
-//! [`StdTokenReader::scan_std_token_at`], is composed of the scan helpers of
-//! [`super::scan`] — one free function per construct, each driven by one feature block of
-//! the [`TokenRules`](super::TokenRules) — except specials recognition, which
-//! [`scan_specials_trigger`] delegates to [`Lang::scan_specials`] (gated by the state's
-//! cached [`TriggerChars`](super::TriggerChars) filter).
+//! A reader turns input into tokens on demand, one at a time, and keeps a position in
+//! the resulting stream. Four methods do the work: [`peek`](TokenReader::peek) parses
+//! the token at the current position without moving,
+//! [`move_to`](TokenReader::move_to) repositions the stream at a named edge of a token,
+//! [`move_to_position`](TokenReader::move_to_position) repositions it at a position the
+//! reader returned earlier, and [`next`](TokenReader::next) is a peek followed by a move
+//! past the token. Construct parsers read their input only through a reader; the
+//! [`TokenReader`] documentation states the full contract, for callers and for anyone
+//! writing a reader of their own.
 //!
-//! The whitespace primitive [`skip_whitespace`] implements the multi-newline rule in one
-//! place for pre-space, command post-space, and comment post-space alike: when
-//! paragraph-break detection
-//! ([`TokenRules::paragraphs_enabled`](super::TokenRules::paragraphs_enabled)) is on,
-//! skipped whitespace never consumes a
-//! newline belonging to a `\n\s*\n` sequence — such a sequence always surfaces as a
+//! [`StdTokenReader`] scans in-memory text under the token rules held by the parsing
+//! state. Its scanning core, [`StdTokenReader::scan_std_token_at`], is assembled from
+//! the scan helpers of this module — one function per construct, each driven by one
+//! feature block of the [`TokenRules`](super::TokenRules) — except specials
+//! recognition, which [`scan_specials_trigger`] delegates to [`Lang::scan_specials`],
+//! calling that hook only where the state's cached
+//! [`TriggerChars`](super::TriggerChars) filter admits the character at hand.
+//!
+//! Whitespace is skipped in one place, [`skip_whitespace`], so that pre-space, command
+//! post-space and comment post-space all obey the same rule: while paragraph-break
+//! detection is on
+//! ([`TokenRules::paragraphs_enabled`](super::TokenRules::paragraphs_enabled)), skipped
+//! whitespace never consumes a newline belonging to a `\n\s*\n` sequence. Such a
+//! sequence always surfaces as a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
 //! [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
 
 use alloc::boxed::Box;
@@ -38,15 +45,17 @@ use super::tokenization::{StreamPosition, Token, Tokenization};
 
 /// One of the five boundaries of a token, in reading order.
 ///
-/// A token occupies a stretch of the stream that has two optional whitespace wings:
-/// *pre-space* (content whitespace read just before the token, outside its span) and
-/// *post-space* (syntactic whitespace consumed just after the token proper, inside its
-/// span — only [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)
-/// tokens have any). Inside the token proper, a kind may carry a leading marker (a
-/// comment's start delimiter, a command's escape character) before its own content.
-/// An edge names one of the five boundaries this creates, and is how a construct
-/// parser asks a [`TokenReader`] for a position or a span without knowing how the
-/// reader stores either.
+/// A token occupies a stretch of the stream with two optional whitespace wings.
+/// *Pre-space* is content whitespace read just before the token and lying outside its
+/// span; *post-space* is syntactic whitespace consumed just after the token proper and
+/// lying inside its span — only [`Command`](TokenKind::Command) and
+/// [`Comment`](TokenKind::Comment) tokens have any. Inside the token proper, some kinds
+/// begin with a leading marker before their own content: a comment's start delimiter, a
+/// command's escape character.
+///
+/// An edge names one of the five boundaries this creates. Asking a [`TokenReader`] for a
+/// position or a span at an edge is how a construct parser talks about where a token is
+/// without knowing how the reader stores either.
 ///
 /// The five offsets are in reading order and may coincide:
 ///
@@ -58,7 +67,7 @@ use super::tokenization::{StreamPosition, Token, Tokenization};
 /// `End == EndPastPostSpace` for a kind with no post-space;
 /// `StartBeforePreSpace == Start` for a token with no preceding whitespace.
 ///
-/// The ordering (`PartialOrd`/`Ord`) is the declaration order, which is reading order.
+/// `PartialOrd`/`Ord` compare the variants in declaration order, which is reading order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TokenEdge {
     /// Where the token's pre-space begins — the position the stream stood at when the
@@ -78,20 +87,20 @@ pub enum TokenEdge {
     EndPastPostSpace,
 }
 
-/// The stream position type of [`StdTokenReader`] — a byte offset into the content the
-/// reader scans, kept opaque.
+/// The stream position type of [`StdTokenReader`]: an opaque byte offset into the
+/// content the reader scans.
 ///
 /// A *stream position* names a place in a reader's token stream. Construct parsers
 /// obtain one only from the reader ([`position_here`](TokenReader::position_here),
 /// [`position_at`](TokenReader::position_at)) and give it back to the reader
 /// ([`move_to_position`](TokenReader::move_to_position),
-/// [`source_span_within`](TokenReader::source_span_within)); there is deliberately no
+/// [`source_span_within`](TokenReader::source_span_within)). There is deliberately no
 /// public constructor and no arithmetic, so a position cannot be invented or shifted
 /// outside the reader that produced it.
 ///
 /// Positions compare with `==` only. Two positions of the same reader are equal exactly
-/// when they name the same place, which is what the parse loops need ("did the reader
-/// move?").
+/// when they name the same place, which is what the parse loops need in order to tell
+/// whether the reader moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StdStreamPosition(usize);
 
@@ -108,196 +117,263 @@ impl StdStreamPosition {
     }
 }
 
-/// The token-reading protocol — the behavior extension point for genuinely different
-/// tokenization (catcode-like schemes, non-textual sources). `peek` receives the full
-/// [`ParsingState<L>`], not just `&TokenRules`: a custom reader keeps its tables in
-/// `L::StateExt`, which only the state exposes.
+/// The interface a parse reads its input through: tokens on demand, and where they are.
+///
+/// Two audiences read this documentation.
+///
+/// **Callers** — construct parsers and the parsing machinery — walk the input with a
+/// reader. Exactly three methods move the stream: [`next`](TokenReader::next) reads the
+/// token at the current position and moves past it, [`move_to`](TokenReader::move_to)
+/// repositions the stream at a named [`TokenEdge`] of a token, and
+/// [`move_to_position`](TokenReader::move_to_position) repositions it at a position the
+/// reader returned earlier.
+///
+/// Every other method leaves the position untouched: [`peek`](TokenReader::peek) parses
+/// the token at the current position without moving,
+/// [`token_kind`](TokenReader::token_kind) says what a token is, and the position and
+/// span methods say where a token or a position is.
+///
+/// A parser can therefore look before it commits: peek, then either consume the token
+/// or leave the stream where it stands. To look further ahead, keep a position, move
+/// the stream, and rewind to that position afterwards.
+///
+/// **Implementors** write a reader when tokenization itself has to work differently:
+/// catcode-like schemes, non-textual sources, a macro expander that splices content
+/// into the stream. The *Contract* section below is what such a reader must satisfy,
+/// and the parsing machinery relies on every clause of it. [`StdTokenReader`] is the
+/// standard implementation, and *Writing a reader over standard tokens* at the end of
+/// this page shows how to reuse it instead of starting from scratch. See also
+/// [defining a custom language](crate::guide::custom_lang).
+///
+/// [`peek`](TokenReader::peek) receives the whole [`ParsingState<L>`], not just the
+/// token rules, so that a reader holding tokenization tables of its own can keep them
+/// in [`Lang::StateExt`], which only the state makes reachable. Since the state changes
+/// during a parse, the same content may tokenize differently at two points of one
+/// parse.
+///
+/// A reader for one parse is built by the language's
+/// [`Tokenization::make_token_reader`], which a driver may override with a reader of
+/// its own ([`ParseDriver::make_token_reader`](crate::core::ParseDriver::make_token_reader)).
 ///
 /// # Positions, edges, and spans
 ///
 /// A reader is the only interpreter of its own stream. Two kinds of value serve that:
 ///
 /// - A **stream position** ([`StreamPosition<L>`](super::StreamPosition), the type the
-///   language's [`Tokenization`](super::Tokenization) declares)
-///   names a place in the token stream. Only a reader produces one
+///   language's [`Tokenization`](super::Tokenization) declares) names a place in the
+///   token stream. Only a reader produces one
 ///   ([`position_here`](TokenReader::position_here),
 ///   [`position_at`](TokenReader::position_at)), and a caller only gives it back
 ///   ([`move_to_position`](TokenReader::move_to_position),
 ///   [`source_span_within`](TokenReader::source_span_within)). Positions compare for
 ///   equality, never for order.
-/// - A **[`TokenEdge`]** names one of a token's five boundaries — the two whitespace
+/// - A **[`TokenEdge`]** names one of a token's five boundaries: the two whitespace
 ///   wings, the token proper, and where the token's own content begins past a leading
-///   marker (a comment delimiter, a command's escape character). Asking for a position
-///   or a span at an edge is how a caller talks about where a token is without reading
-///   anything off the token. The three sub-spans a comment node records are exactly
-///   `Start..ContentStart`, `ContentStart..End` and `End..EndPastPostSpace`.
+///   marker such as a comment delimiter or a command's escape character. Asking for a
+///   position or a span at an edge is how a caller talks about where a token is without
+///   reading anything off the token. The three sub-spans a comment node records are
+///   exactly `Start..ContentStart`, `ContentStart..End` and `End..EndPastPostSpace`.
 ///
-/// Locations leave a reader in exactly one form: a
-/// [`SourceSpan`]/[`SourcePos`], which carries its own source. That is what lets a
-/// reader serve tokens from more than one source during one parse without its caller
-/// having to know — which a reader may do at one nesting level only when the language
-/// declares [`Lang::OBEYS_SPAN_TILING`] `= false` (contract clause 8). A language that
-/// obeys span tiling has one source per parse; further sources enter such a parse only
+/// A reader reports locations in exactly one form: a [`SourceSpan`] or a
+/// [`SourcePos`], each of which names its own source. That is what lets a reader serve
+/// tokens from more than one source during one parse without its caller having to
+/// know.
+///
+/// A reader may do that at one nesting level only when the language declares
+/// [`Lang::OBEYS_SPAN_TILING`] `= false` (contract clause 8). A language that obeys
+/// span tiling reads one source per parse; further sources enter such a parse only
 /// through a nested parse over another source
-/// ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
+/// ([`ParseContext::parse_attached_source`](crate::core::constructs::ParseContext::parse_attached_source)).
 ///
 /// # Contract
 ///
-/// 1. **`peek` is speculative and idempotent per (stream position, state instance):**
-///    repeated calls at the same stream position with the *same* `ParsingState`
-///    instance return an equal token. The state arrives as an `&Arc` precisely so
-///    implementations may memoize on that key: clone the `Arc` into the cache — pointer
-///    identity is a sound key *only while a strong reference pins the allocation* (a
-///    dropped state's address can be recycled for a different state). A *different*
-///    state instance — even one derived with an empty delta — relieves `peek` of any
-///    obligation to repeat itself. [`move_to`](TokenReader::move_to),
+/// 1. **`peek` is speculative, and idempotent per (stream position, state instance).**
+///    Repeated calls at the same stream position with the *same* [`ParsingState`]
+///    instance return an equal token, and `peek` alone never moves the stream:
+///    [`move_to`](TokenReader::move_to),
 ///    [`move_to_position`](TokenReader::move_to_position) and
-///    [`next`](TokenReader::next) commit; `peek` alone never moves the stream.
+///    [`next`](TokenReader::next) are what commit. A *different* state instance — even
+///    one derived with an empty delta — relieves `peek` of any obligation to repeat
+///    itself.
+///
+///    The state arrives as an `&Arc` precisely so that implementations may memoize on
+///    that key. Clone the `Arc` into the cache: pointer identity is a sound key *only
+///    while a strong reference pins the allocation*, since a dropped state's address
+///    can be recycled for a different state.
+///
 /// 2. **A peeked token's [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) edge is
-///    the stream position the peek happened at:** `move_to(&tok,
-///    StartBeforePreSpace)` right after a `peek` does nothing, and later returns the
-///    stream to exactly where that peek happened.
-/// 3. **Tokens and positions stay usable for the whole parse:** every token and every
-///    position a reader hands out remains a valid argument to `move_to`,
-///    `move_to_position`, `position_at`, `source_span_between` and `source_span_within`
-///    until the parse ends — a reader serving several sources (clause 8) must keep them
-///    all addressable.
-/// 4. **Interpretation stays with the issuing reader** (or a reader over the same
-///    content): handing a token or a position to a reader that did not produce it is a
-///    caller-contract violation. [`StdTokenReader`] cannot detect it and answers from
-///    the offsets the token carries; the test-only `TokenListReader` does detect it and
-///    rejects tokens and positions it did not issue (its own documentation states the
-///    rules), which is what makes the two-reader lockstep suites a guard against a
-///    parser inventing either. What `StdTokenReader` answers for a foreign token is
-///    deliberately asymmetric: [`token_kind`](TokenReader::token_kind) reads an empty
-///    slice where the token's offsets fall outside its content (a wrong answer beats a
-///    new panic in library code), while
-///    [`source_span_between`](TokenReader::source_span_between) hands those offsets to
-///    `SourceSpan::new`, whose registered always-on assert fires. A foreign *position*
-///    is answered the same way: `StdTokenReader` passes it straight to `SourcePos::new`
-///    in [`source_position_at`](TokenReader::source_position_at) and to
-///    `SourceSpan::new` in [`source_span_within`](TokenReader::source_span_within), so
-///    a position this reader never handed out trips those same registered asserts —
-///    [`ParseContext::here`](crate::constructs::ParseContext::here) bottoms out there
-///    too, through `source_position_at`.
-/// 5. **Absent features yield no tokens:** a token kind belonging to a feature the
-///    language declares absent ([`Lang::Features`]) must never be produced — no
+///    the stream position the peek happened at.** `move_to(&tok, StartBeforePreSpace)`
+///    right after a `peek` does nothing, and later returns the stream to exactly where
+///    that peek happened.
+///
+/// 3. **Tokens and positions stay usable for the whole parse.** Every token and every
+///    position a reader returns remains a valid argument to `move_to`,
+///    `move_to_position`, `position_at`, `source_span_between` and
+///    `source_span_within` until the parse ends; a reader serving several sources
+///    (clause 8) must keep them all addressable.
+///
+/// 4. **Interpretation stays with the issuing reader**, or with a reader over the same
+///    content. Passing a token or a position to a reader that did not produce it
+///    violates the caller's side of this contract.
+///
+///    [`StdTokenReader`] cannot detect that, and answers from the offsets stored in the
+///    token. What it answers is deliberately asymmetric:
+///    [`token_kind`](TokenReader::token_kind) reads an empty slice where the token's
+///    offsets fall outside its content, a wrong answer being preferable to a new panic
+///    in library code, while
+///    [`source_span_between`](TokenReader::source_span_between) passes those offsets to
+///    [`SourceSpan::new`], whose precondition assert then fires.
+///
+///    A foreign *position* is answered the same way: `StdTokenReader` passes it
+///    straight to [`SourcePos::new`] in
+///    [`source_position_at`](TokenReader::source_position_at) and to
+///    [`SourceSpan::new`] in
+///    [`source_span_within`](TokenReader::source_span_within), so a position this
+///    reader never produced trips those same asserts —
+///    [`ParseContext::here`](crate::core::constructs::ParseContext::here) bottoms out
+///    there too, through `source_position_at`. Those asserts are listed in
+///    [the panicking items of the API](crate::guide::panics).
+///
+/// 5. **Absent features yield no tokens.** A token kind belonging to a feature the
+///    language declares absent ([`Lang::Features`]) must never be produced: no
 ///    `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
-///    `Specials`, or `ParagraphBreak` without theirs. The parsing machinery treats
-///    any such token as a violated contract and reports an implementation error
-///    instead of processing it — uniformly across token kinds.
-/// 6. **Edge order does not matter to `source_span_between`:** the result is the span
+///    `Specials` or `ParagraphBreak` without theirs. The parsing machinery treats any
+///    such token as a violated contract and reports an implementation error instead of
+///    processing it, uniformly across token kinds.
+///
+/// 6. **Edge order does not matter to `source_span_between`.** The result is the span
 ///    between the two edges in reading order, whichever order they are named in. Two
 ///    equal edges give the empty span at that edge.
-/// 7. **Moving sets the position:** after `move_to(&tok, edge)`, `position_here()`
+///
+/// 7. **Moving sets the position.** After `move_to(&tok, edge)`, `position_here()`
 ///    equals `position_at(&tok, edge)`; after `move_to_position(&p)`,
-///    `position_here()` equals `p`. Together with clause 2 this fixes where two
-///    consecutive tokens meet: for a token `next` peeked right after the stream was
-///    moved past `prev`, `position_at(next, StartBeforePreSpace) == position_at(prev,
-///    EndPastPostSpace)` — in every reader, including where `next` is the first token
-///    of another source (see *Seams* below). Where the standard nodes parser is
-///    accumulating a run of content characters, its content loop checks this equality
-///    for the token it is about to add to the pending run, and reports a mismatch as
-///    an implementation error, whatever the language's [`Lang::OBEYS_SPAN_TILING`]
-///    says.
+///    `position_here()` equals `p`.
+///
+///    Together with clause 2 this fixes where two consecutive tokens meet: for a token
+///    `next` peeked right after the stream was moved past `prev`,
+///    `position_at(next, StartBeforePreSpace) == position_at(prev, EndPastPostSpace)`.
+///    That holds in every reader, including where `next` is the first token of another
+///    source (see *Seams* below).
+///
+///    Where the standard nodes parser is accumulating a run of content characters, its
+///    content loop checks this equality for the token it is about to add to the pending
+///    run, and reports a mismatch as an implementation error, whatever the language's
+///    [`Lang::OBEYS_SPAN_TILING`] says.
+///
 /// 8. **One source, in reading order, without gaps** — required of the readers of a
 ///    language that declares [`OBEYS_SPAN_TILING`](Lang::OBEYS_SPAN_TILING) `= true`
-///    (the default). Such a reader serves one parse from one source, tokens in reading
-///    order, with every byte between the earlier token's [`End`](TokenEdge::End) edge
-///    and the later token's [`Start`](TokenEdge::Start) edge belonging to exactly one of
-///    them — as the earlier token's post-space or the later one's pre-space; the source
-///    a parse reads changes only where a parser builds a new reader over another source
-///    ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
+///    (the default).
+///
+///    Such a reader serves one parse from one source, tokens in reading order, with
+///    every byte between the earlier token's [`End`](TokenEdge::End) edge and the later
+///    token's [`Start`](TokenEdge::Start) edge belonging to exactly one of them: to the
+///    earlier token's post-space or to the later one's pre-space. The source a parse
+///    reads changes only where a parser builds a new reader over another source
+///    ([`ParseContext::parse_attached_source`](crate::core::constructs::ParseContext::parse_attached_source)).
+///
 ///    This is what makes the language's parse trees span-tiled, and the machinery
-///    enforces it: a pair of stream positions that does not delimit one forward range of
-///    one source is reported as an implementation error
-///    ([`ParseContext::source_span_within`](crate::constructs::ParseContext::source_span_within)).
-///    Under `OBEYS_SPAN_TILING = false` none of this is promised, and the reader answers
-///    [`source_span_describing`](TokenReader::source_span_describing) for the spans of
-///    multi-token constructs.
-/// 9. **Every token advances the stream:** for every token but the terminal
-///    [`EndOfStream`](TokenKind::EndOfStream), `position_at(&tok, EndPastPostSpace) !=
-///    position_at(&tok, StartBeforePreSpace)`. Clauses 1, 2 and 7 are why: a token whose
-///    two ends are the same position is served again by the next `peek`, at the position
-///    its consumer moved to, under the same state — a read that never ends. What the
-///    clause rules out is the equality of the two positions, not an *empty span* — a
-///    reader may serve a token with no bytes behind it, a synthesized delimiter for
-///    instance, provided it produces two distinct position values for the token's two
-///    ends. Positions are the language's own type and compare for equality only, so
-///    any two values the reader tells apart will do; clauses 1–3 require them of such
-///    a reader anyway, since `move_to(&tok, StartBeforePreSpace)` followed by a fresh
-///    `peek` must return that same token — which a reader that stands still and tracks
-///    progress in hidden state cannot deliver. The standard nodes parser enforces the
-///    clause: a token it consumed that left the stream position unchanged is reported
-///    as an implementation error, which aborts the parse under any recovery policy
-///    instead of looping. The recovery path, where no token is consumed, is covered
-///    separately by the
+///    enforces it: a pair of stream positions that does not delimit one forward range
+///    of one source is reported as an implementation error
+///    ([`ParseContext::source_span_within`](crate::core::constructs::ParseContext::source_span_within)).
+///
+///    Under `OBEYS_SPAN_TILING = false` none of this is promised, and the reader
+///    answers [`source_span_describing`](TokenReader::source_span_describing) for the
+///    spans of multi-token constructs.
+///
+/// 9. **Every token advances the stream.** For every token but the terminal
+///    [`EndOfStream`](TokenKind::EndOfStream),
+///    `position_at(&tok, EndPastPostSpace) != position_at(&tok, StartBeforePreSpace)`.
+///
+///    Clauses 1, 2 and 7 are why: a token whose two ends are the same position is
+///    served again by the next `peek`, at the position its consumer moved to, under the
+///    same state — a read that never ends.
+///
+///    What the clause rules out is the equality of the two positions, not an *empty
+///    span*. A reader may serve a token with no bytes behind it, a synthesized
+///    delimiter for instance, provided it produces two distinct position values for the
+///    token's two ends. Positions are the language's own type and compare for equality
+///    only, so any two values the reader tells apart will do; clauses 1–3 require them
+///    of such a reader anyway, since `move_to(&tok, StartBeforePreSpace)` followed by a
+///    fresh `peek` must return that same token — which a reader that stands still and
+///    tracks its progress in hidden state cannot deliver.
+///
+///    The standard nodes parser enforces the clause: a token it consumed that left the
+///    stream position unchanged is reported as an implementation error, which aborts
+///    the parse under any recovery policy instead of looping. The recovery path, where
+///    no token is consumed, is covered separately by the
 ///    [`TokenRecovery::resume` contract](super::TokenRecovery#contract-resume-must-move-the-stream).
 ///
-/// At the end of the stream `peek` returns the terminal, idempotent
-/// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); the reader
-/// reports the input's final whitespace as that token's pre-space.
+/// At the end of the stream, `peek` returns the terminal, idempotent
+/// [`EndOfStream`](TokenKind::EndOfStream) token rather than an `Option`, and the
+/// input's final whitespace is reported as that token's pre-space.
 ///
 /// # Seams — readers that serve several sources at one nesting level
 ///
 /// A **seam** is a place in the stream where the next token comes from a different
-/// source than the previous one; only a reader of a language with
+/// source than the previous one. Only a reader of a language with
 /// [`OBEYS_SPAN_TILING`](Lang::OBEYS_SPAN_TILING) `= false` has any (clause 8).
-/// Clauses 2 and 7 hold there too, and that determines what the positions at a seam
+/// Clauses 2 and 7 hold at a seam too, and that determines what the positions there
 /// mean:
 ///
-/// - The first token drawn from a new source carries the **trigger position** — where
+/// - The first token drawn from a new source reports the **trigger position** — where
 ///   the stream stood in the outer source when the new source was entered — as its
 ///   [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) edge. Un-consuming that
 ///   token (`move_to(&tok, StartBeforePreSpace)`) therefore returns the stream to the
 ///   trigger, and the next `peek` produces the same first token again (clause 1).
 /// - The position past the last token of an exhausted source is the **resume
-///   position** — where reading continues in the outer source.
+///   position**, where reading continues in the outer source.
 ///
 /// One position value names such a shared place. Which value that is, and what
 /// [`source_position_at`](TokenReader::source_position_at) reports for it, is the
-/// reader's choice — an outer coordinate, an inner one, or a composite of both;
-/// reporting the outer (trigger or resume) coordinate is the recommended answer,
-/// since that is the location a reader of a diagnostic can act on. A token may
-/// consequently have edges in two different sources; its sub-spans are asked for one
-/// at a time through [`source_span_between`](TokenReader::source_span_between), and
-/// each of those is a span of a single source. Because the positions on the two sides
-/// of a seam compare equal, a run of content characters may legitimately extend
-/// across one — which is why the parsers of such a language record multi-token
-/// content as owned text rather than as a span.
+/// reader's choice: an outer coordinate, an inner one, or a composite of both.
+/// Reporting the outer coordinate — the trigger or the resume position — is the
+/// recommended answer, since that is the location a reader of a diagnostic can act on.
 ///
-/// Five further rules for these readers:
+/// A token may consequently have edges in two different sources. Its sub-spans are
+/// asked for one at a time through
+/// [`source_span_between`](TokenReader::source_span_between), and each of those is a
+/// span of a single source.
+///
+/// Because the positions on the two sides of a seam compare equal, a run of content
+/// characters may legitimately extend across one. That is why the parsers of such a
+/// language record multi-token content as owned text rather than as a span.
+///
+/// Five further rules apply to these readers:
 ///
 /// - **The pre-space of the first token drawn from a new source must lie within that
 ///   source.** That token's [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace)
 ///   edge is the trigger position, and the trigger position and the start of the new
-///   source are one shared place (above) — so attributing whitespace of the *outer*
-///   source to that token as pre-space puts real whitespace between two equal
-///   position values. The parsing machinery decides whether a token has pre-space by
-///   comparing exactly those two positions: equal values read as no pre-space, the
-///   pre-space text is never asked for, and the whitespace disappears from the parsed
-///   content without any diagnostic. Outer whitespace that precedes a seam must
-///   therefore be served in the outer source — as the post-space of the token before
-///   the seam, or by starting the new source's content with that whitespace so the
-///   first token's pre-space lies past the seam. (The mirrored attribution is sound:
-///   outer whitespace after an exhausted source may be the last inner token's
-///   post-space, because [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — the
-///   resume position, past that whitespace — is then a different position value than
-///   [`End`](TokenEdge::End).)
+///   source are one shared place (above), so attributing whitespace of the *outer*
+///   source to that token as pre-space would put real whitespace between two equal
+///   position values.
+///
+///   The parsing machinery decides whether a token has pre-space by comparing exactly
+///   those two positions: equal values read as no pre-space, the pre-space text is
+///   never asked for, and the whitespace disappears from the parsed content without any
+///   diagnostic. Outer whitespace that precedes a seam must therefore be served in the
+///   outer source — as the post-space of the token before the seam, or by starting the
+///   new source's content with that whitespace so the first token's pre-space lies past
+///   the seam.
+///
+///   The mirrored attribution is sound: outer whitespace after an exhausted source may
+///   be the last inner token's post-space, because
+///   [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — the resume position, past that
+///   whitespace — is then a different position value than [`End`](TokenEdge::End).
 /// - **Termination is the reader's responsibility.** An expansion that never ends is
-///   simply an endless token stream; the engine's descent guard
-///   ([`DescentGuard`](crate::engine::DescentGuard)) counts parser nesting, not tokens,
+///   simply an endless token stream; the engine's nesting-depth limiter
+///   ([`DescentGuard`](crate::core::DescentGuard)) counts parser nesting, not tokens,
 ///   and will not stop it.
 /// - **Positions and tokens stay valid inside sources the stream has already left**
 ///   (clause 3): parsers rewind across seams — an argument probe that fails, a stop
-///   token that is peeked and left unconsumed — and every position they kept must
-///   still be accepted by `move_to_position`.
-/// - **Mint an expansion's source with**
-///   [`SourceProvenance::Synthesized`](crate::source::SourceProvenance::Synthesized)
-///   (its `description` naming what produced the content, its `triggered_at` the span
-///   the expansion was triggered at), so that a diagnostic reported inside the
-///   expansion carries the provenance chain back to the input. Entering an expansion
-///   pushes no [`Frame`](crate::engine::Frame) — it is not a construct parse.
+///   token that is peeked and left unconsumed — and every position they kept must still
+///   be accepted by `move_to_position`.
+/// - **Create an expansion's source with**
+///   [`SourceProvenance::Synthesized`](crate::source::SourceProvenance::Synthesized):
+///   its `description` names what produced the content and its `triggered_at` names the
+///   span the expansion was triggered at, so that a diagnostic reported inside the
+///   expansion can be traced back to the input through the provenance chain. Entering
+///   an expansion pushes no [`Frame`](crate::core::Frame), since it is not a construct
+///   parse.
 /// - **[`EndOfStream`](TokenKind::EndOfStream) is the end of the *whole* input.** An
 ///   exhausted expansion is not end of stream: the reader continues in the outer
 ///   source. The rule that the input's final whitespace surfaces as the end-of-stream
@@ -306,25 +382,25 @@ impl StdStreamPosition {
 /// # Writing a reader over standard tokens
 ///
 /// A reader that produces the same tokens as [`StdTokenReader`] but decides differently
-/// *which* token comes next (re-classifying a character, splicing in content) does not
-/// have to reimplement interpretation: keep an inner `StdTokenReader` over the same
-/// content, build tokens with the [`StdToken`] constructors (its spans are offsets into
-/// that content, which the inner reader also answers with
-/// [`source_span_between`](TokenReader::source_span_between)), and delegate every
-/// interpretive method to the inner reader. Nothing is read off a token — there is
-/// nothing readable on one.
+/// *which* token comes next — re-classifying a character, splicing in content — does
+/// not have to reimplement interpretation. Keep an inner `StdTokenReader` over the same
+/// content, build tokens with the [`StdToken`] constructors, and delegate every
+/// interpretive method to the inner reader. A token has no readable data, so there is
+/// nothing to reimplement: a `StdToken`'s spans are offsets into that content, which
+/// the inner reader also answers with
+/// [`source_span_between`](TokenReader::source_span_between).
 ///
-/// A reader that keeps one inner `StdTokenReader` per source, wrapping their tokens in a
-/// token type of its own (see *Seams* above), instead calls the two inner-reader methods
-/// that need no tokenization declaration of their own:
-/// [`scan_std_token_at`](StdTokenReader::scan_std_token_at) to read a standard token and
-/// [`token_kind_of_std_token`](StdTokenReader::token_kind_of_std_token) to interpret one
-/// — the [`core::token`](crate::core::token) module documentation describes that case in
-/// full.
+/// A reader that keeps one inner `StdTokenReader` per source, wrapping their tokens in
+/// a token type of its own (see *Seams* above), instead calls the two inner-reader
+/// methods that need no tokenization declaration of their own:
+/// [`scan_std_token_at`](StdTokenReader::scan_std_token_at) to read a standard token,
+/// and [`token_kind_of_std_token`](StdTokenReader::token_kind_of_std_token) to
+/// interpret one. The [`core::token`](crate::core::token) module documentation
+/// describes that case in full.
 ///
 /// Because the inner reader is generic over the language, delegation goes through a
-/// `&dyn TokenReader<'s, L>` / `&mut dyn TokenReader<'s, L>` view of it (plain method
-/// syntax on the concrete inner reader cannot infer the language):
+/// `&dyn TokenReader<'s, L>` / `&mut dyn TokenReader<'s, L>` view of it: plain method
+/// syntax on the concrete inner reader cannot infer the language.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -412,13 +488,32 @@ impl StdStreamPosition {
 /// }
 /// ```
 pub trait TokenReader<'s, L: Lang> {
-    /// Parse the token at the current position without advancing.
+    /// Parses the token at the current position, without moving the stream.
+    ///
+    /// Reading ahead is what this is for: peek, decide, then either consume the token
+    /// with [`move_to`](TokenReader::move_to) at
+    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) or leave the stream where it
+    /// stands. Peeking twice at the same position under the same `state` returns an
+    /// equal token (contract clause 1), so nothing is lost by asking again.
+    ///
+    /// `state` supplies the whole tokenization behavior: the token rules in force here,
+    /// and whatever a custom reader keeps in [`Lang::StateExt`].
+    ///
+    /// # Errors
+    ///
+    /// A [`TokenError`](super::TokenError) reports a condition in the content, such as
+    /// a forbidden character. It offers a
+    /// [`TokenRecovery`](super::TokenRecovery) where the reader can describe how to
+    /// carry on; whether that recovery is taken is the session's
+    /// [`Recovery`](crate::error::Recovery) policy to decide, not the reader's.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>>;
 
-    /// Parse the token at the current position and move past it (including its
-    /// post-space): [`peek`](TokenReader::peek) +
+    /// Parses the token at the current position and moves past it, post-space included.
+    ///
+    /// Equivalent to [`peek`](TokenReader::peek) followed by
     /// [`move_to`](TokenReader::move_to) at
-    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
+    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace). A failing peek leaves the
+    /// stream where it stands.
     fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, Token<L>> {
         let token = self.peek(state)?;
         self.move_to(&token, TokenEdge::EndPastPostSpace);
@@ -427,23 +522,26 @@ pub trait TokenReader<'s, L: Lang> {
 
     // --- navigation by edge and by position ------------------------------------------
 
-    /// Reposition the stream at `edge` of `tok` — forward or backward.
+    /// Repositions the stream at `edge` of `tok`, forward or backward.
     ///
-    /// This is the position-based navigation the parse loops use: `move_to(&tok,
-    /// TokenEdge::EndPastPostSpace)` consumes the token, `move_to(&tok,
-    /// TokenEdge::Start)` puts it back to be read again,
-    /// [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) also gives back the
-    /// whitespace before it, and the two inner edges
-    /// ([`ContentStart`](TokenEdge::ContentStart), [`End`](TokenEdge::End)) put the
-    /// stream inside the token — past a leading marker, or before the syntactic
-    /// post-space (the `\verb` idiom).
+    /// This is the navigation the parse loops use. `move_to(&tok,
+    /// TokenEdge::EndPastPostSpace)` consumes the token; `move_to(&tok,
+    /// TokenEdge::Start)` puts it back to be read again, and
+    /// [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) gives back the
+    /// whitespace before it as well.
+    ///
+    /// The two inner edges, [`ContentStart`](TokenEdge::ContentStart) and
+    /// [`End`](TokenEdge::End), put the stream *inside* the token: past a leading
+    /// marker, or before the syntactic post-space (the `\verb` idiom).
     fn move_to(&mut self, tok: &Token<L>, edge: TokenEdge);
 
-    /// Reposition the stream at a position this reader handed out earlier.
+    /// Repositions the stream at a position this reader returned earlier.
     ///
-    /// Deliberately bidirectional — it serves rewinds as well as resumes — so
-    /// implementations assert nothing about the direction of the move. When adopting a
-    /// [`TokenRecovery`](super::TokenRecovery), the *caller* enforces the
+    /// The move goes in either direction, serving rewinds as well as resumes, so an
+    /// implementation must not assume that `at` lies ahead of the current position.
+    ///
+    /// When adopting a [`TokenRecovery`](super::TokenRecovery), the *caller* is what
+    /// enforces the
     /// [advancement contract](super::TokenRecovery#contract-resume-must-move-the-stream).
     fn move_to_position(&mut self, at: &StreamPosition<L>);
 
@@ -453,14 +551,14 @@ pub trait TokenReader<'s, L: Lang> {
     /// spellings this reader resolved.
     ///
     /// This is the only way a construct parser reads a token. The returned
-    /// [`TokenKind`] borrows from the token (and, for a reader that scans borrowed
-    /// content, from that content) — never from the reader, so a parser may hold it
-    /// while it goes on reading and moving the stream.
+    /// [`TokenKind`] borrows from the token, and from the scanned content for a reader
+    /// that scans borrowed content. It never borrows the reader, so a parser may hold
+    /// it while it goes on reading and moving the stream.
     ///
-    /// The view carries no location: where the token is comes from
+    /// The view says nothing about where the token is. That comes from
     /// [`source_span_of`](TokenReader::source_span_of),
     /// [`source_span_between`](TokenReader::source_span_between) and
-    /// [`position_at`](TokenReader::position_at) — a comment's delimiter span, for
+    /// [`position_at`](TokenReader::position_at): a comment's delimiter span, for
     /// instance, is `source_span_between(tok, Start, ContentStart)`.
     fn token_kind<'t>(&self, tok: &'t Token<L>) -> TokenKind<'t, L>
     where
@@ -477,8 +575,8 @@ pub trait TokenReader<'s, L: Lang> {
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin>;
 
-    /// The token's own span: from [`Start`](TokenEdge::Start) to
-    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — pre-space excluded,
+    /// The token's own span, from [`Start`](TokenEdge::Start) to
+    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace): pre-space excluded,
     /// post-space included.
     fn source_span_of(&self, tok: &Token<L>) -> SourceSpan<L::SourceOrigin> {
         self.source_span_between(tok, TokenEdge::Start, TokenEdge::EndPastPostSpace)
@@ -492,40 +590,45 @@ pub trait TokenReader<'s, L: Lang> {
     /// The stream position at `edge` of `tok`.
     fn position_at(&self, tok: &Token<L>, edge: TokenEdge) -> StreamPosition<L>;
 
-    /// Where a stream position lies in text. An empty-span diagnostic anchor at a
-    /// position is [`SourceSpan::at`] of this.
+    /// Where a stream position lies in text.
+    ///
+    /// To anchor a diagnostic at a position, build the empty span there with
+    /// [`SourceSpan::at`].
     fn source_position_at(&self, at: &StreamPosition<L>) -> SourcePos<L::SourceOrigin>;
 
     /// The source span running from `begin` to `end`, when the two positions delimit one
     /// range of one source; `None` otherwise.
     ///
-    /// `None` means the pair is incoherent — `end` before `begin`, or the two in
-    /// different sources. That is a caller bug (the caller lifts it to an
-    /// implementation error), not a source condition.
+    /// `None` means the pair is incoherent: `end` before `begin`, or the two in
+    /// different sources. That is a bug in the calling code, not a condition of the
+    /// parsed content, and the caller reports it as an implementation error.
     fn source_span_within(
         &self,
         begin: &StreamPosition<L>,
         end: &StreamPosition<L>,
     ) -> Option<SourceSpan<L::SourceOrigin>>;
 
-    /// A source span **describing** the stretch of stream from `begin` to `end` — what
-    /// a node covering several tokens is recorded with when the language does not obey
-    /// span tiling ([`Lang::OBEYS_SPAN_TILING`] `= false`), where the two positions
-    /// need not delimit one range of one source.
+    /// A source span **describing** the stretch of stream from `begin` to `end`, where
+    /// the two positions need not delimit one range of one source.
     ///
-    /// The answer is the reader's to choose: any [`SourceSpan`] it considers a useful
-    /// description of that stretch. The parsing machinery derives nothing from it — no
-    /// content, no structure, no ordering; the span becomes the node's span and shows
-    /// in diagnostics. The recommended answer is `begin`'s source, running from `begin`
-    /// to wherever the stream last stood in that source before reaching `end`. When the
-    /// two positions *do* delimit one range of one source, answer that range — what
-    /// [`source_span_within`](TokenReader::source_span_within) returns. This method
-    /// always answers: the empty span at `begin` ([`SourceSpan::at`] of
-    /// [`source_position_at`](TokenReader::source_position_at)) is always available.
+    /// This is what a node covering several tokens is recorded with when the language
+    /// does not obey span tiling ([`Lang::OBEYS_SPAN_TILING`] `= false`). The parsers
+    /// of a language that does obey span tiling never call this method: they use
+    /// [`source_span_within`](TokenReader::source_span_within) and treat its `None` as
+    /// an implementation error.
     ///
-    /// The parsers of a language that obeys span tiling never call this method: they
-    /// use [`source_span_within`](TokenReader::source_span_within) and treat its `None`
-    /// as an implementation error.
+    /// The answer is the reader's to choose — any [`SourceSpan`] it considers a useful
+    /// description of that stretch. The parsing machinery derives no content, no
+    /// structure and no ordering from it; the span becomes the node's span and appears
+    /// in diagnostics.
+    ///
+    /// The recommended answer is `begin`'s source, running from `begin` to wherever the
+    /// stream last stood in that source before reaching `end`. Where the two positions
+    /// *do* delimit one range of one source, answer that range, which is what
+    /// [`source_span_within`](TokenReader::source_span_within) returns.
+    ///
+    /// This method always answers: the empty span at `begin` — [`SourceSpan::at`] of
+    /// [`source_position_at`](TokenReader::source_position_at) — is always available.
     fn source_span_describing(
         &self,
         begin: &StreamPosition<L>,
@@ -533,17 +636,30 @@ pub trait TokenReader<'s, L: Lang> {
     ) -> SourceSpan<L::SourceOrigin>;
 }
 
-/// Standard reader over in-memory content, driven by the parsing state: the
-/// [`TokenRules`](super::TokenRules) data (plus derived caches) and the
-/// `Lang::scan_specials` hook.
+/// The standard [`TokenReader`]: it scans in-memory content under the token rules of
+/// the parsing state.
 ///
-/// The reader holds only the content borrow and a position; all tokenization behavior
-/// comes from the state passed to [`peek`](TokenReader::peek) — which is what lets the
-/// rules change mid-parse through state transitions.
+/// This is the reader a parse uses unless the language or the driver installs another
+/// one. A language whose [`Lang::Tokenization`] is
+/// [`StdTokenization`](super::StdTokenization) is given one per parse by
+/// [`Tokenization::make_token_reader`](super::Tokenization::make_token_reader), and a
+/// driver may return one of its own instead
+/// ([`ParseDriver::make_token_reader`](crate::core::ParseDriver::make_token_reader)).
+/// Outside a parse, [`new`](StdTokenReader::new) builds a reader over any
+/// [`Source`].
 ///
-/// A feature the language declares absent ([`Lang::Features`]) is never detected:
-/// its detection branch is eliminated at compile time, and its rules block stores no
-/// data to consult in the first place.
+/// The reader itself stores only the content borrow and a position. All tokenization
+/// behavior comes from the state passed to [`peek`](TokenReader::peek) — the
+/// [`TokenRules`](super::TokenRules) data with its derived caches, and the
+/// [`Lang::scan_specials`] hook — which is what lets the rules change mid-parse through
+/// state transitions.
+///
+/// A feature the language declares absent ([`Lang::Features`]) is never detected: its
+/// detection branch is eliminated at compile time, and its rules block stores no data
+/// to consult in the first place.
+///
+/// A custom reader that wants standard tokens need not reproduce any of this; see
+/// *Writing a reader over standard tokens* in the [`TokenReader`] documentation.
 #[derive(Debug, Clone)]
 pub struct StdTokenReader<'s, O: SourceOrigin = Option<String>> {
     source: &'s Arc<Source<O>>,
@@ -552,12 +668,12 @@ pub struct StdTokenReader<'s, O: SourceOrigin = Option<String>> {
 }
 
 impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
-    /// Create a reader positioned at the start of `source`'s content.
+    /// Creates a reader positioned at the start of `source`'s content.
     ///
-    /// The reader borrows the source rather than cloning the `Arc`: it needs the
-    /// source to answer where its tokens are (every location it hands out is a
-    /// [`SourceSpan`]/[`SourcePos`] qualified by this source), and cloning the `Arc`
-    /// once per span keeps that cheap.
+    /// The reader borrows the source rather than cloning the `Arc`, because it needs the
+    /// source to answer where its tokens are: every location it returns is a
+    /// [`SourceSpan`] or [`SourcePos`] qualified by this source, and cloning the `Arc`
+    /// once per location keeps that cheap.
     pub fn new(source: &'s Arc<Source<O>>) -> StdTokenReader<'s, O> {
         StdTokenReader { source, content: source.content(), pos: 0 }
     }
@@ -588,21 +704,22 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         self.pos >= self.content.len()
     }
 
-    /// The parser-facing view of `tok` — the interpretation behind
-    /// [`TokenReader::token_kind`], with `L: Lang` as its only requirement.
+    /// The parser-facing view of `tok`, with `L: Lang` as its only requirement.
     ///
-    /// A reader of a language whose [`Lang::Tokenization`] declares a token type of its
+    /// This is the interpretation behind [`TokenReader::token_kind`], reachable without
+    /// the trait. A language whose [`Lang::Tokenization`] declares a token type of its
     /// own, and stores standard tokens read by inner `StdTokenReader`s inside it — one
     /// inner reader per source — interprets those stored tokens through this method. It
-    /// cannot go through [`TokenReader::token_kind`]: the implementation of that trait
-    /// here is available only to languages tokenized in
+    /// cannot go through [`TokenReader::token_kind`], because the implementation of that
+    /// trait here is available only to languages tokenized in
     /// [`StdToken`]/[`StdStreamPosition`], which such a language is not.
     ///
+    /// The returned view borrows the token and this reader's content, never the reader,
+    /// so a caller may hold it while it goes on reading and moving the stream.
+    ///
     /// Interpreting a token with a reader that did not issue it is ruled out by clause 4
-    /// of the [`TokenReader`] documentation, and this reader cannot detect it: offsets
-    /// that fall outside this reader's content read as empty text, never as a panic. The
-    /// view borrows the token and this reader's content, never the reader, so a caller
-    /// may hold it while it goes on reading and moving the stream.
+    /// of the [`TokenReader`] contract, and this reader cannot detect it: offsets that
+    /// fall outside this reader's content read as empty text, never as a panic.
     pub fn token_kind_of_std_token<'t, L: Lang>(
         &self,
         tok: &'t StdToken<L>,
@@ -647,17 +764,18 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 
     // --- scanning core ------------------------------------------------------------------
 
-    /// Scan the token beginning at `start` under `state`, without moving this reader.
+    /// Scans the token beginning at `start` under `state`, without moving this reader.
     ///
-    /// This is the scanning core behind [`peek`](TokenReader::peek), and it is also
-    /// what a reader of a language whose [`Lang::Tokenization`] declares **its own**
-    /// token or stream-position types reuses: such a language is not the
+    /// This is the scanning core behind [`peek`](TokenReader::peek). Where the reader
+    /// itself stands is neither consulted nor changed: `start` says where to read.
+    ///
+    /// It is also what a reader of a language whose [`Lang::Tokenization`] declares
+    /// **its own** token or stream-position types reuses. Such a language is not the
     /// `Token = StdToken<L>, StreamPosition = StdStreamPosition` one this reader's
     /// [`TokenReader`] implementation requires, so it cannot call `peek` here, yet the
     /// tokens it wants are exactly the ones this scan produces. Everything the scan
-    /// needs of `L` is `L: Lang<SourceOrigin = O>` — except the one step below. Where
-    /// the reader itself stands is not consulted and not changed: `start` says where to
-    /// read.
+    /// needs of `L` is `L: Lang<SourceOrigin = O>`, except the recovery step described
+    /// under *Failures* below.
     ///
     /// # Priority order
     ///
@@ -680,22 +798,21 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// 7. a forbidden character
     ///    ([`TokenRules::forbidden_chars`](super::TokenRules::forbidden_chars)), reported
     ///    as the failure below;
-    /// 8. otherwise a single content character — a
-    ///    [`Char`](TokenKind::Char) token.
+    /// 8. otherwise a single content character — a [`Char`](TokenKind::Char) token.
     ///
     /// Where the content ends and step 1 did not match, the terminal
-    /// [`EndOfStream`](TokenKind::EndOfStream) token is produced instead, carrying the
+    /// [`EndOfStream`](TokenKind::EndOfStream) token is produced instead, with the
     /// skipped whitespace as its pre-space.
     ///
     /// # Where `start` may point
     ///
-    /// `start` is validated here — this is the one boundary where an offset reaches the
+    /// `start` is validated here. This is the one boundary where an offset reaches the
     /// scan from outside, since [`move_to`](TokenReader::move_to) and
     /// [`move_to_position`](TokenReader::move_to_position) accept caller-held tokens and
     /// positions. A `start` that is out of bounds for the content or not on a `char`
     /// boundary aborts the read with an unrecoverable implementation error, anchored at
-    /// the nearest valid offset at or before it (an invalid offset is not itself an
-    /// anchor); it is never a panic. The scan helpers the steps above call receive
+    /// the nearest valid offset at or before it — an invalid offset is not itself an
+    /// anchor — and never with a panic. The scan helpers the steps above call receive
     /// offsets derived from a validated `start`, which is what lets their own
     /// out-of-bounds precondition be a panic.
     ///
@@ -703,19 +820,20 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     ///
     /// `recovery_for` builds the [`TokenRecovery`] offered with a recoverable failure,
     /// from the placeholder token and the offset to resume at. That is the single step
-    /// that needs the *language's* token and stream-position types, which the scan
-    /// cannot name; a caller that cannot describe a recovery answers `None`.
+    /// needing the *language's* token and stream-position types, which the scan cannot
+    /// name; a caller that cannot describe a recovery answers `None`.
     ///
     /// Two conditions are reported with such a recovery, when `recovery_for` offers one:
-    /// [`EndOfStreamAfterEscape`](super::EndOfStreamAfterEscape) (an escape character
-    /// stands as the last character of
-    /// the content) and [`ForbiddenChar`] (step 7). Both placeholders cover the
-    /// offending character as a [`Char`](TokenKind::Char) token and resume past it. The
-    /// other failures never carry a recovery: a [`Lang::scan_specials`] failure
-    /// ([`SpecialsScanError`](super::SpecialsScanError) — the hook cannot say how to
-    /// carry on) and an
-    /// implementation error (an invalid `start`, or a match end or error span from that
-    /// hook that the [`SpecialsMatch`](super::SpecialsMatch) documentation rules out).
+    /// [`EndOfStreamAfterEscape`](super::EndOfStreamAfterEscape), where an escape
+    /// character stands as the last character of the content, and [`ForbiddenChar`]
+    /// (step 7). Both placeholders cover the offending character as a
+    /// [`Char`](TokenKind::Char) token and resume past it.
+    ///
+    /// The other failures never offer a recovery: a [`Lang::scan_specials`] failure
+    /// ([`SpecialsScanError`](super::SpecialsScanError)), since the hook cannot say how
+    /// to carry on, and an implementation error — an invalid `start`, or a match end or
+    /// error span from that hook that the [`SpecialsMatch`](super::SpecialsMatch)
+    /// documentation rules out.
     pub fn scan_std_token_at<L>(
         &self,
         start: usize,

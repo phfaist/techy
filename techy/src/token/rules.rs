@@ -1,26 +1,47 @@
-//! Tokenization rules — the plain data that drives [`StdTokenReader`](super::StdTokenReader).
+//! Tokenization rules: the data that decides how source text is cut into tokens.
 //!
-//! `TokenRules` is defined here in the token topic and *stored* in the parsing state
-//! ([`StateData<L>`](crate::state::StateData)). Everything that can vary during a parse —
-//! delimiters, escape characters, enabled features — is a plain value in these structs,
-//! changed only through reified state deltas at the transition choke point.
-//! There are no privileged language concepts here: no default
-//! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset,
-//! which is also why none of these types implement `Default`.
+//! [`TokenRules`] is all of it — which character introduces a command, which strings
+//! open and close a group, which string starts a comment, which characters count as
+//! whitespace, which characters are rejected outright — with one block per tokenization
+//! feature: [`WhitespaceRules`], [`ParagraphRules`], [`GroupRules`], [`CommandRules`],
+//! [`CommentRules`], [`SpecialsRules`], and [`ForbiddenCharsRules`].
 //!
-//! Group *classes* are the language's business: [`Lang::GroupTypeId`] is a closed
-//! per-language classification (typically an enum — the latexlike preset: content vs.
-//! math groups), fully detached from delimiter spellings. Which
-//! *delimiter pairs* exist, and which class each belongs to, is runtime data — the
-//! [`GroupRule`] values here. Any construct parser may mint a new rule mid-parse via a
-//! state delta (an optional-argument parser momentarily declaring `[`…`]` group
-//! delimiters, a custom spec declaring `<`…`>`).
+//! A language whose syntax differs from LaTeX only in *which* characters play which role
+//! needs nothing more than a `TokenRules` value of its own:
+//! [`StdTokenReader`](super::StdTokenReader) reads whatever the rules say. A language
+//! that has to decide *differently* which token comes next implements
+//! [`TokenReader`](super::TokenReader) instead.
 //!
-//! The one deliberate omission: **specials trigger strings are not enumerated here.**
-//! Their recognition is delegated to the language via `Lang::scan_specials` (see
-//! [`specials`](super::SpecialsMatch)), because trigger sets can be large and
-//! provider-driven (the scope stack). Everything else — commands, comments, groups,
-//! whitespace — is rules data.
+//! Nothing is built in. There is no predefined `\`, `{}`, `%`, or `$`, and none of these
+//! types implement `Default`; the familiar LaTeX values are the latexlike preset's
+//! ([`default_token_rules`](crate::latexlike::default_token_rules)). Build a set of your
+//! own from [`TokenRules::empty`] with struct-update syntax.
+//!
+//! The rules are stored in the parsing state ([`StateData`](crate::core::StateData)), so
+//! every one of these settings can change while a parse runs: a
+//! [`ParsingStateDelta`](crate::core::ParsingStateDelta) holds
+//! [`TokenRulesOverrides`](crate::core::token::TokenRulesOverrides) — one `*Overrides`
+//! type per block — and the derived state's rules are the previous ones with those
+//! overrides applied.
+//!
+//! Group *classes* and group *delimiters* are separate things. The class is the
+//! language's own closed classification, [`Lang::GroupTypeId`]: usually an enum, and the
+//! preset uses it to tell content groups from math groups. Which delimiter pairs exist,
+//! and which class each pair produces, is runtime data — the [`GroupRule`] values here.
+//! A construct parser may add a rule for the duration of one construct through a state
+//! delta, which is how an optional-argument parser makes `[` … `]` a group pair just
+//! while it reads that argument.
+//!
+//! One thing is deliberately not listed here: the trigger strings of specials. The
+//! language recognizes those itself, through
+//! [`Lang::scan_specials`](crate::core::Lang::scan_specials), because a trigger set can
+//! be large and is usually assembled from whichever definitions are loaded. Everything
+//! else — whitespace, groups, commands, comments, forbidden characters — is rules data.
+//!
+//! The guide chapter [Language syntax](crate::guide::language_syntax) describes these
+//! settings in LaTeX terms;
+//! [Token rules and specials recognition](crate::guide::custom_lang#token-rules-and-specials-recognition)
+//! covers configuring them for a language of your own.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -29,98 +50,128 @@ use core::fmt;
 
 use crate::state::{FeaturePresence, Lang, LangFeatures};
 
-/// One group syntax usable in the current parsing state: a delimiter pair and the
-/// language-native class ([`Lang::GroupTypeId`]) of the groups it delimits.
+/// One group delimiter pair, and the class of group it opens.
 ///
-/// Open and close delimiters are arbitrary non-empty strings; several rules may share
-/// delimiter strings (`$…$` and `$$…$$`), including the same string for open and close.
-/// The [`PrefixTable`](super::PrefixTable) resolves the resulting matching ambiguities.
+/// The delimiters are arbitrary non-empty strings — `{` … `}`, `[` … `]`, `$` … `$`,
+/// `$$` … `$$`, `\(` … `\)`. Several rules may use the same string (`$…$` alongside
+/// `$$…$$`), and one rule may use the same string to open and to close; the
+/// [`PrefixTable`](super::PrefixTable) settles which rule a given piece of text matches.
 ///
-/// Rules are held behind `Arc` in [`GroupRules::rules`]: the tokenizer's resolution of
-/// *which* rule matched travels with the emitted
-/// [`GroupOpen`](super::TokenKind::GroupOpen) token, so parsers never re-derive it.
+/// [`group_type`](Self::group_type) is the language's own classification of the group
+/// ([`Lang::GroupTypeId`]) and is independent of the spellings: the preset marks
+/// `$…$` and `\(…\)` as math groups and `{…}` as a content group.
 ///
-/// # Identity matters: two equal rules are not interchangeable
+/// Rules are stored behind `Arc` in [`GroupRules::rules`]. Which rule matched is
+/// recorded in the [`GroupOpen`](super::TokenKind::GroupOpen) token the reader produces,
+/// so a construct parser never has to work it out again.
 ///
-/// The behavior-deciding comparisons are by **`Arc` identity** (`Arc::ptr_eq`),
-/// never by the structural `==` this type also implements:
+/// # Two equal rules are not interchangeable
 ///
-/// - the temporary-group scope check of
-///   [`ParsingState::derived`](crate::state::ParsingState::derived) keeps the
+/// Wherever behavior depends on *which* rule is in play, rules are compared by **`Arc`
+/// identity** (`Arc::ptr_eq`), never by the structural `==` this type also implements:
+///
+/// - [`ParsingState::derived`](crate::core::ParsingState::derived) keeps the
 ///   [`temporary`](GroupRules::temporary) rules only when the installed
 ///   [`expecting_close`](GroupRules::expecting_close) **is one of them by `Arc`
 ///   identity**;
-/// - the derivation caches key on the shared handles the same way — a derived
-///   state reuses its base's [`PrefixTable`](super::PrefixTable) only when the
-///   rule lists match elementwise by `Arc` identity, and the per-parse
-///   group-interior derivations are memoized per `(base, rule)` handle pair
-///   ([`ParserSession::group_interior_state`](crate::engine::ParserSession::group_interior_state));
-/// - the standard optional-argument parsers recognize *their own* minted rules in
-///   the matched token by `Arc` identity.
+/// - the derivation caches key on the shared handles the same way: a derived state
+///   reuses its base's [`PrefixTable`](super::PrefixTable) only when the rule lists
+///   match elementwise by `Arc` identity, and the per-parse group-interior derivations
+///   are memoized per `(base, rule)` handle pair
+///   ([`ParserSession::group_interior_state`](crate::core::ParserSession::group_interior_state));
+/// - the standard optional-argument parsers recognize the rules they declared
+///   themselves by `Arc` identity in the matched token.
 ///
-/// So clone the `Arc`, never the value: a data-equal copy behaves differently in
-/// every one of these places, and `contains(&rule)`-style checks (which use `==`)
-/// answer a different question. The structural `==` answers exactly that other
-/// question — "same group class and delimiter spellings" — which is what
+/// So clone the `Arc`, never the value: a data-equal copy behaves differently in every
+/// one of these places, and a `contains(&rule)`-style check (which uses `==`) answers a
+/// different question. That other question — "same group class and same delimiter
+/// spellings" — is exactly what the structural `==` answers, and it is what
 /// [`TokenKind`](super::TokenKind) equality uses to compare `GroupOpen` tokens.
 pub struct GroupRule<L: Lang> {
-    /// The class of the groups this rule delimits (e.g. the latexlike preset's
-    /// content-group vs. math-group distinction) — detached from the spellings below.
+    /// The class of the groups this rule opens — the preset's content-group versus
+    /// math-group distinction, for instance. Independent of the spellings below.
     pub group_type: L::GroupTypeId,
-    /// Opening delimiter (e.g. `{`).
+    /// Opening delimiter (`{` in LaTeX).
     pub open: String,
-    /// Closing delimiter (e.g. `}`).
+    /// Closing delimiter (`}` in LaTeX).
     pub close: String,
 }
 
-/// One command syntax: an escape character introducing a named invocation (`\textbf`,
-/// `\&`). Several rules may coexist (distinct escape characters; earlier entries win on
-/// conflict); an empty [`CommandRules::rules`] list means no command recognition at all.
+/// One command syntax: an escape character introducing a named invocation.
 ///
-/// "Command" is the token-level term (TeX lineage: control sequence). It is deliberately
-/// *not* "macro": at the token level `\begin` is a command exactly like `\foobar` — which
-/// names are macros, environments, or anything else is decided at parse time by the preset
-/// (terminology stack: command → callable → macro/environment).
+/// With `escape_char: '\\'` and the ASCII letters as [`name_chars`](Self::name_chars) —
+/// the LaTeX setting — `\textbf` reads as one command token named `textbf`, and `\&` as
+/// one command token named `&`.
 ///
-/// A future syntax-kind extension (e.g. `@MARKER@`-style commands without an escape
-/// character) would grow an enum inside this struct; flat escape-char form only, for now.
+/// Several rules may coexist, each with its own escape character; when two of them claim
+/// the same character, the earlier entry of [`CommandRules::rules`] wins. An empty rule
+/// list means no command is recognized and escape characters read as ordinary content.
+/// A command's syntax is always an escape character followed by a name; there is no
+/// other form.
+///
+/// "Command" is the token-level term (TeX calls it a control sequence), deliberately not
+/// "macro": at this level `\begin` is a command exactly like `\foobar`, and which names
+/// are macros, environments, or anything else is decided later from the [callable
+/// specs](crate::core::specs) in effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRule {
     /// The escape character introducing the command (`\` in LaTeX).
     pub escape_char: char,
-    /// Characters that form multi-character command names. A name starts with any
-    /// character; only if the first character is in this set does the name extend greedily
-    /// over further characters of the set (`\textbf` vs. the single-character `\&`). Only
-    /// multi-character (name-chars) commands consume post-space.
+    /// The characters a command name may be built from — the ASCII letters, in LaTeX.
+    ///
+    /// The name always takes the character right after the escape character. If that
+    /// character is in this set, the name extends greedily over the following characters
+    /// of the set; otherwise the name is that single character. So `\textbf` is named
+    /// `textbf`, while `\&` is named `&`.
+    ///
+    /// A name whose first character came from this set also consumes the whitespace that
+    /// follows it, which becomes the command token's post-space (`\textbf  {x}` puts the
+    /// two spaces in the token, not in the content); a name of one character outside the
+    /// set does not.
     pub name_chars: String,
 }
 
 /// One comment syntax: a start delimiter, with the comment running to the end of the line.
-/// Several rules may coexist (longest matching start wins); an empty
-/// [`CommentRules::rules`] list means no comment recognition at all.
 ///
-/// The terminator is implicitly `'\n'` (or end of input) — independent of
-/// [`WhitespaceRules`], so comments work even with whitespace handling disabled. A future
-/// extension may add per-rule terminators (block comments à la `/* … */`); end-of-line
-/// only, for now.
+/// With `start: "%"` — the LaTeX setting — `% remark` reads as one comment token, which
+/// also takes in the newline that ends it and the indentation of the next line (the
+/// token's post-space).
+///
+/// The terminator is always `'\n'`, or the end of the input; `'\r'` is ordinary content.
+/// It does not depend on [`WhitespaceRules`], so comments still work when whitespace
+/// handling is disabled. A comment always runs to the end of the line: there is no
+/// block-comment form.
+///
+/// Several rules may coexist, and the longest matching start delimiter wins. An empty
+/// [`CommentRules::rules`] list means no comment is recognized and a `%` reads as an
+/// ordinary character.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentRule {
     /// The comment-start delimiter string (`%` in LaTeX).
     pub start: String,
 }
 
-/// Whitespace-handling rules — the whitespace block of [`TokenRules`]. With
-/// [`enabled`](Self::enabled) `false` (or an empty `chars` set), whitespace characters
-/// are ordinary content characters, `pre_space` is always empty, and paragraph breaks
-/// are never detected (character-level access mode).
+/// Whitespace handling — the whitespace block of [`TokenRules`]: which characters count
+/// as whitespace, and whether whitespace is treated specially at all.
+///
+/// While it is on, the reader skips a run of these characters ahead of each token and
+/// attaches the run to that token as its *pre-space*, rather than producing a token per
+/// space character. The preset's set is `" \t\n\r\u{000B}\u{000C}"`.
+///
+/// While it is off — [`enabled`](Self::enabled) `false`, or an empty
+/// [`chars`](Self::chars) set — whitespace characters are ordinary content characters,
+/// every token's pre-space is empty, and paragraph breaks are never detected. That is
+/// the character-by-character reading mode.
+///
+/// Changed during a parse through
+/// [`WhitespaceOverrides`](crate::core::token::WhitespaceOverrides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhitespaceRules {
-    /// Whether whitespace handling is on; disabled = whitespace characters are ordinary
-    /// content characters, `pre_space` is always empty, and paragraph breaks are never
-    /// detected (character-level access mode).
+    /// Whether whitespace is treated specially rather than as content; see the type
+    /// documentation for what turning it off changes.
     pub enabled: bool,
-    /// The characters treated as whitespace (e.g. `" \t\n\r"`). Shared (`Arc<str>`) so
-    /// state derivations clone rules data by refcount, not by content.
+    /// The characters treated as whitespace (`" \t\n\r"`, say). Shared (`Arc<str>`), so
+    /// deriving a state clones the set by reference count rather than by content.
     pub chars: Arc<str>,
 }
 
@@ -132,15 +183,25 @@ impl WhitespaceRules {
     }
 }
 
-/// Paragraph-break rules — the paragraphs block of [`TokenRules`]. Paragraph breaks are
-/// detected within whitespace runs, so this block only takes effect while whitespace
-/// handling ([`WhitespaceRules::enabled`]) is on.
+/// Paragraph-break detection — the paragraphs block of [`TokenRules`].
+///
+/// A paragraph break is a run of whitespace holding two or more newlines: the blank line
+/// between two paragraphs of LaTeX source. Breaks are found inside whitespace runs, so
+/// this block has an effect only while whitespace handling
+/// ([`WhitespaceRules::enabled`]) is on.
+///
+/// Changed during a parse through
+/// [`ParagraphOverrides`](crate::core::token::ParagraphOverrides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParagraphRules {
-    /// Whether a whitespace run containing two or more newlines forms a paragraph break.
-    /// Gates both `ParagraphBreak` tokens and the no-multi-newline rule of whitespace
-    /// skipping (pre-space and post-space never consume a newline belonging to a
-    /// `\n\s*\n` sequence). Only meaningful when whitespace handling is enabled.
+    /// Whether a whitespace run containing two or more newlines is a paragraph break.
+    ///
+    /// This gates two things at once: the
+    /// [`ParagraphBreak`](super::TokenKind::ParagraphBreak) tokens themselves, and the
+    /// rule that whitespace skipping stops in front of such a run — so with it on,
+    /// neither a token's pre-space nor a command's or comment's post-space ever swallows
+    /// a newline belonging to a `\n\s*\n` sequence. Meaningful only while whitespace
+    /// handling is enabled.
     pub enabled: bool,
 }
 
@@ -152,41 +213,62 @@ impl ParagraphRules {
     }
 }
 
-/// Group-delimiter rules — the groups block of [`TokenRules`]: the delimiter table
-/// ([`rules`](Self::rules) plus the scoped-lifecycle [`temporary`](Self::temporary)
-/// list), its `enabled` gate, and the positional
-/// [`expecting_close`](Self::expecting_close) slot.
+/// Group delimiters — the groups block of [`TokenRules`].
+///
+/// [`rules`](Self::rules) is the table of delimiter pairs in effect,
+/// [`temporary`](Self::temporary) holds pairs added for the duration of one construct,
+/// [`enabled`](Self::enabled) turns delimiter recognition on and off, and
+/// [`expecting_close`](Self::expecting_close) names the closing delimiter the current
+/// position is waiting for.
+///
+/// Changed during a parse through
+/// [`GroupOverrides`](crate::core::token::GroupOverrides).
 pub struct GroupRules<L: Lang> {
-    /// Whether group delimiters are recognized (gates the delimiter table — but **not**
-    /// [`expecting_close`](Self::expecting_close), which is positional data: a group
-    /// interior that disables groups still finds its own close).
+    /// Whether group delimiters are recognized; when `false`, delimiter strings read as
+    /// ordinary content characters.
+    ///
+    /// This gates the delimiter table only, **not**
+    /// [`expecting_close`](Self::expecting_close): a group interior that switches groups
+    /// off can still find its own closing delimiter.
     pub enabled: bool,
-    /// The group delimiter rules recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`,
-    /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
-    /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
+    /// The delimiter pairs recognized here — `{` … `}`, `[` … `]`, `$` … `$`,
+    /// `$$` … `$$`, `\(` … `\)`, whatever the language declares. They are only pairs of
+    /// strings; math is not a concept the machinery knows.
+    ///
+    /// A longer delimiter is matched ahead of a shorter one it starts with, and when two
+    /// rules claim the same delimiter string the earlier entry wins; see
+    /// [`PrefixTable`](super::PrefixTable) for the exact resolution.
     pub rules: Vec<Arc<GroupRule<L>>>,
-    /// Group rules with a *scoped lifecycle*: they
-    /// tokenize exactly like [`rules`](Self::rules) — same gate, listed **first** in
-    /// the [`PrefixTable`](super::PrefixTable), so they win same-spelling ties — but a
-    /// state derivation that installs an
-    /// [`expecting_close`](Self::expecting_close) which is *not* one of
-    /// these rules (by `Arc` identity) clears this list in the derived state. Descending
-    /// into a temporary rule's own group keeps them (nested delimiters balance
-    /// recursively); descending into any other group drops them for that whole subtree
-    /// (see [`ParsingState::derived`](crate::state::ParsingState::derived)). This is how
-    /// a construct parser mints delimiters "for the occasion" — an optional `[`…`]`
-    /// argument — with brace protection at any depth: the minted rule is dropped at
-    /// the first descent into a group that is not itself.
+    /// Group rules that last only as long as the construct that added them.
+    ///
+    /// They tokenize exactly like [`rules`](Self::rules) — the same
+    /// [`enabled`](Self::enabled) gate applies — and they come first in the
+    /// [`PrefixTable`](super::PrefixTable), so they win ties against a permanent rule
+    /// spelled the same way.
+    ///
+    /// What makes them temporary is how a state derivation treats them: descending into
+    /// a group whose rule is *not* one of these (by `Arc` identity) clears this list for
+    /// that whole subtree, while descending into a temporary rule's own group keeps it,
+    /// so nested delimiters still balance
+    /// ([`ParsingState::derived`](crate::core::ParsingState::derived)).
+    ///
+    /// This is how a construct parser declares delimiters for one occasion. An
+    /// optional-argument parser adds `[` … `]` as a temporary pair, and `\cmd[a{]}b]`
+    /// then reads `a{]}b` as the whole argument: the `]` inside the braces is not a
+    /// delimiter there, because the temporary rule was dropped on the way into the `{`
+    /// group. That protection holds at any depth.
     pub temporary: Vec<Arc<GroupRule<L>>>,
-    /// The group rule whose *close* delimiter takes precedence over all other delimiter
-    /// matches — set (via a state delta) by the group construct parser upon entering a
-    /// group whose delimiters are ambiguous. This is how `$…$` inside `$$…$$` resolves:
-    /// inside a `$…$` group this field holds the `$…$` rule, so a following `$$`
-    /// tokenizes as close-`$` (then open-`$`) rather than as a `$$` delimiter.
-    /// Generalizes pylatexenc's `math_mode_delimiter` without privileging math.
-    /// Not gated by [`enabled`](Self::enabled) — positional data, not a
-    /// feature; the recognition guarantee for an entered group's close must survive any
-    /// interior rule set.
+    /// The group rule whose *closing* delimiter takes precedence over every other
+    /// delimiter match — set through a state delta by the group construct parser when it
+    /// enters a group whose delimiters are ambiguous.
+    ///
+    /// This is how `$…$` inside `$$…$$` resolves: inside a `$…$` group this field holds
+    /// the `$…$` rule, so a following `$$` reads as a closing `$` and then an opening
+    /// `$`, rather than as one `$$` delimiter. It generalizes pylatexenc's
+    /// `math_mode_delimiter` without treating math as special.
+    ///
+    /// Not gated by [`enabled`](Self::enabled): a group that has been entered must be
+    /// able to find its own close whatever rules its interior installs.
     pub expecting_close: Option<Arc<GroupRule<L>>>,
 }
 
@@ -203,15 +285,19 @@ impl<L: Lang> GroupRules<L> {
     }
 }
 
-/// Command-syntax rules — the commands block of [`TokenRules`].
+/// Command syntaxes — the commands block of [`TokenRules`]: which escape characters
+/// introduce a command, and whether commands are recognized at all.
+///
+/// Changed during a parse through
+/// [`CommandOverrides`](crate::core::token::CommandOverrides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRules {
-    /// Whether command syntax is recognized; disabled = escape characters are ordinary
-    /// content characters.
+    /// Whether command syntax is recognized; when `false`, an escape character such as
+    /// `\` reads as an ordinary content character.
     pub enabled: bool,
-    /// Command syntaxes; empty = no command recognition. `Arc`-shared like
-    /// [`GroupRules::rules`]: state derivations clone the
-    /// rule list by refcount, and the shared rules carry pointer identity.
+    /// The command syntaxes ([`CommandRule`]); an empty list means no command is
+    /// recognized even with the gate on. Shared behind `Arc`, so deriving a state clones
+    /// the list by reference count.
     pub rules: Vec<Arc<CommandRule>>,
 }
 
@@ -223,14 +309,20 @@ impl CommandRules {
     }
 }
 
-/// Comment-syntax rules — the comments block of [`TokenRules`].
+/// Comment syntaxes — the comments block of [`TokenRules`]: which strings start a
+/// comment, and whether comments are recognized at all.
+///
+/// Changed during a parse through
+/// [`CommentOverrides`](crate::core::token::CommentOverrides): a callable can switch
+/// comments off for its body, so that a `%` inside stays ordinary content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentRules {
-    /// Whether comment syntax is recognized; disabled = comment starts are ordinary
-    /// content characters.
+    /// Whether comment syntax is recognized; when `false`, a comment-start string such
+    /// as `%` reads as an ordinary content character.
     pub enabled: bool,
-    /// Comment syntaxes; empty = no comment recognition. `Arc`-shared like
-    /// [`GroupRules::rules`].
+    /// The comment syntaxes ([`CommentRule`]); an empty list means no comment is
+    /// recognized even with the gate on. Shared behind `Arc`, so deriving a state clones
+    /// the list by reference count.
     pub rules: Vec<Arc<CommentRule>>,
 }
 
@@ -242,16 +334,24 @@ impl CommentRules {
     }
 }
 
-/// Specials-scan rules — the specials block of [`TokenRules`]. The block holds only
-/// the gate: the specials *data* lives with the language (see
-/// [`enabled`](Self::enabled)).
+/// The specials scan — the specials block of [`TokenRules`].
+///
+/// *Specials* are callables triggered by a plain character sequence instead of by a
+/// command name: `~`, `--`, the quote ligatures. This block holds nothing but the on/off
+/// gate, because the triggers themselves are not rules data — the language recognizes
+/// them through [`Lang::scan_specials`](crate::core::Lang::scan_specials), which in the
+/// preset asks whichever definition providers are loaded.
+///
+/// Changed during a parse through
+/// [`SpecialsOverrides`](crate::core::token::SpecialsOverrides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecialsRules {
-    /// Whether the specials scan runs. The specials *data* lives with the language
-    /// ([`Lang::scan_specials`](crate::state::Lang::scan_specials) → the scope stack's
-    /// providers), but the
-    /// gate is rules data so a delta can switch it: disabled states freeze with the empty
-    /// [`TriggerChars`](super::TriggerChars) filter and the scan hook is never consulted.
+    /// Whether the specials scan runs.
+    ///
+    /// The gate is rules data even though the triggers are not, so that a state delta
+    /// can switch the scan off: a state with it `false` is created with the empty
+    /// [`TriggerChars`](super::TriggerChars) filter, and the language's scan hook is
+    /// never consulted there.
     pub enabled: bool,
 }
 
@@ -263,13 +363,22 @@ impl SpecialsRules {
     }
 }
 
-/// Forbidden-character rules — the forbidden-characters block of [`TokenRules`].
+/// Characters rejected as content — the forbidden-characters block of [`TokenRules`].
+///
+/// The preset forbids nothing; a language might forbid, say, a raw `\t` in a context
+/// where only spaces are meaningful.
+///
+/// This block has no `enabled` gate on purpose: an empty
+/// [`chars`](Self::chars) string is already the off setting, and it is one short string
+/// to put back rather than a feature to re-enable. Changed during a parse through
+/// [`ForbiddenCharsOverrides`](crate::core::token::ForbiddenCharsOverrides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForbiddenCharsRules {
-    /// Characters that may not appear as content; encountering one yields a recoverable
-    /// [`TokenError`](super::TokenError). Empty = off (deliberately no `enabled` gate:
-    /// one trivially restorable string, not a feature toggle). Shared (`Arc<str>`) so
-    /// state derivations clone it by refcount.
+    /// The characters that may not appear as content. Reading one produces a recoverable
+    /// [`TokenError`](super::TokenError) rather than a content character, so a tolerant
+    /// parse reports it and carries on past it. Empty means nothing is forbidden.
+    ///
+    /// Shared (`Arc<str>`), so deriving a state clones the set by reference count.
     pub chars: Arc<str>,
 }
 
@@ -281,45 +390,75 @@ impl ForbiddenCharsRules {
     }
 }
 
-/// The complete data driving standard tokenization, stored in the parsing state — one
-/// field per tokenization feature.
+/// The data that decides how source text is cut into tokens: one block per tokenization
+/// feature.
 ///
-/// [`StdTokenReader`](super::StdTokenReader) is driven by this data (plus the derived
-/// [`PrefixTable`](super::PrefixTable) and the `Lang::scan_specials` hook); anyone needing
-/// genuinely different tokenization *behavior* implements the
+/// A `TokenRules` value says which characters are whitespace, whether a blank line is a
+/// paragraph break, which delimiter pairs open and close a group, which escape
+/// characters introduce a command and which characters its name may use, which strings
+/// start a comment, whether the specials scan runs, and which characters are rejected as
+/// content. Setting those seven blocks is all it takes to give a LaTeX-like language its
+/// own surface syntax.
+///
+/// The value is stored in the parsing state, so it can change while a parse runs — see
+/// [`TokenRulesOverrides`](crate::core::token::TokenRulesOverrides), the matching set of
+/// per-block override types a state delta holds.
+///
+/// [`StdTokenReader`](super::StdTokenReader) reads exactly what this data says (together
+/// with the [`PrefixTable`](super::PrefixTable) derived from it and the language's
+/// specials-scan hook). A language that needs genuinely different tokenization
+/// *behavior*, rather than different characters, implements the
 /// [`TokenReader`](super::TokenReader) trait instead.
 ///
-/// Detection priority at a given position: paragraph break (within leading whitespace) →
-/// group delimiters (expected close first, then longest match) → command escape characters
-/// → comment starts → specials scan → forbidden-character check → single content
-/// character.
+/// # Where the values come from
 ///
-/// Each feature block is a public field (construction sites write struct literals
-/// over the blocks); reading code uses the per-feature accessor methods
-/// ([`whitespace_enabled`](Self::whitespace_enabled), [`group_rules`](Self::group_rules),
-/// …).
+/// There is no default rule set. Start from
+/// [`default_token_rules`](crate::latexlike::default_token_rules) to get the familiar
+/// LaTeX values (`\` with the ASCII letters as command names, `{`/`}` and the math
+/// delimiters as groups, `%` comments, ASCII whitespace with paragraph breaks on,
+/// nothing forbidden), or from [`empty()`](Self::empty) to build a set of your own.
 ///
-/// # Per-feature `enabled` gates
+/// Each block is a public field, so construction writes a struct literal per block;
+/// reading code uses the accessor methods ([`whitespace_enabled`](Self::whitespace_enabled),
+/// [`group_rules`](Self::group_rules), …), which answer sensible values even for a
+/// language that does not have the feature at all.
 ///
-/// Every feature block stores a boolean `enabled` gate next to its data (pylatexenc's
-/// `enable_macros`/`enable_comments`/… pattern). A disabled
-/// feature's syntax reads as ordinary content characters while its data **stays in
-/// place** — so a state delta can disable a feature and a later delta re-enable it,
-/// without any party having to carry the original rules. Three spellings of "off" are
-/// deliberate, each with its own word: gate `false` is the *scoped* off (**disabled** —
-/// data preserved for re-enabling); empty data is the *constitutive* off (**empty** —
-/// no rules data, so nothing is recognized even with the gate `true`); and beyond both
-/// runtime spellings, a feature can be **absent** — the *compile-time* off, declared
-/// per feature on the language via
-/// [`Lang::Features`](crate::state::Lang::Features): the language has no such feature
-/// at all, and no runtime data can say otherwise (the
-/// [`LangFeatures`](crate::state::LangFeatures) docs define the full vocabulary).
-/// Absence goes all the way to storage: an absent feature's field holds the
-/// zero-sized store
-/// ([`FeaturePresence::Store`](crate::state::FeaturePresence::Store)) instead of
-/// its rules block, so rules data for that feature cannot even be written, and the
-/// field occupies no space. For a language with every feature present the fields
-/// *are* the blocks, and nothing here is visible.
+/// # Detection priority
+///
+/// At a position, whitespace is skipped first and becomes the next token's pre-space.
+/// Then the first of these that matches decides the token: a paragraph break; the
+/// closing delimiter the state expects
+/// ([`expecting_group_close`](Self::expecting_group_close)); the longest group delimiter
+/// in the [`PrefixTable`](super::PrefixTable); a command escape character; a comment
+/// start; a specials trigger; a forbidden character (reported as an error); otherwise a
+/// single content character. Group delimiters are tried before commands, so a delimiter
+/// written with an escape character (`\(`) wins over reading a command. Whichever step
+/// belongs to a disabled or absent feature never matches.
+/// [`StdTokenReader::scan_std_token_at`](super::StdTokenReader::scan_std_token_at)
+/// documents the order in full.
+///
+/// # The three ways a feature can be off
+///
+/// Each block except forbidden characters has its own `enabled` gate, in the spirit
+/// of pylatexenc's `enable_macros`/`enable_comments` switches — and there are three
+/// distinct ways for a feature to be off, each with its own word:
+///
+/// - **disabled** — the gate is `false`. The feature's syntax reads as ordinary content
+///   characters while its data stays in place, so one state delta can switch a feature
+///   off and a later one switch it back on without anyone having to keep a copy of the
+///   rules.
+/// - **empty** — there is no data: an empty rule list, or an empty character set.
+///   Nothing is recognized even with the gate `true`.
+/// - **absent** — the language does not have the feature at all. This one is a
+///   compile-time declaration, made per feature through
+///   [`Lang::Features`](crate::core::Lang::Features), and no runtime data can say
+///   otherwise; [`LangFeatures`](crate::core::LangFeatures) defines the full vocabulary.
+///
+/// Absence reaches the storage: an absent feature's field below holds a zero-sized
+/// stand-in ([`FeaturePresence::Store`](crate::core::FeaturePresence::Store)) rather
+/// than its rules block, so the field takes no space and rules data for that feature
+/// cannot even be written. For a language that has every feature — the usual case, and
+/// the preset's — the fields simply *are* the blocks and none of this shows.
 ///
 /// # Constructing rules for a language with absent features
 ///
@@ -345,72 +484,72 @@ impl ForbiddenCharsRules {
 /// };
 /// ```
 ///
-/// (Writing a literal for an *absent* feature's field is a type error — the field
-/// is the zero-sized store, not the block.)
+/// (Writing a literal for an *absent* feature's field is a type error: the field is the
+/// zero-sized stand-in, not the block.)
 pub struct TokenRules<L: Lang> {
     /// Whitespace handling: the whitespace character set and its gate
-    /// ([`WhitespaceRules`]). For a language that declares the whitespace feature
-    /// absent, this field holds the zero-sized store and cannot carry data.
+    /// ([`WhitespaceRules`]). Holds the zero-sized stand-in, and no data, for a language
+    /// that declares the whitespace feature absent.
     pub whitespace:
         <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceRules>,
-    /// Paragraph-break detection ([`ParagraphRules`]). For a language that declares
-    /// the paragraphs feature absent, this field holds the zero-sized store and
-    /// cannot carry data.
+    /// Paragraph-break detection ([`ParagraphRules`]). Holds the zero-sized stand-in for
+    /// a language that declares the paragraphs feature absent.
     pub paragraphs:
         <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphRules>,
     /// Group delimiters: the delimiter table, its gate, and the expected close
-    /// ([`GroupRules`]). For a language that declares the groups feature absent,
-    /// this field holds the zero-sized store and cannot carry data. The `Arc`-held
-    /// rules are compared by identity where behavior is decided — see the
-    /// identity section on [`GroupRule`].
+    /// ([`GroupRules`]). Holds the zero-sized stand-in for a language that declares the
+    /// groups feature absent.
+    ///
+    /// The rules are held behind `Arc`, and wherever behavior depends on which rule is
+    /// in play they are compared by identity — see the identity section on
+    /// [`GroupRule`].
     pub groups: <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupRules<L>>,
-    /// Command syntaxes and their gate ([`CommandRules`]). For a language that
-    /// declares the commands feature absent, this field holds the zero-sized store
-    /// and cannot carry data.
+    /// Command syntaxes and their gate ([`CommandRules`]). Holds the zero-sized stand-in
+    /// for a language that declares the commands feature absent.
     pub commands:
         <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandRules>,
-    /// Comment syntaxes and their gate ([`CommentRules`]). For a language that
-    /// declares the comments feature absent, this field holds the zero-sized store
-    /// and cannot carry data.
+    /// Comment syntaxes and their gate ([`CommentRules`]). Holds the zero-sized stand-in
+    /// for a language that declares the comments feature absent.
     pub comments:
         <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentRules>,
-    /// The specials-scan gate ([`SpecialsRules`]). For a language that declares the
-    /// specials feature absent, this field holds the zero-sized store and cannot
-    /// carry data.
+    /// The specials-scan gate ([`SpecialsRules`]). Holds the zero-sized stand-in for a
+    /// language that declares the specials feature absent.
     pub specials:
         <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsRules>,
-    /// The forbidden-character set ([`ForbiddenCharsRules`]). For a language that
-    /// declares the forbidden-characters feature absent, this field holds the
-    /// zero-sized store and cannot carry data.
+    /// The forbidden-character set ([`ForbiddenCharsRules`]). Holds the zero-sized
+    /// stand-in for a language that declares the forbidden-characters feature absent.
     pub forbidden_chars: <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
         ForbiddenCharsRules,
     >,
 }
 
 impl<L: Lang> TokenRules<L> {
-    /// The all-empty rules value: every feature block's `enabled` gate `false`, every
-    /// collection and string empty, no expected group close — nothing is recognized,
-    /// and content is consumed as plain characters (character-level access mode). The
-    /// default [`Lang::initial_state_data`] builds its seed over exactly this value
-    /// (via [`StateData::empty`](crate::state::StateData::empty)); real languages start
-    /// from it and fill in their canonical rules.
+    /// Returns the all-empty rules: every gate `false`, every rule list and character
+    /// set empty, no expected group close.
     ///
-    /// This is the *constitutive* off (no rules data at all) — for the
-    /// *scoped* off over existing rules, see
-    /// [`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all),
-    /// which flips the gates while the data stays in place.
+    /// Nothing at all is recognized — the reader produces one token per content
+    /// character. This is the starting point for a rule set of your own: fill in the
+    /// blocks the language needs with struct-update syntax, as shown on
+    /// [`TokenRules`]. The default [`Lang::initial_state_data`] seeds a parse with
+    /// exactly this value (through
+    /// [`StateData::empty`](crate::core::StateData::empty)).
     ///
-    /// Deliberately a named constructor, not a `Default` impl: there is no privileged
-    /// "default language" in the machinery (the familiar LaTeX values are the
-    /// latexlike preset's [`default_token_rules`](crate::latexlike::default_token_rules)), and a struct-update
-    /// `..Default::default()` would silently zero future fields where the named
-    /// constructor documents the all-empty intent. Each feature block has a matching
-    /// `empty()` constructor ([`WhitespaceRules::empty`], [`GroupRules::empty`], …).
+    /// This is the *empty* off — no rules data at all. To switch every feature off while
+    /// keeping its data for later, use
+    /// [`TokenRulesOverrides::disable_all`](crate::core::token::TokenRulesOverrides::disable_all),
+    /// which flips the gates instead.
     ///
-    /// This constructor answers for *every* language: a present feature's field gets
-    /// its block's `empty()` value, an absent feature's field the zero-sized store.
-    /// It is therefore also the struct-update base for a language with absent
-    /// features (see the construction section on [`TokenRules`]).
+    /// It is a named constructor rather than a `Default` implementation because there is
+    /// no privileged "default language" here — the familiar LaTeX values are the
+    /// latexlike preset's
+    /// [`default_token_rules`](crate::latexlike::default_token_rules) — and because
+    /// `..Default::default()` would silently zero a field added later where this name
+    /// states the all-empty intent. Each block has its own matching constructor
+    /// ([`WhitespaceRules::empty`], [`GroupRules::empty`], …).
+    ///
+    /// It answers for *every* language: a present feature's field gets its block's
+    /// `empty()` value, an absent feature's field the zero-sized stand-in. That makes it
+    /// the struct-update base for a language with absent features too.
     pub fn empty() -> TokenRules<L> {
         TokenRules {
             whitespace: <L::Features as LangFeatures>::Whitespace::store_with(
@@ -436,8 +575,11 @@ impl<L: Lang> TokenRules<L> {
             .is_some_and(|block| block.enabled)
     }
 
-    /// The characters treated as whitespace ([`WhitespaceRules::chars`]); empty
-    /// when the language declares the whitespace feature absent.
+    /// The characters treated as whitespace ([`WhitespaceRules::chars`]); empty when
+    /// the language declares the whitespace feature absent.
+    ///
+    /// The set as stored, whether or not whitespace handling is enabled — check
+    /// [`whitespace_enabled`](Self::whitespace_enabled) too.
     pub fn whitespace_chars(&self) -> &str {
         <L::Features as LangFeatures>::Whitespace::store_get(&self.whitespace)
             .map_or("", |block| &block.chars)
@@ -458,15 +600,19 @@ impl<L: Lang> TokenRules<L> {
             .is_some_and(|block| block.enabled)
     }
 
-    /// The group delimiter rules recognizable here ([`GroupRules::rules`]); empty
-    /// when the language declares the groups feature absent.
+    /// The group delimiter rules ([`GroupRules::rules`]); empty when the language
+    /// declares the groups feature absent.
+    ///
+    /// The list as stored, whether or not groups are enabled — check
+    /// [`groups_enabled`](Self::groups_enabled) too.
     pub fn group_rules(&self) -> &[Arc<GroupRule<L>>] {
         <L::Features as LangFeatures>::Groups::store_get(&self.groups)
             .map_or(&[], |block| &block.rules)
     }
 
-    /// The scoped-lifecycle group rules ([`GroupRules::temporary`]); empty when the
-    /// language declares the groups feature absent.
+    /// The group rules that last only as long as the construct that added them
+    /// ([`GroupRules::temporary`]); empty when the language declares the groups feature
+    /// absent.
     pub fn temporary_group_rules(&self) -> &[Arc<GroupRule<L>>] {
         <L::Features as LangFeatures>::Groups::store_get(&self.groups)
             .map_or(&[], |block| &block.temporary)
@@ -487,8 +633,11 @@ impl<L: Lang> TokenRules<L> {
             .is_some_and(|block| block.enabled)
     }
 
-    /// The command syntaxes ([`CommandRules::rules`]); empty when the language
-    /// declares the commands feature absent.
+    /// The command syntaxes ([`CommandRules::rules`]); empty when the language declares
+    /// the commands feature absent.
+    ///
+    /// The list as stored, whether or not commands are enabled — check
+    /// [`commands_enabled`](Self::commands_enabled) too.
     pub fn command_rules(&self) -> &[Arc<CommandRule>] {
         <L::Features as LangFeatures>::Commands::store_get(&self.commands)
             .map_or(&[], |block| &block.rules)
@@ -501,8 +650,11 @@ impl<L: Lang> TokenRules<L> {
             .is_some_and(|block| block.enabled)
     }
 
-    /// The comment syntaxes ([`CommentRules::rules`]); empty when the language
-    /// declares the comments feature absent.
+    /// The comment syntaxes ([`CommentRules::rules`]); empty when the language declares
+    /// the comments feature absent.
+    ///
+    /// The list as stored, whether or not comments are enabled — check
+    /// [`comments_enabled`](Self::comments_enabled) too.
     pub fn comment_rules(&self) -> &[Arc<CommentRule>] {
         <L::Features as LangFeatures>::Comments::store_get(&self.comments)
             .map_or(&[], |block| &block.rules)

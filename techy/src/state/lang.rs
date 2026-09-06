@@ -1,9 +1,13 @@
-//! The [`Lang`] trait: the compile-time customization bundle; with it, the
-//! [`NodeExtTypes`] node-ext bundle and the [`TrivialLang`] all-defaults convenience.
+//! The [`Lang`] trait — the types and hooks that define a language — with the
+//! [`NodeExtTypes`] and [`InvocationSyntax`] bundles it names, the [`TrivialLang`]
+//! all-defaults shortcut, and the [`ClosedVocabulary`] enumeration bound.
 //!
-//! `NodeExtTypes` is defined here, next to `Lang`, rather than in the `node` topic:
-//! its *meaning* is a node concern, but it is a constituent of the compile-time bundle,
-//! and moving it there would recreate a module cycle for cosmetics.
+//! [Defining a custom language](crate::guide::custom_lang) walks through an
+//! implementation from scratch.
+
+// `NodeExtTypes` is defined here, next to `Lang`, rather than in the node modules:
+// its *meaning* is a node concern, but it is a constituent of the compile-time
+// bundle, and moving it there would recreate a module cycle for cosmetics.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -20,115 +24,135 @@ use crate::token::{
 use super::features::{AllLangFeatures, LangFeatures};
 use super::parsing_state::{FinalizeError, ParsingState, StateData};
 
-/// The bundle of node extension types of a language — per-instance language data
-/// attached alongside the structural node/record data, orthogonal to structural
-/// identity (a group with custom data is still a group to all generic tooling).
+/// The node extension types of a language: the data a language attaches to each node,
+/// and to each parsed argument and slot record, alongside the structural data.
 ///
-/// - [`NodeExt`](NodeExtTypes::NodeExt) sits uniformly on **every node**; a lang
-///   wanting kind-shaped data uses an enum inside it (coherence is enforced at the
-///   single minting point, [`Lang::make_node_ext`]).
-/// - [`ArgumentExt`](NodeExtTypes::ArgumentExt) /
-///   [`SlotExt`](NodeExtTypes::SlotExt) ride on the parsed argument/slot records.
+/// An extension never changes what a node *is* — a group with custom data is still a
+/// group to every generic tool that reads the tree.
 ///
-/// Bundled behind one associated type (`Lang::NodeExts`) to keep [`Lang`] small; `()`
-/// implements the bundle with every type `()`. Keep ext types word-sized where possible
-/// (an index or `Arc` into Lang-owned storage) — nodes store the ext inline.
+/// - [`NodeExt`](NodeExtTypes::NodeExt) is attached to **every** node. A language that
+///   wants different data per node kind puts an enum inside it; the one place that
+///   creates the value, [`Lang::make_node_ext`], is where the two are kept consistent.
+/// - [`ArgumentExt`](NodeExtTypes::ArgumentExt) and
+///   [`SlotExt`](NodeExtTypes::SlotExt) are attached to the parsed argument and slot
+///   records.
 ///
-/// **Population is initialization** — deliberately **no `Default` bounds**: an ext
-/// value is minted exactly once, at creation, by the party with the knowledge — the
-/// node ext by [`Lang::make_node_ext`] at staging, the argument ext by the
-/// [`ArgumentParser`](crate::spec::ArgumentParser) that parsed the argument, the slot
-/// ext by the invocation composition that mints the
-/// [`ParsedSlot`](crate::node::ParsedSlot) record. There is no
-/// "default-initialized, populated later" state anywhere in the ext system; restaged
-/// copies carry their exts verbatim as frozen parse facts.
+/// The three are bundled behind one associated type ([`Lang::NodeExts`]) to keep
+/// [`Lang`] small; `()` implements the bundle with every type `()`. Nodes store the
+/// extension inline, so keep these types small where possible — an index, or an `Arc`
+/// into storage the language owns.
+///
+/// **An extension value is created once, when the thing it belongs to is created**,
+/// by whichever party has the knowledge: the node extension by
+/// [`Lang::make_node_ext`] as the node is staged, the argument extension by the
+/// [`ArgumentParser`](crate::core::constructs::ArgumentParser) that parsed the
+/// argument, the slot extension where the
+/// [`ParsedSlot`](crate::core::node::ParsedSlot) record is built. Nothing is ever
+/// default-initialized and filled in later, which is why these types carry no
+/// `Default` bound; a restaged copy keeps the extension values it was parsed with.
 pub trait NodeExtTypes {
-    /// The uniform ext on every node, minted by [`Lang::make_node_ext`].
+    /// The extension attached to every node, created by [`Lang::make_node_ext`].
     type NodeExt: Clone + fmt::Debug + Send + Sync;
-    /// Ext of a *parsed argument* record (not a node kind): language/extension data
-    /// attached to one argument of one invocation — e.g. a reference-parsing extension
-    /// caching `{domain: "fig", key: "Abc"}` next to the argument whose content it
-    /// derives from, instead of re-parsing the argument node. Minted by the argument's
-    /// [`ArgumentParser`](crate::spec::ArgumentParser) — its
-    /// [`ParsedArgumentNodes`](crate::spec::ParsedArgumentNodes) output carries the
-    /// value (the standard parsers are defined only `where ArgumentExt<L>: Default` —
-    /// their knowledge about a custom ext *is* "nothing", and the bound says so).
-    /// Absent arguments carry no ext (nothing was parsed, so nothing was minted).
+    /// The extension of a *parsed argument* record — not of a node: data the language
+    /// attaches to one argument of one invocation.
+    ///
+    /// A reference-parsing extension might store `{domain: "fig", key: "Abc"}` next to
+    /// the argument it derived them from, so that nothing has to parse the argument
+    /// node again. The value is created by the argument's
+    /// [`ArgumentParser`](crate::core::constructs::ArgumentParser) and returned in its
+    /// [`ParsedArgumentNodes`](crate::core::constructs::ParsedArgumentNodes) output.
+    /// The standard argument parsers are defined only `where ArgumentExt<L>: Default`,
+    /// since what they know about a custom extension is nothing. An argument that was
+    /// not present has no extension, because nothing was parsed.
     type ArgumentExt: Clone + fmt::Debug + Send + Sync;
-    /// Ext of a *parsed slot* record (not a node kind): per-instance derived data about
-    /// one content region of one invocation — e.g. a tabular extension caching the cell
-    /// structure of an environment's body slot, or an itemize extension caching item
-    /// boundaries (the slot-side symmetry of
-    /// [`ArgumentExt`](NodeExtTypes::ArgumentExt)). Demanded at
-    /// [`ParsedSlot`](crate::node::ParsedSlot) construction; the latexlike preset
-    /// claims this member for its body marker
-    /// ([`BodySlotExt`](crate::node::BodySlotExt)).
+    /// The extension of a *parsed slot* record — not of a node: data the language
+    /// derives about one content region of one invocation.
+    ///
+    /// This is the slot-side counterpart of
+    /// [`ArgumentExt`](NodeExtTypes::ArgumentExt): a table extension might store the
+    /// cell structure of an environment's body, a list extension the item boundaries.
+    /// The value is required when the
+    /// [`ParsedSlot`](crate::core::node::ParsedSlot) record is built. The latexlike
+    /// preset uses this member for its body marker
+    /// ([`BodySlotExt`](crate::core::node::BodySlotExt)).
     type SlotExt: Clone + fmt::Debug + Send + Sync;
 }
 
-/// The no-ext bundle: every ext type is `()`.
+/// The no-extension bundle: every extension type is `()`.
 impl NodeExtTypes for () {
     type NodeExt = ();
     type ArgumentExt = ();
     type SlotExt = ();
 }
 
-/// The contract on a language's invocation-syntax payload type
-/// ([`Lang::InvocationSyntax`]): the recorded **trigger-spelling facts** of one
-/// callable invocation — what was written to invoke it (escape character,
-/// syntactic post-space, an environment's begin/end syntax), in the language's own logical
-/// canonical form. `L`-parameterized like [`ParseDriver<L>`]: the payload's
-/// source-facing method speaks the language's own source-origin type.
+/// The contract on a language's invocation-syntax type ([`Lang::InvocationSyntax`]):
+/// how one callable invocation was written.
 ///
-/// The payload is a **parse-level-syntax channel**, distinct from the node ext
-/// (preset-logic data, [`NodeExtTypes`]): it is stored as the
-/// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)
-/// field and is what makes recomposition accuracy the *language's* choice —
-/// byte-exact vs. up-to-noise vs. loose is decided by what the language records
-/// here, and recomposition reads raw node payload only. `()` records nothing (the
-/// trivial impl): Lang-agnostic tooling then sees only name + span of the
-/// language's callables, by design.
+/// A value of this type records the spelling facts of a single invocation — the escape
+/// character used, any space that followed it, an environment's begin and end syntax —
+/// in whatever canonical form the language prefers. It is stored on the node, as
+/// [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax).
+/// The type is generic over the language because its one method works against the
+/// language's own source type.
 ///
-/// Like [`NodeExtTypes`], this trait lives beside [`Lang`]: its *meaning* is a
-/// node concern, but it is a constituent of the compile-time bundle. The
-/// latexlike preset's payload type is the *data* enum
+/// This is separate from the node extension ([`NodeExtTypes`]), which holds a
+/// language's *derived* data: what is recorded here is what re-emitting the source
+/// has to work from. How faithfully a tree can be turned back into source is
+/// therefore the language's own choice — byte-exact, exact up to insignificant
+/// spacing, or approximate — because recomposition reads only what the node stores.
+/// `()` records nothing, in which case a tool that does not know the language sees
+/// only the name and span of each callable.
+///
+/// The latexlike preset records its macro, environment, and specials forms in
 /// [`latexlike::InvocationSyntaxData`](crate::latexlike::InvocationSyntaxData).
 ///
-/// Construction is a separate, opt-in contract
-/// ([`FromInvocation`](crate::constructs::FromInvocation)) consulted by the
-/// standard staging sites; a language whose payload cannot be built from an
-/// [`Invocation`](crate::constructs::Invocation) alone stages its callables
+/// Building a value is a separate, opt-in contract,
+/// [`FromInvocation`](crate::core::constructs::FromInvocation), which the standard
+/// staging sites use. A language whose value cannot be built from an
+/// [`Invocation`](crate::core::constructs::Invocation) alone stages its callables
 /// through custom parsers instead.
 pub trait InvocationSyntax<L: Lang>: Clone + fmt::Debug + Send + Sync + 'static {
-    /// A copy with every span-backed field resolved to owned text against
-    /// `source` — the carrying node's **own** source (the `Spanned` invariant;
-    /// a multi-source tree materializes each node against the source its span
-    /// lives in). Called by
-    /// [`NodeTree::materialize`](crate::node::NodeTree::materialize) alongside
-    /// the structural payload's own materialization. Source-independent fields
-    /// (rule `Arc`s, plain chars) pass through unchanged.
+    /// A copy of `self` in which every field that is a span into source text has
+    /// been replaced by the owned text it refers to.
+    ///
+    /// `source` is the node's **own** source: in a tree drawn from several sources,
+    /// each node is materialized against the one its span refers to. Fields that do
+    /// not refer to source text — rule handles, plain characters — are copied
+    /// unchanged. Called by
+    /// [`NodeTree::materialize`](crate::core::node::NodeTree::materialize) together
+    /// with the node's structural payload.
     #[must_use]
     fn materialized(&self, source: &Source<L::SourceOrigin>) -> Self;
 }
 
-/// The no-record payload: nothing was recorded, nothing to materialize.
+/// Records nothing about how an invocation was written, so there is nothing to
+/// materialize.
 impl<L: Lang> InvocationSyntax<L> for () {
     fn materialized(&self, _source: &Source<L::SourceOrigin>) {}
 }
 
-/// The compile-time type bundle of a language definition. Every core type takes one
-/// `L: Lang` parameter — never five (the one-generic-parameter principle).
+/// The definition of a language: the types the parsing machinery is generic over, and
+/// the hooks the language implements.
 ///
-/// A minimal language is a ZST with only the associated types filled in; every method
-/// except [`make_node_ext`](Lang::make_node_ext) has a working default (no transition
-/// customization, no specials) — the one exception exists because node exts have no
-/// default value ([`NodeExtTypes`]'s population-is-initialization rule; a no-ext lang's
-/// body is the `Ok(())` one-liner). The latexlike preset and FLM are the intended full
-/// implementors.
+/// Implement it to teach the machinery a new markup language. Every core type of the
+/// crate takes one `L: Lang` parameter, so the associated types chosen here fix the
+/// vocabulary for a whole parse — the mode, group and callable identifiers, the state
+/// and node extension types, the tokenization, and the driver.
 ///
-/// All associated types are `Send + Sync`: thread-safe states and trees are a core
-/// contract — in practice these types are
-/// enums, flags, and `Arc`s, so the bounds are nearly free.
+/// A minimal language is a zero-sized type with only the associated types filled in.
+/// Every method has a working default — no transition customization, no specials —
+/// except [`make_node_ext`](Lang::make_node_ext), which has none because a node
+/// extension value has no default ([`NodeExtTypes`]); a language without extension
+/// data writes it as the one-liner `Ok(())`. Simpler still, `impl TrivialLang for
+/// MyLang {}` supplies everything (see [`TrivialLang`]). The
+/// [`latexlike`](crate::latexlike) preset is the worked-out full implementation.
+///
+/// Every associated type is `Send + Sync`, because parsing states and node trees must
+/// be usable from several threads. In practice these types are enums, flags, and
+/// `Arc`s, so the bounds cost nothing.
+///
+/// [Defining a custom language](crate::guide::custom_lang) works through an
+/// implementation step by step.
 // `'static` because a `Lang` is a compile-time type bundle (a unit marker type in
 // practice) and `CallableSpec<L>: Any` (the downcast contract) requires every spec
 // type — including generic ones like `StdCallableSpec<L>` — to be `'static`.
@@ -150,95 +174,104 @@ pub trait Lang: Sized + 'static {
     /// declaration out.
     type Features: LangFeatures;
 
-    /// Identifier of a group *class* — the language-native taxonomy of "a delimited
-    /// region viewed as one object" (the latexlike preset: content group vs. math
-    /// group), **fully detached from delimiter spellings**. **Closed per language**: a language's group
-    /// classes are known when the `Lang` is written, so this is typically a small enum —
-    /// typed answers to "is this a math group?" without string comparison or a registry.
-    /// Which *delimiter pairs* exist, and which class each maps to, is runtime data
-    /// ([`GroupRule`](crate::token::GroupRule) values in the state's token rules) that
-    /// any construct parser may extend mid-parse; only the class vocabulary is fixed —
-    /// the exact parallel of [`CallableTypeId`](Lang::CallableTypeId) (closed invocation
-    /// *forms*, runtime-registered *callables*). [`TrivialLang`] defaults this to `u32`
-    /// for test languages.
+    /// Identifier of a group *class*: the language's own answer to "what kind of
+    /// delimited region is this?" — the latexlike preset distinguishes a content group
+    /// from a math group. It says nothing about how the delimiters are spelled.
+    ///
+    /// The set of classes is **fixed when the language is written**, so this is
+    /// typically a small enum, and a question like "is this a math group?" is answered
+    /// by a match rather than a string comparison or a registry lookup.
+    ///
+    /// Which *delimiter pairs* exist, and which class each one belongs to, is runtime
+    /// data instead — [`GroupRule`](crate::core::token::GroupRule) values in the
+    /// state's token rules, which any construct parser may extend during a parse. Only
+    /// the vocabulary of classes is fixed. [`CallableTypeId`](Lang::CallableTypeId)
+    /// works the same way: fixed invocation forms, callables registered at runtime.
+    ///
+    /// [`TrivialLang`] uses `u32` here.
     type GroupTypeId: Copy + Eq + Hash + fmt::Debug + Send + Sync;
 
-    /// Identifier of a callable *type* — an invocation form (the latexlike preset:
-    /// macro / environment / specials). **Closed per language**:
-    /// new invocation *forms* are never registered at runtime (new *callables* are —
-    /// via the scope stack), so this is a per-language enum, not an open id. `Ord`
-    /// because providers key their maps by it. [`TrivialLang`] defaults this to `u32`.
+    /// Identifier of a callable *type*: an invocation form — the latexlike preset has
+    /// macros, environments, and specials.
+    ///
+    /// The set of forms is **fixed when the language is written**; new *callables* are
+    /// registered at runtime, through the scope stack, but new invocation forms never
+    /// are. So this is a per-language enum rather than an open identifier. It is `Ord`
+    /// because providers key their definition maps by it. [`TrivialLang`] uses `u32`.
     type CallableTypeId: Copy + Ord + Hash + fmt::Debug + Send + Sync;
 
-    /// Identifier of the **parsing mode** a state is in (the latexlike preset: text /
-    /// math; verbatim-ish modes are candidates) — the third closed per-language
-    /// vocabulary after [`GroupTypeId`](Lang::GroupTypeId) and
-    /// [`CallableTypeId`](Lang::CallableTypeId), though deliberately not a `…TypeId`:
-    /// it names the mode a state *is in*, not a classification of a syntactic object
-    /// (the crate's Id-naming rule). Stored as plain state data
-    /// ([`StateData::mode`]) with a matching [`ParsingStateDelta::mode`](super::ParsingStateDelta::mode) override
-    /// channel: deltas *initiate* mode changes, and
-    /// [`finalize_transition`](Lang::finalize_transition) *interprets* them.
-    /// Mode is not lookup-private: definition visibility
-    /// and any content-interpretation decision may key on it.
+    /// Identifier of the **parsing mode** a state is in — the latexlike preset has
+    /// text and math modes. Like the group and callable identifiers, the set of modes
+    /// is fixed when the language is written.
     ///
-    /// `Copy + Eq + Hash` because modes are memo-key material — the session's
-    /// derivation memo keys the delta's mode override *by value* (exact, unlike the
-    /// identity-keyed rule payloads); `Default` supplies the seed state's mode (the
-    /// default [`initial_state_data`](Lang::initial_state_data)). [`TrivialLang`]
-    /// defaults this to `()` — no modes.
+    /// The mode is ordinary state data ([`StateData::mode`]) with a matching override
+    /// on the delta ([`ParsingStateDelta::mode`](super::ParsingStateDelta::mode)): a
+    /// delta *initiates* a mode change and
+    /// [`finalize_transition`](Lang::finalize_transition) *interprets* it. Anything may
+    /// depend on the mode, including which definitions are visible and how content is
+    /// interpreted.
+    ///
+    /// `Copy + Eq + Hash` because a mode is compared by value when the session decides
+    /// whether two derivations are the same. `Default` supplies the seed state's mode
+    /// for the default [`initial_state_data`](Lang::initial_state_data).
+    /// [`TrivialLang`] uses `()`, meaning the language has no modes.
     type ModeId: Copy + Eq + Hash + Default + fmt::Debug + Send + Sync;
 
-    /// Language-specific parsing state (e.g. feature-toggle flags). Typed — no `Any`
-    /// maps; `()` for languages without extra state. Modal state belongs in the
-    /// first-class [`ModeId`](Lang::ModeId) field instead — a preset needs no
-    /// `in_math_mode` flag here.
+    /// The language's own parsing state — feature-toggle flags, for instance. A
+    /// concrete type, not a map of type-erased values; `()` for a language that needs
+    /// none. Modal state belongs in [`ModeId`](Lang::ModeId) instead, so a preset needs
+    /// no `in_math_mode` flag here.
     ///
-    /// **Must be a plain value type — no interior mutability** (no `Mutex`, no atomics
-    /// used for mutation): states are frozen at construction and their derived caches
-    /// (including [`specials_trigger_chars`](Lang::specials_trigger_chars)'s result) are
-    /// computed from the ext at freeze time. Mutating an ext behind a shared
-    /// `Arc<ParsingState>` would silently desynchronize those caches and break the
-    /// readers' peek-idempotence contract. (The interior-mutable set-once idiom
-    /// permitted for *node* exts does not carry over here.)
+    /// **It must be a plain value type, with no interior mutability** — no `Mutex`, no
+    /// atomics used for mutation. A parsing state is frozen when it is built, and its
+    /// derived caches, including the result of
+    /// [`specials_trigger_chars`](Lang::specials_trigger_chars), are computed from this
+    /// value at that moment. Changing it afterwards, behind a shared
+    /// `Arc<ParsingState>`, would leave those caches describing the old value and break
+    /// the guarantee that peeking at a token twice gives the same answer. The
+    /// set-once-through-interior-mutability idiom allowed for *node* extensions does
+    /// not apply here.
     type StateExt: Clone + fmt::Debug + Default + Send + Sync;
 
-    /// Semantic transition events (e.g. an `EnterMath`), carried on
-    /// [`ParsingStateDelta::events`](super::ParsingStateDelta::events). `()` if
-    /// unused.
+    /// A semantic transition event, such as an `EnterMath`, listed on
+    /// [`ParsingStateDelta::events`](super::ParsingStateDelta::events). `()` for a
+    /// language that uses none.
     ///
-    /// **Events come in two classes**, and the split decides who consumes them:
+    /// **There are two kinds of event**, and which kind one is decides who interprets
+    /// it:
     ///
-    /// - **Context-free** events — interpretable from `(new, prev, events)` alone —
-    ///   are consumed by [`finalize_transition`](Lang::finalize_transition), in and
-    ///   out of parses alike.
-    /// - **Context-dependent** events — whose effect depends on the *enclosing*
-    ///   states at the point of use (the latexlike exit-math-context restore) — are
-    ///   lowered to ordinary override patches by the driver
-    ///   ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event),
-    ///   which receives the session's enclosing-state stack) inside
-    ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state),
-    ///   and never reach `finalize_transition`. A context-dependent event that
-    ///   *does* reach it — a bare out-of-parse
-    ///   [`derived()`](ParsingState::derived) call — must **error loudly**
-    ///   (`finalize_transition` returns `Err`), never be silently dropped: the
-    ///   context it needs does not exist there.
+    /// - A **context-free** event can be interpreted from the new data, the previous
+    ///   state, and the events alone. [`finalize_transition`](Lang::finalize_transition)
+    ///   interprets it, inside a parse and outside one alike.
+    /// - A **context-dependent** event has an effect that depends on the *enclosing*
+    ///   states at the point where it is used — the latexlike restore on leaving a math
+    ///   context is one. The driver translates it into ordinary overrides
+    ///   ([`ParseDriver::resolve_state_event`](crate::core::ParseDriver::resolve_state_event),
+    ///   which receives the session's stack of enclosing states) inside
+    ///   [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state),
+    ///   so it never reaches `finalize_transition`. If one does reach it anyway — a
+    ///   bare [`derived()`](ParsingState::derived) call outside a parse — the
+    ///   customizer must **return `Err`** rather than ignore it, because the context
+    ///   the event needs does not exist there.
     type Event: Clone + fmt::Debug + Send + Sync;
 
-    /// Parse-global **mutable** extension, `Default`-initialized and stored on
-    /// [`ParserSession`](crate::engine::ParserSession) — the preset-owned mutable object
-    /// of a parse, and the home for parse-history accumulation
-    /// ([`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition))
-    /// and parse-global caches.
-    /// `()` if unused.
+    /// The language's **mutable** data for one whole parse: initialized with
+    /// `Default` and stored on the
+    /// [`ParserSession`](crate::core::ParserSession). `()` for a language that uses
+    /// none.
     ///
-    /// Unlike [`StateExt`](Lang::StateExt) this is not `Clone`: sessions are transient
-    /// single-parse objects, never shared or reverted — access is always `&mut`, through
-    /// the session.
+    /// This is where a language accumulates what it learns as the parse proceeds —
+    /// counters and history recorded from
+    /// [`ParseDriver::observe_transition`](crate::core::ParseDriver::observe_transition),
+    /// caches that span the parse.
+    ///
+    /// Unlike [`StateExt`](Lang::StateExt) it is not `Clone`: a session exists for one
+    /// parse and is never shared or rolled back, so it is always reached as `&mut`
+    /// through the session.
     type SessionExt: fmt::Debug + Default + Send + Sync;
 
-    /// Origin metadata type for sources (plugged into `Source<O>`); conventionally
-    /// `Option<String>`.
+    /// The type describing where a source came from, used as the `O` of
+    /// [`Source<O>`](crate::source::Source). Conventionally `Option<String>`.
     type SourceOrigin: SourceOrigin;
 
     /// The language's tokenization, declared as one type

@@ -1,9 +1,9 @@
-//! [`ScriptedReader`]: a [`TokenReader`] that serves one parse from several sources,
-//! following a script written by the test.
+//! [`ScriptedReader`]: a test-only [`TokenReader`] that serves one parse from several
+//! sources, following a script the test writes.
 //!
-//! **Internal test infrastructure** — compiled under `cfg(test)` only, deliberately not
-//! public API. Its purpose is to exercise the parsing machinery of a language that
-//! declares [`Lang::OBEYS_SPAN_TILING`] `= false` without implementing a macro expander:
+//! Compiled under `cfg(test)` only, and deliberately not public API. It exists to
+//! exercise the parsing machinery of a language that declares
+//! [`Lang::OBEYS_SPAN_TILING`] `= false` without having to implement a macro expander:
 //! the reader serves a token stream whose tokens come from several sources, in an order
 //! and with gaps the test chooses.
 //!
@@ -35,9 +35,9 @@
 //! **canonical form** so that two positions compare equal exactly when they name the
 //! same place in the stream:
 //!
-//! - the place past an entry is the place before the following entry: `(i,
+//! - the place past an entry is the place before the following entry, so `(i,
 //!   EndPastPostSpace)` is stored as `(i + 1, StartBeforePreSpace)`. This is what makes
-//!   contract clauses 2 and 7 hold at a seam by construction — the two sides of a seam
+//!   contract clauses 2 and 7 hold at a seam by construction: the two sides of a seam
 //!   are one value, not two.
 //! - within one entry, edges that fall on the same offset name one place, and are stored
 //!   as the earliest of them: for a token with no pre-space, `(i, Start)` is stored as
@@ -72,7 +72,7 @@
 //!
 //! # Panics
 //!
-//! This module asserts where a test's own script is wrong — a segment that ends inside
+//! This module asserts where a test's own script is wrong: a segment that ends inside
 //! a token, a middle segment that ends in whitespace (its bytes would be dropped
 //! silently), content that does not tokenize, a token or position from another reader.
 //! These are mistakes in test code, which is what makes a panic the right report; the
@@ -109,13 +109,13 @@ const EVERY_EDGE: [TokenEdge; 5] = [
 ];
 
 /// The tokenization of a language read by a [`ScriptedReader`]: its own token and
-/// stream-position types, and no language-side reader worth the name.
+/// stream-position types, and a language-side reader that serves nothing.
 ///
 /// A script is runtime data, and [`make_token_reader`](Tokenization::make_token_reader)
 /// receives only a source, so the language-side reader it builds serves an *empty*
-/// stream over that source (one [`EndOfStream`](TokenKind::EndOfStream) token, no
-/// content). Tests build the reader they mean with [`ScriptedReader::new`] and drive
-/// parsers with it directly, or hand it out from a
+/// stream over that source: one [`EndOfStream`](TokenKind::EndOfStream) token and no
+/// content. Tests build the reader they mean with [`ScriptedReader::new`] and drive
+/// parsers with it directly, or return it from a
 /// [`ParseDriver::make_token_reader`](crate::engine::ParseDriver::make_token_reader)
 /// override that holds the script.
 #[derive(Debug, Clone, Copy)]
@@ -215,7 +215,12 @@ struct Entry<L: Lang> {
     token: StdToken<L>,
 }
 
-/// A [`TokenReader`] serving the tokens of a script (see the [module docs](self)).
+/// A test-only [`TokenReader`] that serves the tokens of a script.
+///
+/// Use it in place of [`StdTokenReader`] where a test needs one parse to read from
+/// several sources at one nesting level. See the [module documentation](self) for the
+/// script format, the position model, and the ways a fixed script differs from a
+/// scanning reader.
 pub(crate) struct ScriptedReader<'s, L: Lang> {
     /// One [`StdTokenReader`] per source named by the script, kept for interpreting the
     /// tokens scanned from it (`token_kind`) and for the source their offsets belong to.

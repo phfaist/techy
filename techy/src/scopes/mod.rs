@@ -1,47 +1,64 @@
-//! The scope stack: how callable names resolve to [`CallableSpec`]s.
+//! Where callable definitions are stored, and how a name is looked up.
 //!
-//! The scope-stack design:
+//! A **provider** ([`SpecsProvider`]) is a named store of definitions: it answers a
+//! [`CallableQuery`] — an invocation form plus a name — with a [`CallableSpec`] or with
+//! "not defined here". The providers in effect are held in order by a [`ScopeStack`],
+//! which the parsing state carries ([`StateData::scopes`](crate::core::StateData)).
 //!
-//! - [`SpecsProvider`] is the stack-entry contract: a named, fallible resolver
-//!   ([`retrieve_spec`](SpecsProvider::retrieve_spec)) that may also participate in the
-//!   tokenizer's specials scan ([`scan_specials`](SpecsProvider::scan_specials) +
-//!   [`specials_trigger_chars`](SpecsProvider::specials_trigger_chars)) and accept
-//!   functional definition updates ([`with_definitions`](SpecsProvider::with_definitions)).
-//! - [`Package`] is the immutable standard implementation: built once, loaded wholesale,
-//!   with optional per-mode visibility and a data-driven specials table.
-//! - [`Scope`] is the mutable-by-replacement standard implementation — the target of
-//!   definition ops, updated copy-on-write through `with_definitions`.
-//! - [`FallbackProvider`] answers *any* name of its registered callable types — the
-//!   unknown-callable policy expressed as an ordinary bottom-of-stack provider.
-//! - [`ErrorCallableSpec`] makes "defined to be an error" an ordinary definition: its
-//!   invocation parser records a diagnostic ([`CallableDefinedAsError`]) and recovers.
-//! - [`ScopeStack`] is the ordered stack stored in the parsing state
-//!   ([`StateData::scopes`](crate::state::StateData)), searched **innermost
-//!   (last-pushed) first** — lexical shadowing, no `ConflictStrategy`. The stack itself
-//!   is *not* a provider (stacks do not nest — this removes the
-//!   nested-fallback-preemption hazard instead of re-mitigating it), and it is
-//!   visibility-blind: mode visibility is each provider's own business.
+//! **A name is looked up innermost first**: the provider pushed last is asked first,
+//! and the first one that answers wins. Loading a package that redefines a name
+//! therefore shadows the definition below it, and a definition made inside a group
+//! disappears again when the group ends. When no provider answers, the callable is
+//! unresolvable, and the miss reports which providers were searched
+//! ([`ScopeStack::searched_providers`]).
 //!
-//! # Extending definitions mid-parse
+//! Three provider implementations ship:
 //!
-//! Deltas carry [`ScopeOp`]s ([`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta)):
-//! stack-shape ops (push / unload / replace / replace-stack) and definition ops routed to
-//! a named provider's `with_definitions` ([`DefinitionOp`]). Ops carry `Arc`s directly —
-//! the core has no name→package registry (a by-name `load("amsmath")` belongs to preset
-//! driver helpers, which construct the `Arc` when *building* the delta). Scoped reversion
-//! stays structural: outer states hold the old `Arc`s, so both a pushed provider and a
-//! copy-on-write update of an outer scope revert when the group ends — lexical scoping
-//! falls out of state immutability with zero per-group cost. Op failures surface through
-//! the fallible [`ParsingState::derived`](crate::state::ParsingState::derived) (see
-//! [`ScopeOpError`] and [`DeriveError`](crate::state::DeriveError)).
+//! - [`Package`] — immutable: built once with [`insert`](Package::insert), then loaded
+//!   wholesale. A package, or any single entry in it, may be restricted to certain
+//!   parsing modes, and a package may also define specials as data (trigger strings
+//!   such as `---`).
+//! - [`Scope`] — the target of definitions made during a parse ([`ScopeOp::Define`]).
+//!   Updating one produces a new `Scope` instead of changing the old one, which is what
+//!   makes group-local definitions revert.
+//! - [`FallbackProvider`] — answers *any* name of the callable types registered with
+//!   it, so an unknown callable still resolves to a spec. It goes at the bottom of the
+//!   stack, where anything defined above it shadows it.
+//!
+//! [`ErrorCallableSpec`] is the definition that means "invoking this name is an error":
+//! the invocation records a [`CallableDefinedAsError`] diagnostic and recovers. Storing
+//! it over an existing definition is how a name is taken away again without unloading
+//! the package that defined it.
+//!
+//! # Changing definitions during a parse
+//!
+//! A parsing state delta carries [`ScopeOp`]s
+//! ([`ParsingStateDelta::scope_ops`](crate::core::ParsingStateDelta)): operations on the
+//! shape of the stack (push, unload, replace one provider, replace the whole stack) and
+//! definition operations addressed to a provider by name, which reach that provider as
+//! [`DefinitionOp`]s through [`with_definitions`](SpecsProvider::with_definitions).
+//! Operations carry provider `Arc`s directly; the core keeps no registry mapping
+//! package names to packages, so a by-name `load("amsmath")` belongs to a preset's
+//! driver helpers, which build the `Arc` when they build the delta.
+//!
+//! Reverting is structural: an outer parsing state still holds the previous `Arc`s, so
+//! both a provider pushed for a group and an updated copy of an outer scope are gone
+//! when the group ends, at no per-group cost. Failed operations surface through the
+//! fallible [`ParsingState::derived`](crate::core::ParsingState::derived) — see
+//! [`ScopeOpError`] and [`DeriveError`](crate::core::DeriveError).
 //!
 //! # Specials across providers
 //!
-//! [`ScopeStack::scan_specials`] folds over every provider innermost-first: the
-//! **longest match wins; ties go innermost** — exact pylatexenc `test_for_specials`
-//! parity (`---` beats `--` wherever they are defined), and since equal-length matches
-//! at one position are the *same spelling*, the tie rule is what makes shadowing a
-//! redefined special work. A provider's scan error aborts the fold and propagates.
+//! [`ScopeStack::scan_specials`] consults every provider innermost-first: the
+//! **longest match wins, and ties go to the innermost provider** — pylatexenc's
+//! `test_for_specials` behavior, so `---` beats `--` wherever the two are defined.
+//! Since two equally long matches at one position are the same spelling, the tie rule
+//! is what makes a redefined special shadow the previous definition. A provider's scan
+//! error stops the search and propagates.
+//!
+//! The guide chapter
+//! [Defining macros, environments, and specials](crate::guide::specs) covers all of
+//! this from the user's side.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -818,27 +835,55 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
     }
 }
 
-/// An immutable, wholesale-loaded collection of definitions — the standard
-/// [`SpecsProvider`] for preset/library data.
+/// A collection of callable definitions, built once and loaded whole: the usual place
+/// to put the macros, environments and specials a document uses.
 ///
-/// Built once (insertions while owned), then shared behind an `Arc` on scope stacks;
-/// it never mutates afterwards — its [`with_definitions`](SpecsProvider::with_definitions)
-/// is the default refusal. Keys are `(Lang::CallableTypeId, normalized name)`,
-/// **many-to-one**: several names may map to one shared spec (flyweight — `\emph` and
-/// `\textit` can share an `Arc`). Inserting an existing key replaces the previous spec.
+/// Create one with [`new`](Package::new), add definitions while you still own it, then
+/// load it into the parsing state the parser starts from —
+/// [`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)
+/// takes packages by value. Once shared on a scope stack a package never changes: its
+/// [`with_definitions`](SpecsProvider::with_definitions) is the default refusal, and
+/// definitions made during a parse go to a [`Scope`] instead.
 ///
-/// **Mode visibility** is checked inside the package's own
-/// [`retrieve_spec`](SpecsProvider::retrieve_spec)/[`scan_specials`](SpecsProvider::scan_specials)
-/// (the stack is visibility-blind), at two grains: a **package-level** gate
-/// ([`set_visible_modes`](Package::set_visible_modes)) and a **per-entry** gate
+/// ```
+/// use techy::core::specs::Package;
+/// use techy::latexlike::Latexlike;
+///
+/// let mut package: Package<Latexlike> = Package::new("mydefs");
+/// package.define_macro("emph", ["m"]).unwrap();
+/// package.define_environment("quotation", ["o"]).unwrap();
+/// assert_eq!(package.len(), 2);
+/// ```
+///
+/// [`define_macro`](Package::define_macro) and
+/// [`define_environment`](Package::define_environment) are the latexlike preset's
+/// one-liners, taking argument codes directly
+/// ([`argument_specs`](crate::latexlike::argument_specs) documents the code table). The
+/// general form is [`insert`](Package::insert), which takes an invocation form, a name,
+/// and any [`CallableSpec`] you build yourself. The guide chapter
+/// [Defining macros, environments, and specials](crate::guide::specs) shows a package
+/// through to a finished parse.
+///
+/// Keys are `(Lang::CallableTypeId, normalized name)` and the mapping is
+/// **many-to-one**: several names may share one spec value (`\emph` and `\textit` can
+/// hold the same `Arc`). Inserting an existing key replaces the previous definition and
+/// returns it.
+///
+/// **Mode visibility.** A definition can be restricted to certain parsing modes at two
+/// grains: the whole package ([`set_visible_modes`](Package::set_visible_modes)) and
+/// the single entry
 /// ([`insert_in_modes`](Package::insert_in_modes)/[`insert_specials_in_modes`](Package::insert_specials_in_modes)).
-/// Both must admit [`ParsingState::mode`] for a definition to resolve; outside its modes
-/// a package or an entry answers `Ok(None)` — invisible, not an error. So one loadable
-/// package can hold text-only typography specials and math-only scripts side by side.
+/// Both must admit [`ParsingState::mode`] for a definition to resolve; outside its
+/// modes a package or an entry answers `Ok(None)` — invisible, not an error. So one
+/// loadable package can hold text-only typography specials and math-only scripts side
+/// by side. The package checks this itself, inside its own
+/// [`retrieve_spec`](SpecsProvider::retrieve_spec) and
+/// [`scan_specials`](SpecsProvider::scan_specials); the scope stack does not look at
+/// visibility at all.
 ///
-/// **Specials as data**: a package may carry trigger-string definitions
-/// ([`insert_specials`](Package::insert_specials)); its scan returns the longest
-/// matching trigger.
+/// **Specials as data.** A package may also define trigger strings
+/// ([`insert_specials`](Package::insert_specials)) — `---`, `~`, `&`. Its scan returns
+/// the longest matching trigger.
 ///
 /// **Serialization.** A package is serialized by *identity*: its entry carries the
 /// package's name only, and the reading side looks the name up among the providers
@@ -846,7 +891,7 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
 /// is part of the reading program's own configuration, not something to describe in
 /// full. Its *definitions* are
 /// serialized by identity too, when the package was built **shared**
-/// ([`new_shared`](Package::new_shared)): the specs it hands out
+/// ([`new_shared`](Package::new_shared)): the specs it issues
 /// [`SpecProvenance`] stamps for ([`provenance_for`](Package::provenance_for),
 /// [`provenance_for_specials`](Package::provenance_for_specials)) refer back to it.
 /// A package built with [`new`](Package::new) and later wrapped in an `Arc` cannot
@@ -868,10 +913,12 @@ pub struct Package<L: Lang> {
 }
 
 impl<L: Lang> Package<L> {
-    /// An empty package. The name identifies it on stacks, in ops, and in diagnostics.
+    /// An empty package. The name identifies it on scope stacks, in the operations that
+    /// address a provider by name, and in diagnostics.
     ///
-    /// A package built this way cannot hand out provenance stamps for its definitions
-    /// (see [`new_shared`](Package::new_shared) and the type's documentation).
+    /// A package built this way cannot issue provenance stamps for its definitions, so
+    /// its specs cannot be serialized by identity (see
+    /// [`new_shared`](Package::new_shared) and the type's documentation).
     pub fn new(name: impl Into<Box<str>>) -> Package<L> {
         Package {
             name: name.into(),
@@ -882,16 +929,19 @@ impl<L: Lang> Package<L> {
         }
     }
 
-    /// An empty package that `build` fills, returned shared: the package is created
-    /// inside its own `Arc`, so that while `build` runs it can hand out
-    /// [`SpecProvenance`] stamps for its definitions
+    /// An empty package that `build` fills, returned already shared.
+    ///
+    /// The package is created inside its own `Arc`, so that while `build` runs it can
+    /// issue [`SpecProvenance`] stamps for its definitions
     /// ([`provenance_for`](Package::provenance_for),
-    /// [`provenance_for_specials`](Package::provenance_for_specials)) — the stamps
-    /// refer weakly to the `Arc` being built. Inside `build`, insert the definitions
-    /// as usual, stamping the specs first (the crate's spec types take the stamp with
-    /// `with_provenance`; the latexlike helpers `define_macro`/`define_environment`
-    /// stamp automatically). Only the specs a package stamps can be serialized by
-    /// identity — see the type's documentation.
+    /// [`provenance_for_specials`](Package::provenance_for_specials)); the stamps refer
+    /// weakly to the `Arc` being built. Only the specs a package stamps can be
+    /// serialized by identity — see the type's documentation.
+    ///
+    /// Inside `build`, insert the definitions as usual, stamping each spec first: the
+    /// crate's spec types take the stamp through their `with_provenance` builder, and
+    /// the latexlike one-liners [`define_macro`](Package::define_macro) and
+    /// [`define_environment`](Package::define_environment) stamp on their own.
     ///
     /// ```
     /// use techy::core::specs::{Package, StdCallableSpec};
@@ -965,36 +1015,42 @@ impl<L: Lang> Package<L> {
     }
 
     /// Define `name` (normalized spelling) under the invocation form `callable_type`,
-    /// visible in every mode the package is. Returns the spec previously defined under
-    /// that key, if any.
+    /// visible in every mode the package is.
+    ///
+    /// A key that already has a definition is **replaced**, and the previous spec is
+    /// returned; a key that had none returns `None`.
     ///
     /// **The name is the *normalized* spelling — never include the escape
-    /// character.** Register `"emph"`, not `"\\emph"`: command tokens carry their
-    /// name *without* the escape character, so an escape-prefixed registration can
-    /// never match — the definition is silently unreachable. This is deliberately
-    /// *not* validated here: escape characters are a [`TokenRules`](crate::token::TokenRules)
-    /// fact this layer cannot know, they can change mid-parse, and a leading
-    /// escape-character-like char can be fully intended (`@greet` registered before
-    /// `@` *becomes* an escape character). The trap is caught where it bites
-    /// instead: the resolution-miss detail suggests escape-prefixed near-misses
-    /// ([`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes)),
-    /// and a parse-initialization check warns when *all* of a provider's
-    /// definitions are escape-shadowed
+    /// character.** Register `"emph"`, not `"\\emph"`: a command token carries its name
+    /// *without* the escape character, so an escape-prefixed registration can never
+    /// match and the definition is silently unreachable.
+    ///
+    /// This is deliberately not validated here. Which characters are escape characters
+    /// is a [`TokenRules`](crate::core::token::TokenRules) fact this layer cannot see,
+    /// it can change mid-parse, and a leading escape-character-like character can be
+    /// fully intended (`@greet`, registered before `@` *becomes* an escape character).
+    /// The mistake is instead caught where it bites: a resolution miss suggests
+    /// escape-prefixed near-misses
+    /// ([`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes)),
+    /// and a check at parse initialization warns when *all* of a provider's definitions
+    /// begin with an escape character
     /// ([`check_provider_commands_shadowed_by_escape`]).
     ///
-    /// **No spec-type/callable-type cross-check either — deliberately.** A
-    /// "mismatched" registration (say, a plain macro-shaped spec under an
-    /// environment form) is documented-legitimate: the *composition* that parses
-    /// the invocation form owns the parse, and the spec contributes argument
-    /// structure — e.g. the latexlike environment composition parses any
-    /// `CallableSpec`'s declared arguments after `\begin{name}` and gives the body
-    /// the default handling. The preset one-liners (`define_macro`/
-    /// `define_environment` on latexlike packages) make the correct pairing
-    /// structural in normal use.
+    /// **The spec type and the callable type are not cross-checked either.** A
+    /// "mismatched" registration — say a plain macro-shaped spec under an environment
+    /// form — is legitimate: what parses the invocation is the composition registered
+    /// for that invocation form, and the spec only contributes the argument structure.
+    /// The latexlike environment composition, for instance, parses any
+    /// [`CallableSpec`]'s declared arguments after `\begin{name}` and gives the body the
+    /// default handling. The preset one-liners
+    /// [`define_macro`](Package::define_macro) and
+    /// [`define_environment`](Package::define_environment) pair the two correctly by
+    /// construction.
     ///
     /// The spec passes through the sealed [`IntoCallableSpec`] conversion: by value
-    /// (`insert(CallableType::Macro, "emph", MacroSpec::new(…))` — no `Arc::new`), or
-    /// pre-shared as an `Arc` for flyweight sharing across names.
+    /// (`insert(CallableType::Macro, "emph", MacroSpec::new(…))`, with no `Arc::new`),
+    /// or already `Arc`-shared, which is how one spec value is registered under several
+    /// names.
     pub fn insert<M>(
         &mut self,
         callable_type: L::CallableTypeId,
@@ -1306,14 +1362,24 @@ impl<L: Lang> fmt::Debug for Package<L> {
 
 // --- Scope -------------------------------------------------------------------------------
 
-/// The definition target: the standard mutable-by-replacement [`SpecsProvider`] that
-/// [`ScopeOp::Define`]/[`ScopeOp::Remove`] address.
+/// The provider that definitions made *during* a parse go into — what
+/// [`ScopeOp::Define`] and [`ScopeOp::Remove`] address by name.
 ///
-/// "Mutable" means **copy-on-write**: [`with_definitions`](SpecsProvider::with_definitions)
-/// returns a fresh `Scope` and the stack swaps its entry, while outer states keep the
-/// old `Arc` — group-local definition semantics fall out of structural reversion, even
-/// when the targeted scope sits below other providers. Storage is a `BTreeMap` (`no_std`, deterministic iteration); keys are
-/// `(Lang::CallableTypeId, normalized name)`, many-to-one to shared specs.
+/// A scope is never modified in place:
+/// [`with_definitions`](SpecsProvider::with_definitions) returns a fresh `Scope` and
+/// the stack replaces its entry with it, while outer parsing states go on holding the
+/// old `Arc`. That is what makes a definition made inside a group disappear when the
+/// group ends, even when the scope it went into sits below other providers on the
+/// stack.
+///
+/// Scopes are created as they are needed: the first [`ScopeOp::Define`] naming a scope
+/// that is not on the stack creates it as the innermost entry. Building one directly
+/// with [`new`](Scope::new) and [`insert`](Scope::insert) is for seeding an initial
+/// parsing state.
+///
+/// Keys are `(Lang::CallableTypeId, normalized name)`, and several names may share one
+/// spec value. Definitions are held in a `BTreeMap`, so iteration order is
+/// deterministic.
 ///
 /// **Serialization.** A scope holds definitions made during a parse, so it is
 /// serialized in full — its name and every definition, each spec as an entry of its
@@ -1336,9 +1402,12 @@ impl<L: Lang> Scope<L> {
         &self.name
     }
 
-    /// Define `name` under `callable_type` directly (builder-style, while the scope is
-    /// still owned — seeding initial states, tests). Returns the previously defined
-    /// spec, if any. Mid-parse definitions go through [`ScopeOp::Define`] instead.
+    /// Define `name` under `callable_type` directly, while the scope is still owned —
+    /// for seeding an initial parsing state, or in tests. Definitions made during a
+    /// parse go through [`ScopeOp::Define`] instead.
+    ///
+    /// A key that already has a definition is **replaced**, and the previous spec is
+    /// returned; a key that had none returns `None`.
     pub fn insert(
         &mut self,
         callable_type: L::CallableTypeId,
@@ -1460,14 +1529,17 @@ impl<L: Lang> fmt::Debug for Scope<L> {
 
 // --- FallbackProvider --------------------------------------------------------------------
 
-/// The unknown-callable policy as an ordinary provider: answers **any** name of its
-/// registered callable types with that type's shared fallback singleton (fallbacks live *in* the stack, at the bottom, so
-/// suppression by shadowing is a theorem of search order, and the stack needs no
-/// separate fallback map).
+/// A provider that answers **any** name of the callable types registered with it: what
+/// an unknown callable resolves to.
 ///
-/// Fallback specs are shared singletons (possible because specs are de-keyed), so
-/// "unknown `\foo`" costs no per-instance allocation, and a callable node's spec can be
-/// guaranteed never-`None` for every callable type registered here.
+/// Push it at the *bottom* of the scope stack. Since lookup goes innermost first, every
+/// real definition above it shadows it, and it answers only the names nothing else
+/// defines — so the stack itself needs no separate notion of a fallback.
+///
+/// Register one spec per callable type with [`set`](FallbackProvider::set). Because a
+/// spec holds no name of its own, that single spec value answers every unknown name of
+/// its type: an unknown `\foo` costs no allocation, and a callable node's spec is never
+/// missing for a callable type registered here.
 ///
 /// **Serialization.** Serialized in full — its name and every fallback, each spec as
 /// an entry of its own — and rebuilt through [`new`](FallbackProvider::new) and
@@ -1483,8 +1555,10 @@ impl<L: Lang> FallbackProvider<L> {
         FallbackProvider { name: name.into(), fallbacks: BTreeMap::new() }
     }
 
-    /// Register the fallback spec answering every name of `callable_type` (typically a
-    /// shared singleton). Returns the previously registered fallback, if any.
+    /// Register the spec that answers every name of `callable_type`.
+    ///
+    /// A callable type that already had a fallback keeps the new one instead, and the
+    /// previous spec is returned; otherwise the result is `None`.
     pub fn set(
         &mut self,
         callable_type: L::CallableTypeId,
@@ -1564,14 +1638,20 @@ impl fmt::Display for CallableDefinedAsError {
     }
 }
 
-/// A [`CallableSpec`] whose invocation is an error: the core-provided utility behind
-/// "defined to be an error" (no `Masked` resolution outcome exists — shadowing lower
-/// entries *and* the fallback with this spec suppresses them purely by search order,
-/// with a better message than a mask could carry).
+/// A [`CallableSpec`] whose invocation is an error: how a name is *defined to be
+/// undefined*.
 ///
-/// Its invocation parser records a [`CallableDefinedAsError`] through the recovery
-/// entry point (strict: abort; tolerant: diagnostic) and stages the trigger as a span-backed chars
-/// fallback, consuming nothing further.
+/// Storing it under a name shadows every definition below it, a
+/// [`FallbackProvider`]'s included, so this is how a definition is taken away without
+/// unloading the package that made it. There is no separate "masked" resolution
+/// outcome: ordinary search order does the work, and the diagnostic can say more than a
+/// mask could.
+///
+/// Invoking it records a [`CallableDefinedAsError`] through the recovery entry point —
+/// aborting under strict recovery, recording a diagnostic under tolerant recovery — and
+/// then stages the trigger as a `Chars` node over its own source span, consuming
+/// nothing further. [`with_detail`](ErrorCallableSpec::with_detail) adds *why* the name
+/// is an error to the message.
 #[derive(Debug, Clone, Default)]
 pub struct ErrorCallableSpec {
     /// Optional detail for the diagnostic — *why* the name is an error.

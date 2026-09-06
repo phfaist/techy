@@ -1,32 +1,37 @@
 //! Callable specs: the behavior attached to anything invocable from the token stream.
 //!
-//! Callable specs (the argument model is modeled on pylatexenc's
-//! `LatexArgumentSpec`). A [`CallableSpec`] records *callable behavior*, not
-//! the form or name under which it is invoked — specs are **de-keyed**: the invocation
-//! form is the language's closed [`Lang::CallableTypeId`](crate::state::Lang) and the
-//! name lives in the provider key (normalized) and on the node (invocation spelling).
-//! One spec may back several names (flyweight), including the per-type unknown-callable
-//! fallback singletons of a [`FallbackProvider`](crate::scopes::FallbackProvider).
+//! A [`CallableSpec`] describes what a callable *does*, not the form or the name under
+//! which it is invoked. The invocation form is the language's closed
+//! [`Lang::CallableTypeId`](crate::core::Lang); the name is held by the key the
+//! provider stores the spec under (normalized) and appears on the parsed node (the
+//! invocation spelling as written). One spec value may therefore be stored under
+//! several names, and the same shared spec can answer for every unknown callable of a
+//! callable type — that is how a
+//! [`FallbackProvider`](crate::core::specs::FallbackProvider) works.
 //!
-//! The declarative surface is the [`ArgumentSpec`] list exposed by the spec (arguments
-//! *configure* an invocation), with [`StdCallableSpec`] as the standard implementation.
-//! Slots — a parsed callable's *content regions* — have no spec-side declaration:
-//! they are record-level vocabulary
-//! ([`ParsedSlot`](crate::node::ParsedSlot)), minted by the takeover parser that reads
-//! the body; the spec announces that it takes material via
-//! [`CallableSpec::requires_content`]. An argument **is a parser**: every argument routes to
-//! an [`ArgumentParser`] object, with the standard forms (delimited group, optional
-//! group, literal marker, …) provided as core construct parsers, parameterized by group
-//! types and rules — the core has no privileged argument *spellings* (revised July
-//! 2026). The [`ArgumentParser`] entry point is [`parse_argument`], returning
-//! [`ParsedArgumentNodes`]; the `make_invocation_parser()` factory override is the
-//! full-takeover hatch.
+//! [`StdCallableSpec`] is the standard implementation: a spec's declarative surface is
+//! the [`ArgumentSpec`] list it exposes, with one entry per argument that *configures*
+//! an invocation. The argument model follows pylatexenc's `LatexArgumentSpec`.
+//!
+//! An argument **is a parser**: every argument routes to an [`ArgumentParser`] object,
+//! whose entry point is [`parse_argument`] and which returns
+//! [`ParsedArgumentNodes`]. The standard forms (delimited group, optional group,
+//! literal marker, …) are core construct parsers, parameterized by group types and
+//! rules; the core privileges no argument *spelling* of its own. Overriding
+//! [`CallableSpec::make_invocation_parser`] replaces the whole invocation parse
+//! instead, which is what `\verb`-like constructs need.
+//!
+//! Slots — a parsed callable's *content regions*, such as an environment body — have
+//! no spec-side declaration; they exist only as records
+//! ([`ParsedSlot`](crate::core::node::ParsedSlot)) minted by the parser that reads the
+//! body. A spec announces that it takes material at all through
+//! [`CallableSpec::requires_content`].
 //!
 //! [`parse_argument`]: ArgumentParser::parse_argument
 //!
-//! Definition resolution — [`SpecsProvider`](crate::scopes::SpecsProvider),
-//! [`ScopeStack`](crate::scopes::ScopeStack) and friends — lives in the neighboring
-//! [`scopes`](crate::scopes) topic.
+//! Resolving a name to a spec — [`SpecsProvider`](crate::core::specs::SpecsProvider),
+//! [`ScopeStack`](crate::core::specs::ScopeStack) and the rest — is in the neighboring
+//! [`scopes`](crate::scopes) module.
 
 mod callable;
 mod structure;

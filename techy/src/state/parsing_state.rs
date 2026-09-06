@@ -1,5 +1,5 @@
-//! [`ParsingState`] and its stored [`StateData`]; [`DeriveError`], the failure carrier
-//! of the fallible transition choke point.
+//! [`ParsingState`] and its stored [`StateData`], with the two failure types of the
+//! state constructors: [`DeriveError`] and [`FinalizeError`].
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -13,22 +13,29 @@ use super::delta::ParsingStateDelta;
 use super::features::{FeaturePresence, LangFeatures, LangHasScopes};
 use super::lang::Lang;
 
-/// The plain stored settings of a parsing state — the data that deltas override and
-/// [`Lang::finalize_transition`] may rewrite. Fields are public *here* (the customizer
-/// needs full access); the outer [`ParsingState`] exposes them read-only.
+/// The stored settings of a parsing state: the data a [`ParsingStateDelta`] overrides
+/// and [`Lang::finalize_transition`] may rewrite.
+///
+/// The fields are public here because the two language hooks that build state data —
+/// [`Lang::initial_state_data`] and [`Lang::finalize_transition`] — need full access
+/// to them. Once the data is frozen into a [`ParsingState`] it is reachable only
+/// through that type's getters.
 pub struct StateData<L: Lang> {
-    /// Tokenization rules — plain stored data (defined in the token topic).
+    /// The tokenization rules ([`TokenRules`]).
     pub rules: TokenRules<L>,
     /// The definitions visible in this state: the provider stack,
     /// modified mid-parse via [`scope_ops`](super::ParsingStateDelta::scope_ops)
     /// (`\newcommand`-style definitions, package loads).
     pub scopes: ScopeStack<L>,
-    /// The parsing mode this state is in ([`Lang::ModeId`]) — first-class core data:
-    /// deltas *initiate* mode changes ([`mode`](super::ParsingStateDelta::mode)
-    /// override channel) and [`Lang::finalize_transition`] *interprets* them.
+    /// The parsing mode this state is in ([`Lang::ModeId`]).
+    ///
+    /// A delta *initiates* a mode change by setting its
+    /// [`mode`](super::ParsingStateDelta::mode) override;
+    /// [`Lang::finalize_transition`] *interprets* the change, adjusting whatever else
+    /// the new mode implies.
     pub mode: L::ModeId,
-    /// Language-specific state (e.g. feature-toggle flags; modal state lives in
-    /// [`mode`](StateData::mode) instead).
+    /// The language's own state ([`Lang::StateExt`]) — feature-toggle flags, for
+    /// instance. Modal state belongs in [`mode`](StateData::mode) instead.
     pub ext: L::StateExt,
 }
 
@@ -52,31 +59,41 @@ impl<L: Lang> StateData<L> {
     }
 }
 
-/// An immutable parsing state: [`StateData`] behind a getter-only surface, plus derived
-/// caches valid for this instance's lifetime.
+/// An immutable snapshot of everything in effect at one point of a parse.
 ///
-/// The **only** way a non-initial state comes into existence is
-/// [`derived()`](ParsingState::derived) — the single point through which every state
-/// transition passes. States are cheaply
-/// shareable; the engine wraps them in `Arc` and creates a new one only at transitions,
-/// so nodes can record their parse-time state.
+/// A state holds the stored settings ([`StateData`]: the tokenization
+/// [`rules()`](ParsingState::rules), the visible definitions
+/// [`scopes()`](ParsingState::scopes), the parsing [`mode()`](ParsingState::mode) and
+/// the language's [`ext()`](ParsingState::ext)) behind those getters, together with
+/// two lookup caches computed from them. Nothing modifies a state once it exists.
+///
+/// There are exactly two ways to obtain one:
+///
+/// - [`lang_initial()`](ParsingState::lang_initial) — the language's seed state, the
+///   starting point of a parse (see also
+///   [`lang_initial_with_packages()`](ParsingState::lang_initial_with_packages));
+/// - [`derived()`](ParsingState::derived) — every other state, produced by applying a
+///   [`ParsingStateDelta`] to an existing state.
+///
+/// The engine shares states behind `Arc` and builds a new one only at a transition,
+/// so every parsed node can record the state it was parsed under
+/// ([`NodeRef::parsing_state`](crate::core::node::NodeRef::parsing_state)). To read
+/// back what was in effect where a node was parsed, start there.
 ///
 /// # Derived caches
 ///
 /// The delimiter [`PrefixTable`] and the specials [`TriggerChars`] filter are computed
-/// eagerly when the state is frozen (constructor / end of `derived()`), not lazily on
-/// first use: the crate is `no_std` (`core` has no `OnceLock`, and `OnceCell` would make
-/// states non-`Sync`). Eager rebuilds are a real fraction of a transition's cost, so
-/// [`derived()`](ParsingState::derived) reuses the parent's `PrefixTable` (held behind
-/// `Arc`) whenever its inputs — the groups block's gate and rule lists, by `Arc`
-/// identity — are unchanged. No analogous generic reuse rule exists for
-/// `TriggerChars`: its inputs include `L::StateExt`, which carries no `Eq` bound (see
-/// [`Lang::specials_trigger_chars`]).
+/// when the state is frozen, not lazily on first use, so that a shared state needs no
+/// interior mutability. [`derived()`](ParsingState::derived) reuses the parent's
+/// prefix table when nothing it is built from changed; the trigger filter is always
+/// recomputed, because it is derived from `L::StateExt`, which has no equality bound
+/// to compare against (see [`Lang::specials_trigger_chars`]).
 ///
-/// Each cache is stored through the presence declaration of the feature it derives
-/// from ([`Lang::Features`]): the prefix table with groups, the trigger filter with
-/// specials. For a language that declares the feature absent, the cache is the
-/// zero-sized store and its accessor answers `None`.
+/// Each cache exists only for a language that declares the corresponding feature
+/// present ([`Lang::Features`]): the prefix table with groups, the trigger filter with
+/// specials. For a language that declares the feature absent, the cache occupies no
+/// space and its accessor ([`prefix_table()`](ParsingState::prefix_table),
+/// [`trigger_chars()`](ParsingState::trigger_chars)) returns `None`.
 pub struct ParsingState<L: Lang> {
     data: StateData<L>,
     prefix_table:
@@ -86,36 +103,49 @@ pub struct ParsingState<L: Lang> {
 }
 
 impl<L: Lang> ParsingState<L> {
-    /// The *Lang's* seed state: [`Lang::initial_state_data`] frozen — the one public
-    /// path from data to state, so every state a parse sees is either this seed or a
-    /// [`derived()`](ParsingState::derived) descendant that passed through
-    /// [`Lang::finalize_transition`]. Callers customize the starting point by deriving
-    /// from the seed with a delta (`ParsingState::lang_initial()?.derived(&delta)?`) —
-    /// or, for the everyday "seed plus these packages" case,
-    /// [`lang_initial_with_packages`](ParsingState::lang_initial_with_packages). The
-    /// seed itself does *not* run `finalize_transition` (it has no predecessor); its
-    /// coherence is the language author's contract (the hook's docs).
+    /// The language's seed state: [`Lang::initial_state_data`] frozen into a state.
     ///
-    /// # Fallibility
+    /// This is the only way to obtain a first state, and the state a parse starts
+    /// from — pass it to [`Language::new`](crate::core::Language::new). Every other
+    /// state is a [`derived()`](ParsingState::derived) descendant of it, so every
+    /// state a parse can see is either this seed or one that passed through
+    /// [`Lang::finalize_transition`].
     ///
-    /// `Err` is [`Lang::initial_state_data`]'s own failure passed through
-    /// ([`FinalizeError`] — a seed built from configuration or external definition
-    /// data can be invalid or unavailable; see the hook's docs): the failure
-    /// surfaces here, at seeding time, so a broken seed is never parsed with. For
-    /// a language whose seed data cannot fail, unwrapping with
-    /// `.expect("seed state")` states exactly that.
+    /// To start from something other than the language's own default, derive from the
+    /// seed with a delta (`ParsingState::lang_initial()?.derived(&delta)?`); for the
+    /// common "the seed plus these packages" case, use
+    /// [`lang_initial_with_packages()`](ParsingState::lang_initial_with_packages).
+    ///
+    /// The seed does *not* run [`Lang::finalize_transition`], which needs a previous
+    /// state; keeping the seed data consistent with what that hook maintains is the
+    /// language author's responsibility, described on
+    /// [`Lang::initial_state_data`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Lang::initial_state_data`]'s own [`FinalizeError`] unchanged: a seed
+    /// assembled from configuration or from external definition data can be invalid
+    /// or unavailable. The failure surfaces here, before any parse exists, so a
+    /// broken seed is never parsed with. For a language whose seed data cannot fail,
+    /// `.expect("seed state")` says exactly that.
     pub fn lang_initial() -> Result<ParsingState<L>, FinalizeError> {
         Ok(ParsingState::freeze(L::initial_state_data()?))
     }
 
-    /// The *Lang's* seed state with `packages` pushed onto its scope stack (in
-    /// iteration order — the last pushed is innermost and shadows the ones below):
-    /// the everyday "define a package, add it to the language" construction.
-    /// Requires a language whose
-    /// features declare the scope stack present ([`LangHasScopes`]) — pushing
-    /// providers is scope mutation; a language without the feature seeds via
-    /// [`lang_initial`](ParsingState::lang_initial). Packages pass by value through
-    /// the sealed [`IntoSpecsProvider`] conversion (pre-shared `Arc`s pass through):
+    /// The language's seed state with `packages` pushed onto its scope stack: the
+    /// everyday "define a package, add it to the language" construction.
+    ///
+    /// The packages are pushed in iteration order, so the last one is innermost and
+    /// shadows the definitions below it. Each is accepted by value through the sealed
+    /// [`IntoSpecsProvider`] conversion; an already-shared `Arc` passes through
+    /// unchanged.
+    ///
+    /// Available only for a language whose features declare the scope stack present
+    /// ([`LangHasScopes`]) — pushing a provider changes the scope stack, which a
+    /// language without the feature does not have. Such a language seeds with
+    /// [`lang_initial()`](ParsingState::lang_initial).
+    ///
+    /// # Examples
     ///
     /// ```
     /// # use techy::core::{Language, ParsingState, StdParseDriver};
@@ -131,18 +161,16 @@ impl<L: Lang> ParsingState<L> {
     /// );
     /// ```
     ///
-    /// # Fallibility
+    /// # Errors
     ///
-    /// `Err` is [`Lang::initial_state_data`]'s own failure passed through, exactly
-    /// as on [`lang_initial`](ParsingState::lang_initial) — **the packages step
-    /// adds no failure source of its own**: the seed never runs
-    /// [`Lang::finalize_transition`] (it has no predecessor), and pushing providers
-    /// directly onto the seed's scope stack involves no by-name scope ops (the only
-    /// failing kind). The derivation path is not involved — packages-at-seed is not
-    /// a transition, and the freeze rebuilds the derived caches over the augmented
-    /// data. Anything beyond packages — rules overrides, a mode, events — goes
-    /// through the delta idiom instead:
-    /// `ParsingState::lang_initial()?.derived(&delta)?`.
+    /// Returns [`Lang::initial_state_data`]'s own [`FinalizeError`] unchanged,
+    /// exactly as [`lang_initial()`](ParsingState::lang_initial) does. **Adding the
+    /// packages cannot fail**: the seed never runs [`Lang::finalize_transition`], and
+    /// pushing a provider onto the scope stack is not one of the scope operations
+    /// that can fail (those address a provider by name). This is not a transition,
+    /// so [`derived()`](ParsingState::derived) is not involved. Any other change to
+    /// the starting state — rules overrides, a mode, events — goes through a delta
+    /// instead: `ParsingState::lang_initial()?.derived(&delta)?`.
     pub fn lang_initial_with_packages(
         packages: impl IntoIterator<Item: IntoSpecsProvider<L>>,
     ) -> Result<ParsingState<L>, FinalizeError>
@@ -158,75 +186,87 @@ impl<L: Lang> ParsingState<L> {
 
     /// Create a state directly from raw data, bypassing [`Lang::finalize_transition`]:
     /// freezes `data` and rebuilds the derived caches. Crate-internal, for two
-    /// callers: the deserialization of a serialized state (whose data already passed
-    /// the choke point when the state was first built — the serialized form holds
-    /// finalized data, and rebuilding it must not run the customizer again), and tests
-    /// assembling ad-hoc states. The public paths are
-    /// [`lang_initial()`](ParsingState::lang_initial) (+ the packages form) and
-    /// [`derived()`](ParsingState::derived), which keep the choke point airtight.
+    /// callers: the deserialization of a serialized state (whose data already ran
+    /// through the customizer when the state was first built — the serialized form
+    /// holds finalized data, and rebuilding it must not run the customizer again),
+    /// and tests assembling ad-hoc states. The public constructors are
+    /// [`lang_initial()`](ParsingState::lang_initial) (with its packages form) and
+    /// [`derived()`](ParsingState::derived), and they are the only ones, so every
+    /// state a caller can build is either a seed or a finalized transition.
     pub(crate) fn new(data: StateData<L>) -> ParsingState<L> {
         ParsingState::freeze(data)
     }
 
-    /// The sole constructor of non-initial states: every state transition passes
-    /// through this method.
+    /// Returns a new state with `delta` applied to this one.
     ///
-    /// Applies the delta's overrides to a copy of this state's data, strips temporary
-    /// group rules when the delta ends their scope (below), runs
-    /// [`Lang::finalize_transition`] exactly once, and freezes the result. Derived
-    /// caches are rebuilt — except the [`PrefixTable`], which is reused from `self`
-    /// (an `Arc` clone) when its inputs are unchanged: same groups gate, same `rules`
-    /// and `temporary` lists by elementwise `Arc` identity. The
-    /// dominant transition — a group interior overriding only the expected group
-    /// close, which is deliberately not a table input — takes the reuse path.
-    /// Functional contract: `self` is never observably mutated.
+    /// This is the only way to build a state other than the seed, so every state
+    /// transition in the library passes through it. It copies this state's data,
+    /// applies the delta's overrides, strips temporary group rules when the delta
+    /// ends their scope (see below), runs [`Lang::finalize_transition`] exactly once,
+    /// and freezes the result. `self` is left unchanged.
     ///
-    /// # Fallibility
+    /// The derived caches are recomputed, except that the [`PrefixTable`] is shared
+    /// with `self` when nothing it is built from changed: the same groups gate and
+    /// the same `rules` and `temporary` lists, compared element by element by `Arc`
+    /// identity. The most frequent transition of all — entering a group interior,
+    /// which overrides only the expected group close — takes that sharing path,
+    /// because the expected close is not one of the table's inputs.
     ///
-    /// Two failure sources, both folded into [`DeriveError`]:
+    /// Inside a driven parse, construct parsers do not call this method directly;
+    /// they derive through
+    /// [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state),
+    /// which routes the derivation through the session so that the driver observes
+    /// the transition and repeated identical derivations are computed once.
     ///
-    /// - A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets
-    ///   an absent provider name; a definition op routed to an immutable provider).
-    ///   Every failing op is skipped — the rest of the delta still applies.
-    /// - [`Lang::finalize_transition`] can refuse the transition
-    ///   ([`FinalizeError`]) — above all when a *context-dependent* event reaches
-    ///   this method un-lowered (the two-class contract on [`Lang::Event`]): the
-    ///   enclosing-state context such an event needs exists only inside a driven
-    ///   parse, where
-    ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
-    ///   lowers the event before the delta ever gets here.
+    /// # Errors
     ///
-    /// A delta without scope ops and without events **cannot fail** under a `Lang`
-    /// whose customizer only refuses events. (Override data for a feature the
-    /// language declares absent is not a failure source: it is unrepresentable —
-    /// the delta's per-feature fields are stored through [`Lang::Features`], and an
-    /// absent feature's field cannot carry data.) The error carries the mechanical
-    /// failure records plus the fully derived **recovered state** (frozen like any
-    /// other; on a finalize refusal, the data as the hook left it), so a tolerant
-    /// caller can diagnose and continue while a strict caller aborts.
-    /// Classification is the caller's: the in-parse derivation path
-    /// ([`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state))
-    /// routes scope-op failures through the recovery entry point
-    /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)) and treats a finalize
-    /// refusal as an implementation error (the driver failed to lower); an embedder
-    /// deriving out of parse treats an `Err` as its own input error.
+    /// [`DeriveError`] reports either or both of two failures:
+    ///
+    /// - A [`scope op`](ParsingStateDelta::scope_ops) failed — it named a provider
+    ///   that is not on the stack, or routed a definition to an immutable provider.
+    ///   Each failing op is skipped and the rest of the delta still applies.
+    /// - [`Lang::finalize_transition`] refused the transition ([`FinalizeError`]).
+    ///   The usual cause is a *context-dependent* event reaching this method (see the
+    ///   two classes of event described on [`Lang::Event`]): such an event needs the
+    ///   stack of enclosing states, which exists only inside a driven parse, where
+    ///   [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state)
+    ///   translates it into ordinary overrides before the delta reaches this method.
+    ///
+    /// A delta with no scope ops and no events therefore **cannot fail**, under a
+    /// language whose customizer only refuses events. Override data for a feature the
+    /// language declares absent is not a failure case either: such a field cannot
+    /// hold data at all ([`Lang::Features`]).
+    ///
+    /// The error also holds the fully derived state, frozen like any other, with just
+    /// the failing ops skipped (on a refusal from the customizer, the data as the
+    /// hook left it), so a tolerant caller can report the problem and carry on where
+    /// a strict caller aborts. What the failure *means* is the caller's to decide:
+    /// the in-parse path reports a failed scope op as a
+    /// [`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed) diagnostic and
+    /// treats a refused transition as an implementation error, whereas an embedder
+    /// deriving outside a parse treats an `Err` as an error in its own input.
     ///
     /// # Temporary group rules
     ///
-    /// [`GroupRules::temporary`](crate::token::GroupRules::temporary) is scoped in
-    /// state data, and this method
-    /// enforces the scope — every group descent passes through here (installing the
-    /// entered rule as the expected close), including hand-built deltas that never
-    /// touch the session helpers. A delta that overrides the expected close
-    /// (`expecting_close`) ends
-    /// the temporaries' scope unless the installed close **is** one of the base's
-    /// temporary rules (by `Arc` identity — the same-delimiter descent that keeps
-    /// nested minted brackets balancing); installing any other rule, or clearing the
-    /// expectation, yields a derived state with the `temporary` list emptied, and
-    /// interior inheritance then keeps it empty for the whole subtree (brace protection
-    /// at any depth). A delta that explicitly overrides `temporary` itself is
-    /// exempt — the delta author spoke. The rule is a pure function of `(base, delta)`,
-    /// so identity-keyed derivation memos stay sound.
+    /// [`GroupRules::temporary`](crate::core::token::GroupRules::temporary) holds
+    /// group delimiter rules that are meant to last only for the region that
+    /// installed them, and this method is what ends that region — every group descent
+    /// derives through here, hand-built deltas included.
+    ///
+    /// A delta that overrides the expected group close
+    /// ([`expecting_close`](crate::core::token::GroupRules::expecting_close)) ends the
+    /// temporary rules' region and the derived state's `temporary` list comes out
+    /// empty; interior inheritance then keeps it empty for the whole subtree. Two
+    /// exceptions:
+    ///
+    /// - the installed close *is* one of the base state's temporary rules (by `Arc`
+    ///   identity) — descending into such a rule's own group keeps nested delimiters
+    ///   balancing, so the list survives;
+    /// - the delta overrides `temporary` itself — the delta's author said what the
+    ///   list should be, and that wins.
+    ///
+    /// The outcome is a function of the base state and the delta alone, so derivation
+    /// results stay interchangeable between identical derivations.
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> Result<ParsingState<L>, DeriveError<L>> {
         let mut data = self.data.clone();
@@ -305,50 +345,57 @@ impl<L: Lang> ParsingState<L> {
         }
     }
 
-    /// The tokenization rules in effect.
+    /// The tokenization rules in effect ([`TokenRules`]).
     pub fn rules(&self) -> &TokenRules<L> {
         &self.data.rules
     }
 
-    /// The definitions visible in this state: the provider stack. For a language
-    /// that declares the scope stack absent ([`Lang::Features`]), the returned stack
-    /// is permanently empty.
+    /// The definitions visible in this state, as a stack of providers.
+    ///
+    /// For a language that declares the scope stack absent ([`Lang::Features`]), the
+    /// returned stack is permanently empty.
     pub fn scopes(&self) -> &ScopeStack<L> {
         &self.data.scopes
     }
 
-    /// The parsing mode this state is in ([`Lang::ModeId`]; by value — modes are
-    /// `Copy`).
+    /// The parsing mode this state is in ([`Lang::ModeId`]).
     pub fn mode(&self) -> L::ModeId {
         self.data.mode
     }
 
-    /// The language-specific state extension.
+    /// The language's own state ([`Lang::StateExt`]).
     pub fn ext(&self) -> &L::StateExt {
         &self.data.ext
     }
 
-    /// The delimiter-matching table derived from the rules' groups block. `None`
-    /// exactly when the language declares the groups feature absent
-    /// ([`Lang::Features`]); a state whose groups are merely disabled at runtime
-    /// ([`TokenRules::groups_enabled`] off) still answers `Some` of the **empty**
-    /// table (the setting is applied at freeze time).
+    /// The delimiter-matching table built from the rules' groups block.
+    ///
+    /// `None` exactly when the language declares the groups feature absent
+    /// ([`Lang::Features`]). A state whose groups are merely turned off at runtime
+    /// ([`TokenRules::groups_enabled`] is `false`) still returns `Some` of the
+    /// **empty** table, because the setting is applied when the table is built.
     pub fn prefix_table(&self) -> Option<&PrefixTable<L>> {
         <L::Features as LangFeatures>::Groups::store_get(&self.prefix_table)
             .map(|table| &**table)
     }
 
-    /// The specials trigger-character filter derived via
-    /// [`Lang::specials_trigger_chars`]. `None` exactly when the language declares
-    /// the specials feature absent ([`Lang::Features`]); a state whose specials scan
-    /// is merely disabled at runtime ([`TokenRules::specials_enabled`] off) still
-    /// answers `Some` of the **empty** filter (the setting is applied at freeze
-    /// time).
+    /// The specials trigger-character filter, computed by
+    /// [`Lang::specials_trigger_chars`].
+    ///
+    /// `None` exactly when the language declares the specials feature absent
+    /// ([`Lang::Features`]). A state whose specials scan is merely turned off at
+    /// runtime ([`TokenRules::specials_enabled`] is `false`) still returns `Some` of
+    /// the **empty** filter, because the setting is applied when the filter is
+    /// computed.
     pub fn trigger_chars(&self) -> Option<&TriggerChars> {
         <L::Features as LangFeatures>::Specials::store_get(&self.trigger_chars)
     }
 
     fn freeze(data: StateData<L>) -> ParsingState<L> {
+        // Eager, not lazy: the crate is `no_std` (`core` has no `OnceLock`, and an
+        // `OnceCell` would make states non-`Sync`). Rebuilding the table is a real
+        // fraction of a transition's cost, hence the reuse path in `derived()`.
+        //
         // With the groups feature absent there is no table to build — the store is
         // zero-sized and `PrefixTable::for_rules` is never called.
         let prefix_table = <L::Features as LangFeatures>::Groups::store_with(|| {
@@ -424,48 +471,46 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
     }
 }
 
-/// A [`derived()`](ParsingState::derived) transition that failed: the delta carried
-/// failing [`scope ops`](ParsingStateDelta::scope_ops), and/or
-/// [`Lang::finalize_transition`] refused the transition.
+/// The error of [`ParsingState::derived`]: the delta contained a failing
+/// [scope op](ParsingStateDelta::scope_ops), or [`Lang::finalize_transition`] refused
+/// the transition, or both.
 ///
-/// Mechanical, deliberately unclassified — whether a failure is an extension bug or an
-/// embedder input error is the *caller's* context. The error carries everything a
-/// tolerant caller needs to continue (the `String::from_utf8` pattern — recovery
-/// material rides in the error):
+/// It reports what went wrong without judging how serious it is — whether a failure
+/// is a bug in an extension or bad input to an embedding depends on the caller's
+/// situation. Along with the failures it holds everything needed to carry on:
 ///
-/// - [`failures`](DeriveError::failures): one record per failing op, in delta order;
-/// - [`finalize_error`](DeriveError::finalize_error): the customizer's refusal, when
-///   [`Lang::finalize_transition`] returned `Err` (typically a context-dependent
-///   event reaching [`ParsingState::derived`] un-lowered — the two-class contract on
-///   [`Lang::Event`]);
-/// - [`recovered`](DeriveError::recovered): the fully derived state with exactly the
-///   failing ops skipped — finalized and frozen like every state, ready to continue
-///   under (on a finalize refusal: the data as the hook left it, best-effort);
-/// - [`delta`](DeriveError::delta): the delta as applied, so a recovering caller can
-///   still feed
-///   [`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition)
-///   the true transition (needed because the group-interior derivation applies a
-///   *merged* delta its caller never sees).
+/// - [`failures`](DeriveError::failures) — one record per failing scope op, in the
+///   order the delta listed them;
+/// - [`finalize_error`](DeriveError::finalize_error) — the customizer's refusal, when
+///   [`Lang::finalize_transition`] returned `Err` (usually a context-dependent event
+///   that reached [`ParsingState::derived`] untranslated; see [`Lang::Event`]);
+/// - [`recovered`](DeriveError::recovered) — the fully derived state with just the
+///   failing ops skipped, finalized and frozen like any other state, so a tolerant
+///   caller can continue with it (after a refusal from the customizer, the data as
+///   the hook left it);
+/// - [`delta`](DeriveError::delta) — the delta as applied, which a recovering caller
+///   needs in order to report the true transition to
+///   [`ParseDriver::observe_transition`](crate::core::ParseDriver::observe_transition):
+///   deriving a group interior applies a *merged* delta the caller never sees.
 ///
 /// At least one of [`failures`](DeriveError::failures) (non-empty) and
 /// [`finalize_error`](DeriveError::finalize_error) (`Some`) is always present.
 ///
-/// Not `Clone`: states are identity-bearing (deliberately non-`Clone`), and the
-/// recovered state is a state.
+/// This type is not `Clone`, because a [`ParsingState`] is not: a state is identified
+/// by its address, and the recovered state is a state.
 ///
-/// The `Err` variant is large *by design* — it owns a full state plus the applied
-/// delta, because the recovery payload is the point of the type. The functions
-/// returning it `#[allow(clippy::result_large_err)]` rather than box: `Box`-free
-/// signatures were judged worth the bigger `Result` return slot.
+/// The `Err` value is large by design — it owns a whole state plus the applied delta,
+/// which is the point of the type — so the functions returning it allow
+/// `clippy::result_large_err` instead of boxing.
 pub struct DeriveError<L: Lang> {
-    /// One record per failing op, in delta order (may be empty only when
-    /// [`finalize_error`](DeriveError::finalize_error) is `Some`).
+    /// One record per failing scope op, in the order the delta listed them. Empty
+    /// only when [`finalize_error`](DeriveError::finalize_error) is `Some`.
     pub failures: Vec<ScopeOpError>,
     /// [`Lang::finalize_transition`]'s refusal, if the customizer returned `Err`.
     pub finalize_error: Option<FinalizeError>,
-    /// The derived state with the failing ops skipped (everything else applied).
+    /// The derived state with the failing ops skipped and everything else applied.
     pub recovered: ParsingState<L>,
-    /// The delta the derivation applied (cloned into the error).
+    /// The delta the derivation applied, cloned into the error.
     pub delta: ParsingStateDelta<L>,
 }
 
@@ -503,28 +548,33 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
 
 impl<L: Lang> core::error::Error for DeriveError<L> {}
 
-/// A [`Lang`] state hook's refusal to produce a parsing state, from either of the
-/// two producers on the data→state path:
+/// A language hook's refusal to produce parsing state data. Either of the two hooks
+/// that build state data can return one:
 ///
-/// - [`Lang::finalize_transition`] refusing a **transition** — the customizer's
-///   loud "this delta cannot be applied here". The canonical case: a
-///   **context-dependent** event reaching [`ParsingState::derived`] un-lowered
-///   (outside any driven parse, or under a driver that failed to lower it) — see
-///   the two-class contract on [`Lang::Event`]. Folded into
-///   [`DeriveError::finalize_error`] by [`derived()`](ParsingState::derived).
-/// - [`Lang::initial_state_data`] refusing to assemble the **seed** data (a seed
-///   built from configuration or external definition data can be invalid or
-///   unavailable). Passed through by the
-///   [`lang_initial`](ParsingState::lang_initial) family.
+/// - [`Lang::finalize_transition`] refusing a **transition** — "this delta cannot be
+///   applied here". The usual case is a context-dependent event that reached
+///   [`ParsingState::derived`] untranslated, outside any driven parse or under a
+///   driver that did not translate it (see [`Lang::Event`]).
+///   [`derived()`](ParsingState::derived) reports it as
+///   [`DeriveError::finalize_error`].
+/// - [`Lang::initial_state_data`] refusing to assemble the **seed** data, which can
+///   happen when the seed is built from configuration or from external definition
+///   data. The [`lang_initial()`](ParsingState::lang_initial) family returns it
+///   unchanged.
+///
+/// The message says which hook refused and why; [`message()`](FinalizeError::message)
+/// reads it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalizeError {
     message: String,
 }
 
 impl FinalizeError {
-    /// A refusal with the given human-facing description (say *which* event,
-    /// invariant, or seed input, and what the caller should have done — e.g.
-    /// "derive through a parse context so the driver can lower the event").
+    /// A refusal with the given description, meant to be read by a person.
+    ///
+    /// Name the event, invariant, or seed input at fault and what the caller should
+    /// have done instead — for example, "derive through a parse context so the driver
+    /// can translate the event".
     pub fn new(message: impl Into<String>) -> FinalizeError {
         FinalizeError { message: message.into() }
     }

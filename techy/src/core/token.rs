@@ -2,17 +2,35 @@
 //! token errors.
 //!
 //! A **token** is the smallest unit of input a parser asks for: an atomic value naming
-//! what to parse next, and nothing more. Tokens hold no readable data — a construct
-//! parser holds and passes them around, and asks the reader that produced a token what
-//! that token *is* ([`TokenReader::token_kind`], which answers a [`TokenKind`] view) and
-//! where it is ([`TokenReader::source_span_of`], and the spans and stream positions taken
-//! at a [`TokenEdge`]). A language declares its tokenization as one type,
-//! [`Tokenization`], named as [`Lang::Tokenization`](crate::core::Lang::Tokenization):
-//! the token type its readers produce, the type naming a place in the token stream, and
-//! how the reader for one parse is built. [`StdTokenization`] is the standard
-//! declaration, and [`StdTokenReader`] the reader it names.
+//! what to parse next, and nothing more.
 //!
-//! # What lives here
+//! Tokens hold no readable data. A construct parser holds a token and passes it around,
+//! and asks the reader that produced it what that token *is*
+//! ([`TokenReader::token_kind`], which answers a [`TokenKind`] view) and where it is
+//! ([`TokenReader::source_span_of`], and the spans and stream positions taken at a
+//! [`TokenEdge`]).
+//!
+//! A language declares its tokenization as one type, [`Tokenization`], named as
+//! [`Lang::Tokenization`](crate::core::Lang::Tokenization): the token type its readers
+//! produce, the type naming a place in the token stream, and how the reader for one
+//! parse is built. [`StdTokenization`] is the standard declaration, and
+//! [`StdTokenReader`] the reader it names.
+//!
+//! # Where to start
+//!
+//! To give a language a surface syntax of its own — a different escape character,
+//! different group delimiters, a different comment marker — the one type to read is
+//! [`TokenRules`]. Nothing else has to be written; *Writing a token reader* below sets
+//! out when that stops being enough and what the next two steps are.
+//!
+//! In the guide: [Language syntax](crate::guide::language_syntax) describes these
+//! settings in LaTeX terms,
+//! [Tokens and token rules](crate::guide::concepts_overview#tokens-and-token-rules)
+//! places tokens in the parse as a whole, and
+//! [Defining a custom language](crate::guide::custom_lang) covers the whole job of
+//! giving a language its own syntax.
+//!
+//! # What this module contains
 //!
 //! `core::token` holds what a token reader produces, consumes and answers with — the
 //! token and stream-position types, the `TokenReader` trait and the standard reader, the
@@ -22,7 +40,7 @@
 //! `Lang` trait (its associated types and hooks), the parsing state and its deltas, and
 //! the engine.
 //!
-//! A **scan helper**, one of the item groups that rule places here, is a free function
+//! A **scan helper**, one of the groups listed below, is a free function
 //! that recognizes one construct at a byte offset in the text being scanned and answers
 //! what it found — byte ranges into that text ([`Span`](crate::source::Span)s), plus the
 //! rule or the specification that matched — or nothing. A helper advances no position,
@@ -45,13 +63,14 @@
 //!   [`GroupRules`] of [`GroupRule`]s, [`CommandRules`] of [`CommandRule`]s,
 //!   [`CommentRules`] of [`CommentRule`]s, [`SpecialsRules`], and
 //!   [`ForbiddenCharsRules`]. Two families come with them:
-//!   - the overrides a parsing-state delta carries to change the rules mid-parse —
+//!   - the overrides a parsing-state delta holds to change the rules mid-parse —
 //!     [`TokenRulesOverrides`] and its per-block [`WhitespaceOverrides`],
 //!     [`ParagraphOverrides`], [`GroupOverrides`], [`CommandOverrides`],
 //!     [`CommentOverrides`], [`SpecialsOverrides`], [`ForbiddenCharsOverrides`];
-//!   - the caches a parsing state derives at each state transition: the group-delimiter
-//!     [`PrefixTable`] of [`PrefixEntry`]s, and [`TriggerChars`], the filter saying which
-//!     characters a specials match may start with.
+//!   - the caches a parsing state derives from its own rules when it is created, which
+//!     no one builds by hand: the group-delimiter [`PrefixTable`] of [`PrefixEntry`]s,
+//!     and [`TriggerChars`], the filter saying which characters a specials match may
+//!     start with.
 //! - **What a specials scan answers with** — [`SpecialsMatch`] for a match and
 //!   [`SpecialsScanError`] for a failure of
 //!   [`Lang::scan_specials`](crate::core::Lang::scan_specials), the hook a reader consults

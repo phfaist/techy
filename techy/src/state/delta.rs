@@ -1,4 +1,5 @@
-//! [`ParsingStateDelta`] and [`TokenRulesOverrides`]: reified state changes.
+//! [`ParsingStateDelta`], a parsing-state change described as data, and the
+//! [`TokenRulesOverrides`] blocks it applies to the tokenization rules.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -24,9 +25,10 @@ pub struct WhitespaceOverrides {
 }
 
 impl WhitespaceOverrides {
-    /// The whitespace block's scoped off: `enabled: Some(false)`, everything else
-    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
-    /// language has the whitespace feature.
+    /// Overrides that turn whitespace handling off: `enabled: Some(false)`, every
+    /// other field left alone. This is the block
+    /// [`TokenRulesOverrides::disable_all`] installs for a language with the
+    /// whitespace feature.
     pub fn disable() -> WhitespaceOverrides {
         WhitespaceOverrides { enabled: Some(false), ..WhitespaceOverrides::default() }
     }
@@ -65,9 +67,9 @@ pub struct ParagraphOverrides {
 }
 
 impl ParagraphOverrides {
-    /// The paragraphs block's scoped off: `enabled: Some(false)` — the block
-    /// [`TokenRulesOverrides::disable_all`] sets up when the language has the
-    /// paragraphs feature.
+    /// Overrides that turn paragraph-break detection off: `enabled: Some(false)`.
+    /// This is the block [`TokenRulesOverrides::disable_all`] installs for a language
+    /// with the paragraphs feature.
     pub fn disable() -> ParagraphOverrides {
         ParagraphOverrides { enabled: Some(false) }
     }
@@ -98,42 +100,45 @@ pub struct GroupOverrides<L: Lang> {
     pub enabled: Option<bool>,
     /// Replace the recognizable group delimiter rules.
     pub rules: Option<Vec<Arc<GroupRule<L>>>>,
-    /// Replace the temporary (scoped-lifecycle) group rules
-    /// ([`GroupRules::temporary`]). An explicit override wins over the
-    /// derivation-path stripping rule: a delta that sets this field *and* installs an
-    /// [`expecting_close`](GroupRules::expecting_close) keeps exactly the
-    /// list it names (see [`ParsingState::derived`](super::ParsingState::derived)).
+    /// Replace the temporary group rules ([`GroupRules::temporary`]) — the ones that
+    /// last only for the region that installed them.
+    ///
+    /// Setting this field explicitly overrides the rule by which deriving a state
+    /// otherwise empties the list: a delta that sets it *and* installs an
+    /// [`expecting_close`](GroupRules::expecting_close) keeps exactly the list named
+    /// here. See [`ParsingState::derived`](super::ParsingState::derived).
     pub temporary: Option<Vec<Arc<GroupRule<L>>>>,
     /// Override the expected group close (`Some(None)` clears it).
     pub expecting_close: Option<Option<Arc<GroupRule<L>>>>,
 }
 
 impl<L: Lang> GroupOverrides<L> {
-    /// The groups block's scoped off: `enabled: Some(false)`, everything else
-    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
-    /// language has the groups feature, and the base a takeover parser's groups
-    /// literal spreads from (see the struct-update note on [`TokenRulesOverrides`]).
+    /// Overrides that turn group delimiters off: `enabled: Some(false)`, every other
+    /// field left alone. This is the block [`TokenRulesOverrides::disable_all`]
+    /// installs for a language with the groups feature, and the base a takeover
+    /// parser's own groups literal spreads from (see the struct-update section on
+    /// [`TokenRulesOverrides`]).
     pub fn disable() -> GroupOverrides<L> {
         GroupOverrides { enabled: Some(false), ..GroupOverrides::default() }
     }
 
-    /// Overrides that carry `rules`' **persistent** group data: the
+    /// Overrides that copy `rules`' **lasting** group data: the
     /// [`enabled`](GroupRules::enabled) gate and the delimiter
-    /// [`rules`](GroupRules::rules) list. The list is cloned as `Arc` handles, so
-    /// rule identity survives (see the identity section on [`GroupRule`]).
+    /// [`rules`](GroupRules::rules) list. The list is cloned as `Arc` handles, so rule
+    /// identity survives (see the identity section on [`GroupRule`]).
     ///
     /// [`temporary`](GroupRules::temporary) and
-    /// [`expecting_close`](GroupRules::expecting_close) are deliberately left
-    /// `None`: they are in-flight structural expectations belonging to one live
-    /// parse position, not rules data to install elsewhere — and an override
-    /// setting both would additionally engage the explicit-temporary-list rule of
-    /// [`ParsingState::derived`](super::ParsingState::derived). A parser that wants
-    /// an expected close installs it on top of this base:
+    /// [`expecting_close`](GroupRules::expecting_close) are deliberately left `None`:
+    /// they describe what one live parse position expects, not rules data to install
+    /// elsewhere — and setting both would additionally trigger the explicit-list rule
+    /// of [`ParsingState::derived`](super::ParsingState::derived). A parser that wants
+    /// an expected close adds it on top of this value:
     /// `GroupOverrides { expecting_close: Some(Some(rule)), ..GroupOverrides::override_all(&rules) }`
-    /// (the shape [`verbatim_state_delta`](crate::constructs::verbatim_state_delta)
-    /// writes over [`disable()`](Self::disable)).
+    /// — the same shape
+    /// [`verbatim_state_delta`](crate::core::constructs::verbatim_state_delta) writes
+    /// over [`disable()`](Self::disable).
     ///
-    /// The block-level piece of [`TokenRulesOverrides::override_all`].
+    /// This is the groups part of [`TokenRulesOverrides::override_all`].
     pub fn override_all(rules: &GroupRules<L>) -> GroupOverrides<L> {
         GroupOverrides {
             enabled: Some(rules.enabled),
@@ -184,9 +189,9 @@ pub struct CommandOverrides {
 }
 
 impl CommandOverrides {
-    /// The commands block's scoped off: `enabled: Some(false)`, everything else
-    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
-    /// language has the commands feature.
+    /// Overrides that turn command syntax off: `enabled: Some(false)`, every other
+    /// field left alone. This is the block [`TokenRulesOverrides::disable_all`]
+    /// installs for a language with the commands feature.
     pub fn disable() -> CommandOverrides {
         CommandOverrides { enabled: Some(false), ..CommandOverrides::default() }
     }
@@ -228,9 +233,9 @@ pub struct CommentOverrides {
 }
 
 impl CommentOverrides {
-    /// The comments block's scoped off: `enabled: Some(false)`, everything else
-    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
-    /// language has the comments feature.
+    /// Overrides that turn comment syntax off: `enabled: Some(false)`, every other
+    /// field left alone. This is the block [`TokenRulesOverrides::disable_all`]
+    /// installs for a language with the comments feature.
     pub fn disable() -> CommentOverrides {
         CommentOverrides { enabled: Some(false), ..CommentOverrides::default() }
     }
@@ -270,8 +275,8 @@ pub struct SpecialsOverrides {
 }
 
 impl SpecialsOverrides {
-    /// The specials block's scoped off: `enabled: Some(false)` — the block
-    /// [`TokenRulesOverrides::disable_all`] sets up when the language has the
+    /// Overrides that turn the specials scan off: `enabled: Some(false)`. This is the
+    /// block [`TokenRulesOverrides::disable_all`] installs for a language with the
     /// specials feature.
     pub fn disable() -> SpecialsOverrides {
         SpecialsOverrides { enabled: Some(false) }
@@ -306,10 +311,10 @@ pub struct ForbiddenCharsOverrides {
 }
 
 impl ForbiddenCharsOverrides {
-    /// The forbidden-characters block's scoped off. The block has no gate, so the
-    /// off is expressed in the data itself: `chars: Some("")` — the empty forbidden
-    /// set — the block [`TokenRulesOverrides::disable_all`] sets up when the
-    /// language has the forbidden-characters feature.
+    /// Overrides that turn the forbidden-character check off. The block has no gate,
+    /// so the off is expressed in the data itself: `chars: Some("")`, the empty
+    /// forbidden set. This is the block [`TokenRulesOverrides::disable_all`] installs
+    /// for a language with the forbidden-characters feature.
     pub fn disable() -> ForbiddenCharsOverrides {
         ForbiddenCharsOverrides { chars: Some("".into()) }
     }
@@ -334,27 +339,34 @@ impl ForbiddenCharsOverrides {
     }
 }
 
-/// Typed optional overrides of [`TokenRules`] — pylatexenc's "changed kwargs", reified.
-/// One override block per feature block, each a struct of `Option` fields:
-/// `None` = leave unchanged; `Some(value)` = replace the whole field.
+/// Optional overrides of the tokenization rules ([`TokenRules`]): one override block
+/// per feature block, each a struct of `Option` fields, where `None` leaves the field
+/// unchanged and `Some(value)` replaces it.
 ///
-/// The `enabled` gates override independently of their data: disabling a feature for a
-/// scope is `commands: CommandOverrides::disable()`, and a later
-/// `enabled: Some(true)` re-enables it with the *original* rules intact — no party has
-/// to carry them.
+/// This is the token-rules part of a [`ParsingStateDelta`]. Start from
+/// [`default()`](Default::default) (change nothing),
+/// [`disable_all()`](Self::disable_all) (turn every feature off) or
+/// [`override_all()`](Self::override_all) (install a complete set of rules), then
+/// adjust the fields that matter.
 ///
-/// Collections are replaced wholesale, not merged: a delta that wants "current group
-/// rules plus one more" is built by the party that can see the current state (typically
-/// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
-/// override itself would put policy decisions inside the derivation point.
+/// Each `enabled` gate overrides independently of the data it gates. Turning a feature
+/// off for a region is `commands: CommandOverrides::disable()`, and a later
+/// `enabled: Some(true)` turns it back on with the *original* rules still in place —
+/// no one has to remember and restore them.
 ///
-/// Like [`TokenRules`], the override blocks are stored through the language's
-/// per-feature presence declarations ([`Lang::Features`]): for a feature the language
-/// declares absent, the field holds the zero-sized store
-/// ([`FeaturePresence::Store`]) instead of its override block, so override data for
-/// that feature cannot even be written — a delta can never carry it. For a language
-/// with every feature present the fields *are* the override blocks, and nothing here
-/// is visible.
+/// **A field is replaced, never merged into.** An override that sets a rule list
+/// installs that list; there is no "the current rules plus one more". A delta wanting
+/// that is built by whoever can see the current state, through
+/// [`ParsingState::rules()`](super::ParsingState::rules). Wholesale replacement is
+/// also what makes combining two deltas simple: when both set the same field, the
+/// later one wins outright.
+///
+/// Like [`TokenRules`] itself, each block is stored according to the language's
+/// declaration for that feature ([`Lang::Features`]). For a feature the language
+/// declares absent, the field holds no override block at all and takes no space
+/// ([`FeaturePresence::Store`]), so a delta can never carry overrides for it. For a
+/// language with every feature present the fields *are* the override blocks, and none
+/// of this is visible.
 ///
 /// # Struct update replaces whole feature blocks
 ///
@@ -379,22 +391,22 @@ pub struct TokenRulesOverrides<L: Lang> {
     pub paragraphs:
         <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphOverrides>,
     /// Overrides of the groups block. For a language that declares the groups
-    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// feature absent, this field holds the zero-sized store and cannot hold
     /// overrides.
     pub groups:
         <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupOverrides<L>>,
     /// Overrides of the commands block. For a language that declares the commands
-    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// feature absent, this field holds the zero-sized store and cannot hold
     /// overrides.
     pub commands:
         <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandOverrides>,
     /// Overrides of the comments block. For a language that declares the comments
-    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// feature absent, this field holds the zero-sized store and cannot hold
     /// overrides.
     pub comments:
         <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentOverrides>,
     /// Overrides of the specials block. For a language that declares the specials
-    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// feature absent, this field holds the zero-sized store and cannot hold
     /// overrides.
     pub specials:
         <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsOverrides>,
@@ -407,28 +419,29 @@ pub struct TokenRulesOverrides<L: Lang> {
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
-    /// The scoped off for every feature the language has: each block whose feature
-    /// `L` declares present ([`Lang::Features`]) is set to its `disable()` value.
-    /// For the gate-carrying blocks (whitespace, multi-newline paragraphs, groups,
-    /// commands, comments, specials) that is `enabled: Some(false)`, every other
-    /// field untouched; `forbidden_chars` has no gate, so its off is expressed in
-    /// the data itself — the empty forbidden set (`chars: Some("")`). Features the
-    /// language declares absent are simply not mentioned by the returned value:
-    /// their fields hold the zero-sized store, which carries nothing.
+    /// Overrides that turn off every feature the language has: each block whose
+    /// feature `L` declares present ([`Lang::Features`]) is set to its `disable()`
+    /// value.
     ///
-    /// This is the raw-state block a rest-of-line or verbatim-like takeover parser
-    /// starts from. It composes: tweak fields afterwards, e.g. install the terminator
-    /// that ends the raw region
-    /// ([`verbatim_state_delta`](crate::constructs::verbatim_state_delta) is exactly
-    /// this plus its [`expecting_close`](GroupRules::expecting_close)) — minding the
-    /// whole-block struct-update note above: the tweak spreads from the block's
-    /// [`disable()`](GroupOverrides::disable), not from its default.
+    /// For the six gated blocks (whitespace, paragraph breaks, groups, commands,
+    /// comments, specials) that means `enabled: Some(false)` with every other field
+    /// left alone. `forbidden_chars` has no gate, so its off is expressed in the data:
+    /// the empty forbidden set, `chars: Some("")`. A feature the language declares
+    /// absent is not mentioned by the returned value at all.
     ///
-    /// The gates flip while the rules data stays in place, so a later delta can
-    /// re-enable a gated feature with its original rules (the forbidden set, having
-    /// no gate, is replaced instead — re-establishing it means overriding the
-    /// characters again). The *constitutive* off (no rules
-    /// data at all) is [`TokenRules::empty`](crate::token::TokenRules::empty).
+    /// This is the starting point for a parser that takes over the raw input — a
+    /// rest-of-line or verbatim region. Adjust the result afterwards, for instance to
+    /// install the terminator that ends the region;
+    /// [`verbatim_state_delta`](crate::core::constructs::verbatim_state_delta) is this
+    /// value plus an [`expecting_close`](GroupRules::expecting_close). Mind the
+    /// whole-block struct-update rule above: such an adjustment must spread from the
+    /// block's own [`disable()`](GroupOverrides::disable), not from its default.
+    ///
+    /// Only the gates flip; the rules data stays in place, so a later delta can turn a
+    /// feature back on with its original rules. The forbidden set, having no gate, is
+    /// replaced instead, so restoring it means overriding the characters again. To
+    /// remove the rules data itself rather than turn the features off, use
+    /// [`TokenRules::empty`](crate::core::token::TokenRules::empty).
     pub fn disable_all() -> TokenRulesOverrides<L> {
         // `store_with` consults the presence declaration: a present feature's field
         // gets the block's `disable()` value; an absent feature's field is the
@@ -456,26 +469,26 @@ impl<L: Lang> TokenRulesOverrides<L> {
         }
     }
 
-    /// The wholesale install of `rules`: for every feature the language declares
-    /// present ([`Lang::Features`]) the block is set to its `override_all()` value,
-    /// so applying the result makes the target's rules equal to `rules`. Features
-    /// the language declares absent are simply not mentioned by the returned value:
-    /// their fields hold the zero-sized store, which carries nothing.
+    /// Overrides that install `rules` wholesale: for every feature the language
+    /// declares present ([`Lang::Features`]) the block is set to its `override_all()`
+    /// value, so applying the result makes the target's rules equal to `rules`. A
+    /// feature the language declares absent is not mentioned by the returned value at
+    /// all.
     ///
-    /// Exactly the composition of the seven per-block constructors
-    /// ([`WhitespaceOverrides::override_all`], [`GroupOverrides::override_all`], …),
-    /// and the counterpart of [`disable_all`](Self::disable_all): that one flips the
-    /// gates and leaves the data in place, this one replaces the data and sets each
-    /// gate to `rules`' own. The rule lists are cloned as `Arc` handles, so rule
-    /// identity survives (see the identity section on [`GroupRule`]).
+    /// The result is exactly the composition of the seven per-block constructors
+    /// ([`WhitespaceOverrides::override_all`], [`GroupOverrides::override_all`], and
+    /// so on). It is the counterpart of [`disable_all()`](Self::disable_all): that one
+    /// flips the gates and leaves the data alone, this one replaces the data and sets
+    /// each gate to whatever `rules` has. Rule lists are cloned as `Arc` handles, so
+    /// rule identity survives (see the identity section on [`GroupRule`]).
     ///
-    /// **The two transient group fields are not carried.** Whatever `rules` holds in
+    /// **The two transient group fields are not copied.** Whatever `rules` holds in
     /// [`temporary`](GroupRules::temporary) and
-    /// [`expecting_close`](GroupRules::expecting_close) is left `None` — they are
-    /// in-flight structural expectations of one live parse position, not rules data
-    /// to install elsewhere ([`GroupOverrides::override_all`] has the full reasoning;
-    /// a parser wanting an expected close installs it on top). Every other field of
-    /// every present block is `Some`.
+    /// [`expecting_close`](GroupRules::expecting_close) is left `None`: they are
+    /// expectations of one live parse position, not rules data to install elsewhere
+    /// ([`GroupOverrides::override_all`] gives the full reasoning, and shows how a
+    /// parser that wants an expected close adds it on top). Every other field of every
+    /// present block is `Some`.
     pub fn override_all(rules: &TokenRules<L>) -> TokenRulesOverrides<L> {
         // Matched projections per feature, as in `apply`: the rules store and the
         // override store carry the same presence marker, so a present feature's
@@ -665,52 +678,103 @@ impl<L: Lang> TokenRulesOverrides<L> {
     }
 }
 
-/// A reified state change: the argument of [`ParsingState::derived()`](super::ParsingState::derived).
+/// A description of a parsing-state change: the argument of
+/// [`ParsingState::derived()`](super::ParsingState::derived).
 ///
-/// Deltas are **values, not closures** — mergeable, inspectable, and propagatable to base
-/// states their producer never saw (a construct parser returns its delta; the *caller*
-/// decides the scope: apply to its own state for following siblings, or drop it with the
-/// group). Standard overrides and semantic events travel together so one transition (and
-/// one `finalize_transition` run) covers both.
+/// A delta lists what is to be different in the new state — token-rules overrides,
+/// scope operations, a parsing mode, a replacement state extension — together with any
+/// semantic [events](Lang::Event) the language interprets. Overrides and events travel
+/// in the same value, so one transition, and one run of
+/// [`Lang::finalize_transition`], covers both.
 ///
+/// A delta is plain data rather than a closure. It can be inspected, stored, merged
+/// with another delta, and applied by a *caller* to a base state its producer never
+/// saw. That is what lets a construct parser return the change it wants and leave the
+/// caller to decide where the change applies: to the caller's own state, so the
+/// following siblings see it, or nowhere, because the group it was made in has ended.
+///
+/// Build one with [`new()`](Self::new) and the chaining setters —
+/// [`rules()`](Self::rules()), [`scope_op()`](Self::scope_op),
+/// [`push_provider()`](Self::push_provider), [`mode()`](Self::mode()),
+/// [`ext()`](Self::ext()), [`event()`](Self::event) — or by filling in the public
+/// fields. Inside a driven parse, apply one through
+/// [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state)
+/// rather than calling `derived()` directly.
+///
+/// # Combining two deltas
+///
+/// Applying one delta and then another has the same effect as applying a single
+/// combined delta, and the machinery does combine them — a group's interior delta with
+/// the descent's own, an invocation's after-effect with the ones before it. The later
+/// delta wins, field by field:
+///
+/// - **Token-rules overrides** ([`rules`](field@Self::rules)): each `Some` field of the
+///   later delta replaces the earlier delta's; a `None` field leaves the earlier one
+///   in place. Since an override replaces a whole field rather than merging into it
+///   (see [`TokenRulesOverrides`]), "the later one wins" is exact.
+/// - **[`mode`](field@Self::mode) and [`ext`](field@Self::ext)**: the later `Some`
+///   wins; `None` keeps what the earlier delta set.
+/// - **[`scope_ops`](field@Self::scope_ops) and [`events`](field@Self::events)**:
+///   appended in application order — nothing is discarded. Where an event sits among
+///   the scope ops does not matter, because [`Lang::finalize_transition`] receives all
+///   the events of one transition at once.
+///
+/// The [concepts overview](crate::guide::concepts_overview#parsing-state-and-deltas)
+/// introduces states and deltas, and [the parsing
+/// model](crate::guide::parsing_model#how-parsing-state-flows) shows where each kind of
+/// change applies.
 pub struct ParsingStateDelta<L: Lang> {
-    /// Overrides of the stored token rules; every field optional.
+    /// Overrides of the stored token rules; every field of every block is optional.
     pub rules: TokenRulesOverrides<L>,
-    /// Scope-stack operations, applied in order: stack-shape ops and definition ops routed to a named
-    /// provider — see [`ScopeOp`]. This is how definitions extend mid-parse
-    /// (`\newcommand`); scope reversion is structural — the caller keeps the previous
-    /// `Arc<ParsingState>`. Ops can **fail** (absent target
-    /// name, immutable provider): failures are collected per op — the rest still
-    /// apply — and surface through the fallible
-    /// [`derived()`](super::ParsingState::derived). For a language that declares the
-    /// scopes feature absent ([`Lang::Features`]), this field holds the zero-sized
-    /// store and cannot carry ops; the [`scope_op`](Self::scope_op) and
-    /// [`push_provider`](Self::push_provider) builders require the feature.
+    /// Operations on the scope stack, applied in the order listed: operations that
+    /// change the shape of the stack, and definition operations addressed to a named
+    /// provider ([`ScopeOp`]).
+    ///
+    /// This is how definitions are added during a parse (`\newcommand`). Undoing them
+    /// takes nothing: leaving the scope means continuing with the previous
+    /// `Arc<ParsingState>`, which the caller still holds.
+    ///
+    /// An operation can **fail** — it names a provider that is not on the stack, or
+    /// sends a definition to an immutable provider. Each failure is recorded and the
+    /// remaining operations still apply; the failures reach the caller through
+    /// [`derived()`](super::ParsingState::derived).
+    ///
+    /// For a language that declares the scopes feature absent ([`Lang::Features`]),
+    /// this field occupies no space and cannot hold operations, and the
+    /// [`scope_op()`](Self::scope_op) and [`push_provider()`](Self::push_provider)
+    /// builders are unavailable.
     pub scope_ops: <<L::Features as LangFeatures>::Scopes as FeaturePresence>::Store<Vec<ScopeOp<L>>>,
-    /// Override the parsing mode ([`StateData::mode`]); `None` = leave unchanged.
-    /// The override *is* the mode-change signal:
-    /// [`Lang::finalize_transition`] sees it applied on the new data and interprets it
-    /// against the previous state's [`mode()`](super::ParsingState::mode) — no
-    /// [`Lang::Event`] needed for mode-shaped transitions.
+    /// The parsing mode to switch to ([`StateData::mode`]); `None` leaves it
+    /// unchanged.
+    ///
+    /// Setting it is itself the signal that the mode changes:
+    /// [`Lang::finalize_transition`] sees the new mode already applied and compares it
+    /// with the previous state's [`mode()`](super::ParsingState::mode). A
+    /// mode change needs no [`Lang::Event`].
     pub mode: Option<L::ModeId>,
-    /// Whole-value replacement of the language-specific state extension; generic code
-    /// leaves this `None` (presets prefer events + `finalize_transition`).
+    /// A replacement for the language's own state ([`Lang::StateExt`]), as a whole
+    /// value; `None` leaves it unchanged. Generic code leaves this `None` — a language
+    /// usually adjusts its extension from an event in
+    /// [`Lang::finalize_transition`] instead.
     pub ext: Option<L::StateExt>,
-    /// Semantic transition events. **Two classes** (the contract on
-    /// [`Lang::Event`]): *context-free* events are consumed by
-    /// [`Lang::finalize_transition`] wherever the delta is applied;
-    /// *context-dependent* events (needing the enclosing-state stack — the
-    /// latexlike exit-math restore) are lowered to ordinary override patches by
-    /// the driver inside
-    /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
-    /// and never reach `finalize_transition` — reaching it anyway (a bare
-    /// out-of-parse [`derived()`](super::ParsingState::derived)) is a loud
-    /// [`FinalizeError`](super::FinalizeError).
+    /// Semantic transition events for the language to interpret.
+    ///
+    /// There are two kinds, described on [`Lang::Event`]. A *context-free* event is
+    /// interpreted by [`Lang::finalize_transition`] wherever the delta is applied. A
+    /// *context-dependent* event — one whose effect depends on the enclosing states,
+    /// such as the latexlike restore on leaving math — is translated into ordinary
+    /// overrides by the driver inside
+    /// [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state)
+    /// and never reaches `finalize_transition`. If one does reach it — a bare
+    /// [`derived()`](super::ParsingState::derived) call outside a parse — the
+    /// customizer must refuse with a [`FinalizeError`](super::FinalizeError) rather
+    /// than ignore it.
     pub events: Vec<L::Event>,
 }
 
 impl<L: Lang> ParsingStateDelta<L> {
-    /// An empty delta (deriving with it yields an equivalent state).
+    /// An empty delta, the starting point for the chaining setters. Deriving with it
+    /// yields a state equivalent to the base.
     pub fn new() -> ParsingStateDelta<L> {
         ParsingStateDelta {
             rules: TokenRulesOverrides::default(),
@@ -727,9 +791,11 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
-    /// Add a scope-stack operation (ops apply in the order added). Requires a
-    /// language with the scopes feature: the ops address the scope stack, which a
-    /// language without the feature does not have.
+    /// Add a scope-stack operation; operations apply in the order they are added.
+    ///
+    /// Available only for a language with the scopes feature ([`LangHasScopes`]): the
+    /// operations address the scope stack, which a language without the feature does
+    /// not have.
     pub fn scope_op(mut self, op: ScopeOp<L>) -> Self
     where
         L: LangHasScopes,
@@ -738,9 +804,12 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
-    /// Push a provider onto the state's scope stack (innermost = pushed last) — sugar
-    /// for the dominant [`ScopeOp::Push`] shape. Requires a language with the scopes
-    /// feature, like [`scope_op`](Self::scope_op).
+    /// Push a provider onto the state's scope stack; the last one pushed is the
+    /// innermost. A convenience method for the most common operation,
+    /// [`ScopeOp::Push`].
+    ///
+    /// Available only for a language with the scopes feature, like
+    /// [`scope_op()`](Self::scope_op).
     pub fn push_provider(mut self, provider: Arc<dyn SpecsProvider<L>>) -> Self
     where
         L: LangHasScopes,

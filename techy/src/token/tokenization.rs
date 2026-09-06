@@ -1,6 +1,12 @@
-//! The [`Tokenization`] bundle — a language's tokenization declared as one type —
-//! with the [`Token`] / [`StreamPosition`] projections and the standard
-//! [`StdTokenization`].
+//! A language's tokenization, declared as one type.
+//!
+//! [`Tokenization`] is that declaration: which token type the language's readers
+//! produce, which type names a place in its token stream, and how the reader for one
+//! parse is built. A language names one such type as
+//! [`Lang::Tokenization`](crate::core::Lang::Tokenization), and the rest of the crate
+//! spells the two types through the aliases [`Token<L>`](Token) and
+//! [`StreamPosition<L>`](StreamPosition). [`StdTokenization`] is the standard
+//! declaration, used by every language in this crate.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -13,25 +19,39 @@ use super::reader::{StdStreamPosition, StdTokenReader, TokenReader};
 use super::token::StdToken;
 
 /// A language's tokenization, declared once at the type level: the token type its
-/// readers produce, the stream-position type they hand out, and how the reader for a
-/// parse over one source is built.
+/// readers produce, the type naming a place in its token stream, and how the reader for
+/// a parse over one source is built.
 ///
-/// This is the type a language names as [`Lang::Tokenization`](crate::state::Lang::Tokenization).
-/// It is implemented by a zero-sized type and never exists as a value — the trait
-/// carries no method taking `self`. [`StdTokenization`] is the implementation this
-/// crate provides; a language tokenized differently writes its own zero-sized type and
-/// implements this trait for it.
+/// This is the type a language names as
+/// [`Lang::Tokenization`](crate::core::Lang::Tokenization). It is implemented by a type
+/// with no fields and never exists as a value — no method here takes `self`.
+/// [`StdTokenization`] is the implementation this crate provides; a language tokenized
+/// differently writes a type of its own and implements this trait for it.
 ///
-/// The three members answer three separate questions, and splitting them is what lets
-/// a driver stay written against a language without knowing which reader it will get:
-/// what a token is (the [`Token`](Tokenization::Token) type), how a place in the stream
-/// is named (the [`StreamPosition`](Tokenization::StreamPosition) type), and which
-/// reader produces both ([`make_token_reader`](Tokenization::make_token_reader)).
+/// # Why a language names its own token types
+///
+/// A reader may need to produce something other than a standard token — one that
+/// remembers which of several sources it came from, for a macro expander — while the
+/// construct parsers, the driver and the engine still have to name "a token of this
+/// language" in their signatures. They name it [`Token<L>`](Token), which the compiler
+/// resolves through this declaration to
+/// `<L::Tokenization as Tokenization<L>>::Token`: for a language declaring
+/// [`StdTokenization`], to [`StdToken<L>`](super::StdToken).
+/// [`StreamPosition<L>`](StreamPosition) resolves the same way, to
+/// [`StdStreamPosition`](super::StdStreamPosition). So a language that keeps the
+/// standard tokenization never has to think about the indirection; a language that does
+/// not gets to swap both types by naming one type of its own.
+///
+/// The three members answer three separate questions, which is what lets a driver stay
+/// written against a language without knowing which reader it will get: what a token is
+/// (the [`Token`](Tokenization::Token) type), how a place in the stream is named (the
+/// [`StreamPosition`](Tokenization::StreamPosition) type), and which reader produces
+/// both ([`make_token_reader`](Tokenization::make_token_reader)).
 ///
 /// # Implementing this trait
 ///
 /// Declare a type with no fields, implement this trait for it, and name it as the
-/// language's [`Lang::Tokenization`](crate::state::Lang::Tokenization). An
+/// language's [`Lang::Tokenization`](crate::core::Lang::Tokenization). An
 /// implementation that is generic over the language needs the bound
 /// `L: Lang<Tokenization = MyTokenization>`:
 ///
@@ -122,14 +142,14 @@ pub trait Tokenization<L: Lang> {
     /// off a token. That is what lets a reader serve tokens from more than one source
     /// during one parse — a macro expander, say — while construct parsers stay written
     /// against one API. A reader does that at one nesting level only for a language
-    /// that declares [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)
+    /// that declares [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)
     /// `= false` ([`TokenReader`](super::TokenReader) contract clause 8).
     ///
     /// The bounds are what the machinery needs of any token: `Clone` (parsers keep a
     /// token while they read on), `Debug` (diagnostics and test failures), `PartialEq`
     /// (equality compares what the reader recorded — test harnesses compare tokens
     /// produced by two readers over the same content), and `Send + Sync` (a token may
-    /// travel with a parse that crosses threads).
+    /// move to another thread along with the parse it belongs to).
     ///
     /// Languages tokenized by [`StdTokenReader`](super::StdTokenReader) — every
     /// language of this crate — use [`StdToken<L>`](super::StdToken), through
@@ -137,7 +157,7 @@ pub trait Tokenization<L: Lang> {
     type Token: Clone + fmt::Debug + PartialEq + Send + Sync;
 
     /// The type naming a place in this language's token stream — the value a
-    /// [`TokenReader`](super::TokenReader) hands out from
+    /// [`TokenReader`](super::TokenReader) returns from
     /// [`position_here`](super::TokenReader::position_here) and
     /// [`position_at`](super::TokenReader::position_at), and accepts back at
     /// [`move_to_position`](super::TokenReader::move_to_position).
@@ -149,7 +169,7 @@ pub trait Tokenization<L: Lang> {
     /// sources during one parse name places its own way, while parsers stay written
     /// against one API — a reader serves several sources at one nesting level only for
     /// a language that declares
-    /// [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`
+    /// [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`
     /// ([`TokenReader`](super::TokenReader) contract clause 8), and the positions on
     /// the two sides of a source seam compare equal (that contract's *Seams* section).
     ///
@@ -163,33 +183,45 @@ pub trait Tokenization<L: Lang> {
     /// value. A reader that needs runtime data reads it from the parsing state passed
     /// to [`peek`](super::TokenReader::peek), or is built instead by a driver
     /// overriding
-    /// [`ParseDriver::make_token_reader`](crate::engine::ParseDriver::make_token_reader) —
+    /// [`ParseDriver::make_token_reader`](crate::core::ParseDriver::make_token_reader) —
     /// the per-instance override, whose default body calls this function.
     fn make_token_reader<'s>(
         source: &'s Arc<Source<L::SourceOrigin>>,
     ) -> Box<dyn TokenReader<'s, L> + 's>;
 }
 
-/// The token type of `L` — the projection through
-/// [`Lang::Tokenization`](crate::state::Lang::Tokenization).
+/// The token type of `L`.
 ///
-/// Spell a language's token type `Token<L>`; the contract it satisfies is documented on
+/// An alias for `<L::Tokenization as Tokenization<L>>::Token`: spell a language's token
+/// type `Token<L>` and the compiler reads it off the language's
+/// [`Lang::Tokenization`](crate::core::Lang::Tokenization) declaration. For a language
+/// declaring [`StdTokenization`] — every language in this crate — it resolves to
+/// [`StdToken<L>`](super::StdToken).
+///
+/// What a token is, and what may be done with one, is documented on
 /// [`Tokenization::Token`].
 pub type Token<L> = <<L as Lang>::Tokenization as Tokenization<L>>::Token;
 
-/// The stream-position type of `L` — the projection through
-/// [`Lang::Tokenization`](crate::state::Lang::Tokenization).
+/// The type naming a place in `L`'s token stream.
 ///
-/// Spell a language's stream-position type `StreamPosition<L>`; the contract it
-/// satisfies is documented on [`Tokenization::StreamPosition`].
+/// An alias for `<L::Tokenization as Tokenization<L>>::StreamPosition`: spell it
+/// `StreamPosition<L>` and the compiler reads it off the language's
+/// [`Lang::Tokenization`](crate::core::Lang::Tokenization) declaration. For a language
+/// declaring [`StdTokenization`] it resolves to
+/// [`StdStreamPosition`](super::StdStreamPosition).
+///
+/// What such a position is, and what may be done with one, is documented on
+/// [`Tokenization::StreamPosition`].
 pub type StreamPosition<L> = <<L as Lang>::Tokenization as Tokenization<L>>::StreamPosition;
 
 /// The standard tokenization: [`StdToken<L>`](super::StdToken) tokens,
 /// [`StdStreamPosition`](super::StdStreamPosition) positions, and readers built by
 /// [`StdTokenReader::new`](super::StdTokenReader::new).
 ///
-/// This is what [`TrivialLang`](crate::state::TrivialLang) and every language of this
-/// crate declare as their [`Lang::Tokenization`](crate::state::Lang::Tokenization).
+/// Declare it with `type Tokenization = StdTokenization;` — which is what
+/// [`TrivialLang`](crate::core::TrivialLang), the latexlike preset, and every other
+/// language of this crate do — and [`Token<L>`](Token) and
+/// [`StreamPosition<L>`](StreamPosition) then resolve to those two standard types.
 #[derive(Debug, Clone, Copy)]
 pub struct StdTokenization;
 

@@ -1,31 +1,34 @@
-//! [`TokenListReader`]: a [`TokenReader`] over a pre-built token list.
+//! [`TokenListReader`]: a test-only [`TokenReader`] that serves a pre-built token list.
 //!
-//! **Internal test infrastructure** — compiled under `cfg(test)` only, deliberately not
-//! public API. Its purpose is testing construct
-//! parsers in isolation: a hand-written or pre-scanned `Vec<Token>` drives a parser
-//! without a live scanning reader, so a test can exercise exactly the token sequence it means
-//! to — most importantly as the lockstep reader-agreement harness of the construct-parser
-//! suites, the enforcement mechanism for "construct parsers never reach around the reader
-//! into raw content". The fidelity gap below (a fixed list cannot re-tokenize under the
-//! peek state) is acceptable for a test tool and is why it makes no public reader
-//! contract.
+//! Compiled under `cfg(test)` only, and deliberately not public API. It exists so that
+//! construct parsers can be tested in isolation: a hand-written or pre-scanned
+//! `Vec<Token>` drives a parser without a live scanning reader, so a test can exercise
+//! exactly the token sequence it means to.
+//!
+//! Its most important use is the lockstep reader-agreement harness of the
+//! construct-parser suites, which runs one parse against this reader and against
+//! [`StdTokenReader`] and compares the two. That is what enforces "construct parsers
+//! never reach around the reader into raw content": this reader rejects any token or
+//! position it did not issue.
+//!
+//! The fidelity gap below — a fixed list cannot re-tokenize under the peek state — is
+//! acceptable for a test tool, and is why this reader makes no public reader contract.
 //!
 //! # Fidelity contract
 //!
 //! The reader keeps a byte **position**, exactly like [`StdTokenReader`]:
-//! [`move_to`](super::TokenReader::move_to) places it at the named edge of
-//! the token,
+//! [`move_to`](super::TokenReader::move_to) places it at the named edge of the token,
 //! and `peek` returns the first listed token at or after the position, clipping its
-//! pre-space to start no earlier than that position (re-peeking mid-pre-space behaves
-//! like a fresh scan). Past the last token, `peek` yields the terminal idempotent
-//! [`EndOfStream`](super::TokenKind::EndOfStream).
+//! pre-space to start no earlier than that position, so that re-peeking mid-pre-space
+//! behaves like a fresh scan. Past the last token, `peek` yields the terminal
+//! idempotent [`EndOfStream`](super::TokenKind::EndOfStream).
 //!
-//! The one inherent difference from a scanning reader: the list is **fixed**. Tokens are
-//! not re-scanned under the state passed to `peek`, and a position placed *inside* a
-//! token's span (e.g. a move to [`End`](super::TokenEdge::End), rewinding before
-//! swallowed post-space — the `\verb` idiom) yields the *following* listed token — a
-//! scanning reader would re-read the post-space bytes as fresh content. Tests that need
-//! re-scanning behavior use [`StdTokenReader`] on real content.
+//! The one inherent difference from a scanning reader is that the list is **fixed**.
+//! Tokens are not re-scanned under the state passed to `peek`, and a position placed
+//! *inside* a token's span — a move to [`End`](super::TokenEdge::End), rewinding before
+//! swallowed post-space, as the `\verb` idiom does — yields the *following* listed
+//! token, where a scanning reader would re-read the post-space bytes as fresh content.
+//! Tests that need re-scanning behavior use [`StdTokenReader`] on real content.
 //!
 //! [`StdTokenReader`]: super::StdTokenReader
 
@@ -42,26 +45,28 @@ use super::reader::{StdStreamPosition, TokenEdge, TokenReader};
 use super::token::{StdToken, StdTokenKindData, TokenKind};
 use super::tokenization::{StreamPosition, Token, Tokenization};
 
-/// A [`TokenReader`] serving tokens from a pre-built list (see the module docs for the
-/// fidelity contract).
+/// A test-only [`TokenReader`] that serves tokens from a pre-built list.
 ///
-/// The tokens must be in source order (ascending, non-overlapping spans — the order a
-/// scan produces); a trailing [`EndOfStream`](super::TokenKind::EndOfStream) token is
-/// permitted but not required (one is synthesized past the end of the list).
+/// See the [module documentation](self) for what this reader is for and for the ways
+/// its fixed list differs from a scanning reader.
+///
+/// The tokens must be in source order: ascending, non-overlapping spans, the order a
+/// scan produces. A trailing [`EndOfStream`](super::TokenKind::EndOfStream) token is
+/// permitted but not required, since one is synthesized past the end of the list.
 ///
 /// # Rejecting what this reader never issued
 ///
 /// This reader is the mechanical guard behind the lockstep harness: it **panics** when
-/// handed a token or a stream position it did not issue, so a construct parser that
-/// invents either — instead of asking the reader — fails loudly rather than quietly
-/// producing a plausible wrong span. (Panicking is right here and only here: this is
-/// test infrastructure, and the violation is a bug in the test suite's own code.)
+/// handed a token or a stream position it did not issue, so that a construct parser
+/// which invents either instead of asking the reader fails loudly rather than quietly
+/// producing a plausible wrong span. Panicking is right here and only here — this is
+/// test infrastructure, and the violation is a bug in the test suite's own code.
 ///
 /// - A **token** is accepted when a listed token has the same span and the same kind, or
 ///   when it is an end-of-stream token (which this reader synthesizes rather than serves
 ///   from the list). Pre-space is left out of the comparison because `peek` clips it
 ///   to the current position.
-/// - A **position** is accepted when its offset is one this reader handed out: the set
+/// - A **position** is accepted when its offset is one this reader issued. That set
 ///   starts with the initial position alone and grows with the five edge offsets of
 ///   every token the reader serves, with every position it answers
 ///   (`position_here`/`position_at`), and with every offset it is moved to
@@ -71,7 +76,7 @@ pub struct TokenListReader<'s, L: Lang> {
     source: &'s Arc<Source<L::SourceOrigin>>,
     tokens: Vec<StdToken<L>>,
     pos: usize,
-    /// Every offset this reader has handed out as a stream position (see
+    /// Every offset this reader has issued as a stream position (see
     /// [the validation rules](TokenListReader#rejecting-what-this-reader-never-issued)).
     /// A `RefCell` because the position accessors take `&self`.
     issued: RefCell<BTreeSet<usize>>,
@@ -82,10 +87,12 @@ where
     L: Lang,
     L::Tokenization: Tokenization<L, Token = StdToken<L>>,
 {
-    /// Create a reader positioned before the first token. The source-order contract
-    /// (type docs) is the caller's; it is debug-asserted here, and an out-of-order
-    /// list is not rejected — the parse's span bookkeeping reports the breakage as an
-    /// implementation error where it surfaces.
+    /// Creates a reader positioned before the first token.
+    ///
+    /// Keeping `tokens` in source order (see the type documentation) is the caller's
+    /// responsibility. It is debug-asserted here, and an out-of-order list is not
+    /// rejected: the parse's span bookkeeping reports the breakage as an implementation
+    /// error where it surfaces.
     pub fn new(
         source: &'s Arc<Source<L::SourceOrigin>>,
         tokens: Vec<StdToken<L>>,
@@ -101,7 +108,7 @@ where
         TokenListReader { source, tokens, pos, issued }
     }
 
-    /// Record `offset` as one this reader handed out.
+    /// Record `offset` as one this reader issued.
     fn issue(&self, offset: usize) -> usize {
         self.issued.borrow_mut().insert(offset);
         offset
@@ -126,7 +133,7 @@ where
         );
     }
 
-    /// Panic unless `at` is an offset this reader handed out (see the type's docs).
+    /// Panic unless `at` is an offset this reader issued (see the type's docs).
     fn check_position(&self, at: usize, what: &str) {
         assert!(
             self.issued.borrow().contains(&at),
