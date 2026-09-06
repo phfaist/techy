@@ -1,6 +1,6 @@
 //! [`EmbellishmentsArgumentParser`]: the embellishment-arguments parser
-//! (ParserLibraryParity.md N3; pylatexenc's `LatexOptionalEmbellishmentArgsParser`,
-//! xparse's `e{<chars>}` argument type, the preset's `e{…}` code).
+//! (pylatexenc's `LatexOptionalEmbellishmentArgsParser`, xparse's `e{<chars>}`
+//! argument type, the preset's `e{…}` code).
 //!
 //! One argument position absorbing a run of *marker + expression* pairs: whenever one
 //! of the configured markers (`^`, `_`, `'`, …) comes next, it must be followed —
@@ -25,10 +25,10 @@
 //!
 //! # Matching rules
 //!
-//! - **Noise before a marker; only whitespace before an argument** (decided July
-//!   2026, whitespace allowance revised the same month): whitespace and comments are
-//!   scanned ahead of each marker (region noise, like every argument), and between a
-//!   marker and its expression **plain whitespace** is tolerated (pylatexenc's
+//! - **Noise before a marker; only whitespace before an expression**: whitespace and
+//!   comments are scanned ahead of each marker (region noise, like every argument),
+//!   and between a marker and its expression **plain whitespace** is tolerated
+//!   (pylatexenc's
 //!   `allow_pre_space` parity; TeX's `x^ 2`), staged *inside* the wrapper group as
 //!   leading noise. Anything else — a comment, a paragraph break, end of input, a
 //!   group close… — is **not a match**: the marker is rewound whole and the run
@@ -66,16 +66,24 @@ use super::argument_parsers::{
 };
 use super::{node_text_content, ConstructParserResult, FromInvocation, ParseContext};
 
-/// The embellishment-arguments parser (xparse's `e{<chars>}` argument type): marker
-/// alternatives (`^`, `_`, `'`, …), each followed by one expression (at most plain
-/// whitespace apart), repeating in any source order until no available marker
-/// matches; each marker matches at most once per invocation. The whole run is
-/// recorded as **one argument**: each matched pair stages one classless wrapper
-/// `Group` ([`GroupData::untyped`](crate::node::GroupData::untyped)) whose `open` is
-/// the marker as written and whose children are the expression's nodes — by-marker
-/// access is [`split_embellishments`](crate::extract::split_embellishments). Longest
-/// match wins among still-available markers sharing a prefix; a marker not followed
-/// by an expression is rewound whole and ends the run silently.
+/// An argument position that absorbs a run of *marker + expression* pairs, such as
+/// the sub- and superscripts of `\op^{a}_{b}` (xparse's `e{<chars>}` argument type).
+///
+/// The engine reaches for it when a callable's spec declares an argument with this
+/// parser. Whenever one of the configured markers (`^`, `_`, `'`, …) comes next, it
+/// must be followed — at most plain whitespace apart — by one expression: a
+/// delimited group, a full invocation, or a single character. The pair repeats until
+/// no still-available marker matches, in any source order, and each marker matches
+/// at most once per invocation. Among available markers sharing a prefix the longest
+/// one wins. A marker not followed by an expression is rewound whole and ends the run
+/// silently, staying ordinary content of the enclosing level.
+///
+/// The whole run is recorded as **one argument**. Each matched pair stages one
+/// classless wrapper `Group`
+/// ([`GroupData::untyped`](crate::node::GroupData::untyped)) whose opening delimiter
+/// is the marker as written and whose children are the expression's nodes; read the
+/// pairs back by marker with
+/// [`split_embellishments`](crate::extract::split_embellishments).
 pub struct EmbellishmentsArgumentParser {
     markers: Vec<Box<str>>,
 }

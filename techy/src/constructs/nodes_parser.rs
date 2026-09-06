@@ -8,8 +8,8 @@
 //!
 //! The `GroupOpen` arm descends. It resolves the interior's base state through the
 //! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
-//! [`GroupParser`] under the policy's state, reverting to the loop's own state
-//! afterwards. A group normally returns no state delta; one leaks an after-effect only
+//! group parser under the policy's state — [`GroupParser`] unless the driver's
+//! factory supplies another — reverting to the loop's own state afterwards. A group normally returns no state delta; one leaks an after-effect only
 //! where the language installed [`GroupAfterEffectsFn`].
 //!
 //! The `Command` and `Specials` arms descend the same way. A `Command` token resolves
@@ -53,10 +53,10 @@ use super::{
 /// names no callable.
 ///
 /// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command) answered
-/// something other than
-/// [`Resolved`](crate::core::specs::CommandResolution::Resolved). In tolerant parsing
-/// [`NodesParser`] recovers by staging a `Chars` node over the command token's span, so
-/// the source text survives in the tree; a strict parse stops with this condition.
+/// [`Unresolved`](crate::core::specs::CommandResolution::Unresolved). In tolerant
+/// parsing [`NodesParser`] recovers by staging a `Chars` node over the command token's
+/// span, so the source text survives in the tree; a strict parse stops with this
+/// condition.
 ///
 /// A resolver that failed while answering, rather than answering "no such callable",
 /// raises [`CommandResolutionFailed`] instead.
@@ -197,27 +197,31 @@ impl fmt::Display for UnusableRecoveryToken {
     }
 }
 
-/// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
-/// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
+/// Which peeked token matches a [`TokenStopCondition`] and so ends a [`NodesParser`]
+/// run.
+///
+/// The common cases are named variants; [`Predicate`](Self::Predicate) covers everything
+/// else. This is the typed form of pylatexenc's `stop_token_condition`.
 pub enum TokenStopKind<'p, L: Lang> {
-    /// Stop at a [`Command`](TokenKind::Command) token with this name (an
-    /// environment body stopping at `\end`).
+    /// Stop at a [`Command`](crate::core::token::TokenKind::Command) token with this
+    /// name — how an environment body stops at `\end`.
     Command {
         /// The command name to stop at (as written, without the escape character).
         name: &'p str,
     },
-    /// Stop at a [`GroupClose`](TokenKind::GroupClose) token that spells `close` **and**
-    /// whose class (resolved against the current state) is `group_type` — the exact
-    /// `(group_type, close)` pairing the enclosing group opened with. Both must match:
-    /// a group opened with `{` (class `group_type`) stops at `}`, but neither at a `]`
-    /// that merely shares its class (different `close`) nor at a `}` a state change has
-    /// re-classed to a *different* group class (same `close`, different `group_type`). A
-    /// non-matching close surfaces as [`StopCause::UnexpectedGroupClose`] instead.
+    /// Stop at a [`GroupClose`](crate::core::token::TokenKind::GroupClose) token that
+    /// spells `close` *and* whose group class is `group_type` — the exact pairing the
+    /// enclosing group opened with.
     ///
-    /// The class is not carried on the token — `GroupClose` holds only its `delim`
-    /// — so it is re-resolved against `cx.state`, the same
-    /// state (including sibling deltas applied so far) the tokenizer used to emit the
-    /// token; a reclassifying delta is therefore reflected here.
+    /// Both halves must match. A group opened with `{` stops at `}`, but not at a `]`
+    /// that merely shares its class, and not at a `}` that a state change has re-classed
+    /// to a different group class. A close that does not match ends the run as
+    /// [`StopCause::UnexpectedGroupClose`] instead.
+    ///
+    /// A `GroupClose` token records only its delimiter, so the class is resolved again
+    /// against the parsing state the loop currently holds — the same state the tokenizer
+    /// used to emit the token, including the sibling deltas applied so far. A delta that
+    /// re-classes a delimiter is therefore reflected here.
     GroupClose {
         /// The group class the enclosing group belongs to (resolved for the arriving
         /// close against the current state — the expected close, then the delimiter table).
@@ -225,25 +229,25 @@ pub enum TokenStopKind<'p, L: Lang> {
         /// The closing delimiter (as written, e.g. `}`) the enclosing group expects.
         close: &'p str,
     },
-    /// Stop at a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
+    /// Stop at a [`ParagraphBreak`](crate::core::token::TokenKind::ParagraphBreak)
+    /// token.
     ParagraphBreak,
-    /// Stop at any token the predicate matches. Programmatic conditions live only in
-    /// tier-2 parser temporaries, never in spec data. The predicate receives the
-    /// peeked **token** and a shared, call-scoped reference to the **reader that
-    /// produced it**, so it can ask whatever it needs about the token —
-    /// [`token_kind`](crate::token::TokenReader::token_kind) for what it is,
-    /// [`source_span_of`](crate::token::TokenReader::source_span_of) for where — and
-    /// cannot move the stream.
+    /// Stop at any token the predicate matches.
     ///
-    /// An `Err` from the predicate **aborts the parse** under any recovery policy —
-    /// a predicate that cannot answer leaves no sound way to decide where the run
-    /// ends. Carry [`HookFailed`](crate::error::HookFailed) for an operational
-    /// failure in the predicate's own code,
-    /// [`ImplementationError`](super::ImplementationError) for a violated library
-    /// contract, or a document condition for a diagnosis made deliberately. The
-    /// consultation site attaches the live traceback when the error carries no
-    /// frames of its own. An infallible predicate wraps its answer in `Ok(...)`
-    /// and that is the only change.
+    /// The predicate receives the peeked token and a shared, call-scoped reference to
+    /// the reader that produced it, so it can ask whatever it needs about the token —
+    /// [`token_kind`](crate::core::token::TokenReader::token_kind) for what the token
+    /// is, [`source_span_of`](crate::core::token::TokenReader::source_span_of) for where
+    /// it is — while being unable to move the stream. A predicate belongs in the
+    /// short-lived parser value that sets up the run, not in spec data.
+    ///
+    /// An `Err` from the predicate aborts the parse under any recovery policy: a
+    /// predicate that cannot answer leaves no sound way to decide where the run ends.
+    /// Carry [`HookFailed`](crate::error::HookFailed) for an operational failure in the
+    /// predicate's own code, [`ImplementationError`](super::ImplementationError) for a
+    /// violated library contract, or a document condition for a diagnosis made
+    /// deliberately. The parser attaches the live traceback when the error carries no
+    /// frames of its own. An infallible predicate returns `Ok(...)`.
     // The predicate signature is the variant's whole documented meaning; hiding it
     // behind an alias would only make callers look the signature up elsewhere.
     #[allow(clippy::type_complexity)]
@@ -255,50 +259,66 @@ pub enum TokenStopKind<'p, L: Lang> {
     ),
 }
 
-/// The token-condition half of a [`StopSpec`]: which peeked token ends the parse
-/// ([`kind`](Self::kind)) and whether [`NodesParser`] consumes it on a match
-/// ([`consume`](Self::consume)).
+/// The token-condition half of a [`StopSpec`]: which peeked token ends the parse, and
+/// whether [`NodesParser`] consumes it on a match.
 ///
-/// On a match `NodesParser` returns [`StopCause::TokenCondition`] with the matched
-/// token's span. With `consume = false` the token is left **unconsumed** at its own
-/// `span.start` (peek it again); with `consume = true` it is taken whole — including any
-/// syntactic post-space (a command name's terminating whitespace), so no byte is re-read
-/// as content. This is a declarative consume/leave switch, not pylatexenc's
-/// `handle_stop_condition_token` interpretation hook.
+/// On a match the run ends with [`StopCause::TokenCondition`], carrying the matched
+/// token's span.
+///
+/// With [`consume`](Self::consume) `= false` the token is left unconsumed at its own
+/// `span.start`, so the caller can peek it again. With `consume = true` it is taken
+/// whole, including any syntactic post-space such as a command name's terminating
+/// whitespace, so no byte is re-read as content.
+///
+/// The switch only decides whether to consume; unlike pylatexenc's
+/// `handle_stop_condition_token`, there is no hook that reinterprets the token.
 pub struct TokenStopCondition<'p, L: Lang> {
     /// Which token ends the parse.
     pub kind: TokenStopKind<'p, L>,
-    /// Whether `NodesParser` consumes the matched token (`true`) or leaves it unconsumed
-    /// for the caller (`false`).
+    /// Whether [`NodesParser`] consumes the matched token (`true`) or leaves it
+    /// unconsumed for the caller (`false`).
     pub consume: bool,
 }
 
-/// What ends a [`NodesParser`] run — both triggers optional and independent.
+/// What ends a [`NodesParser`] run: a token condition, a node condition, or neither.
 ///
-/// The `'p` lifetime ties borrowed conditions (names, predicates) to the parser
-/// temporary — construct parsers are free to borrow (two-tier ownership model).
+/// The two triggers are independent and both optional. [`none`](Self::none) parses to
+/// end of input; [`at_token`](Self::at_token) sets only the token condition. When both
+/// are set and both would fire at once, the token condition wins — see
+/// [`node`](Self::node).
+///
+/// The `'p` lifetime ties borrowed conditions, such as command names and predicates, to
+/// the short-lived parser value that owns the spec, so a condition may borrow from its
+/// surroundings rather than be cloned into spec data.
 pub struct StopSpec<'p, L: Lang> {
     /// Token condition, tested on peek; a match ends the parse, consuming the token or
     /// leaving it per its [`consume`](TokenStopCondition::consume) switch.
-    pub token: Option<TokenStopCondition<'p, L>>,
-    /// Node condition, tested after each staged node with (number of nodes staged so
-    /// far, view of the just-staged node); a match includes that node and stops after
-    /// it. Not consulted on the final flush a matched token condition triggers — the
-    /// token condition wins outright (its answer could change nothing, and the
-    /// predicate is a stateful `FnMut` that must not observe a
-    /// consulted-but-ignored call). The
-    /// (count, last node) signature is a deliberate deviation from pylatexenc's
-    /// whole-nodelist rescans.
     ///
-    /// An `Err` from the condition **aborts the parse** under any recovery policy —
-    /// a condition that cannot answer leaves no sound way to decide where the run
-    /// ends. Carry [`HookFailed`](crate::error::HookFailed) for an operational
-    /// failure in the condition's own code,
-    /// [`ImplementationError`](super::ImplementationError) for a violated library
-    /// contract, or a document condition for a diagnosis made deliberately. The
-    /// consultation site attaches the live traceback when the error carries no
-    /// frames of its own. An infallible condition wraps its answer in `Ok(...)`
-    /// and that is the only change.
+    /// Only cleanly read tokens are tested. A recovery placeholder standing in for a
+    /// tokenization error is processed as content instead: its site has already
+    /// diagnosed it, and a token that cannot be read again cannot be left for the
+    /// caller.
+    pub token: Option<TokenStopCondition<'p, L>>,
+    /// Node condition, tested after each staged node; a match includes that node and
+    /// ends the run with [`StopCause::NodeCondition`].
+    ///
+    /// The condition receives the number of nodes staged so far and a view of the node
+    /// just staged, rather than the whole sibling list as pylatexenc rescans it.
+    ///
+    /// It is not consulted on the final flush that a matched token condition triggers.
+    /// The token condition wins outright there: the run would end as
+    /// [`TokenCondition`](StopCause::TokenCondition) either way, and honoring the node
+    /// condition instead would leave a `consume = true` stop token unconsumed. Since the
+    /// condition is a stateful `FnMut`, even a consulted-but-ignored call would be an
+    /// observable side effect, so it is not called at all.
+    ///
+    /// An `Err` from the condition aborts the parse under any recovery policy: a
+    /// condition that cannot answer leaves no sound way to decide where the run ends.
+    /// Carry [`HookFailed`](crate::error::HookFailed) for an operational failure in the
+    /// condition's own code, [`ImplementationError`](super::ImplementationError) for a
+    /// violated library contract, or a document condition for a diagnosis made
+    /// deliberately. The parser attaches the live traceback when the error carries no
+    /// frames of its own. An infallible condition returns `Ok(...)`.
     // The decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]); an alias would only rename it.
     #[allow(clippy::type_complexity)]
     pub node: Option<
@@ -310,13 +330,13 @@ pub struct StopSpec<'p, L: Lang> {
 }
 
 impl<'p, L: Lang> StopSpec<'p, L> {
-    /// No stop conditions: parse to end of input.
+    /// Returns a spec with no stop conditions: the run continues to end of input.
     pub fn none() -> StopSpec<'p, L> {
         StopSpec { token: None, node: None }
     }
 
-    /// Only a token condition: stop at `kind`, consuming the matched token or leaving it
-    /// per `consume`.
+    /// Returns a spec with only a token condition: stop at `kind`, consuming the
+    /// matched token or leaving it for the caller as `consume` says.
     pub fn at_token(kind: TokenStopKind<'p, L>, consume: bool) -> StopSpec<'p, L> {
         StopSpec { token: Some(TokenStopCondition { kind, consume }), node: None }
     }
@@ -328,14 +348,16 @@ impl<L: Lang> Default for StopSpec<'_, L> {
     }
 }
 
-/// Condition: a group close delimiter appeared with no group open — the *root driver's*
-/// diagnosis of [`StopCause::UnexpectedGroupClose`] (defined here, next to the stop
-/// cause that announces the situation, so custom root drivers reuse it). Inside a group the enclosing [`GroupParser`](super::GroupParser) claims the token
-/// instead ([`UnclosedGroup`](super::UnclosedGroup) covers *that* family) — this condition is for the
-/// outermost level, where nobody claims it: the standard root parser
-/// ([`RootNodesParser`](super::RootNodesParser)) reports it through
-/// the recovery entry point, consumes the token, stages it as a `Chars` node, and
-/// resumes (strict parses abort).
+/// Diagnostic condition: a group close delimiter appeared where no group is open.
+///
+/// This is how the outermost level diagnoses [`StopCause::UnexpectedGroupClose`]. Inside
+/// a group the enclosing [`GroupParser`](super::GroupParser) claims such a token instead
+/// and diagnoses it as [`UnclosedGroup`](super::UnclosedGroup); at the outermost level
+/// nobody claims it. The standard root parser
+/// ([`RootNodesParser`](super::RootNodesParser)) reports this condition, consumes the
+/// token, stages it as a `Chars` node, and resumes; a strict parse stops here.
+///
+/// A custom root driver can raise the same condition for the same situation.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -347,13 +369,19 @@ pub struct StrayGroupClose {
     pub delim: String,
 }
 
-/// How a [`NodesParser`] run ended. Abnormal endings are **data**, not errors — only the
-/// caller knows whether reaching end of input before `\end{align}` is a problem.
+/// How a [`NodesParser`] run ended.
+///
+/// An abnormal ending is reported as data rather than as an error, because only the
+/// caller knows whether it is a problem: reaching end of input matters to an environment
+/// body still waiting for `\end{align}`, and not at all to the top level. The run's
+/// [`NodesOutcome`] carries this value alongside the nodes staged before the stop.
 pub enum StopCause<L: Lang> {
-    /// The token stop condition matched. `span` is the matched token's span; whether it
-    /// was consumed is the [`consume`](TokenStopCondition::consume) the caller set —
-    /// consumed ⇒ the reader stands just past it, otherwise it sits unconsumed at
-    /// its own start, its pre-space already staged as sibling content.
+    /// The token stop condition matched.
+    ///
+    /// Whether the token was consumed is the
+    /// [`consume`](TokenStopCondition::consume) the caller set. If it was, the reader
+    /// stands just past the token; if it was not, the token sits unconsumed at its own
+    /// start. Either way its pre-space is already staged as sibling content.
     TokenCondition {
         /// The matched stop token's span.
         span: SourceSpan<L::SourceOrigin>,
@@ -363,20 +391,25 @@ pub enum StopCause<L: Lang> {
         /// whether or not the condition consumed it.
         after: StreamPosition<L>,
     },
-    /// The node stop condition fired on the last staged node (the reader stands where
-    /// that node ended: a directly staged node is consumed, a flush leaves the triggering
-    /// token unconsumed at its own start).
+    /// The node stop condition fired on the last staged node.
+    ///
+    /// The reader stands where that node ended: a node staged directly has been
+    /// consumed, whereas a node produced by flushing a pending character run leaves the
+    /// token that triggered the flush unconsumed at its own start.
     NodeCondition,
-    /// [`EndOfStream`](TokenKind::EndOfStream) was reached (its trailing-whitespace
-    /// node, if any, is already staged).
+    /// [`EndOfStream`](crate::core::token::TokenKind::EndOfStream) was reached. Any
+    /// trailing whitespace is already staged as a final `Chars` node.
     EndOfInput,
-    /// A group close no condition asked for; the close token is left unconsumed at
-    /// its own start and the caller decides (diagnose-and-skip at the root, unwind in
-    /// a group parser). The span covers the delimiter exactly as matched
-    /// ([`GroupClose`](crate::token::TokenKind::GroupClose) carries the span's slice
-    /// and nothing more), so a caller diagnosing the close reads it off the span
-    /// ([`SourceSpan::content`](crate::source::SourceSpan::content)) — re-peeking
-    /// under any state but the loop's own could tokenize different bytes.
+    /// A group close arrived that no stop condition asked for.
+    ///
+    /// The close token is left unconsumed at its own start and the caller decides what
+    /// to do: the root parser diagnoses it and skips it, a group parser unwinds.
+    ///
+    /// The span covers the delimiter exactly as matched, since a
+    /// [`GroupClose`](crate::core::token::TokenKind::GroupClose) token carries nothing
+    /// but its delimiter. Read the delimiter off the span with
+    /// [`SourceSpan::content`](crate::source::SourceSpan::content) rather than peeking
+    /// again — a peek under any state but the loop's own could tokenize different bytes.
     UnexpectedGroupClose {
         /// The unexpected close token's span.
         span: SourceSpan<L::SourceOrigin>,
@@ -446,38 +479,44 @@ impl<L: Lang> PartialEq for StopCause<L> {
 
 impl<L: Lang> Eq for StopCause<L> {}
 
-/// What a [`NodesParser`] produces: the staged sibling nodes, in source order, how the
-/// run ended, the loop's live state at the stop, and the merged record of the sibling
-/// after-effect deltas the run applied.
+/// What a [`NodesParser`] run produces: the staged sibling nodes in source order, how
+/// the run ended, the parsing state it reached, and the state after-effects it applied.
+///
+/// A caller that resumes content where the run stopped continues under
+/// [`state`](Self::state). A caller that has to carry the run's state effects somewhere
+/// else instead wants [`after_effects`](Self::after_effects).
 pub struct NodesOutcome<L: Lang> {
     /// The staged nodes, in source order (the caller claims them as children).
     pub nodes: Vec<BuildId>,
     /// How the parse ended.
     pub stop: StopCause<L>,
-    /// The loop's live state when it returned: the entry state evolved by the sibling
-    /// after-effect deltas applied so far. A caller that resumes content at the stop
-    /// position (the root's tolerant stray-close skip) continues under this state —
-    /// resuming under its own copy of the entry state would silently roll those
-    /// after-effects back.
+    /// The parsing state when the run returned: the state it started from, evolved by
+    /// the sibling after-effect deltas it applied.
+    ///
+    /// A caller that resumes content at the stop position — as the root parser does
+    /// after skipping a stray group close — must continue under this state. Resuming
+    /// under its own copy of the entry state would silently roll those after-effects
+    /// back.
     pub state: Arc<ParsingState<L>>,
-    /// The sibling after-effect deltas this run applied, merged into one delta in
-    /// application order (`None` = the run applied none). Each merged component is
-    /// the **effective, as-applied** delta — context-dependent events already
-    /// lowered into their override patches at the loop's own position — so the
-    /// record is replayable against a base its producers never saw: later field
-    /// overrides win, scope ops (and any context-free events) concatenate in
-    /// application order ([`ParsingStateDelta`]'s value-not-closure design). This is
-    /// the channel for callers that must **propagate** the run's state effects
-    /// rather than resume under them — the `\input` `persist_state` composition
-    /// forwards it as the invocation's own after-effect
-    /// ([`AttachedSourceOutcome`](super::AttachedSourceOutcome)); a caller that
-    /// merely resumes at the stop position wants [`state`](NodesOutcome::state)
-    /// instead (re-deriving from the record would re-run fallible scope ops and
-    /// re-fire transition observation on a second path). A scope op that *failed*
-    /// when first applied stays in the record — nothing is silently stripped — so
-    /// a propagating replay re-attempts it and may re-diagnose the same failure
-    /// at the propagation site. Boxed like the [`ConstructParser`] pass-through
-    /// delta: the common `None` costs one pointer-sized slot.
+    /// The sibling after-effect deltas this run applied, merged into a single
+    /// [`ParsingStateDelta`] in application order. `None` when the run applied none.
+    ///
+    /// Use this to *propagate* the run's state effects elsewhere. The `\input`
+    /// composition that persists state forwards it as the invocation's own after-effect
+    /// (see [`AttachedSourceOutcome`](super::AttachedSourceOutcome)). To merely resume
+    /// where the run stopped, use [`state`](NodesOutcome::state) instead: re-deriving
+    /// from this record would re-run fallible scope operations and observe the state
+    /// transitions a second time.
+    ///
+    /// Each merged component is the delta as it was actually applied, with
+    /// context-dependent events already lowered into the override patches they produced
+    /// at the loop's own position. The record is therefore replayable against a base its
+    /// producers never saw: later field overrides win, and scope operations and
+    /// context-free events concatenate in application order.
+    ///
+    /// A scope operation that failed when first applied stays in the record — nothing is
+    /// silently stripped — so a replay attempts it again and may report the same failure
+    /// at the propagation site.
     pub after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
@@ -505,46 +544,130 @@ impl<L: Lang> Clone for NodesOutcome<L> {
     }
 }
 
-/// The main content loop: parses a sequence of sibling nodes until a stop condition,
-/// an unexpected group close, or end of input (pylatexenc's `LatexGeneralNodesParser`
-/// plus its nodes collector).
+/// Parses a run of sibling nodes, stopping at a stop condition, an unexpected group
+/// close, or end of input.
 ///
-/// A tier-2 temporary: constructed with its per-use configuration (the source the token
-/// spans refer into, and the [`StopSpec`]), working state in fields, dropped with the
-/// frame. The input parsing state is `cx.state` (the caller sets it); sibling deltas
-/// returned by invocation parsers are applied internally as the loop proceeds, and the
-/// parser itself returns `None` as its pass-through delta (the state-threading
-/// convention). The applied deltas are not lost: the outcome exports the loop's live
-/// state at the stop ([`NodesOutcome::state`]) for callers that resume content at the
-/// stop position, and their merged record ([`NodesOutcome::after_effects`]) for
-/// callers that propagate the run's state effects elsewhere (the `\input`
-/// `persist_state` composition).
+/// This is the content dispatch loop: the top-level content, a group's interior and an
+/// environment's body each run one. It peeks one token at a time and dispatches on the
+/// token's kind. Character runs, comments and paragraph breaks are staged directly;
+/// a group open, a command, or a specials trigger starts a descent into a child
+/// construct parser. [The parsing
+/// model](crate::guide::parsing_model#the-content-dispatch-loop) walks through the
+/// dispatch; [custom construct parsers](crate::guide::construct_parsers) covers writing
+/// the parsers it descends into. This is pylatexenc's `LatexGeneralNodesParser`
+/// together with its nodes collector.
+///
+/// Build one with [`new`](Self::new), giving it the [`StopSpec`] that says where the run
+/// ends, and add [`with_child_states`](Self::with_child_states) to change the parsing
+/// state child constructs are parsed under. Run it like any other [`ConstructParser`];
+/// it produces a [`NodesOutcome`]. The value holds its working state in fields and is
+/// meant to be built for one run and dropped.
+///
+/// The run starts from the parsing state the caller put in the context. Deltas returned
+/// by invocation parsers are applied as the loop proceeds, so a `\newcommand` is in
+/// effect for the siblings that follow it, and the parser itself returns `None` as its
+/// own pass-through delta. Those applied deltas reach the caller through the outcome:
+/// [`NodesOutcome::state`] for a caller that resumes content at the stop position, and
+/// [`NodesOutcome::after_effects`] for one that propagates the run's state effects
+/// elsewhere.
+///
+/// # Where a run stops
+///
+/// A [`StopSpec`] carries two independent triggers. The token condition is tested on
+/// each peeked token; a match ends the run and, per its
+/// [`consume`](TokenStopCondition::consume) switch, either leaves the token unconsumed
+/// for the caller or consumes it here. The node condition is tested after each staged
+/// node; a match includes that node and stops after it. Both are tested only at this
+/// parser's own nesting level — a nested group is consumed whole by the group parser.
+///
+/// An abnormal ending is reported as data rather than as an error: the run returns its
+/// [`StopCause`] and the caller decides what it means. An unexpected group close is left
+/// unconsumed.
+///
+/// Whenever a run ends at a token — a matched stop token, an unexpected group close, or
+/// end of input — that token's pre-space is flushed into the sibling nodes first. The
+/// whitespace before a `}` or an `\end` is interior content and belongs to a sibling
+/// node. A token left behind then sits at its own `span.start`, so peeking it
+/// again yields it with empty pre-space and no byte is represented twice; a consumed
+/// stop token is taken whole, including any syntactic post-space such as a command
+/// name's terminating whitespace, so the reader stands just past it. Either way the
+/// matched span is reported in [`StopCause::TokenCondition`].
+///
+/// When both triggers would fire at once — the pre-stop flush stages a node the node
+/// condition would match — the token condition wins, and the node condition is not
+/// consulted for that flush. See [`StopSpec::node`].
+///
+/// # Whitespace and spans
+///
+/// Character tokens accumulate into *maximal* `Chars` nodes. Every token's pre-space
+/// joins the pending run, and pending whitespace with no adjacent characters becomes a
+/// whitespace-only `Chars` node — including the trailing whitespace the end-of-stream
+/// token carries.
+///
+/// A paragraph break is always its own node, staged over the whole token span with the
+/// kind
+/// [`ParseDriver::make_paragraph_break_node`](crate::core::ParseDriver::make_paragraph_break_node)
+/// chooses; character runs flush at a break and never merge across one. A comment node
+/// comes straight from a whole-comment token, recording the start delimiter, the
+/// content, and the post-space separately.
+///
+/// A `Chars` node records its content as
+/// [`TextContent::Spanned`](crate::source::TextContent::Spanned), the exact span slice,
+/// for a language that sets
+/// [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING). For a language
+/// that does not, a run's tokens need not form one contiguous stretch of one source —
+/// they may cross a seam between two sources, where a span would name the wrong bytes —
+/// so the content is [`TextContent::Owned`](crate::source::TextContent::Owned),
+/// accumulated token by token from what the reader reports about each of them.
+///
+/// A language that obeys span tiling therefore gets span tiling: the staged sibling
+/// spans cover the parsed extent exactly, with no gaps and no byte counted twice. No
+/// such accounting is claimed for a language that does not; its nodes carry the spans
+/// the reader reported and the content it reported.
+///
+/// # Recovery
+///
+/// Each problem is recovered where it is detected, under the session's recovery policy.
+/// A tokenizer error continues with the placeholder token the error offers, the reader
+/// repositioned to the error's resume position so the error is never read again. A
+/// command that does not resolve, or whose resolver failed, is diagnosed and recovered
+/// as a `Chars` node over the token's span. A recognized specials trigger never takes
+/// that path, because for specials recognition is resolution, so it always dispatches;
+/// a specials or group-open *placeholder* token does take it, diagnosed as
+/// [`UnusableRecoveryToken`], since there are no source bytes behind it to parse.
+///
+/// Markup text left inside a `Chars` node is an accepted artifact of tolerant recovery
+/// and always comes with a diagnostic. Such fallback nodes are deliberately not merged
+/// into neighboring character runs. Group recovery — an unclosed group at end of input,
+/// a mismatched close — belongs to [`GroupParser`](super::GroupParser).
+///
+/// An `Err` means the parse is over: nothing continues past one.
 pub struct NodesParser<'p, L: Lang> {
     stop: StopSpec<'p, L>,
     /// Descent-state policy for child constructs (groups and invocations); defaults to
     /// inherit-everywhere.
     child_states: ChildStateSpec<'p, L>,
     nodes: Vec<BuildId>,
-    /// The pending maximal chars run (invariant 1): extended by `Char` tokens and
-    /// every token's pre-space, flushed when a non-`Char` construct starts.
+    /// The pending maximal chars run: extended by `Char` tokens and every token's
+    /// pre-space, flushed when a non-`Char` construct starts.
     run: Option<PendingRun<L>>,
     /// The merged record of the sibling after-effect deltas applied so far
     /// ([`NodesOutcome::after_effects`]); drained at every return like `nodes`.
     after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
-/// The pending maximal chars run of a [`NodesParser`] (invariant 1): the two stream
-/// positions it spans and, for a language that does not obey span tiling, the text
-/// accumulated along the way.
+/// The pending maximal chars run of a [`NodesParser`]: the two stream positions it
+/// spans and, for a language that does not obey span tiling, the text accumulated along
+/// the way.
 struct PendingRun<L: Lang> {
     /// Where the run starts.
     start: StreamPosition<L>,
-    /// Where the run currently ends — the position the next extension must start at
-    /// (the [`TokenReader`] contract's clause 7 corollary).
+    /// Where the run currently ends — the position the next extension must start at,
+    /// by the [`TokenReader`] contract's clause 7 corollary.
     end: StreamPosition<L>,
-    /// The run's text as the reader answered it, token by token: `Some` exactly when
+    /// The run's text as the reader reported it, token by token. `Some` exactly when
     /// the language does not obey span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`),
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`),
     /// where the run's tokens need not form one contiguous stretch of one source and a
     /// span could not describe their text.
     text: Option<String>,
@@ -562,11 +685,13 @@ impl<L: Lang> fmt::Debug for PendingRun<L> {
     }
 }
 
-/// The `Chars` node a pending run becomes: the span running from the run's start to
-/// its end ([`ParseContext::source_span_within`], which follows the language's
-/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) declaration), and the
-/// content — the exact span slice where the language obeys span tiling, the text
-/// accumulated from the reader's answers where it does not.
+/// Builds the `Chars` node a pending run becomes.
+///
+/// The span runs from the run's start to its end, through
+/// [`ParseContext::source_span_within`], which follows the language's
+/// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) declaration. The content
+/// is the exact span slice where the language obeys span tiling, and the text
+/// accumulated from the reader's reports where it does not.
 fn chars_run_node<L: Lang>(
     cx: &ParseContext<'_, '_, L>,
     run: PendingRun<L>,
@@ -580,7 +705,10 @@ fn chars_run_node<L: Lang>(
 }
 
 impl<'p, L: Lang> NodesParser<'p, L> {
-    /// A parser staging the nodes it reads, stopping per `stop`.
+    /// Creates a parser that stages the nodes it reads and stops as `stop` says.
+    ///
+    /// Child constructs are parsed under the state the parser itself holds; call
+    /// [`with_child_states`](Self::with_child_states) to change that.
     pub fn new(stop: StopSpec<'p, L>) -> NodesParser<'p, L> {
         NodesParser {
             stop,
@@ -591,28 +719,32 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         }
     }
 
-    /// Replace the descent-state policy (default: inherit everywhere). See
-    /// [`ChildStateSpec`].
+    /// Sets the parsing state that groups and invocations are parsed under, replacing
+    /// the default of inheriting the loop's own state everywhere.
+    ///
+    /// See [`ChildStateSpec`] for the policies available.
     pub fn with_child_states(mut self, child_states: ChildStateSpec<'p, L>) -> Self {
         self.child_states = child_states;
         self
     }
 
-    /// Extend the pending run with a token's pre-space (content whitespace joins the
-    /// run — invariant 1; pending whitespace with no adjacent chars becomes a
-    /// whitespace-only run). The token's `StartBeforePreSpace` edge must be the
-    /// position the pending run ends at — the [`TokenReader`] contract's clause 7
-    /// corollary, checked in [`extend_run_to`](Self::extend_run_to) and reported as an
-    /// `Err` detail rather than asserted ([§dd-dr:panic-policy]).
+    /// Extends the pending run with a token's pre-space: content whitespace joins the
+    /// run, and pending whitespace with no adjacent characters becomes a
+    /// whitespace-only run.
+    ///
+    /// The token's `StartBeforePreSpace` edge must be the position the pending run ends
+    /// at, by the [`TokenReader`] contract's clause 7 corollary.
+    /// [`extend_run_to`](Self::extend_run_to) checks that and returns the violation as
+    /// an `Err` detail; it never panics.
     ///
     /// For a language with
-    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
-    /// pre-space text the reader answers for *this* token joins the run's owned text.
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`, the
+    /// pre-space text the reader reports for *this* token joins the run's owned text.
     ///
-    /// Equal `StartBeforePreSpace` and `Start` positions read as no pre-space — the
-    /// two edges of the first token drawn from a new source compare equal unless its
-    /// pre-space lies within that source, which is why the [`TokenReader`] contract's
-    /// seam rules require exactly that of such a token (see *Seams* there).
+    /// Equal `StartBeforePreSpace` and `Start` positions read as no pre-space. The two
+    /// edges of the first token drawn from a new source compare equal unless its
+    /// pre-space lies within that source, which is exactly what the [`TokenReader`]
+    /// contract's seam rules require of such a token (see *Seams* there).
     fn take_pre_space(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
@@ -628,17 +760,19 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.extend_run_to(start, end, text)
     }
 
-    /// The `Char` arm: pre-space and the character extend the pending run — one
-    /// extension over the token's whole extent, from where its pre-space begins to
-    /// where it ends (the two coincide when the token has no pre-space). Same
-    /// position check (and `Err` reporting) as
+    /// The `Char` arm: extends the pending run with the token's pre-space and its
+    /// character in one step, over the token's whole extent — from where its pre-space
+    /// begins to where the token ends. The two coincide when the token has no
+    /// pre-space.
+    ///
+    /// Same position check, and the same `Err` reporting, as
     /// [`take_pre_space`](Self::take_pre_space).
     ///
     /// For a language with
-    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the
-    /// run's owned text grows by what the reader says this token is: its pre-space
-    /// text, the character it was classified as (`c`), and its syntactic post-space
-    /// text — three answers about this one token.
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`, the run's
+    /// owned text grows by three things the reader reports about this one token: its
+    /// pre-space text, the character it was classified as (`c`), and its syntactic
+    /// post-space text.
     fn extend_run(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
@@ -652,13 +786,14 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.extend_run_to(start, end, text)
     }
 
-    /// The shared run extension: `start` must be the position the pending run ends
-    /// at. That is the [`TokenReader`] contract's clause 7 corollary — a peeked token's
-    /// `StartBeforePreSpace` edge is where the peek happened, and moving to an edge
-    /// sets the position — so it holds for every reader, whatever the language's
-    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) says, and the check
-    /// runs in both cases. A violation is outer-layer input, reported as an `Err`
-    /// detail rather than asserted ([§dd-dr:panic-policy]).
+    /// The shared run extension. `start` must be the position the pending run ends at.
+    ///
+    /// That is the [`TokenReader`] contract's clause 7 corollary: a peeked token's
+    /// `StartBeforePreSpace` edge is where the peek happened, and moving to an edge sets
+    /// the position. It holds for every reader, whatever the language's
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) says, so the check
+    /// runs in both cases. A violation comes from an outer layer, and is returned as an
+    /// `Err` detail; it is never asserted.
     ///
     /// `text` is the extension's text for a run that accumulates owned text — `Some`
     /// exactly when the language does not obey span tiling.
@@ -691,7 +826,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         Ok(())
     }
 
-    /// Flush the pending run as a `Chars` node ([`chars_run_node`]). Returns whether
+    /// Flushes the pending run as a `Chars` node ([`chars_run_node`]). Returns whether
     /// the node stop condition fired on it.
     fn flush(&mut self, cx: &mut ParseContext<'_, '_, L>) -> ConstructParserResult<L, bool> {
         match self.run.take() {
@@ -703,10 +838,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         }
     }
 
-    /// Extend the pending run with `pre_space`, then flush it: the path taken when a
-    /// non-`Char` construct starts (invariant 1). A matched *stop* token's flush goes
-    /// through [`flush_for_token_stop`](Self::flush_for_token_stop) instead — same
-    /// staging, no node-condition test.
+    /// Extends the pending run with the token's pre-space, then flushes it: the path
+    /// taken when a non-`Char` construct starts.
+    ///
+    /// A matched *stop* token's flush goes through
+    /// [`flush_for_token_stop`](Self::flush_for_token_stop) instead — same staging, no
+    /// node-condition test.
     fn flush_through(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
@@ -724,9 +861,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     }
 
     /// [`flush_through`](Self::flush_through) minus the node-condition test: the flush
-    /// performed when the token stop condition has matched. The stop token's pre-space
-    /// is interior content and must land in a sibling node, but
-    /// the token condition has already ended the parse and wins outright: a
+    /// performed when the token stop condition has matched.
+    ///
+    /// The stop token's pre-space is interior content and must land in a sibling node,
+    /// but the token condition has already ended the parse and wins outright. A
     /// node-condition match here could not change the outcome, and honoring it instead
     /// would leave a `consume = true` stop token unconsumed, forfeiting the consume
     /// flag's atomicity guarantee. The predicate is a stateful `FnMut`, so even a
@@ -752,9 +890,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         Ok(())
     }
 
-    /// Stage a childless node under the current state and record it as a sibling —
-    /// without testing the node stop condition (that is [`stage_node`](Self::stage_node)'s
-    /// job; the token-stop flush stages through this directly).
+    /// Stages a childless node under the current state and records it as a sibling,
+    /// without testing the node stop condition.
+    ///
+    /// Testing the condition is [`stage_node`](Self::stage_node)'s job; the token-stop
+    /// flush stages through this one directly.
     fn stage(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
@@ -768,8 +908,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         Ok(id)
     }
 
-    /// Stage a childless node ([`stage`](Self::stage)) and test the node stop condition
-    /// on it.
+    /// Stages a childless node ([`stage`](Self::stage)) and tests the node stop
+    /// condition on it.
     fn stage_node(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
@@ -780,11 +920,13 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.test_node_stop(cx, id)
     }
 
-    /// Test the node stop condition against an already-recorded sibling (the last entry
-    /// of `self.nodes` — staged either by [`stage`](Self::stage) or by a child construct
-    /// parser). A condition `Err` aborts under any policy ([`StopSpec::node`]'s
-    /// contract), with the live traceback attached here — the callback has no
-    /// session access.
+    /// Tests the node stop condition against an already-recorded sibling: the last
+    /// entry of `self.nodes`, staged either by [`stage`](Self::stage) or by a child
+    /// construct parser.
+    ///
+    /// A condition `Err` aborts under any recovery policy, as [`StopSpec::node`]
+    /// promises. The live traceback is attached here, since the callback has no session
+    /// access of its own.
     fn test_node_stop(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
@@ -803,10 +945,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         condition(self.nodes.len(), view).map_err(|error| cx.attach_hook_frames(error))
     }
 
-    /// If the token stop condition matches the peeked token, whether it is to be consumed
-    /// ([`TokenStopCondition::consume`]); `None` when no token condition matches. A
-    /// predicate `Err` aborts under any policy ([`TokenStopKind::Predicate`]'s
-    /// contract); the caller attaches the live traceback.
+    /// Returns whether the matched stop token is to be consumed
+    /// ([`TokenStopCondition::consume`]) when the token stop condition matches the
+    /// peeked token, and `None` when no token condition matches.
+    ///
+    /// A predicate `Err` aborts under any recovery policy, as
+    /// [`TokenStopKind::Predicate`] promises; the caller attaches the live traceback.
     fn token_stop(
         &self,
         state: &ParsingState<L>,
@@ -838,15 +982,17 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         Ok(matches.then_some(cond.consume))
     }
 
-    /// The shared tolerant recovery of the not-yet-wired arms (`Command` until
-    /// resolution dispatch lands in 6.4, `Specials` likewise, plus recovery-placeholder
-    /// `GroupOpen` tokens) — and the decided unresolvable-command recovery:
-    /// flush, record the condition (or abort under strict), consume the token, and stage
-    /// a chars fallback node over its full span. For a `Command` token the span includes
-    /// its post-space, which the fallback deliberately swallows (consuming the token
-    /// without its post-space would desynchronize [`TokenListReader`]'s fixed list —
-    /// its module docs flag exactly this — and the fallback is a diagnosed artifact
-    /// anyway). Returns whether a stop condition fired.
+    /// The shared tolerant recovery for a token the loop cannot dispatch — an
+    /// unresolvable command, a resolver failure, or an unusable recovery placeholder.
+    ///
+    /// Flushes the pending run, records `condition` (or aborts under a strict policy),
+    /// consumes the token, and stages a chars fallback node over its full span. Returns
+    /// whether a stop condition fired.
+    ///
+    /// For a `Command` token that span includes the post-space, which the fallback
+    /// deliberately swallows: consuming the token without its post-space would
+    /// desynchronize the fixed list of [`TokenListReader`], as its module documentation
+    /// notes, and the fallback is a diagnosed artifact anyway.
     ///
     /// [`TokenListReader`]: crate::token::TokenListReader
     fn recover_as_chars<'s>(
@@ -870,14 +1016,21 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.stage_node(cx, NodeKind::chars(span.span()), span)
     }
 
-    /// Dispatch a resolved invocation (the `Command`/`Specials` arms): resolve the
-    /// descent base state through the [`invocation`](ChildStateSpec::invocation) policy
-    /// (resolution already ran under the loop's own state — resolution precedes policy), consume the trigger token **whole** (syntactic post-space included —
-    /// mirroring the `GroupOpen` arm, so loop progress holds by construction), run the
-    /// spec's invocation parser under the policy state (structural swap/revert), record
-    /// the staged node, and apply the parser's after-effect delta to the loop's own
-    /// state for subsequent siblings (`\newcommand` — session-mediated, so the
-    /// transition is observed). Returns whether the node stop condition fired.
+    /// Dispatches a resolved invocation — the `Command` and `Specials` arms.
+    ///
+    /// Resolves the descent base state through the
+    /// [`invocation`](ChildStateSpec::invocation) policy; command resolution itself
+    /// already ran under the loop's own state, since resolution precedes the policy.
+    /// Consumes the trigger token whole, syntactic post-space included, mirroring the
+    /// `GroupOpen` arm so that loop progress holds by construction. Runs the spec's
+    /// invocation parser under the policy state, reverting afterwards, and records the
+    /// staged node.
+    ///
+    /// The parser's after-effect delta is then applied to the loop's own state, so it
+    /// holds for the following siblings (`\newcommand`); the application goes through
+    /// the session, so the state transition is observed.
+    ///
+    /// Returns whether the node stop condition fired.
     fn dispatch_invocation<'s>(
         &mut self,
         cx: &mut ParseContext<'_, 's, L>,
@@ -930,7 +1083,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.test_node_stop(cx, id)
     }
 
-    /// Drain the collected siblings (and the merged after-effect record) into the
+    /// Drains the collected siblings and the merged after-effect record into the
     /// outcome.
     fn outcome(&mut self, state: &Arc<ParsingState<L>>, stop: StopCause<L>) -> NodesOutcome<L> {
         NodesOutcome {
@@ -950,6 +1103,33 @@ where
 {
     type Output = NodesOutcome<L>;
 
+    /// Runs the content loop from the context's current position, staging sibling nodes
+    /// until the run stops.
+    ///
+    /// The second element of the returned pair is this parser's own pass-through state
+    /// delta, always `None`. The deltas that invocation parsers return are applied to
+    /// the loop's own state as it proceeds and reported through
+    /// [`NodesOutcome::after_effects`] instead.
+    ///
+    /// # Errors
+    ///
+    /// An abnormal *ending* is not an error — it is reported as a [`StopCause`]. The
+    /// parse is abandoned, and nothing continues past the error, when:
+    ///
+    /// - a condition is diagnosed under a strict recovery policy, or a token error
+    ///   offers no recovery to continue from;
+    /// - a hook or callback returns an `Err`: a stop condition ([`StopSpec::token`],
+    ///   [`StopSpec::node`]), a child-state policy ([`ChildStateSpec`]), command
+    ///   resolution, or a parser factory. These abort under any recovery policy,
+    ///   because without an answer the loop cannot tell where the run ends or what to
+    ///   descend into;
+    /// - the token source violates its contract — it serves a token whose kind belongs
+    ///   to a language feature the language declares absent, a token that does not
+    ///   start where it was peeked, or a token that leaves the stream position
+    ///   unchanged, which would otherwise make the loop read it forever. These are
+    ///   reported as [`ImplementationError`](super::ImplementationError), never as a
+    ///   panic;
+    /// - staging a node into the tree fails.
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
@@ -1363,10 +1543,12 @@ where
     }
 }
 
-/// The group class a close delimiter belongs to under `state`'s rules: the expected
-/// close takes precedence (mirroring the tokenizer's priority in
-/// [`scan_group_delimiter`](crate::core::token::scan_group_delimiter)), then the
-/// delimiter table. `None` when the delimiter belongs to no close rule in scope.
+/// Returns the group class a close delimiter belongs to under `state`'s rules, or
+/// `None` when the delimiter belongs to no close rule in scope.
+///
+/// The expected close takes precedence, then the delimiter table — the same priority the
+/// tokenizer applies in
+/// [`scan_group_delimiter`](crate::core::token::scan_group_delimiter).
 fn group_close_type<L: Lang>(state: &ParsingState<L>, delim: &str) -> Option<L::GroupTypeId> {
     if let Some(rule) = state.rules().expecting_group_close() {
         if rule.close == delim {

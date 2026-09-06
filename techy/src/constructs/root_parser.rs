@@ -16,8 +16,8 @@ use super::{
     StopCause, StopSpec, StrayGroupClose,
 };
 
-/// The standard **root parser**: the content loop over the whole source, staging the
-/// root `List`.
+/// The standard **root parser**: the content loop the parse entry point runs over the
+/// whole source, staging the tree's root `List` node.
 ///
 /// Read the name as *root — nodes parser*: "root" is the parser's place in the
 /// descent hierarchy (the parser the entry point runs directly, above every descent),

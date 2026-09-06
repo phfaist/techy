@@ -122,23 +122,28 @@ pub struct DescentWarning {
     pub detail: String,
 }
 
-/// The configuration of [`StdDescentGuard`] — one of four modes, built with the
-/// constructors below (the modes are named `FixedStackBudget`,
-/// `ComputedStackBudget`, `DepthLimit`, and `Off`; construction goes through the
-/// constructors because a default-constructed value additionally carries a private
-/// "no configuration was given" mark that an openly constructable value could not).
+/// How deeply a run may nest: the configuration of [`StdDescentGuard`].
 ///
-/// The `Default` value is a [`FixedStackBudget`](StdDescentGuardInit::fixed_stack_budget)
-/// of [`StdDescentGuard::DEFAULT_STACK_BUDGET`] bytes, marked as unconfigured:
-/// under it the guard additionally emits the one-time
+/// Choose one of four modes with the constructors below —
+/// [`fixed_stack_budget`](StdDescentGuardInit::fixed_stack_budget),
+/// [`computed_stack_budget`](StdDescentGuardInit::computed_stack_budget),
+/// [`depth_limit`](StdDescentGuardInit::depth_limit), and
+/// [`off`](StdDescentGuardInit::off) — then pass the value to the run's
+/// `with_descent_guard_init` method
+/// ([`Language::with_descent_guard_init`](super::Language::with_descent_guard_init)
+/// for a parse, the equivalent on each traversal driver).
+///
+/// The `Default` value is a
+/// [`fixed_stack_budget`](StdDescentGuardInit::fixed_stack_budget) of
+/// [`StdDescentGuard::DEFAULT_STACK_BUDGET`] bytes. It behaves differently from the
+/// same budget chosen explicitly, because the guard knows that nothing was
+/// configured: it records the one-time
 /// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching) warning
-/// at half the budget, and its refusal message points at the
-/// `with_descent_guard_init` configuration method (on
-/// [`Language`](super::Language) and the traversal drivers alike).
-/// The default budget is deliberately tight — in unoptimized (debug) builds it
-/// allows only on the order of ten parse nesting levels — so that a deep run
-/// under the untuned default fails early, with a message naming the
-/// configuration entry point, instead of consuming an unknown amount of stack.
+/// once half the budget is used, and its refusal message names the
+/// `with_descent_guard_init` method. The default budget is deliberately tight — in
+/// unoptimized (debug) builds it allows only on the order of ten parse nesting
+/// levels — so that a deep run under the untuned default fails early, pointing at the
+/// way to configure it, rather than consuming an unknown amount of stack.
 ///
 /// # Which mode to choose
 ///
@@ -254,9 +259,9 @@ impl StdDescentGuardInit {
 }
 
 /// The built-in default: a fixed stack budget of
-/// [`StdDescentGuard::DEFAULT_STACK_BUDGET`] bytes, marked as unconfigured (the
-/// mark drives the one-time half-budget warning and the self-describing refusal
-/// text — see the type docs).
+/// [`StdDescentGuard::DEFAULT_STACK_BUDGET`] bytes, plus the one-time half-budget
+/// warning and the refusal text that names the configuration method — see the type
+/// documentation.
 impl Default for StdDescentGuardInit {
     fn default() -> StdDescentGuardInit {
         StdDescentGuardInit {
@@ -266,8 +271,19 @@ impl Default for StdDescentGuardInit {
     }
 }
 
-/// The standard [`DescentGuard`]: byte-budget, depth-limit, and off modes,
-/// configured through [`StdDescentGuardInit`] (see its docs for choosing a mode).
+/// The standard [`DescentGuard`]: caps how deeply one parse or one tree traversal
+/// may nest.
+///
+/// The cap comes from [`StdDescentGuardInit`] — a stack budget in bytes, a plain
+/// count of simultaneously open levels, or no cap at all — and without configuration
+/// it is a fixed budget of
+/// [`DEFAULT_STACK_BUDGET`](StdDescentGuard::DEFAULT_STACK_BUDGET) bytes. At the cap
+/// the next descent is refused, which ends the run with an ordinary error (for a
+/// parse, [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), under
+/// any recovery policy) rather than letting it crash the process by exhausting the
+/// call stack. Under the default configuration the guard also reports a one-time
+/// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching) warning
+/// once half the budget is used, so that the cap makes itself known before it is hit.
 ///
 /// The byte-budget modes **estimate** stack use by address distance: at
 /// [`init`](DescentGuard::init) the guard records the address of a local variable

@@ -252,25 +252,28 @@ pub fn scan_argument_noise<'s, L: Lang>(
     }
 }
 
-/// The adjacency counterpart of [`scan_argument_noise`], for an argument that must
-/// **immediately follow** what precedes it — pylatexenc's `allow_pre_space=False`: peek
-/// the next token and answer it as `next` only when it is *adjacent*, meaning it
-/// carries no pre-space and is not a comment. Otherwise `next` is `None` (the token is
-/// left where it is; nothing has been staged or consumed), so the calling parser
-/// reports the argument absent through its ordinary absent path — silently for an
-/// optional argument, as missing-mandatory for a mandatory one. The `nodes` list is
-/// always empty: an adjacent token has no pre-space to stage.
+/// Peeks the next token and answers it only when the argument is *adjacent* — when no
+/// whitespace and no comment separate it from what precedes.
 ///
-/// "Adjacent" is judged by the reader's own classification, so what the language
-/// attaches to the *preceding* token does not count as separation: a named command's
-/// post-space belongs to the command token (`\cmd {x}` is adjacent), while a
-/// single-character command takes no post-space (`\\ [x]` is not — the AMS `\\`
-/// idiom pylatexenc's `allow_pre_space=False` exists for).
+/// The counterpart of [`scan_argument_noise`] for an argument that must immediately
+/// follow the preceding token (pylatexenc's `allow_pre_space=False`). A token is
+/// adjacent when it carries no pre-space and is not a comment; otherwise
+/// [`next`](ArgumentNoise::next) is `None`, the token is left where it is, and nothing
+/// has been staged or consumed, so the calling parser reports the argument absent
+/// through its ordinary absent path — silently for an optional argument, as a missing
+/// mandatory argument otherwise. The [`nodes`](ArgumentNoise::nodes) list is always
+/// empty: an adjacent token has no pre-space to stage.
+///
+/// Adjacency is judged by the token reader's own classification, so whatever the
+/// language attaches to the *preceding* token does not count as separation. A named
+/// command's post-space belongs to the command token, so `\cmd {x}` is adjacent; a
+/// single-character command takes no post-space, so `\\ [x]` is not — the line-break
+/// idiom this requirement exists for, where `[x]` is content rather than an argument.
 ///
 /// Used by the group argument parsers' `require_adjacent` opt-in
 /// ([`GroupArgumentParser::require_adjacent`],
-/// [`OptionalGroupArgumentParser::require_adjacent`]); custom [`ArgumentParser`]s
-/// with the same adjacency requirement use it in place of the noise scan.
+/// [`OptionalGroupArgumentParser::require_adjacent`]); custom [`ArgumentParser`]
+/// implementations with the same requirement use it in place of the noise scan.
 pub fn peek_adjacent_argument<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
 ) -> ConstructParserResult<L, ArgumentNoise<L>> {
@@ -289,9 +292,12 @@ pub fn peek_adjacent_argument<'s, L: Lang>(
     Ok(ArgumentNoise { nodes: Vec::new(), start, next })
 }
 
-/// Stage `tok`'s pre-space as a whitespace-only `Chars` node (if non-empty) and record
-/// it in `nodes` — how a committed token's pre-space becomes the region's leading noise
-/// (whitespace before an argument is a node like everywhere else).
+/// Stages `tok`'s pre-space as a whitespace-only `Chars` node and appends it to `nodes`.
+///
+/// Does nothing when `tok` carries no pre-space. An argument parser calls this once it
+/// has committed to the argument being present: [`scan_argument_noise`] leaves the stop
+/// token's own pre-space unstaged, so that a parser taking its absent path stages
+/// nothing for it.
 pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
@@ -320,16 +326,19 @@ pub(super) fn stage<L: Lang>(
 
 // --- the expression core --------------------------------------------------------------
 
-/// Parse the single expression node starting at `next` (a noise scan's stop token,
-/// unconsumed): a delimited group of any class in scope (consumed whole), a full
-/// callable invocation, or a single content char — staging `next`'s pre-space into
-/// `nodes` first. Returns `Ok(None)` — nothing consumed, nothing staged — when `next`
-/// cannot begin an expression (end of input, a paragraph break, a group close: the
-/// enclosing structure's business).
+/// Parses the single expression node beginning at `next`, an unconsumed noise-scan stop
+/// token: a delimited group of any class in scope (consumed whole), a full callable
+/// invocation, or a single content character.
 ///
-/// Invocations dispatch through the spec's full `make_invocation_parser` factory path
-/// (takeover parsers included) under the current state — the descent policy question
-/// does not reach here ([`ChildStateSpec`](super::ChildStateSpec) is one level deep) — with two deliberate rules:
+/// `next`'s pre-space is staged into `nodes` first, then the expression's own nodes.
+/// Returns `Ok(None)`, with nothing consumed and nothing staged, when `next` cannot
+/// begin an expression — end of input, a paragraph break, or a group close, all of which
+/// belong to the enclosing construct.
+///
+/// Invocations dispatch through the spec's full `make_invocation_parser` factory path,
+/// takeover parsers included, under the current state. No child-state policy applies at
+/// this site, because a [`ChildStateSpec`](super::ChildStateSpec) reaches one level deep
+/// only. Two rules apply:
 ///
 /// - A callable whose invocation **requires content**
 ///   ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content):
@@ -502,26 +511,38 @@ where
 
 // --- the standard argument parsers ----------------------------------------------------
 
-/// The single-expression argument parser (pylatexenc's `LatexExpressionParser`): the
-/// argument is **one node** — a delimited group of any class in scope, a full callable
-/// invocation, or a single content char. The expression node itself is the content
-/// (its delimiters, where it has any, are part of the value — contrast
-/// [`GroupArgumentParser`], whose matched delimiters are argument syntax).
+/// An argument that is exactly one node: `{a b}`, a whole invocation such as
+/// `\alpha`, or a single character such as the `1` of `\frac12`.
 ///
-/// **The content designation differs from [`GroupArgumentParser`]'s even on identical
-/// input**: on `{ab}`, this parser designates the `Group` *node* as the content — the
-/// braces belong to the value — where `GroupArgumentParser` designates the group's
-/// *children* (`ab`), its braces being argument syntax. The two coincide only on the
-/// fallback shapes (`\frac12`: the single node is the content either way).
+/// The node that was parsed is itself the argument's content, delimiters included where
+/// it has any. Whitespace and comments may precede it and become the region's leading
+/// nodes. pylatexenc calls this parser `LatexExpressionParser`.
 ///
-/// The expression is mandatory: when none can start at the position, the parser
-/// diagnoses (tolerant) or aborts (strict) and reports the argument absent, consuming
-/// nothing. Also the fallback engine of [`GroupArgumentParser`].
+/// No latexlike argument code selects it on its own — attach it to an [`ArgumentSpec`]
+/// yourself — but the embellishments code `e{…}` reads each marker's value this way, and
+/// so does the fallback described below.
+///
+/// **The content designation differs from [`GroupArgumentParser`]'s on the same input.**
+/// On `{ab}` this parser designates the `Group` node as the content, braces and all,
+/// where [`GroupArgumentParser`] designates the group's children (`ab`) because it reads
+/// the braces as argument syntax. The two agree only where no group opens and a single
+/// node is taken (`\frac12`).
+///
+/// # When no expression is there
+///
+/// The expression is mandatory. If nothing at the position can begin one — end of input,
+/// a paragraph break, the close delimiter of an enclosing group — the parser records an
+/// [`ExpectedExpressionArgument`] diagnostic under tolerant recovery, or aborts the parse
+/// under strict recovery, and in both cases reports the argument absent without consuming
+/// anything.
+///
+/// [`GroupArgumentParser`] uses this same expression parsing for its single-expression
+/// fallback.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExpressionParser;
 
 impl ExpressionParser {
-    /// The single-expression argument parser.
+    /// Creates the single-expression argument parser; it has no settings.
     pub fn new() -> ExpressionParser {
         ExpressionParser
     }
@@ -580,81 +601,99 @@ where
     )
 }
 
-/// The standard mandatory-argument parser (pylatexenc's `'{'` shorthand as a core
-/// parser). The **delimited form** comes in one of two flavors:
+/// A mandatory argument delimited by a group — `\emph{text}`, or `\m(text)` for a
+/// parser configured with the `(`…`)` pair — falling back by default to a single
+/// expression, so that `\frac12` reads as two one-character arguments.
 ///
-/// - **Class form** ([`new`](GroupArgumentParser::new)): a group of the configured
-///   class if one opens at the position — its delimiters are argument *syntax*, so the
-///   content is the group's children. The delimiters come from the state's own group
-///   rules (the language declares `{…}`); the parser is configured only with the group
-///   **class** that counts as this argument's delimited form.
-/// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule) for one pair —
-///   the `r<c1><c2>` argument code — and
-///   [`any_of`](GroupArgumentParser::any_of) for several alternatives, pylatexenc's
-///   `LatexDelimitedMultiDelimGroupParser` / the `AnyDelimited` code): the delimiters
-///   are **minted for the occasion** — the parser carries its own [`GroupRule`]s,
-///   installed as temporary group rules for the argument's probe exactly like
-///   [`OptionalGroupArgumentParser`]'s (same nested-delimiter balancing, same brace
-///   protection — see that type's docs), just mandatory. With several alternatives,
-///   the **contents keep only the pair actually encountered** (the pylatexenc
-///   multi-delim subtlety; see the shared rule on [`OptionalGroupArgumentParser`]):
-///   inside `<…>` a stray `[` is an ordinary character, while `<…>` still nests and
-///   the pair that matched is recorded on the staged group node as always.
+/// The group's delimiters are argument *syntax*: they are consumed, and the argument's
+/// content is the group's children. This is the parser behind the latexlike argument
+/// codes `"m"` and `"{"`, behind `"r<c1><c2>"` (a required pair, as in `"r()"`), and
+/// behind the word codes `AnyDelimited` and `BracedOnly`; the full code table is on
+/// [`argument_specs`](crate::latexlike::argument_specs).
 ///
-/// Orthogonal to the form, the **single-expression fallback**
-/// ([`with_expression_fallback`](GroupArgumentParser::with_expression_fallback)): when
-/// no group of the delimited form opens at the position, the argument is the next
-/// single expression instead (`\frac12`, `\frac1\alpha`; the expression node is the
-/// content). The fallback parses under the **plain argument state** — in the rule form
-/// the minted rule is *not* in force there, so its spellings read as the language
-/// reads them (a stray minted closer is an ordinary char, never a stray group close).
-/// The defaults are pylatexenc parity: **on** for the class form (`'{'` always falls
-/// back), **off** for the rule form (required-delimited has none: `\m x` under an
-/// `r()` code diagnoses missing-mandatory and leaves `x` alone). The other two
-/// combinations are techy extensions — notably class form + fallback off: a real
-/// group or a diagnosed missing argument.
+/// # Which groups are accepted
 ///
-/// **Not [`ExpressionParser`] under another name**: where a group of the argument's
-/// delimited form opens, this parser designates the group's *children* as the content
-/// — the delimiters are argument syntax, consumed but not part of the value — while
-/// `ExpressionParser` on the same `{…}` source designates the group *node* itself,
-/// delimiters included. The expression fallback is the one place the two agree (the
-/// fallback node is the content either way).
+/// - **Class form** ([`new`](GroupArgumentParser::new)): any group of the configured
+///   class that opens at the position. The delimiter spellings come from the parsing
+///   state's own group rules — the language is what declares `{…}` — and the parser is
+///   configured only with the group *class* that counts as this argument's delimited
+///   form.
+/// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule) for one pair,
+///   [`any_of`](GroupArgumentParser::any_of) for several alternatives; pylatexenc's
+///   `LatexDelimitedMultiDelimGroupParser`): the parser carries its own [`GroupRule`]s
+///   and installs them as temporary group rules for the duration of this argument,
+///   exactly as [`OptionalGroupArgumentParser`] does — same balancing of nested
+///   delimiters, same protection by an inner group of another class, both documented on
+///   that type.
 ///
-/// Missing — no group of the delimited form opens, and the fallback is off or no
-/// expression can start (end of input, a paragraph break, an enclosing group close):
-/// diagnosed here as missing-mandatory (tolerant) or abort (strict), argument absent,
-/// nothing consumed. The condition is the same with the fallback on or off.
+///   Where several alternatives are given, whichever pair opens is the argument's, and
+///   the contents keep only that pair: inside a matched `<…>` a stray `[` is an ordinary
+///   character, while `<…>` still nests. The pair that matched is recorded on the staged
+///   group node as always.
 ///
-/// Also orthogonal: the **adjacency requirement**
-/// ([`require_adjacent`](GroupArgumentParser::require_adjacent), pylatexenc's
-/// `allow_pre_space=False`). By default the argument may follow whitespace and
-/// comments, which become the region's leading noise; with the requirement, the
-/// argument — delimited form or fallback expression alike — must begin immediately,
-/// and whitespace or a comment in between counts as the argument missing
-/// (diagnosed as above, nothing consumed; see [`peek_adjacent_argument`] for what
-/// counts as adjacent).
+/// # The single-expression fallback
 ///
-/// Requires a language with the groups feature ([`LangHasGroups`]): the rule form
-/// installs its minted delimiters as temporary group rules, and the delimited form of
-/// either flavor is a group.
+/// When no group of the accepted form opens, the argument is the next single expression
+/// instead — `\frac12`, `\frac1\alpha` — and that expression node is the content.
+/// [`with_expression_fallback`](GroupArgumentParser::with_expression_fallback) turns the
+/// fallback on or off; the constructors default it **on** for the class form and **off**
+/// for the rule form, matching pylatexenc, so `\m x` under an `"r()"` code reports a
+/// missing argument and leaves `x` alone. The class form with the fallback off — the
+/// `BracedOnly` code — accepts a real group or nothing, which is what machine-written
+/// arguments usually want.
+///
+/// The fallback parses under the plain argument state, so in the rule form the minted
+/// rule is not in force there and its spellings read as the language reads them: a stray
+/// minted closer is an ordinary character, never a stray group close.
+///
+/// # When the argument is not there
+///
+/// If no group of the accepted form opens and either the fallback is off or nothing at
+/// the position can begin an expression (end of input, a paragraph break, the close
+/// delimiter of an enclosing group), the parser records a [`MissingMandatoryArgument`]
+/// diagnostic under tolerant recovery, or aborts the parse under strict recovery, and in
+/// both cases reports the argument absent without consuming anything. That is the same
+/// whether the fallback is on or off.
+///
+/// # Content, compared with `ExpressionParser`
+///
+/// This is not [`ExpressionParser`] under another name. Where a group of the accepted
+/// form opens, the group's *children* are the content and the delimiters are argument
+/// syntax — consumed, but not part of the value; [`ExpressionParser`] on the same `{…}`
+/// source makes the group *node* the content, delimiters included. The two agree only on
+/// the fallback shapes, where the single node is the content either way.
+///
+/// # Requiring an adjacent argument
+///
+/// By default the argument may follow whitespace and comments, which become the leading
+/// nodes of its region. [`require_adjacent`](GroupArgumentParser::require_adjacent)
+/// (pylatexenc's `allow_pre_space=False`) requires it — delimited form and fallback
+/// expression alike — to begin immediately, and whitespace or a comment in between then
+/// counts as the argument missing, diagnosed as above with nothing consumed. See
+/// [`peek_adjacent_argument`] for what counts as adjacent.
+///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the accepted form is
+/// a group either way, and the rule form installs its minted delimiters as temporary
+/// group rules.
 pub struct GroupArgumentParser<L: Lang> {
     form: GroupArgumentForm<L>,
     expression_fallback: bool,
     require_adjacent: bool,
 }
 
-/// The two delimited forms of [`GroupArgumentParser`] (see the type docs). `Rules`
-/// holds one minted rule per acceptable delimiter pair (the resolved `### PhF` note:
-/// the list form supersedes a scalar `Rule` — one element is the `r<c1><c2>` case).
+/// The two delimited forms of [`GroupArgumentParser`] (see the type docs). `Rules` holds
+/// one minted rule per acceptable delimiter pair; a single-element list is the
+/// `r<c1><c2>` argument code.
 enum GroupArgumentForm<L: Lang> {
     Class(L::GroupTypeId),
     Rules(Vec<Arc<GroupRule<L>>>),
 }
 
 impl<L: LangHasGroups> GroupArgumentParser<L> {
-    /// A mandatory argument delimited by any group rule of class `group_type`, with
-    /// the single-expression fallback on (pylatexenc's `'{'`).
+    /// A mandatory argument delimited by any group rule of class `group_type` — `{…}`
+    /// for the latexlike content class — with the single-expression fallback on.
+    ///
+    /// What the latexlike argument codes `"m"` and `"{"` build.
     pub fn new(group_type: L::GroupTypeId) -> GroupArgumentParser<L> {
         GroupArgumentParser {
             form: GroupArgumentForm::Class(group_type),
@@ -663,19 +702,27 @@ impl<L: LangHasGroups> GroupArgumentParser<L> {
         }
     }
 
-    /// A mandatory argument delimited exactly by `rule`, minted for the occasion as a
-    /// temporary group rule (e.g. `(`…`)` for an `r()` code), with the expression
-    /// fallback off (pylatexenc's required-delimited — see the type docs).
+    /// A mandatory argument delimited exactly by `rule` — `\m(text)` for a `(`…`)` rule
+    /// — with the single-expression fallback off.
+    ///
+    /// The rule is installed as a temporary group rule for the duration of this
+    /// argument, so its delimiters need not be declared by the language. What the
+    /// latexlike argument code `"r<c1><c2>"` builds; [`any_of`](GroupArgumentParser::any_of)
+    /// takes several alternative pairs.
     pub fn with_rule(rule: Arc<GroupRule<L>>) -> GroupArgumentParser<L> {
         GroupArgumentParser::any_of([rule])
     }
 
-    /// A mandatory argument delimited by **any** of the given minted rules
-    /// (pylatexenc's `LatexDelimitedMultiDelimGroupParser`, the `AnyDelimited` code):
-    /// whichever pair opens at the position is the argument's delimiters; the contents
-    /// keep only that pair (see the type docs). Expression fallback off. Must be
-    /// non-empty (an empty rule set is reported as an implementation error when the
-    /// parser runs); ties between same-spelling opens go to the first listed rule.
+    /// A mandatory argument delimited by **any** of the given rules: whichever pair
+    /// opens at the position becomes the argument's delimiters.
+    ///
+    /// The contents then keep only that pair, as described on the type. The
+    /// single-expression fallback is off. Ties between rules with the same opening
+    /// spelling go to the first one listed. What the latexlike word code `AnyDelimited`
+    /// builds (pylatexenc's `LatexDelimitedMultiDelimGroupParser`).
+    ///
+    /// `rules` must not be empty. An empty rule set is not rejected here: it is reported
+    /// as an implementation error when the parser runs.
     pub fn any_of(
         rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
     ) -> GroupArgumentParser<L> {
@@ -687,17 +734,22 @@ impl<L: LangHasGroups> GroupArgumentParser<L> {
         }
     }
 
-    /// Set the single-expression fallback (see the type docs; the constructor defaults
-    /// are class form on, rule form off).
+    /// Turns the single-expression fallback on or off.
+    ///
+    /// With it off, only a group of the accepted form is taken, and anything else is a
+    /// missing mandatory argument. The constructor defaults are on for the class form
+    /// and off for the rule form; the type documents what the fallback accepts.
     pub fn with_expression_fallback(mut self, expression_fallback: bool) -> Self {
         self.expression_fallback = expression_fallback;
         self
     }
 
-    /// Require the argument to begin immediately — no whitespace, no comment between
+    /// Requires the argument to begin immediately: no whitespace and no comment between
     /// the preceding token and the argument's first token (pylatexenc's
-    /// `allow_pre_space=False`; see the type docs and [`peek_adjacent_argument`]).
-    /// Off by default.
+    /// `allow_pre_space=False`).
+    ///
+    /// Off by default. Whitespace or a comment in between then counts as the argument
+    /// missing. See [`peek_adjacent_argument`] for exactly what counts as adjacent.
     pub fn require_adjacent(mut self) -> Self {
         self.require_adjacent = true;
         self
@@ -804,8 +856,10 @@ where
     }
 }
 
-/// The missing-mandatory recovery: diagnostic at the blocking position
-/// (tolerant) or abort (strict); absent, nothing consumed.
+/// Reports a mandatory argument as missing: a [`MissingMandatoryArgument`] diagnostic at
+/// the blocking position under tolerant recovery, an abort under strict recovery.
+///
+/// Returns `Ok(None)` — the argument is absent and nothing has been consumed.
 pub(super) fn missing_mandatory<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     noise: ArgumentNoise<L>,
@@ -820,10 +874,14 @@ pub(super) fn missing_mandatory<L: Lang>(
     Ok(None)
 }
 
-/// The number of children of a staged node (builder read-back). The id comes from a
-/// driver-factory parse, i.e. through outer-layer hands: a bogus id degrades to a
-/// zero-child answer rather than panicking — it still lands in the argument's node
-/// region, where `builder.add` diagnoses it ([§dd-dr:panic-policy] staged-id rule).
+/// The number of children of a staged node, read back from the tree builder.
+///
+/// Answers zero for an unknown `id` rather than panicking. The ids passed here come from
+/// a parse run by the driver's own factory, so a misbehaving custom driver can supply one
+/// that was never staged; such an id still lands in the argument's node region, where the
+/// tree builder reports it.
+// A bogus staged id must degrade rather than panic, cf. [§dd-dr:panic-policy]'s staged-id
+// rule; `builder.add` is where it is diagnosed.
 pub(super) fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32 {
     let staged = cx.staged_nodes();
     let Some(view) = staged.get(id) else { return 0 };
@@ -885,66 +943,78 @@ fn probe_minted_group<'s, L: LangHasGroups>(
     Ok(Some(MintedGroupMatch { open, rule, contents_state }))
 }
 
-/// The standard optional-group argument parser (pylatexenc's `'['` shorthand as a core
-/// parser): the argument is provided exactly when one of its opening delimiters comes
-/// next (noise skipped), and absent otherwise — silently, consuming nothing.
+/// An optional argument delimited by a group, typically `[…]` as in
+/// `\includegraphics[width=5cm]{fig.png}`.
 ///
-/// The delimiters are **minted for the occasion**: the parser carries its own
-/// [`GroupRule`]s — one (say `[`…`]` under a preset's option class,
-/// [`new`](OptionalGroupArgumentParser::new)) or several alternatives
-/// ([`any_of`](OptionalGroupArgumentParser::any_of); pylatexenc's
-/// `LatexDelimitedMultiDelimGroupParser` with `optional=True`, the
-/// `AnyDelimitedOptional` code) — installed as **temporary group rules**
-/// ([`TokenRules::temporary_group_rules`]) in a derived state covering the probing peek.
-/// When the argument is present, the group's contents parse under a state keeping
-/// **only the pair actually encountered** (with one configured rule, the same state —
-/// the pylatexenc multi-delim contents subtlety comes for free; see
-/// [`GroupArgumentParser::any_of`]). Temporary rules win same-spelling ties, and the
-/// derivation point
-/// ([`ParsingState::derived`](crate::state::ParsingState::derived)) scopes their
-/// lifecycle:
+/// The argument is present exactly when one of its opening delimiters comes next, and
+/// absent otherwise — silently, with nothing consumed and no diagnostic. Its content is
+/// the option group's children; the delimiters are argument syntax. This is the parser
+/// behind the latexlike argument codes `"o"`, `"["`, `"d<c1><c2>"` and the word code
+/// `AnyDelimitedOptional`; the full code table is on
+/// [`argument_specs`](crate::latexlike::argument_specs).
 ///
-/// - **Nested brackets balance**: a descent into the minted rule's own group keeps
-///   the rule, so `[with[recursive[use]of]brackets]` is one argument with nested
-///   group nodes (pylatexenc parity).
-/// - **Braces protect, at any depth**: a descent into any *other* group strips the
-///   rule for that whole subtree — `]` is an ordinary character inside
-///   `[{arg with ]}]`, and equally at depth two, `[a[b{c]}]]`.
+/// # The minted delimiters
 ///
-/// Invocations inside the option inherit the contents state as-is: their
-/// group-delimited arguments protect through the same stripping (`[\m{a]b}]` holds),
-/// while their **non-group** token consumption sees the minted rule in force — a
-/// deliberate, narrow divergence from pylatexenc's revert-to-outer-state semantics
-/// (subject to revision — a preset argument-parser helper could reset `groups` or the
-/// temporaries through its own delta).   ### UNCLEAR, REFORMULATE
+/// The delimiter pair need not be declared by the language: the parser carries its own
+/// [`GroupRule`]s — one ([`new`](OptionalGroupArgumentParser::new)), or several
+/// alternatives ([`any_of`](OptionalGroupArgumentParser::any_of); pylatexenc's
+/// `LatexDelimitedMultiDelimGroupParser` with `optional=True`) — and installs them as
+/// temporary group rules ([`TokenRules::temporary_group_rules`]) in a state derived for
+/// the probing peek. A temporary rule wins against a rule of the same spelling.
 ///
-/// **Protection presupposes the close spelling is not otherwise special in the
-/// argument state.** If the base rules class `[`/`]` as a genuine group pairing of the
-/// language, the stripped state still reads `]` as a real close token, and
-/// `\item[{a]b}]` genuinely fails — stray-close unwinding with diagnostics, exactly
-/// like `{a]b}` anywhere else in that language. Intended, not degradation: stripping
-/// restores the language's own reading, it never overrides it.
+/// When the argument is present, its contents parse under a state that keeps only the
+/// pair actually encountered, so an unmatched alternative reads as an ordinary character
+/// inside it; with a single configured rule that is the same state.
+/// [`GroupArgumentParser::any_of`] mints its delimiters the same way.
 ///
-/// Content designation: the option group's children — except that a **lone child group
-/// of the configured protective class** (`[{arg with ]}]`: braces protecting the `]`)
-/// designates *that* group's children instead, the parse-time resolution of
-/// pylatexenc's post-hoc `unwrap_double_group` accessor hack.
+/// Where a state is derived ([`ParsingState::derived`]) is what scopes the temporary
+/// rules:
 ///
-/// **Adjacency** ([`require_adjacent`](OptionalGroupArgumentParser::require_adjacent),
-/// pylatexenc's `allow_pre_space=False`): by default the opening delimiter may follow
-/// whitespace and comments (the region's leading noise); with the requirement it must
-/// come immediately, and an opener after whitespace or a comment is *not* this
-/// argument — absent, silently, nothing consumed, the `[` left for the enclosing
-/// content. The use case is pylatexenc's own: `\\` in an AMS alignment, where
-/// `A=0 \\ [C,D]=0` must not read `[C,D]` as a spacing argument; likewise a
-/// `\begin{lstlisting} [` whose `[` is verbatim content. See
-/// [`peek_adjacent_argument`] for what counts as adjacent.
+/// - **Nested pairs balance.** Descending into the minted rule's own group keeps the
+///   rule, so `[with[recursive[use]of]brackets]` is one argument containing nested group
+///   nodes.
+/// - **Another group protects, at any depth.** Descending into a group of any *other*
+///   class strips the rule for that whole subtree: `]` is an ordinary character inside
+///   `[{arg with ]}]`, and equally at depth two in `[a[b{c]}]]`.
 ///
-/// Requires a language with the groups feature ([`LangHasGroups`]): the parser
-/// installs its minted delimiters as temporary group rules.
+/// An invocation inside the option inherits the contents state unchanged. Its
+/// group-delimited arguments are protected by the same stripping, so `[\m{a]b}]` is one
+/// option; but whatever it consumes *without* descending into a group still sees the
+/// minted rule in force. That is a narrow difference from pylatexenc, which reverts to
+/// the state outside the option.
 ///
-/// [`ChildStateSpec`]: super::ChildStateSpec
-/// [`TokenRules::temporary_group_rules`]: crate::token::TokenRules::temporary_group_rules
+/// **Protection presupposes that the closing spelling is not otherwise special in the
+/// argument's state.** If the language's own rules already pair `[` with `]`, the
+/// stripped state still reads `]` as a real close delimiter, and `\item[{a]b}]` fails
+/// with stray-close unwinding and diagnostics, exactly as `{a]b}` would anywhere else in
+/// that language. Stripping restores the language's own reading; it never overrides it.
+///
+/// # Content
+///
+/// The content is the option group's children — except that a lone child group of the
+/// class given to
+/// [`with_unwrap_lone_group`](OptionalGroupArgumentParser::with_unwrap_lone_group)
+/// designates *that* group's children instead. That is the protective-braces idiom
+/// `[{arg with ]}]`, resolved while parsing rather than by an accessor afterwards as in
+/// pylatexenc's `unwrap_double_group`.
+///
+/// # Requiring an adjacent argument
+///
+/// By default the opening delimiter may follow whitespace and comments, which become the
+/// leading nodes of the argument's region.
+/// [`require_adjacent`](OptionalGroupArgumentParser::require_adjacent) (pylatexenc's
+/// `allow_pre_space=False`) requires it to come immediately; an opener after whitespace
+/// or a comment is then not this argument at all — absent, silently, nothing consumed,
+/// the `[` left to the enclosing content. The cases this exists for are `\\` in an
+/// alignment, where `A=0 \\ [C,D]=0` must not read `[C,D]` as a spacing argument, and a
+/// `\begin{lstlisting} [` whose `[` is verbatim content. See [`peek_adjacent_argument`]
+/// for what counts as adjacent.
+///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the parser installs
+/// its minted delimiters as temporary group rules.
+///
+/// [`ParsingState::derived`]: crate::core::ParsingState::derived
+/// [`TokenRules::temporary_group_rules`]: crate::core::token::TokenRules::temporary_group_rules
 pub struct OptionalGroupArgumentParser<L: Lang> {
     rules: Vec<Arc<GroupRule<L>>>,
     unwrap_lone_group: Option<L::GroupTypeId>,
@@ -952,16 +1022,25 @@ pub struct OptionalGroupArgumentParser<L: Lang> {
 }
 
 impl<L: LangHasGroups> OptionalGroupArgumentParser<L> {
-    /// An optional argument delimited by `rule` (e.g. `[`…`]` under a preset's option
-    /// class), with no protective-group unwrapping.
+    /// An optional argument delimited by `rule` — `[`…`]` under a preset's option class
+    /// — with no unwrapping of a protective inner group.
+    ///
+    /// What the latexlike argument codes `"o"`, `"["` and `"d<c1><c2>"` build — each of
+    /// them with
+    /// [`with_unwrap_lone_group`](OptionalGroupArgumentParser::with_unwrap_lone_group)
+    /// applied on top, for the content-group class.
     pub fn new(rule: Arc<GroupRule<L>>) -> OptionalGroupArgumentParser<L> {
         OptionalGroupArgumentParser::any_of([rule])
     }
 
-    /// An optional argument delimited by **any** of the given minted rules (the
-    /// `AnyDelimitedOptional` code — see the type docs). Must be non-empty (an empty
-    /// rule set is reported as an implementation error when the parser runs); ties
-    /// between same-spelling opens go to the first listed rule.
+    /// An optional argument delimited by **any** of the given rules: whichever pair opens
+    /// at the position becomes the argument's delimiters.
+    ///
+    /// What the latexlike word code `AnyDelimitedOptional` builds. Ties between rules
+    /// with the same opening spelling go to the first one listed.
+    ///
+    /// `rules` must not be empty. An empty rule set is not rejected here: it is reported
+    /// as an implementation error when the parser runs.
     pub fn any_of(
         rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
     ) -> OptionalGroupArgumentParser<L> {
@@ -969,17 +1048,23 @@ impl<L: LangHasGroups> OptionalGroupArgumentParser<L> {
         OptionalGroupArgumentParser { rules, unwrap_lone_group: None, require_adjacent: false }
     }
 
-    /// Designate the children of a lone child group of class `group_type` as the
-    /// content (the protective-braces idiom — see the type docs).
+    /// Designates the children of a lone child group of class `group_type` as the
+    /// argument's content, instead of the option group's own children.
+    ///
+    /// The protective-braces idiom: with the content class given here, `[{arg with ]}]`
+    /// yields `arg with ]` as the content. Off unless set.
     pub fn with_unwrap_lone_group(mut self, group_type: L::GroupTypeId) -> Self {
         self.unwrap_lone_group = Some(group_type);
         self
     }
 
-    /// Require the opening delimiter to come immediately — no whitespace, no comment
+    /// Requires the opening delimiter to come immediately: no whitespace and no comment
     /// between the preceding token and the opener (pylatexenc's
-    /// `allow_pre_space=False`; see the type docs and [`peek_adjacent_argument`]).
-    /// Off by default.
+    /// `allow_pre_space=False`).
+    ///
+    /// Off by default. An opener that follows whitespace or a comment is then not this
+    /// argument, and is left to the enclosing content. See [`peek_adjacent_argument`] for
+    /// exactly what counts as adjacent.
     pub fn require_adjacent(mut self) -> Self {
         self.require_adjacent = true;
         self
@@ -1075,25 +1160,38 @@ where
         )))
     }
 
-    /// Optional: absent is a valid, silent outcome (the trait default, stated
-    /// explicitly — the expression-position guard leans on this answer).
+    /// Optional: an absent argument is a valid, silent outcome.
+    ///
+    /// This is the trait's default answer, stated explicitly because it feeds the
+    /// spec-level
+    /// [`requires_content`](crate::core::specs::CallableSpec::requires_content), which
+    /// decides whether the callable may be used bare in expression position.
     fn can_match_empty(&self) -> bool {
         true
     }
 }
 
-/// The literal-marker argument parser (pylatexenc's `LatexOptionalCharsMarkerParser`,
-/// the `'*'` shorthand as a core parser): the argument is provided exactly when the
-/// marker's characters come next (noise skipped; the chars must be consecutive, with
-/// no intervening whitespace), staged as a single `Chars` node which **is** the
-/// content (pylatexenc parity). Absent is silent, consuming nothing.
+/// An optional argument that is a literal marker: the `*` of `\section*{Title}`, or any
+/// other fixed run of characters.
+///
+/// The argument is present exactly when the marker's characters come next, after any
+/// whitespace and comments in front of it. They must be consecutive, with nothing
+/// between them: for the marker `!!`, `\m !!` matches but `\m ! !` does not. The marker
+/// is staged as a single `Chars` node, and that node is the argument's content.
+///
+/// When the marker is not there the argument is absent — silently, with nothing consumed
+/// and no diagnostic. This is the parser behind the latexlike argument codes `"s"`,
+/// `"*"` and `"t<c>"` (pylatexenc's `LatexOptionalCharsMarkerParser`); the full code
+/// table is on [`argument_specs`](crate::latexlike::argument_specs).
 pub struct MarkerArgumentParser {
     marker: Box<str>,
 }
 
 impl MarkerArgumentParser {
-    /// An optional literal marker (e.g. `*`). Must be non-empty (an empty marker is
-    /// reported as an implementation error when the parser runs).
+    /// An optional literal marker such as `*`.
+    ///
+    /// `marker` must not be empty. An empty marker is not rejected here: it is reported
+    /// as an implementation error when the parser runs.
     pub fn new(marker: impl Into<Box<str>>) -> MarkerArgumentParser {
         MarkerArgumentParser { marker: marker.into() }
     }
@@ -1164,8 +1262,12 @@ where
         Ok(Some(region_with_last_as_content(mem::take(&mut noise.nodes))))
     }
 
-    /// Optional: absent is a valid, silent outcome (the trait default, stated
-    /// explicitly — the expression-position guard leans on this answer).
+    /// Optional: an absent argument is a valid, silent outcome.
+    ///
+    /// This is the trait's default answer, stated explicitly because it feeds the
+    /// spec-level
+    /// [`requires_content`](crate::core::specs::CallableSpec::requires_content), which
+    /// decides whether the callable may be used bare in expression position.
     fn can_match_empty(&self) -> bool {
         true
     }

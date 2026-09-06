@@ -1,47 +1,60 @@
-//! The verbatim family: parsers whose content
-//! is **raw text** — no commands, no groups, no comments — read per the pinned recipe:
-//! a features-disabled derived state whose
-//! [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) is
-//! **replaced** by a rule whose close string is the verbatim terminator. The expected
-//! close is ungated by the groups gate
-//! ([`GroupRules::enabled`](crate::token::GroupRules::enabled)) and overrides any
-//! close expectation inherited
-//! from an enclosing group, so it is the single recognizer left active: the body
-//! arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
-//! multi-character strings included — as one
-//! [`GroupClose`](TokenKind::GroupClose). These parsers
-//! read through the ordinary [`TokenReader`](crate::token::TokenReader) protocol;
-//! they need a **scanning** reader (a pre-scanned token list cannot re-tokenize under
-//! the verbatim state — `TokenListReader`'s documented fidelity limit).
+//! Parsers for **raw text** content: `\verb|…|`-style arguments and verbatim bodies,
+//! inside which no commands, groups, comments or specials are recognized.
 //!
-//! - [`verbatim_state_delta`] — the recipe as data: the base piece custom raw-content
-//!   parsers start from (`LatexVerbatimBaseParser`'s reusable core).
-//! - [`VerbatimArgumentParser`] — delimited verbatim in argument position
-//!   (`\verb|…|`; `LatexDelimitedVerbatimParser`): auto-matched or fixed delimiters,
-//!   depth counter for paired delimiters.
-//! - [`VerbatimBodyParser`] — a verbatim environment body: raw content up to its
-//!   terminator ([`VerbatimBodyTerminator`] — a literal string, or a stop command
-//!   back-referencing the invocation name, `\end{verbatim}`), the single newline after
-//!   the opening scaffolding gobbled out of the designated content.
+//! - [`verbatim_state_delta`] — the parsing state change that switches tokenization to
+//!   raw reading. Custom raw-content parsers start from this.
+//! - [`VerbatimArgumentParser`] — a raw region between two delimiter characters, in
+//!   argument position (`\verb|…|`), with auto-matched or fixed delimiters.
+//! - [`VerbatimBodyParser`] — a raw body up to a terminator
+//!   ([`VerbatimBodyTerminator`]: a literal string, or a stop command repeating the
+//!   invocation name, `\end{verbatim}`), with the newline that follows the opening
+//!   scaffolding designated out of the content.
+//!
+//! The last two produce what their tokenizing counterparts produce — a
+//! [`ParsedArgumentNodes`] and an [`EnvironmentBody`] — so a definition can use one in
+//! place of the other. "Environment" is the LaTeX-like preset's vocabulary: the core has
+//! no built-in construct of that name, only these parsers for the region between an
+//! opening the caller has already read and the terminator the parser is given.
+//!
+//! # How raw reading works
+//!
+//! All of it rests on one derived parsing state, which turns off every tokenization
+//! feature the language has — commands, groups, comments, specials, paragraph breaks,
+//! whitespace scanning, forbidden characters — and *replaces*
+//! [`expecting_group_close`](crate::core::token::TokenRules::expecting_group_close) with
+//! a rule whose close string is the verbatim terminator. That expected close is not
+//! subject to the groups feature gate
+//! ([`GroupRules::enabled`](crate::core::token::GroupRules::enabled)) and overrides any
+//! close expectation inherited from an enclosing group, so it is the only recognizer
+//! left active: the content arrives as plain [`Char`](TokenKind::Char) tokens and the
+//! terminator — multi-character strings included — as a single
+//! [`GroupClose`](TokenKind::GroupClose) token. Detecting the end of the content is
+//! therefore ordinary token reading, and the terminator is matched character for
+//! character, with no whitespace tolerated anywhere inside it.
+//!
+//! Because the content is re-tokenized under that state, these parsers need a token
+//! reader that scans the source, such as
+//! [`StdTokenReader`](crate::core::token::StdTokenReader). A reader that replays a list
+//! of tokens scanned earlier cannot re-tokenize, and will not produce the raw reading.
 //!
 //! # Node shapes
 //!
-//! The delimited form stages a [`Group`](crate::node::NodeKind::Group) node — the
-//! delimiters recorded as written, class = the configured
-//! [`GroupTypeId`](crate::state::Lang::GroupTypeId) — holding one `Chars` child with
-//! the raw content (omitted when empty: techy never stages empty chars nodes); the
-//! argument's content designation is the group's children. The environment form
-//! stages the standard body `List` holding the raw-content `Chars` node; a gobbled
-//! newline is **kept as a leading whitespace `Chars` node but designated out of the
-//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte.
+//! The delimited form stages a [`Group`](crate::core::node::NodeKind::Group) node — the
+//! delimiters recorded as written, the class the one configured on the parser — holding
+//! one `Chars` child with the raw content, omitted when the content is empty (an empty
+//! chars node is never staged); the argument's content is the group's children.
 //!
-//! The raw-content `Chars` nodes record the **verbatim state** they were read
-//! under; the group/list wrappers record the surrounding state. Their content is the
-//! exact span slice for a language that obeys span tiling
-//! ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) and the text
-//! the reader answered, token by token, for a language with
-//! `OBEYS_SPAN_TILING = false` — where the tokens the raw content is read from need
-//! not form one contiguous stretch of one source.
+//! The body form stages the standard body `List` holding the raw-content `Chars` node. A
+//! gobbled newline is kept as a leading whitespace `Chars` node but designated out of
+//! the content ([`EnvironmentBody::content`]) — either way the tree keeps every
+//! character of the source.
+//!
+//! The raw-content `Chars` nodes record the verbatim parsing state they were read under;
+//! the group and list wrappers record the surrounding state. Their content is the exact
+//! span slice for a language that obeys span tiling
+//! ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), and the text the
+//! reader answered token by token for a language that does not — where the tokens the
+//! raw content was read from need not form one contiguous stretch of one source.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -69,10 +82,12 @@ use super::environment_parser::{
 };
 use super::{node_text_content, push_pre_space_text, push_token_text, ConstructParser, ConstructParserResult, ParseContext};
 
-/// Condition: the input (or a tolerated unreadable token) ended inside a delimited
-/// verbatim region before its closing delimiter appeared. Tolerant recovery keeps the
-/// content read so far and records an **empty** close on the group node (the
-/// [`GroupData::close`] never-found convention).
+/// Condition: a delimited verbatim region ended before its closing delimiter appeared.
+///
+/// Raised at the end of the input, and when a token the reader could not read was
+/// tolerated. Tolerant recovery keeps the content read so far and records an **empty**
+/// close on the group node — the [`GroupData::close`] convention for a delimiter that
+/// was never found.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -84,9 +99,12 @@ pub struct UnterminatedVerbatim {
     pub close: String,
 }
 
-/// Condition: no verbatim opening delimiter could be read at a mandatory delimited
-/// verbatim argument's position — end of input, or (with fixed delimiters) a different
-/// character. Recovery reports the argument absent, consuming nothing.
+/// Condition: no opening delimiter could be read where a delimited verbatim argument
+/// was mandatory.
+///
+/// Raised at the end of the input, and — when the parser prescribes a fixed pair — when
+/// a different character stands at that position. Recovery reports the argument absent,
+/// consuming nothing.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.verbatim.expected-verbatim-delimiter")]
@@ -109,20 +127,26 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
     }
 }
 
-/// The verbatim reading recipe as a [`ParsingStateDelta`]: every tokenization
-/// feature the language has off
-/// ([`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all))
-/// and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
-/// **replaced** by `terminator`. Under the derived state the
-/// content arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
-/// `terminator`'s `close` string, which must be non-empty to ever match — as one
+/// The parsing state change that switches tokenization to raw reading, with
+/// `terminator` as the string that ends the raw region.
+///
+/// Every tokenization feature the language has is turned off
+/// ([`TokenRulesOverrides::disable_all`](crate::core::token::TokenRulesOverrides::disable_all))
+/// and [`expecting_group_close`](crate::core::token::TokenRules::expecting_group_close)
+/// is **replaced** by `terminator`. Under the derived state the content arrives as plain
+/// [`Char`](TokenKind::Char) tokens and the terminator — `terminator`'s `close` string,
+/// which must be non-empty to ever match — as a single
 /// [`GroupClose`](TokenKind::GroupClose) token.
 ///
-/// The base building block for custom raw-content parsers; [`VerbatimArgumentParser`]
-/// and [`VerbatimBodyParser`] derive their reading states through it.
-/// `disable_all()` clears the forbidden-character set with everything else: a
-/// character the language outlaws elsewhere reads as ordinary raw content inside
-/// a verbatim region.
+/// Turning the features off clears the forbidden-character set along with everything
+/// else, so a character the language outlaws elsewhere reads as ordinary raw content
+/// inside a verbatim region.
+///
+/// This is the building block for custom raw-content parsers: derive a state from it
+/// with [`ParseContext::derive_state`] and read under that state. [`VerbatimArgumentParser`]
+/// and [`VerbatimBodyParser`] do exactly that, and
+/// [the construct parsers guide](crate::guide::construct_parsers#a-complete-takeover-parser)
+/// works through a parser of one's own.
 ///
 /// Requires a language with the groups feature ([`LangHasGroups`]): the terminator is
 /// installed as the expected group close, which is groups data.
@@ -279,36 +303,49 @@ fn default_auto_delimiters() -> Vec<(char, char)> {
     vec![('{', '}'), ('[', ']'), ('<', '>'), ('(', ')')]
 }
 
-/// The delimited-verbatim argument parser (the `v` argument code): the argument
-/// is a raw-text region between two delimiter characters, `\verb|…|`-style.
+/// Parses a raw-text argument delimited by a pair of characters, `\verb|…|`-style (the
+/// `v` argument code of the LaTeX-like preset).
 ///
-/// The opening delimiter is the first character after optional whitespace — **any**
-/// character, read raw under a derived state where only whitespace scanning is left
-/// active (comments are *not* skipped: `%` is a perfectly good `\verb` delimiter; the
-/// skipped whitespace is staged as region noise like every argument's). By default the
-/// closing delimiter is auto-matched: the paired closer for `{ [ < (`
-/// (customizable via [`with_auto_delimiters`](VerbatimArgumentParser::with_auto_delimiters)),
-/// the same character otherwise. [`with_delimiters`](VerbatimArgumentParser::with_delimiters)
-/// prescribes a fixed pair instead (the `v<c1><c2>` code): a different character at the
-/// position diagnoses [`ExpectedVerbatimDelimiter`] and reports the argument absent,
-/// consuming nothing.
+/// The opening delimiter is the first character after optional whitespace, read raw
+/// under a state where only whitespace scanning is left active. Comments are *not*
+/// skipped — `%` is a perfectly good `\verb` delimiter — and the skipped whitespace is
+/// staged like any other argument's surrounding noise. Any character the language can
+/// tokenize will do; one it declares forbidden in the surrounding state cannot be read,
+/// and the argument is then reported absent.
 ///
-/// **Pairing rule**: when the delimiters differ, nested occurrences
-/// of the opening character deepen a depth counter and matching closers close it —
-/// `\verb{a{b}c}` reads `a{b}c` whole; with identical delimiters the first closer ends
-/// the region.
+/// By default the closing delimiter is matched automatically: the paired closer for
+/// `{ [ < (` — that table is replaceable with
+/// [`with_auto_delimiters`](VerbatimArgumentParser::with_auto_delimiters) — and the same
+/// character for anything else.
+/// [`with_delimiters`](VerbatimArgumentParser::with_delimiters) prescribes a fixed pair
+/// instead (the `v<c1><c2>` argument code).
 ///
-/// The content is read as raw text, under the reading state derived through
+/// When the two delimiters differ, nested occurrences of the opening character deepen a
+/// depth counter and matching closers close it, so `\verb{a{b}c}` reads `a{b}c` whole.
+/// With identical delimiters the first closer ends the region.
+///
+/// The content is read as raw text under the state derived through
 /// [`verbatim_state_delta`], and staged as a
-/// group + chars shape: a [`Group`](crate::node::NodeKind::Group) node of the
-/// configured class whose single `Chars` child (omitted when the content is empty) is
-/// the raw text, recorded under the verbatim state; the content designation is the
-/// group's children. At end of input before the closing delimiter,
-/// [`UnterminatedVerbatim`] is diagnosed (strict: abort) and the group records an
-/// empty close.
+/// [`Group`](crate::core::node::NodeKind::Group) node of the configured class whose
+/// single `Chars` child (omitted when the content is empty) holds the raw text and
+/// records the verbatim state; the argument's content is the group's children.
 ///
-/// Requires a language with the groups feature ([`LangHasGroups`]): the parser
-/// installs its closing delimiter as an expected group close and stages a group node.
+/// Requires a language with the groups feature ([`LangHasGroups`]): the parser installs
+/// its closing delimiter as an expected group close and stages a group node.
+///
+/// # Recovery
+///
+/// Both problems are reported through [`ParseContext::recover`], so a strict driver
+/// aborts the parse and a tolerant one records the diagnostic and continues as
+/// described:
+///
+/// - No opening delimiter where the argument starts — the input has ended, or a fixed
+///   pair was prescribed and a different character stands there:
+///   [`ExpectedVerbatimDelimiter`], and the argument is reported absent with nothing
+///   consumed.
+/// - The input ends, or a token the reader could not read is tolerated, before the
+///   closing delimiter: [`UnterminatedVerbatim`], and the group records an empty
+///   close.
 pub struct VerbatimArgumentParser<L: Lang> {
     group_type: L::GroupTypeId,
     delimiters: Option<(char, char)>,
@@ -316,8 +353,8 @@ pub struct VerbatimArgumentParser<L: Lang> {
 }
 
 impl<L: LangHasGroups> VerbatimArgumentParser<L> {
-    /// An auto-delimited verbatim argument staging groups of class `group_type`
-    /// (`\verb|…|`, `\verb+…+`, …; the bare `v` code).
+    /// Creates an auto-delimited verbatim argument parser staging groups of class
+    /// `group_type` (`\verb|…|`, `\verb+…+`, …; the bare `v` argument code).
     pub fn new(group_type: L::GroupTypeId) -> VerbatimArgumentParser<L> {
         VerbatimArgumentParser {
             group_type,
@@ -326,15 +363,17 @@ impl<L: LangHasGroups> VerbatimArgumentParser<L> {
         }
     }
 
-    /// Prescribe a fixed delimiter pair (the `v<c1><c2>` code): the argument is
-    /// provided only when `open` itself comes next.
+    /// Prescribes a fixed delimiter pair (the `v<c1><c2>` argument code): the argument
+    /// is provided only when `open` itself comes next.
     pub fn with_delimiters(mut self, open: char, close: char) -> Self {
         self.delimiters = Some((open, close));
         self
     }
 
-    /// Replace the auto-matched delimiter table (default: `{}`, `[]`, `<>`, `()`).
-    /// An opening character not in the table closes with itself. Ignored when
+    /// Replaces the table of automatically matched delimiter pairs (default: `{}`,
+    /// `[]`, `<>`, `()`).
+    ///
+    /// An opening character that is not in the table closes with itself. Ignored when
     /// [`with_delimiters`](VerbatimArgumentParser::with_delimiters) prescribed a pair.
     pub fn with_auto_delimiters(
         mut self,
@@ -518,31 +557,32 @@ impl<L: Lang> fmt::Debug for VerbatimArgumentParser<L> {
     }
 }
 
-/// Specification of upon which tokens the verbatim-body-parser should terminate.
-/// One either specifies a full literal terminator syntax that is expected, or
-/// a sequence of the type `<ESC-CHAR><END-COMMAND>{<NAME>}`, such as
-/// `\end{verbatim}`.
+/// What ends a verbatim body: a literal string, or a stop command repeating the
+/// invocation's name, such as `\end{verbatim}`.
 ///
-/// Both shapes are **read** identically: [`VerbatimBodyParser`] composes one raw
+/// Both shapes are **read** the same way: [`VerbatimBodyParser`] composes one raw
 /// terminator string out of the variant's fields and installs it as the body state's
-/// expected group close ([`verbatim_state_delta`]), so the whole terminator arrives
-/// as a single token — a raw body never tokenizes its terminator, whatever its shape.
-/// The two shapes differ in the facts the parser reports back for the consumed
-/// terminator ([`EnvironmentBody::terminator`]): a literal one has no structure to
-/// report beyond its span
-/// ([`Literal`](EnvironmentTerminatorSyntaxData::Literal)), whereas a stop-command
-/// one was composed from known pieces and reports them as
+/// expected group close ([`verbatim_state_delta`]), so the whole terminator arrives as a
+/// single token. A raw body never tokenizes its terminator, whatever shape it was given
+/// in, and the composed string is matched character for character — `\end {verbatim}`,
+/// with a space in it, does not end the body.
+///
+/// The shapes differ only in what the parser reports for the consumed terminator
+/// ([`EnvironmentBody::terminator`]): a literal one has no structure to report beyond
+/// its span ([`Literal`](EnvironmentTerminatorSyntaxData::Literal)), whereas a stop
+/// command was composed from known pieces and reports them as
 /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) facts — the same shape
-/// [`EnvironmentBodyParser`](super::EnvironmentBodyParser) reports after its
-/// tokenized scan, so a recording consumer needs no separate raw-body arm.
+/// [`EnvironmentBodyParser`](super::EnvironmentBodyParser) reports after tokenizing a
+/// terminator, so a consumer that records how the source was written needs no separate
+/// case for raw bodies.
 pub enum VerbatimBodyTerminator<'p, L : Lang> {
     /// The terminator given as one raw string, with no further structure to it.
     Literal {
         /// The terminator, as literal raw text (e.g. `|END_VERBATIM_HERE|`)
         terminator : String
     },
-    /// The terminator given as an environment-terminating command back-referencing
-    /// the invocation's name — `\end{verbatim}`, spelled out piece by piece.
+    /// The terminator given as an environment-terminating command that repeats the
+    /// invocation's name — `\end{verbatim}`, spelled out piece by piece.
     StopEnvironmentCommand {
         /// The escape character the terminator command is written with (`\` for
         /// `\end{verbatim}`) — the canonical spelling the composing caller uses,
@@ -554,8 +594,8 @@ pub enum VerbatimBodyTerminator<'p, L : Lang> {
         invocation_name: &'p str,
         /// The terminator command's name (`end`), the body loop's stop condition.
         stop_command_name: &'p str,
-        /// The group rule in which we demand the terminator environment name to be
-        /// enclosed.  (In `\end{xyz}`, this is the `{`/`}` group rule.)
+        /// The group rule the terminator's name must be enclosed in: for `\end{xyz}`,
+        /// the `{`/`}` rule.
         name_group_rule: Arc<GroupRule<L>>,
     }
 }
@@ -659,32 +699,47 @@ impl<L: Lang> fmt::Debug for VerbatimBodyTerminator<'_, L> {
     }
 }
 
-/// The verbatim environment-body parser: reads the body as **raw text** up to the
-/// given `terminator` (cf. [`VerbatimBodyTerminator`]),
-/// consumes the terminator, and stages the standard body `List`
-/// with the content as one raw `Chars` node — a drop-in
-/// [`EnvironmentBodyParser`](super::EnvironmentBodyParser) replacement for
-/// `make_body_parser`-style spec hooks (it produces the same [`EnvironmentBody`]).
+/// Parses the body of an environment-shaped construct as **raw text**: everything up to
+/// `terminator`, with no commands, groups or comments recognized inside it.
 ///
-/// **Newline gobbling** (on by default): a newline immediately at
-/// the body's start — the one right after `\begin{verbatim}` — is *staged* as a
-/// leading whitespace `Chars` node but **designated out of the content**
-/// ([`EnvironmentBody::content`]): trees keep every byte, content extraction starts at
-/// the real first verbatim line. Disable via
+/// The body is read, the terminator consumed, and the standard body `List` staged with
+/// the content as one raw `Chars` node. It produces the same [`EnvironmentBody`] as
+/// [`EnvironmentBodyParser`](super::EnvironmentBodyParser), so a definition that supplies
+/// its own body parser can use either. "Environment" is the LaTeX-like preset's
+/// vocabulary; this parser reads the region between an opening the caller has already
+/// read and the terminator it is configured with.
+///
+/// [`new`](VerbatimBodyParser::new) takes what a definition has to configure: the name
+/// diagnostics call the construct, what ends the body ([`VerbatimBodyTerminator`] — a
+/// literal string, or a stop command repeating that name), and the group class of the
+/// rule minted to carry the terminator (that class is recorded nowhere — the body stages
+/// a `List`, not a group). In the LaTeX-like preset none of this is written by hand: an
+/// environment registered with the shipped verbatim behavior sets it up (see
+/// [the definitions guide](crate::guide::specs#the-spec-types)).
+///
+/// **Newline gobbling** (on by default): a newline standing at the very start of the
+/// body — the one right after `\begin{verbatim}` — is staged as a leading whitespace
+/// `Chars` node but designated *out* of the content ([`EnvironmentBody::content`]), so
+/// the tree keeps every character while extracted content starts at the first real
+/// verbatim line. Turn it off with
 /// [`with_gobble_leading_newline`](VerbatimBodyParser::with_gobble_leading_newline).
 ///
-/// At end of input before the terminator, [`MissingEnvironmentTerminator`] is
-/// diagnosed (anchored at the invocation trigger, like the tokenized body parser) and
-/// the body closes at the input's end.
-///
-/// The consumed terminator's facts are reported back on
-/// [`EnvironmentBody::terminator`] in the arm matching the terminator's own shape —
+/// The consumed terminator's spelling is reported on [`EnvironmentBody::terminator`] in
+/// the variant matching the terminator's own shape:
 /// [`Literal`](EnvironmentTerminatorSyntaxData::Literal) for a literal string,
-/// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a stop command
-/// ([`VerbatimBodyTerminator`]).
+/// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a stop command.
 ///
 /// Requires a language with the groups feature ([`LangHasGroups`]): the terminator is
 /// carried by a minted group rule installed as the expected group close.
+///
+/// # Recovery
+///
+/// When the input ends before the terminator appears — or a token the reader could not
+/// read is tolerated there — [`MissingEnvironmentTerminator`] is reported through
+/// [`ParseContext::recover`], anchored at the invocation trigger like the tokenizing body
+/// parser's. A strict driver aborts the parse; a tolerant one records the diagnostic,
+/// keeps the content read so far, closes the body where the reading stopped, and leaves
+/// [`EnvironmentBody::terminator`] `None`.
 pub struct VerbatimBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{verbatim}`'s command token), anchoring
     /// the missing-terminator diagnostic.
@@ -704,7 +759,7 @@ pub struct VerbatimBodyParser<'p, L: Lang> {
 }
 
 impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
-    /// A verbatim body parser for the environment invoked as `invocation_name`
+    /// Creates a verbatim body parser for the construct invoked as `invocation_name`
     /// (trigger token span `trigger_span`), ended by `terminator`
     /// ([`VerbatimBodyTerminator`]), minting its expected-close rule under
     /// `group_type`.
@@ -724,16 +779,20 @@ impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
         }
     }
 
-    /// Set whether a single newline at the body's very start is designated out of the
-    /// content (default: `true` — the `\begin{verbatim}`-line newline belongs to the
-    /// environment's begin/end syntax, not to the verbatim text).
+    /// Sets whether a single newline at the body's very start is designated out of the
+    /// content (default: `true`).
+    ///
+    /// That newline ends the `\begin{verbatim}` line: it belongs to the construct's
+    /// opening syntax rather than to the verbatim text. Either way it is staged, and
+    /// stays in the tree.
     pub fn with_gobble_leading_newline(mut self, gobble: bool) -> Self {
         self.gobble_leading_newline = gobble;
         self
     }
 
-    /// Provide the span of the invocation name as written, so the body's traceback
-    /// frame can quote it (`environment ‘verbatim’`).
+    /// Provides the span of the invocation name as written, so the body's traceback
+    /// frame can quote it (`environment ‘verbatim’`). Without it the frame is titled
+    /// "environment body".
     pub fn with_invocation_name_span(mut self, name_span: SourceSpan<L::SourceOrigin>) -> Self {
         self.invocation_name_span = Some(name_span);
         self

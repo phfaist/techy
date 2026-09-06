@@ -22,10 +22,15 @@ use super::{
     ConstructParser, ConstructParserResult, FromInvocation, Invocation, ParseContext,
 };
 
-/// Parse a callable's declared arguments at the reader's position — the argument half of
-/// [`StdInvocationParser`], shared with environment-shaped compositions.
+/// Parses a callable's declared arguments at the reader's position, returning the
+/// nodes they staged and one record per declared argument.
 ///
-/// Iterates `callable_spec.arguments()` in invocation order, running each argument's
+/// This is the argument half of [`StdInvocationParser`], public as a building block
+/// for parsers that take over an invocation: an environment-shaped
+/// `make_invocation_parser` override runs this same loop between reading its
+/// `\begin{name}` name group and parsing its body.
+///
+/// It iterates `callable_spec.arguments()` in invocation order, running each argument's
 /// parser under the argument's own state — the spec's `parsing_state_delta` stacked on
 /// `cx.state`, session-mediated, reverted structurally — and
 /// collects the provided regions' nodes into one child list plus one [`ParsedArgument`]
@@ -33,15 +38,11 @@ use super::{
 /// returned regions are staged in child-list offsets, ready for the caller's
 /// [`ParsedArguments`] record.
 ///
-/// Each argument runs under its traceback frame (`argument #N of ‘\frac’`):
-/// `name_span` is the invocation spelling's span, quoted into the title at snapshot
-/// time — the spec is de-keyed, so the spelling must come from the caller (an
-/// environment composition passes its *name*'s span, so frames quote `align`, not
-/// `\begin`).
-///
-/// Public as a takeover-composition building block:
-/// an environment-shaped `make_invocation_parser` override runs this same loop between
-/// reading its `\begin{name}` name group and parsing its body.
+/// Each argument runs under its own traceback frame (`argument #N of ‘\frac’`).
+/// `name` is the span of the invocation spelling, quoted into that title when the
+/// traceback is snapshotted: a spec does not know the name it was registered under,
+/// so the spelling has to come from the caller. An environment composition passes the
+/// span of its *environment* name, so its frames quote `align`, not `\begin`.
 pub fn parse_declared_arguments<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     callable_spec: &Arc<dyn CallableSpec<L>>,
@@ -88,12 +89,19 @@ pub fn parse_declared_arguments<L: Lang>(
     Ok((children, arguments))
 }
 
-/// The standard declarative invocation parser — the default returned by
+/// Parses one callable invocation from the arguments its spec declares, and stages
+/// the resulting `Callable` node.
+///
+/// This is what
 /// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
-/// — and the carrier of the invocation-parsing contract, which any takeover
-/// parser supplied by an overridden factory runs under too. A tier-2 temporary
-/// (see [`core::constructs`](crate::core::constructs)), constructed per
-/// invocation by the spec's factory.
+/// returns unless a spec overrides it, so the engine reaches for it for every
+/// callable that does not take over its own parsing: the content loop resolves a
+/// trigger token, consumes it, and runs the parser the spec's factory returned. It is
+/// constructed per invocation and dropped when the invocation's parse ends (see the
+/// two-tier ownership model in [`core::constructs`](crate::core::constructs)).
+///
+/// Its documentation also states the invocation-parsing contract that a replacement
+/// parser from an overridden factory runs under.
 ///
 /// # Contract
 ///

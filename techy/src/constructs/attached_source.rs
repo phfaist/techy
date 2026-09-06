@@ -1,18 +1,18 @@
-//! Attached-source parsing: the [`ParseContext::parse_attached_source`] door and
-//! the [`ParseContext::attach_source_reference`] resolve-diagnose-attach bundle —
-//! the engine half of `\input`-style inclusion ([`SourceResolver`] is the lookup
-//! half).
+//! Attached-source parsing: [`ParseContext::parse_attached_source`], which parses a
+//! second source into the running parse, and
+//! [`ParseContext::attach_source_reference`], which resolves a reference and then
+//! does the same — the engine half of `\input`-style inclusion ([`SourceResolver`]
+//! is the lookup half).
 //!
-//! The door sub-parses an already-minted [`Source`] **into the running session**:
-//! included content must parse under the parsing state *at the inclusion point*,
-//! which the running session has naturally — and the staged nodes join the same
-//! builder, so a multi-source tree is one tree (`BuildId`s are session-global).
-//! Slot assembly stays the calling invocation parser's job: the door returns an
-//! [`AttachedSourceOutcome`] — content nodes plus the included run's merged
-//! after-effect record — and the caller stages the nodes (for `\input`, as an
-//! [`Attached`](crate::node::SlotRole::Attached) slot of its callable node) and
-//! decides whether the record continues past the inclusion (the
-//! persist-vs-transparent choice).
+//! Both parse the attached [`Source`] **into the running session**: included content
+//! must parse under the parsing state at the inclusion point, which the running
+//! session already has, and the staged nodes join the same builder, so a tree
+//! drawing on several sources is still one tree (`BuildId`s are session-global).
+//! Assembling a slot from the result stays the calling invocation parser's job: both
+//! methods return an [`AttachedSourceOutcome`] — content nodes plus the included
+//! run's merged after-effect record — and the caller stages the nodes (for `\input`,
+//! as an [`Attached`](crate::node::SlotRole::Attached) slot of its callable node)
+//! and decides whether the record continues past the inclusion.
 //!
 //! The reference itself is the caller's to read, and the rule on it is one line: an
 //! `\input`-style construct's reference argument carries **plain text**. A caller that
@@ -47,8 +47,13 @@ use super::{
     StrayGroupClose,
 };
 
-/// What [`ParseContext::parse_attached_source`] produces: the staged content nodes of
-/// the included run, plus the run's merged after-effect record.
+/// The result of parsing an attached source: the staged content nodes of the
+/// included run, plus the run's merged after-effect record.
+///
+/// Returned by [`ParseContext::parse_attached_source`] and
+/// [`ParseContext::attach_source_reference`]. The nodes are staged in the running
+/// parse's tree and their spans point into the attached [`Source`], not into the
+/// document that included it.
 pub struct AttachedSourceOutcome<L: Lang> {
     /// The staged content nodes, in source order — no wrapper `List`, no slot record:
     /// slot assembly stays the calling invocation parser's job.
@@ -87,13 +92,33 @@ impl<L: Lang> Clone for AttachedSourceOutcome<L> {
 }
 
 impl<L: Lang> ParseContext<'_, '_, L> {
-    /// Parse `source` as **attached content** of the construct being parsed — the
-    /// sub-parse entry point of `\input`-style inclusion: a fresh inner context over its
-    /// own reader (the outer reader stays untouched, pinned to the outer source),
-    /// the **same session and builder** (the staged nodes belong to the running
-    /// parse; `BuildId`s are session-global), and `state` as the sub-parse's input
-    /// state — for inclusion semantics, the state at the inclusion point
-    /// (`Arc::clone(&cx.state)`).
+    /// Parses `source` as **attached content** of the construct being parsed: the
+    /// sub-parse entry point of `\input`-style inclusion.
+    ///
+    /// The caller supplies everything the sub-parse needs: the [`Source`] to parse
+    /// (already built — [`resolve_source_reference`] is what builds one from a
+    /// reference, and [`attach_source_reference`](ParseContext::attach_source_reference)
+    /// composes the two steps), the input parsing state (for inclusion semantics,
+    /// the state at the inclusion point — `Arc::clone(&cx.state)`), and the parser
+    /// that drives the run. The method builds a fresh inner context over its own
+    /// reader for `source`, leaving the outer reader untouched on the outer source,
+    /// and uses the **same session and node builder**, so the staged nodes belong to
+    /// the running parse.
+    ///
+    /// # Spans and the including source
+    ///
+    /// Every node staged from the attached content carries a span into `source`, not
+    /// into the document that included it, so one tree can name several sources; a
+    /// [`SourceSpan`] always says which. The link back to the inclusion is the
+    /// attached source's own provenance: [`resolve_source_reference`] stamps the
+    /// including construct's span on it as
+    /// [`triggered_at`](crate::source::SourceProvenance::triggered_at), which is what
+    /// lets a diagnostic raised inside the inclusion be reported with the include
+    /// chain that led to it. Byte accounting holds per source: the included nodes
+    /// tile the attached content, and no span of theirs relates to the includer's
+    /// bytes.
+    ///
+    /// # The parser to pass
     ///
     /// The caller supplies the construct parser driving the sub-parse; for
     /// `\input`-style inclusion that is the root nodes-parse shape,
@@ -107,9 +132,9 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// return).
     ///
     /// Returns an [`AttachedSourceOutcome`]: the staged **content nodes only** — no
-    /// wrapper `List`, no slot record: slot assembly stays the invocation parser's
-    /// job (the single staging entry point, [`stage_node`](ParseContext::stage_node),
-    /// still holds) —
+    /// wrapper `List` and no slot record, since assembling those stays the calling
+    /// invocation parser's job, through the same
+    /// [`stage_node`](ParseContext::stage_node) entry point as everything else —
     /// plus the included run's merged after-effect record
     /// ([`AttachedSourceOutcome::after_effects`]), which the caller forwards or
     /// drops (the persist-vs-transparent choice of `\input`-style specs). The whole
@@ -214,9 +239,13 @@ impl<L: Lang> ParseContext<'_, '_, L> {
         })
     }
 
-    /// Resolve `reference` and parse the resolved source as attached content —
-    /// the **single resolve-diagnose-attach raising site** of `\input`-style
-    /// inclusion, so the two failure conditions carry one wording across every
+    /// Resolves `reference` through the driver's source resolver and parses the
+    /// resolved source as attached content.
+    ///
+    /// This is the composition an `\input`-style construct performs once it has read
+    /// its reference argument: it looks the reference up, and on success delegates to
+    /// [`parse_attached_source`](ParseContext::parse_attached_source). Being the one
+    /// place both lookup failures are raised, it gives them one wording across every
     /// `\input`-variant spec and framework:
     ///
     /// - no resolver configured on the driver

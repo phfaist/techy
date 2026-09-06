@@ -1,4 +1,4 @@
-//! Construct parsers: the parsing layer of the S1 core.
+//! Construct parsers: the `ConstructParser` contract and the standard parsers.
 //!
 //! [`ConstructParser`] is the single most important trait in the system: every construct —
 //! the root parse ([`RootNodesParser`], the parser the entry point runs directly), the
@@ -222,20 +222,14 @@ pub(crate) fn comment_node_kind<L: Lang>(
     (kind, span)
 }
 
-/// Everything a construct parser needs, in one context value.  Includes pretty much
-/// all methods the construct parser might need, including to stage nodes, to delegate
-/// parsing to sub-parsers, pushing frames on the frames stack, to change the parsing
-/// state, etc.
+/// Everything a construct parser needs during one construct's parse, in one value:
+/// the token reader, the input parsing state, the per-parse session, and the
+/// language's driver.
 ///
-/// **Dispatching fallible public hooks yourself.** A third-party construct parser
-/// that consults a fallible hook directly — say
-/// [`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) or
-/// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
-/// — also owns the error's traceback: the hooks have no session access, so the
-/// consultation site attaches the live traceback to a hook-returned abort error
-/// through [`ParseContext::attach_hook_frames`]
-/// (`.map_err(|error| cx.attach_hook_frames(error))`), exactly as the in-crate
-/// dispatch sites do — an error already carrying frames keeps them.
+/// A [`ConstructParser`] receives one by reference and does all of its work through
+/// it: reading tokens, staging nodes, running sub-parsers, deriving and scoping
+/// parsing states, pushing traceback frames, and reporting problems. Code that drives
+/// construct parsers itself builds a context with [`new`](ParseContext::new).
 ///
 /// **Spans come from the token reader** — the context holds no source handle. A
 /// construct parser does not pair a byte range with a source itself: every
@@ -248,6 +242,16 @@ pub(crate) fn comment_node_kind<L: Lang>(
 /// the current position ([`here`](ParseContext::here), the anchor for a condition
 /// detected between tokens). Only the reader knows which source it is serving tokens
 /// from, so only the reader can answer where a token is.
+///
+/// **Dispatching fallible public hooks yourself.** A third-party construct parser
+/// that consults a fallible hook directly — say
+/// [`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) or
+/// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+/// — also owns the error's traceback: the hooks have no session access, so the
+/// consultation site attaches the live traceback to a hook-returned abort error
+/// through [`ParseContext::attach_hook_frames`]
+/// (`.map_err(|error| cx.attach_hook_frames(error))`), exactly as the in-crate
+/// dispatch sites do — an error already carrying frames keeps them.
 pub struct ParseContext<'a, 's, L: Lang> {
     /// The token stream — and the answer to every "where?" question: what a token
     /// is worth as a span, and where the stream stands.
@@ -281,10 +285,13 @@ pub struct ParseContext<'a, 's, L: Lang> {
 }
 
 impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
-    /// Bundle the four parse inputs into a context. Prefer this over a struct literal
-    /// (the fields stay public for access): the context is the type's stated "one place
-    /// to grow" (depth limits, cancellation), and construction through `new` keeps
-    /// future fields from breaking every embedder.
+    /// Creates a context from the four parse inputs: the token reader, the
+    /// construct's input parsing state, the session, and the driver.
+    ///
+    /// Prefer this over a struct literal even though the fields are public. The
+    /// context is where the library grows when parsing gains a new ambient concern
+    /// (a depth limit, a cancellation signal), and construction through `new` keeps
+    /// such an addition from breaking code that builds contexts.
     pub fn new(
         tokens: &'a mut dyn TokenReader<'s, L>,
         state: Arc<ParsingState<L>>,
@@ -301,8 +308,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         SourceSpan::at(&self.tokens.source_position_at(&self.tokens.position_here()))
     }
 
-    /// The source span running from `begin` to `end` — the span of a construct that
-    /// covers several tokens, taken from two stream positions the reader handed out
+    /// Returns the source span running from `begin` to `end` — the span of a
+    /// construct covering several tokens.
+    ///
+    /// The two arguments are stream positions the reader returned
     /// ([`position_here`](crate::token::TokenReader::position_here),
     /// [`position_at`](crate::token::TokenReader::position_at)).
     ///
@@ -340,31 +349,40 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         }
     }
 
-    /// Stage one parsed node — **the single staging entry point** of parsing (every
-    /// parsed node enters the tree through it), and the one automatic
-    /// [`Lang::make_node_ext`] site: the node's ext is minted here (with the
-    /// descent-only [`StagedChildren`](crate::node::StagedChildren) view of
-    /// `children`), then the node is staged with annotation `()` (parse output is the
-    /// unannotated `NodeTree<L>`; annotations are consumer vocabulary).
+    /// Stages one parsed node and returns the [`BuildId`](crate::node::BuildId) that
+    /// identifies it.
     ///
-    /// Construct parsers have no other route to the builder — no node escapes ext
-    /// minting, with zero parser cooperation required. `children` are the node's
-    /// structural children in order (for a `Callable`: one region per provided
-    /// argument, then one per slot — see
+    /// This is the **single staging entry point** of parsing: every parsed node
+    /// enters the tree through it, and construct parsers reach the tree builder no
+    /// other way. Because of that, this is also where each node's language extension
+    /// is created — [`Lang::make_node_ext`] runs here, with the
+    /// [`StagedChildren`](crate::node::StagedChildren) view of `children` — so no
+    /// node can escape extension minting and no parser has to cooperate for it to
+    /// happen. The node is staged with annotation `()`: a parse produces the
+    /// unannotated `NodeTree<L>`, and annotations belong to the code that consumes
+    /// the tree afterwards.
+    ///
+    /// `children` are the node's structural children in order (for a `Callable`: one
+    /// region per provided argument, then one per slot — see
     /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add)).
     ///
-    /// `Err` reports a staging-contract violation
-    /// ([`NodeBuildError`](crate::node::NodeBuildError)) — an implementation bug in an
-    /// extension, not a source condition — or the ext mint's own reported failure
-    /// ([`ExtMintFailed`](crate::node::NodeBuildError::ExtMintFailed),
-    /// [`Lang::make_node_ext`]'s error channel). Lift a contract violation with
-    /// [`implementation_error`](ParseContext::implementation_error); lift
-    /// `ExtMintFailed` — an operational failure in consumer-supplied hook code, not
-    /// a contract violation — as a [`HookFailed`](crate::error::HookFailed)
-    /// condition carrying the mint's `detail`, with the live traceback attached
-    /// ([`attach_hook_frames`](ParseContext::attach_hook_frames)). The in-crate
-    /// staging callers match the variant and do exactly that; either lift aborts
-    /// the parse under any recovery policy.
+    /// # Errors
+    ///
+    /// Returns a [`NodeBuildError`](crate::node::NodeBuildError) in two cases, both
+    /// of which abort the parse under any recovery policy — neither is a condition in
+    /// the source being parsed:
+    ///
+    /// - a violation of the staging contract, which is an implementation bug in an
+    ///   extension. Turn it into an abort error with
+    ///   [`implementation_error`](ParseContext::implementation_error).
+    /// - [`ExtMintFailed`](crate::node::NodeBuildError::ExtMintFailed), the failure
+    ///   [`Lang::make_node_ext`] itself reported. This is an operational failure in
+    ///   consumer-supplied code rather than a broken contract, so turn it into a
+    ///   [`HookFailed`](crate::error::HookFailed) condition holding the mint's
+    ///   `detail`, with the live traceback attached
+    ///   ([`attach_hook_frames`](ParseContext::attach_hook_frames)).
+    ///
+    /// The in-crate staging callers match on the variant and do exactly that.
     pub fn stage_node(
         &mut self,
         kind: NodeKind<L>,
@@ -389,13 +407,16 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.session.builder.staged_nodes()
     }
 
-    /// Stage the resolved invocation's `Callable` node — the **transcription-case
-    /// shorthand** over the single staging entry point ([`stage_node`](ParseContext::stage_node)):
-    /// builds the [`CallableData`] by transcribing `callable_type`/`name`/`spec`
-    /// from the bundle and minting the invocation-syntax payload from it
-    /// ([`FromInvocation`]), computes the node's span, stages (minting the node
-    /// ext, as staging always does), and returns the id. What [`StdInvocationParser`] does, packaged
-    /// for takeover parsers of the same macro shape.
+    /// Stages the `Callable` node of a resolved invocation and returns its
+    /// [`BuildId`](crate::node::BuildId).
+    ///
+    /// A shorthand over [`stage_node`](ParseContext::stage_node) for the common case
+    /// where the node simply records what the invocation resolved to: it builds the
+    /// [`CallableData`] by copying `callable_type`, `name` and `spec` out of the
+    /// bundle, creates the invocation-syntax payload from it ([`FromInvocation`]),
+    /// computes the node's span, and stages the node. This is what
+    /// [`StdInvocationParser`] does, packaged for parsers that take over an
+    /// invocation of the same macro shape.
     ///
     /// `arguments`/`slots` are **caller-tiled** records in staged child-list
     /// coordinates, and `children` the flat child list they tile — the natural
@@ -429,17 +450,21 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// an explicit [`CallableData`]. No ext/annotation parameters — staging
     /// mints the ext, and parse annotations are `()`.
     ///
-    /// `Err` reports an **invalid computed span** — for a language that obeys span
-    /// tiling, a node end (from the standard rule or from `end`) that precedes the
-    /// trigger's start, or that lies in another source than the trigger: a contract
-    /// violation by the calling parser, lifted as an [`ImplementationError`] that
-    /// aborts under any recovery policy, never a panic (a language with
+    /// # Errors
+    ///
+    /// Returns an [`ImplementationError`] for an **invalid computed span**: under a
+    /// language that obeys span tiling, a node end (from the standard rule or from
+    /// `end`) that precedes the trigger's start or lies in a different source than
+    /// the trigger. That is a contract violation by the calling parser; it aborts the
+    /// parse under any recovery policy, and never panics. A language with
     /// `OBEYS_SPAN_TILING = false` claims nothing about the span and reports no such
-    /// error) — or a
-    /// [`stage_node`](ParseContext::stage_node) failure lifted per that method's
-    /// split (contract violations as [`ImplementationError`], the ext mint's
-    /// reported failure as [`HookFailed`](crate::error::HookFailed); both abort
-    /// under any recovery policy).
+    /// error.
+    ///
+    /// A failure of the underlying [`stage_node`](ParseContext::stage_node) is
+    /// returned per that method's split: contract violations as
+    /// [`ImplementationError`], the extension mint's own reported failure as
+    /// [`HookFailed`](crate::error::HookFailed). Both abort under any recovery
+    /// policy.
     pub fn stage_invocation(
         &mut self,
         invocation: &Invocation<'_, L>,
@@ -553,9 +578,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         )
     }
 
-    /// Probe the token at the current position under `state`, mapping a tokenizer error
-    /// per the recovery policy — the **probing peek** of the argument-probe protocol:
-    /// strict mode aborts with the token error (mirroring the content loop); tolerant
+    /// Peeks at the token at the current position under `state`, mapping a tokenizer
+    /// error per the recovery policy.
+    ///
+    /// This is the peek an argument parser probes a position with: strict mode aborts
+    /// with the token error (mirroring the content loop); tolerant
     /// mode reports `None` **without diagnosing or consuming** — the caller treats the
     /// position as unusable (argument absent, terminator malformed) and the enclosing
     /// content loop re-reads the error and applies its own token recovery, avoiding a
@@ -571,7 +598,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// parser peeking with its minted group rule in force — without swapping
     /// [`state`](ParseContext::state).
     ///
-    /// Thin sugar over [`ParseDriver::probe_token`], where the policy is defined.
+    /// Shorthand for [`ParseDriver::probe_token`], where the policy is defined.
     pub fn probe_token(
         &mut self,
         state: &Arc<ParsingState<L>>,
@@ -579,10 +606,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.driver.probe_token(self.tokens, self.session, state)
     }
 
-    /// Run `parser` as one **sub-parse** — the single entry point that every descent
-    /// (a construct parser running another [`ConstructParser`] over the same input)
-    /// MUST go through; the pylatexenc
-    /// `walker.parse_content(parser, …, parsing_state)` analog.
+    /// Runs `parser` as one sub-parse of the construct being parsed, and returns its
+    /// output and after-effect delta.
+    ///
+    /// This is the single entry point every descent (a construct parser running
+    /// another [`ConstructParser`] over the same input) MUST go through — the
+    /// counterpart of pylatexenc's `walker.parse_content(parser, …, parsing_state)`.
     ///
     /// The contract is **normative**: a `ConstructParser` runs only through this
     /// method — called directly, or through the thin wrappers
@@ -687,12 +716,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Run `f` with [`state`](ParseContext::state) scoped to `state`, restoring the
-    /// outer state afterwards — the closure-shaped scoped-state primitive under
-    /// [`parse_construct`](ParseContext::parse_construct), for state scopes that
-    /// are not `ConstructParser`-shaped (the per-argument delta around
-    /// `ArgumentParser::parse_argument`; takeover parsers scoping hand-derived
-    /// states around arbitrary code).
+    /// Runs `f` with [`state`](ParseContext::state) set to `state`, restoring the
+    /// outer state afterwards.
+    ///
+    /// This is the state scoping that [`parse_construct`](ParseContext::parse_construct)
+    /// performs, exposed for scopes that are not `ConstructParser`-shaped: the
+    /// per-argument delta around `ArgumentParser::parse_argument`, or a takeover
+    /// parser scoping a state it derived itself around arbitrary code.
     ///
     /// This is a **state-scoping utility, not a descent entry point**: code that
     /// runs another [`ConstructParser`] must go through
@@ -720,9 +750,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Detection-site recovery — **the recovery entry point**: every problem a
-    /// construct parser detects in the source is reported through this one method,
-    /// which boxes the condition and hands it to [`ParseDriver::recover`], where the
+    /// Reports a problem detected in the source and applies the driver's recovery
+    /// policy.
+    ///
+    /// This is **the recovery entry point**: every problem a construct parser finds
+    /// in the source is reported through this one method, at the point of detection.
+    /// It boxes the condition and passes it to [`ParseDriver::recover`], where the
     /// policy is defined — the default driver path applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once (it needs
     /// this context's parsing state) and then records the condition as an
@@ -736,11 +769,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.recover_boxed(Box::new(condition), span)
     }
 
-    /// Attach the live traceback to a hook-returned abort error that carries no
-    /// frames of its own — extension hooks (driver hooks, spec factories,
-    /// descent-state callbacks) have no session access, so the call site is where
-    /// the snapshot exists. An error already carrying frames passes through
+    /// Attaches the live traceback to an abort error returned by a hook, when the
+    /// error has no frames of its own; an error that already has frames is returned
     /// unchanged.
+    ///
+    /// Extension hooks (driver hooks, spec factories, descent-state callbacks) have
+    /// no access to the session, so the site that called the hook is the only place
+    /// where a traceback snapshot can be taken.
     ///
     /// The in-crate dispatch sites use this on every fallible hook they consult; a
     /// construct parser that consults such a hook itself
@@ -770,11 +805,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.driver.recover(self.session, &self.state, data, span)
     }
 
-    /// The parser-facing state derivation, from the **current** state
-    /// ([`state`](ParseContext::state)) — the one derivation point every construct
-    /// parser derives through: lowers **context-dependent events**, then runs the
-    /// session-mediated derivation ([`ParserSession::derived_state`] with this
-    /// context's driver), so every transition reaches
+    /// Derives a new parsing state by applying `delta` to the **current** state
+    /// ([`state`](ParseContext::state)).
+    ///
+    /// This is the derivation point every construct parser goes through: it lowers
+    /// **context-dependent events**, then runs the session-mediated derivation
+    /// ([`ParserSession::derived_state`] with this context's driver), so every
+    /// transition reaches
     /// [`ParseDriver::observe_transition`]. Deriving from another base goes through
     /// the session method directly
     /// (`cx.session.derived_state(cx.driver, &base, &delta)`) — with no event
@@ -986,9 +1023,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         Ok(effective)
     }
 
-    /// The group-interior derivation from the **current** state — sugar over
-    /// [`ParserSession::group_interior_state`] supplying this context's driver: the
-    /// canonical expecting-close override merged with the driver's
+    /// Derives the state a group's interior is parsed under, from the **current**
+    /// state — [`ParserSession::group_interior_state`] with this context's driver
+    /// supplied: the canonical expecting-close override merged with the driver's
     /// [`group_interior_delta`](ParseDriver::group_interior_delta), memoized per
     /// `(base, rule)`. Failing scope ops in the driver's descent delta recover exactly
     /// like [`derive_state`](ParseContext::derive_state)'s (the recovered interior
@@ -1008,7 +1045,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         }
     }
 
-    /// The shared recovery path of the two fallible derivation sugars: report every
+    /// The shared recovery path of the two fallible derivation methods: report every
     /// failing op through the recovery entry point (strict: the first one aborts); a
     /// finalize refusal aborts as an [`ImplementationError`] under any policy (a
     /// context-requiring event reached the underlying derivation point un-lowered —
@@ -1191,10 +1228,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Build the abort error for an extension-implementation contract violation
-    /// detected at `span` — an [`ImplementationError`] with the live traceback
-    /// attached. `detail` is typically a [`NodeBuildError`](crate::node::NodeBuildError)
-    /// or a literal contract description.
+    /// Builds the abort error for an extension-implementation contract violation
+    /// detected at `span`: an [`ImplementationError`] with the live traceback
+    /// attached.
+    ///
+    /// `detail` is typically a [`NodeBuildError`](crate::node::NodeBuildError) or a
+    /// literal description of the contract that was violated.
     ///
     /// Deliberately **not** the recovery entry point: an implementation bug is not a source
     /// condition — it aborts even under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant), and no
@@ -1251,8 +1290,9 @@ pub struct ImplementationError {
 
 /// Condition: a scope op of an in-parse state delta failed
 /// ([`ScopeOpError`](crate::scopes::ScopeOpError), rendered into `detail`) — reported
-/// through the recovery entry point by the [`ParseContext`] derivation sugars: strict parses abort on it; tolerant parses record it and
-/// continue under the ops-skipped state
+/// through the recovery entry point by the [`ParseContext`] derivation methods:
+/// strict parses abort on it; tolerant parses record it and continue under the
+/// ops-skipped state
 /// ([`DeriveError::recovered`](crate::state::DeriveError::recovered)).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -1326,25 +1366,106 @@ impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {
 /// (mirroring [`Diagnostic`](crate::error::Diagnostic)); the alias derives it from `L`.
 pub type ConstructParserResult<L, T> = Result<T, ParseError<<L as Lang>::SourceOrigin>>;
 
-/// A parser for one construct, reading tokens and staging nodes through the context.
+/// A parser for one construct: it reads tokens and stages nodes through a
+/// [`ParseContext`], and returns what it staged.
 ///
-/// Implementations are tier-2 **temporaries** (the two-tier ownership model in
-/// [`core::constructs`](crate::core::constructs)): per-use configuration in
-/// fields, `&mut self` working state, dropped with the frame.
+/// This is the extension point for adding syntax to a language. Implement it to
+/// parse a construct the standard parsers do not cover — a macro that takes over
+/// its own invocation, a body shape of your own — and hand your implementation to
+/// the engine from the factory that covers that construct:
+/// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+/// for one callable, or the [`ParseDriver`] factories
+/// ([`make_root_parser`](ParseDriver::make_root_parser),
+/// [`make_nodes_parser`](ParseDriver::make_nodes_parser),
+/// [`make_group_parser`](ParseDriver::make_group_parser),
+/// [`make_invocation_parser`](ParseDriver::make_invocation_parser)) for every
+/// construct of that shape in the language.
+/// [Writing a construct parser](crate::guide::construct_parsers) works through a
+/// complete example.
 ///
-/// On success, a parser returns its output (typically staged `BuildId`s) together with
-/// an optional boxed [`ParsingStateDelta`] — the construct's *after-effect for the
-/// caller* (`\newcommand` pushing definitions for subsequent siblings), never its
-/// internal scoping. The delta is boxed so the common `None` case costs one
-/// pointer-sized return slot per recursion level, not the full delta struct.
+/// # What an implementation must do
+///
+/// Everything a parser needs is on the [`ParseContext`] it is given, and the
+/// context's methods are the only supported route to each of these jobs:
+///
+/// - **Read tokens** through [`cx.tokens`](ParseContext::tokens), and ask that same
+///   reader for every span it stages or reports — a parser never pairs a byte range
+///   with a source itself.
+/// - **Stage every node** through [`stage_node`](ParseContext::stage_node) (or the
+///   invocation shorthand [`stage_invocation`](ParseContext::stage_invocation)).
+///   There is no other route to the tree, which is what lets the engine mint each
+///   node's language extension without the parser's cooperation.
+/// - **Run any sub-parse** through
+///   [`parse_construct`](ParseContext::parse_construct) or its wrappers
+///   [`parse_nodes`](ParseContext::parse_nodes) and
+///   [`parse_group`](ParseContext::parse_group) — never by calling another
+///   parser's [`parse`](ConstructParser::parse) directly, which would bypass the
+///   engine's per-descent bookkeeping.
+/// - **Report every problem it finds in the source** through
+///   [`recover`](ParseContext::recover), at the point of detection, and continue
+///   locally if it returns `Ok(())`. Report a violated library contract through
+///   [`implementation_error`](ParseContext::implementation_error) instead.
+///
+/// An implementation is a **temporary**: it is constructed with its per-use
+/// configuration where it is needed, keeps its working state in its own fields
+/// ([`parse`](ConstructParser::parse) takes `&mut self`), may borrow freely, and is
+/// dropped when the construct's parse ends. Never store one in a spec — specs are
+/// shared across parses; see the two-tier ownership model in
+/// [`core::constructs`](crate::core::constructs).
+///
+/// # What the engine guarantees
+///
+/// A parser reached through one of the factories above is run by
+/// [`parse_construct`](ParseContext::parse_construct), which, around the single
+/// [`parse`](ConstructParser::parse) call:
+///
+/// - sets [`cx.state`](ParseContext::state) to the construct's input state and
+///   restores the caller's state afterwards, so a parser may derive and scope child
+///   states freely without cleaning up;
+/// - pushes the construct's traceback frame, if the caller supplied one, so every
+///   condition recorded during the parse names the construct;
+/// - checks the parse's nesting-depth limit before entering, so a parser that
+///   recurses through the context cannot exhaust the stack.
+///
+/// The root parser is the one exception: the parse entry point calls its
+/// [`parse`](ConstructParser::parse) directly, without a depth level or a frame
+/// (see [`RootNodesParser`]).
 pub trait ConstructParser<L: Lang> {
-    /// What the parser produces: a staged `BuildId`, a `Vec<BuildId>`, a
-    /// `ParsedArguments`, …
+    /// What this parser produces on success — a staged [`BuildId`](crate::node::BuildId)
+    /// for a parser that stages one node, a `Vec<BuildId>` for one that stages a run,
+    /// a [`NodesOutcome`] for a content loop, and so on.
     type Output;
 
-    /// Parse the construct at the context's current position.
+    /// Parses the construct at the context's current position, staging its nodes.
+    ///
+    /// Called exactly once per construct, by
+    /// [`ParseContext::parse_construct`](ParseContext::parse_construct) (see the
+    /// guarantees on the trait). On entry, `cx.state` is the construct's input
+    /// parsing state and the reader stands at the construct's first unconsumed
+    /// token — for an invocation parser, the token that triggered the invocation has
+    /// already been consumed by the caller.
+    ///
+    /// Returns the parser's [`Output`](ConstructParser::Output) together with an
+    /// optional [`ParsingStateDelta`]: the construct's **after-effect for the
+    /// caller** — a `\newcommand` whose definition must apply to the following
+    /// siblings — and never the state the parser scoped internally. The parser does
+    /// not apply it; the caller decides whether and where it applies. Return `None`
+    /// when the construct has no effect beyond itself, which is the common case.
+    ///
+    /// # Errors
+    ///
+    /// An `Err` **aborts the whole parse**: nobody continues past it. Problems in
+    /// the source are therefore not returned as errors — they are reported through
+    /// [`recover`](ParseContext::recover) where they are detected, which returns
+    /// `Err` only when the parse is running under
+    /// [`Recovery::Strict`](crate::error::Recovery::Strict). Reserve a directly
+    /// constructed `Err` for conditions no recovery can survive, such as a violated
+    /// library contract
+    /// ([`implementation_error`](ParseContext::implementation_error)).
     // The output-plus-delta pair is the decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]);
-    // splitting it into a named type would only rename the complexity.
+    // splitting it into a named type would only rename the complexity. The delta is
+    // boxed so the common `None` costs one pointer-sized return slot per recursion
+    // level rather than the full delta struct.
     #[allow(clippy::type_complexity)]
     fn parse(
         &mut self,
@@ -1352,11 +1473,13 @@ pub trait ConstructParser<L: Lang> {
     ) -> ConstructParserResult<L, (Self::Output, Option<Box<ParsingStateDelta<L>>>)>;
 }
 
-/// One resolved callable invocation, as handed to
-/// [`CallableSpec::make_invocation_parser`]: the dispatch loop resolves the trigger
-/// token (via [`ParseDriver::resolve_command`], or the
-/// resolution riding on a `Specials` token), builds this value, and moves it into the
-/// invocation parser the spec's factory returns.
+/// One resolved callable invocation, as passed to
+/// [`CallableSpec::make_invocation_parser`].
+///
+/// The dispatch loop resolves the trigger token (through
+/// [`ParseDriver::resolve_command`], or from the resolution a `Specials` token
+/// already carries), builds this value, and moves it into the invocation parser the
+/// spec's factory returns.
 ///
 /// When the parser runs, the trigger token has already been **consumed whole** by the
 /// dispatching arm (`move_to(token, TokenEdge::EndPastPostSpace)`, syntactic
@@ -1382,8 +1505,9 @@ pub struct Invocation<'a, L: Lang> {
     pub name: &'a str,
     /// The behavior spec driving the parse.
     pub spec: &'a Arc<dyn CallableSpec<L>>,
-    /// The token that triggered this invocation. Only a [`TokenReader`] interprets
-    /// it: hand it back to `cx.tokens` to learn what the trigger is and where it lies.
+    /// The token that triggered this invocation. Only a [`TokenReader`] can
+    /// interpret it: pass it to `cx.tokens` to learn what the trigger is and where
+    /// it is.
     pub token: &'a Token<L>,
 }
 
@@ -1398,12 +1522,15 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
     }
 }
 
-/// Opt-in constructor contract on a language's invocation-syntax payload
-/// ([`Lang::InvocationSyntax`], bounded by the core
-/// [`InvocationSyntax`](crate::state::InvocationSyntax) trait): build the
-/// recorded trigger-spelling facts from one resolved [`Invocation`].
+/// Builds a language's invocation-syntax payload ([`Lang::InvocationSyntax`]) from
+/// one resolved [`Invocation`]: the facts about how the invocation was spelled that
+/// the staged node records.
 ///
-/// Consulted by the **standard staging sites** —
+/// Implement it on the payload type (which the core
+/// [`InvocationSyntax`](crate::state::InvocationSyntax) trait already bounds) to let
+/// the standard parsers stage that language's callables.
+///
+/// It is consulted by the **standard staging sites** —
 /// [`ParseContext::stage_invocation`] (and through it
 /// [`StdInvocationParser`] and the expression-position bare-callable staging) plus
 /// the preset's specials sites — under a bound-where-used
@@ -1420,7 +1547,7 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
 /// standard dispatch loop reaches [`StdInvocationParser`] through the defaulted
 /// spec factory). techy implements it for `()` (records nothing), and the
 /// latexlike preset for its payload enum, so `Lang`s with `InvocationSyntax = ()`
-/// and latexlike-family languages satisfy the bound out of the box.
+/// and latexlike-family languages satisfy the bound with no work of their own.
 pub trait FromInvocation<L: Lang>: Sized {
     /// The payload recording `invocation`'s trigger spelling. Pure transcription:
     /// asks `tokens` what the token that triggered the invocation is

@@ -1,18 +1,19 @@
-//! Engine orchestration: [`ParserSession`], the root object of a parse, and
-//! the [`ParseDriver`] behavior object.
+//! Engine orchestration: [`ParserSession`], the root object of one parse, and the
+//! [`ParseDriver`] behavior object.
 //!
-//! A session bundles everything one parse **accumulates** — the staging
+//! A session holds everything one parse **accumulates** — the staging
 //! [`NodeTreeBuilder`], the [`Diagnostics`] sink, the derivation memos, the live frame
 //! stack — and [`finish`](ParserSession::finish) freezes it into a [`ParseResult`].
-//! Sessions are transient: one parse each, no reuse, pure scratch/output. Parse
-//! *behavior* — the [`Recovery`] policy included, moved off the session in 7.2 — lives
-//! on the language's [`ParseDriver`] (see its docs for the placement doctrine).
+//! Sessions are transient: one parse each, no reuse. Parse *behavior*, the
+//! [`Recovery`] policy included, belongs to the language's [`ParseDriver`] instead.
 //!
-//! The [`Language<L>`] runtime bundle is the long-lived counterpart: initial
-//! state and driver instance, with the [`parse()`](Language::parse) shorthand and the
-//! configurable [`parse_setup()`](Language::parse_setup) → [`ParseSetup::parse`]
-//! entry driving reader → root parser → `finish()`.
-//! `ParseResult` deliberately carries no `'env` lifetime and no `Language` reference: nodes are self-contained, results outlive their bundle.
+//! The [`Language<L>`] bundle is the long-lived counterpart: the initial state and the
+//! driver instance, with the [`parse()`](Language::parse) shorthand and the
+//! configurable [`parse_setup()`](Language::parse_setup) → [`ParseSetup::parse`] entry
+//! running reader → root parser → `finish()`.
+//!
+//! `ParseResult` deliberately has no `'env` lifetime and no `Language` reference:
+//! nodes are self-contained, so results outlive the bundle that produced them.
 
 mod descent_guard;
 mod driver;
@@ -53,13 +54,20 @@ pub use driver::{
 };
 pub use language::{Language, ParseSetup};
 
-/// One live entry of the session's parse-frame stack:
-/// pushed at the descent points through
-/// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame) and
-/// snapshotted into `L`-free [`TraceFrame`]s by the recovery entry point. Pushes run
-/// once per construct during normal parsing, so a frame is **allocation-free to
-/// build** (`Arc` reference-count increments only); its title is rendered only at
-/// snapshot time, when a problem is being reported.
+/// One construct that a parse currently has open: an entry of the session's parse
+/// frame stack.
+///
+/// The stack is what lets a reported problem say which group, argument, or
+/// environment the parser was inside. Frames are pushed and popped at every descent
+/// by
+/// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame), and
+/// [`ParserSession::snapshot_frames`] copies the live stack into
+/// [`TraceFrame`]s — which no longer mention the language type `L` — whenever a
+/// condition is recorded.
+///
+/// Building a frame allocates nothing (only `Arc` reference counts change), because a
+/// push happens once per construct in every parse; the title is rendered only when a
+/// snapshot is taken, that is, only when a problem is being reported.
 pub struct Frame<L: Lang> {
     /// How the frame's traceback title is produced at snapshot time.
     pub title: FrameTitle<L>,
@@ -67,10 +75,13 @@ pub struct Frame<L: Lang> {
     pub span: SourceSpan<L::SourceOrigin>,
 }
 
-/// A live frame's title recipe: **mechanisms, not a construct taxonomy**
-/// — the core has no macro/environment vocabulary, so a
-/// callable's title comes from its spec's
-/// [`stack_frame_title`](CallableSpec::stack_frame_title) hook at snapshot time.
+/// How a [`Frame`]'s title is produced when the stack is snapshotted.
+///
+/// The variants name mechanisms rather than kinds of construct: the engine has no
+/// vocabulary for macros or environments, so a callable's title is produced by its
+/// own spec, through
+/// [`stack_frame_title`](CallableSpec::stack_frame_title), at the moment a snapshot
+/// is taken.
 pub enum FrameTitle<L: Lang> {
     /// A fixed title.
     Static(&'static str),
@@ -143,15 +154,15 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
     }
 }
 
-/// The failure of a **session-mediated derivation**
-/// ([`ParserSession::derived_state`], [`ParserSession::group_interior_state`]):
-/// either the state derivation itself failed, or the driver's transition
-/// observation hook answered its abort channel. The two arms stay separate
-/// because they carry different continuation material — a derivation failure
-/// comes with the structured [`DeriveError`] (failing ops, the recovered state) a
-/// tolerant caller continues under, while an observation abort is already the
-/// [`ParseError`] that ends the parse
-/// ([`ParseDriver::observe_transition`]'s contract).
+/// Why a state derivation made through the session failed
+/// ([`ParserSession::derived_state`], [`ParserSession::group_interior_state`]).
+///
+/// Either the derivation itself failed, or the driver's transition observation hook
+/// asked for the parse to end. The two arms stay separate because a caller can do
+/// different things with them: a derivation failure comes with a structured
+/// [`DeriveError`] naming the operations that failed and offering a recovered state
+/// to continue under, while an observation abort is already the [`ParseError`] that
+/// ends the parse (see [`ParseDriver::observe_transition`]).
 #[allow(clippy::large_enum_variant)] // large `Derive` arm by design — see `DeriveError`
 #[non_exhaustive]
 pub enum SessionDeriveError<L: Lang> {
@@ -195,17 +206,27 @@ impl<L: Lang> core::error::Error for SessionDeriveError<L> {
     }
 }
 
-/// The root object of one parse: node building, diagnostics, and the recovery policy.
+/// Everything one parse accumulates: the nodes being staged, the diagnostics, and the
+/// bookkeeping the engine needs while the parse runs.
 ///
-/// The diagnostics and ext fields are public: construct parsers reach them through
-/// [`ParseContext::session`](crate::constructs::ParseContext) — the session *is* the
-/// shared mutable surface of a parse (trees stay immutable; this is the mutation
-/// boundary, consumed by [`finish`](ParserSession::finish)). The staging builder is
-/// deliberately **not** public: parse staging goes exclusively through the single
-/// staging entry point,
-/// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node) (which
-/// mints the node ext — no parser can stage an unpopulated node); the read view is
+/// A session is created for one parse and consumed by
+/// [`finish`](ParserSession::finish), which freezes it into a [`ParseResult`]. It is
+/// the only mutable part of a parse — trees, states, and specs are all immutable —
+/// and construct parsers reach it as
+/// [`ParseContext::session`](crate::constructs::ParseContext).
+///
+/// [`diagnostics`](ParserSession::diagnostics) and [`ext`](ParserSession::ext) are
+/// public fields, so a parser can record a diagnostic or update the language's own
+/// per-parse data directly. The node builder is deliberately private: nodes are
+/// staged only through
+/// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node), which
+/// creates the node extension as it goes, so no parser can stage a node with its
+/// extension left unpopulated. Read staged nodes back with
 /// [`ParseContext::staged_nodes`](crate::constructs::ParseContext::staged_nodes).
+///
+/// Most programs never touch a session: [`Language::parse`] creates and finishes one.
+/// Construct it directly when driving construct parsers yourself, over a
+/// [`ParseContext`](crate::constructs::ParseContext) you built.
 pub struct ParserSession<L: Lang> {
     /// The staging node builder (crate-internal; see the type docs).
     pub(crate) builder: NodeTreeBuilder<L>,
@@ -260,8 +281,11 @@ pub struct ParserSession<L: Lang> {
 }
 
 impl<L: Lang> ParserSession<L> {
-    /// A fresh session. The recovery policy is no longer session state — it lives on
-    /// the language's [`ParseDriver`]: the session is pure scratch/output.
+    /// Creates an empty session for one parse.
+    ///
+    /// A session holds no configuration — the recovery policy and every other
+    /// parse-time decision belong to the language's [`ParseDriver`] — so there is
+    /// nothing to pass here.
     pub fn new() -> ParserSession<L> {
         ParserSession {
             builder: NodeTreeBuilder::new(),
@@ -275,15 +299,17 @@ impl<L: Lang> ParserSession<L> {
         }
     }
 
-    /// Install the parse's [`StdDescentGuard`] instance — the seam for embedders
-    /// driving construct parsers over a hand-built
-    /// [`ParseContext`](crate::constructs::ParseContext), where no
-    /// [`ParseSetup::parse`] runs to install the guard:
-    /// create the guard with [`DescentGuard::init`] on the thread that will parse
-    /// and install it before parsing starts. Without an installed guard, the first
-    /// descent creates one lazily from the guard's default configuration —
-    /// whose stack measurement then starts at that first descent rather than at
-    /// the true parse entry.
+    /// Installs the guard that caps how deeply this parse may nest.
+    ///
+    /// [`ParseSetup::parse`] does this for you. Call it yourself when driving
+    /// construct parsers over a [`ParseContext`](crate::constructs::ParseContext) you
+    /// built: create the guard with [`DescentGuard::init`] on the thread that will
+    /// parse, and install it before parsing starts.
+    ///
+    /// Without an installed guard, the first descent creates one from the default
+    /// configuration. That still caps the nesting, but a stack-measuring guard then
+    /// takes its reference measurement at that first descent instead of at the true
+    /// start of the parse.
     pub fn install_descent_guard(&mut self, guard: StdDescentGuard) {
         self.descent_guard = Some(guard);
     }
@@ -341,57 +367,72 @@ impl<L: Lang> ParserSession<L> {
         debug_assert!(popped.is_some(), "with_frame pops exactly what it pushed");
     }
 
-    /// Snapshot the live frame stack into `L`-free [`TraceFrame`]s, innermost first —
-    /// titles are rendered here, only when a condition is recorded. Public for
-    /// custom parser code building its own [`ParseError`]s
-    /// ([`ParseError::with_frames`](crate::error::ParseError::with_frames)); the
-    /// stack itself is only mutated through
+    /// Copies the constructs currently open into [`TraceFrame`]s, innermost first.
+    ///
+    /// The frame titles are rendered here, which is why the copy is made only when a
+    /// condition is being recorded. Call it when building a [`ParseError`] of your
+    /// own, to attach the parse traceback with
+    /// [`ParseError::with_frames`](crate::error::ParseError::with_frames).
+    ///
+    /// The live stack itself changes only through
     /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame).
     pub fn snapshot_frames(&self) -> Vec<TraceFrame<L::SourceOrigin>> {
         self.frames.iter().rev().map(Frame::render).collect()
     }
 
-    /// Session-mediated state derivation — the in-parse standard: within a parse
-    /// frame, construct parsers derive states through this method
-    /// (usually via [`ParseContext::derive_state`], which supplies
-    /// the driver **and lowers context-dependent events first** — this session
-    /// method performs no event lowering) so every transition event reaches
-    /// [`ParseDriver::observe_transition`] (with the session's
-    /// [`ext`](ParserSession::ext)). **Data-equivalent to
-    /// [`ParsingState::derived`]** — the session layer may deduplicate and observe,
-    /// never alter the resulting state.
+    /// Derives a new parsing state from `base` and `delta`, reporting the transition
+    /// to the driver.
+    ///
+    /// This is how states are derived *during* a parse. The result is exactly what
+    /// [`ParsingState::derived`] would produce — the session layer may deduplicate the
+    /// work and report the transition, never change its outcome — but going through
+    /// the session is what lets [`ParseDriver::observe_transition`] see every
+    /// transition, with the session's [`ext`](ParserSession::ext) to accumulate into.
+    /// Code outside a parse (initial states, tests, tree transformations) calls
+    /// `derived()` directly.
+    ///
+    /// Construct parsers normally call [`ParseContext::derive_state`] rather than this
+    /// method: it supplies the driver and, first, turns context-dependent events into
+    /// ordinary patches. This method performs no such event lowering.
     ///
     /// [`ParseContext::derive_state`]: crate::constructs::ParseContext::derive_state
     ///
-    /// **Overrides-only deltas are memoized**: when the delta carries no ext replacement, no
-    /// events, and no scope ops — i.e. only token-rules overrides and/or a mode
-    /// override — the derivation is keyed on the base state's `Arc` identity plus the
-    /// overrides (rule payloads by `Arc` identity, gates and mode by value — see the
-    /// `state_memo` module) and deduplicated across the session. `derived()` is a pure
-    /// function of (base data, delta, events) — [`Lang::finalize_transition`]'s purity
-    /// contract — so a pointer-keyed hit is exact; identity keying can only miss on
-    /// value-equal-but-distinct `Arc`s, never falsely hit (and the mode key, a
-    /// `Copy + Eq` value, cannot even miss). Deltas carrying ext/events/scope-ops
-    /// always derive fresh: those payloads have no identity to key on.
-    /// [`ParseDriver::observe_transition`] fires on **every** call, memo hits included;
-    /// [`Lang::finalize_transition`] runs once per unique derivation.
+    /// # Memoization
     ///
-    /// **Fallibility**: scope ops can fail, so this method is fallible like
-    /// [`ParsingState::derived`] under it — a derivation failure is the
-    /// [`Derive`](SessionDeriveError::Derive) arm of the error. Overrides-only
-    /// deltas cannot fail that way (which is also why the memo never caches a
-    /// failure). The observation hook has its own abort channel
-    /// ([`observe_transition`](ParseDriver::observe_transition)'s `Err`), reported
-    /// as the [`Observe`](SessionDeriveError::Observe) arm. On any `Err`, no
-    /// transition is committed: nothing is memoized, and on the `Derive` arm
-    /// [`observe_transition`](ParseDriver::observe_transition) has **not**
-    /// fired — a caller that recovers tolerantly and continues under
-    /// [`DeriveError::recovered`](crate::state::DeriveError) observes that transition
-    /// itself (the [`ParseContext`](crate::constructs::ParseContext) sugar does; see
-    /// its recovery path).
+    /// A delta carrying only token-rule overrides and/or a mode override — no
+    /// extension replacement, no events, no scope operations — is memoized for the
+    /// rest of the session. The key is the base state's `Arc` identity plus the
+    /// overrides, with rule payloads taken by `Arc` identity and the per-block gates
+    /// and the mode by value.
     ///
-    /// Out-of-parse code (initial states, tests, tree transforms) keeps calling
-    /// `derived()` directly.
+    /// Identity keying is exact here, because `derived()` is a pure function of the
+    /// base data, the delta, and the events ([`Lang::finalize_transition`]'s purity
+    /// contract). It can only miss — on `Arc`s that are value-equal but distinct —
+    /// never hit falsely; the mode key, being a `Copy + Eq` value, cannot even miss.
+    /// Deltas carrying an extension, events, or scope operations always derive afresh:
+    /// those payloads have no identity to key on.
+    ///
+    /// [`ParseDriver::observe_transition`] runs on **every** call, memoized ones
+    /// included. [`Lang::finalize_transition`] runs once per distinct derivation.
+    ///
+    /// # Errors
+    ///
+    /// [`Derive`](SessionDeriveError::Derive) means the derivation itself failed —
+    /// scope operations can fail, so this method is fallible exactly as
+    /// [`ParsingState::derived`] beneath it is. A delta of overrides alone cannot fail
+    /// this way, which is also why the memo never needs to cache a failure.
+    ///
+    /// [`Observe`](SessionDeriveError::Observe) means
+    /// [`observe_transition`](ParseDriver::observe_transition) asked for the parse to
+    /// end.
+    ///
+    /// On either error no transition is committed and nothing is memoized. On the
+    /// `Derive` arm [`observe_transition`](ParseDriver::observe_transition) has **not**
+    /// run, so a caller that tolerates the failure and continues under
+    /// [`DeriveError::recovered`](crate::state::DeriveError) is responsible for
+    /// reporting that transition itself — which the
+    /// [`ParseContext`](crate::constructs::ParseContext) convenience method does on
+    /// its recovery path.
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived_state(
         &mut self,
@@ -439,42 +480,53 @@ impl<L: Lang> ParserSession<L> {
         Ok(new)
     }
 
-    /// The group-interior derivation: the state a group's interior is parsed under is
-    /// always `base` + `expecting_group_close = rule` — the uniform invariant that
-    /// guarantees the close delimiter stays recognizable — **merged with the driver's**
-    /// [`group_interior_delta`](ParseDriver::group_interior_delta), the descent-delta
-    /// channel that lets a group class change its interior's state (a math group
-    /// setting the parsing mode). Sibling groups under one state repeat the identical
-    /// derivation — the dominant state-cloning cost in deep documents — so the result
-    /// is memoized per `(base, rule)` (`Arc` identities; a dedicated session map,
-    /// deliberately separate from the general derivation memo — sharing one map
-    /// would let a hand-built expecting-close delta collide with a driver-augmented
-    /// descent under the same key).
+    /// Derives the state a group's interior is parsed under, when the group entered
+    /// matched `rule`.
     ///
-    /// The driver hook runs on memo **miss** only — sound because it is contractually
-    /// a pure function of `(base, rule)`; a memoized hit substitutes its previous
-    /// answer, with the *merged* delta stored on the entry so
-    /// [`observe_transition`](ParseDriver::observe_transition) (which fires on every
-    /// call, hits included) always sees the true delta. Because the memo keys on
-    /// `(base, rule)` rather than on delta shape, the descent stays deduplicated even
-    /// when the driver's delta carries events or an ext replacement.
+    /// That state is always `base` with `expecting_group_close` set to `rule` — the
+    /// invariant that keeps the group's close delimiter recognizable — merged with
+    /// whatever [`group_interior_delta`](ParseDriver::group_interior_delta) returns,
+    /// which is how a group class changes the conditions its content is parsed under
+    /// (a math group setting the parsing mode).
     ///
-    /// The descent invariant wins over the hook: whatever the driver's delta says, the
-    /// interior's `expecting_group_close` is the entered rule.
+    /// The invariant wins over the hook: whatever the driver's delta says, the
+    /// interior's `expecting_group_close` is the rule that was entered.
     ///
-    /// **Fallibility**: a driver descent delta may carry scope ops, which can
-    /// fail ([`Derive`](SessionDeriveError::Derive)), and the observation hook has
-    /// its own abort channel
-    /// ([`Observe`](SessionDeriveError::Observe) —
-    /// [`observe_transition`](ParseDriver::observe_transition)'s `Err`). On any
-    /// `Err`, nothing is memoized, and on the `Derive` arm no transition was
-    /// observed (see [`derived_state`](ParserSession::derived_state)); the
-    /// derivation error's
-    /// [`recovered`](crate::state::DeriveError::recovered) state still has the
-    /// descent invariant applied (the forced expecting-close is an override, not an
-    /// op), so a tolerant caller can safely parse the interior under it. Failures are
-    /// *not* cached: every failing descent re-reports — a misbehaving driver stays
-    /// loud.
+    /// # Memoization
+    ///
+    /// Sibling groups under one state repeat the identical derivation, which is the
+    /// largest state-copying cost in deeply nested documents, so the result is
+    /// memoized per `(base, rule)` (both by `Arc` identity). This memo is separate
+    /// from the one [`derived_state`](ParserSession::derived_state) uses: sharing one
+    /// map would let a hand-built expecting-close delta and a driver-augmented descent
+    /// collide under the same key while deriving different states.
+    ///
+    /// The driver hook therefore runs on a memo **miss** only, which is sound because
+    /// it is contractually a pure function of `(base, rule)`. A memoized hit reuses
+    /// its previous answer, and the entry stores the *merged* delta so that
+    /// [`observe_transition`](ParseDriver::observe_transition) — which runs on every
+    /// call, hits included — always sees the true delta. Since the key is
+    /// `(base, rule)` rather than the shape of the delta, the descent stays
+    /// deduplicated even when the driver's delta carries events or an extension.
+    ///
+    /// # Errors
+    ///
+    /// [`Derive`](SessionDeriveError::Derive) means the derivation failed: a driver's
+    /// descent delta may carry scope operations, and those can fail.
+    /// [`Observe`](SessionDeriveError::Observe) means
+    /// [`observe_transition`](ParseDriver::observe_transition) asked for the parse to
+    /// end.
+    ///
+    /// On either error nothing is memoized, and on the `Derive` arm no transition was
+    /// reported — as in [`derived_state`](ParserSession::derived_state). The
+    /// derivation error's [`recovered`](crate::state::DeriveError::recovered) state
+    /// still has the interior invariant applied, because the forced
+    /// `expecting_group_close` is an override rather than an operation, so a caller
+    /// that tolerates the failure can safely parse the interior under it.
+    ///
+    /// Failures are deliberately not cached: every failing descent reports again,
+    /// rather than a misbehaving driver being diagnosed once and then silently
+    /// tolerated.
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn group_interior_state(
         &mut self,
@@ -517,20 +569,27 @@ impl<L: Lang> ParserSession<L> {
         Ok(new)
     }
 
-    /// The raw record-or-abort primitive of detection-site recovery. Construct parsers call
-    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead —
-    /// the recovery entry point, which boxes the condition and hands it to
-    /// [`ParseDriver::recover`], which applies
-    /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) (needing the context's
-    /// state) and its recovery policy before ending up here.
+    /// Records a detected problem, or turns it into the error that ends the parse.
     ///
-    /// `recovery` is the policy for **this** condition — the driver's blanket answer,
+    /// `recovery` is the policy for **this** condition: the driver's blanket answer,
     /// or a per-condition decision by a custom driver policy. Under
-    /// [`Recovery::Tolerant`], records the condition as an error-severity
-    /// [`Diagnostic`] at `span` and returns `Ok(())` (the caller continues with its
-    /// site's local recovery). Under [`Recovery::Strict`], returns the condition as a
-    /// [`ParseError`] to bubble — nobody continues past an `Err`. Either carrier
-    /// receives a snapshot of the live frame stack (the parse traceback).
+    /// [`Recovery::Tolerant`] the condition is recorded as an error-severity
+    /// [`Diagnostic`] at `span` and `Ok(())` is returned, so the caller continues with
+    /// the local recovery documented for that condition. Under [`Recovery::Strict`]
+    /// the condition is returned as a [`ParseError`] to propagate, and nothing
+    /// continues past it. Either way it receives a snapshot of the frames currently
+    /// open — the parse traceback.
+    ///
+    /// Construct parsers call
+    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead.
+    /// That entry point boxes the condition and passes it to [`ParseDriver::recover`],
+    /// which applies [`refine_diagnostic`](ParseDriver::refine_diagnostic) — needing
+    /// the context's state — and its recovery policy before reaching this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns the condition as a [`ParseError`] exactly when `recovery` is
+    /// [`Recovery::Strict`].
     pub fn recover(
         &mut self,
         recovery: Recovery,
@@ -548,13 +607,19 @@ impl<L: Lang> ParserSession<L> {
         }
     }
 
-    /// Freeze the session: flatten everything reachable from `root` into the final
-    /// [`NodeTree`] (resolving staged argument/slot regions) and hand over the
-    /// diagnostics — available even for successful tolerant parses — and the
-    /// session extension ([`ext`](ParserSession::ext), what
-    /// [`ParseDriver::observe_transition`] accumulated). `Err` reports a
-    /// staging-contract violation ([`NodeBuildError`]) — an implementation bug in an
-    /// extension, not a source condition.
+    /// Freezes the session into a [`ParseResult`], with `root` as the tree's root
+    /// node.
+    ///
+    /// Everything reachable from `root` is flattened into the final [`NodeTree`],
+    /// resolving the staged argument and slot regions on the way. The diagnostics
+    /// come along — a tolerant parse succeeds with a non-empty set — as does the
+    /// session extension ([`ext`](ParserSession::ext)), holding whatever
+    /// [`ParseDriver::observe_transition`] accumulated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeBuildError`] when the staging contract was violated. That is an
+    /// implementation bug in an extension, not a problem with the document.
     pub fn finish(self, root: BuildId) -> Result<ParseResult<L>, NodeBuildError> {
         Ok(ParseResult {
             tree: self.builder.finish(root)?,
@@ -585,22 +650,37 @@ impl<L: Lang> fmt::Debug for ParserSession<L> {
     }
 }
 
-/// A finished parse: the frozen tree plus everything reported and accumulated
-/// along the way.
+/// What a completed parse produced: the finished node tree, the diagnostics, and
+/// whatever the language accumulated along the way.
+///
+/// Returned by [`Language::parse`] and [`ParseSetup::parse`]. It owns everything it
+/// holds and borrows nothing from the [`Language`] that produced it, so a result
+/// outlives its language. A parse that aborted returns a
+/// [`ParseError`](crate::error::ParseError) instead, and no `ParseResult` at all.
+///
+/// The fields are public: read [`tree`](ParseResult::tree) for the document,
+/// [`diagnostics`](ParseResult::diagnostics) for what was reported, and take either
+/// of them by value when only one is needed.
 pub struct ParseResult<L: Lang> {
-    /// The parsed document.
+    /// The parsed document, as an immutable node tree.
     pub tree: NodeTree<L>,
-    /// The diagnostics recorded during the parse (possibly non-empty even on success —
-    /// tolerant parsing).
+    /// Everything reported during the parse.
+    ///
+    /// A tolerant parse succeeds with a non-empty set of diagnostics, so check
+    /// [`has_errors`](crate::error::Diagnostics::has_errors) before treating the tree
+    /// as clean.
     pub diagnostics: Diagnostics<L::SourceOrigin>,
-    /// The parse's final session extension ([`Lang::SessionExt`]) — the **data**
-    /// half of transition observation:
-    /// [`ParseDriver::observe_transition`] accumulates parse-history data into it
-    /// while the parse runs, and this field hands the accumulated value out (the
-    /// hook's diagnostics sink is the reporting half, landing in
-    /// [`diagnostics`](ParseResult::diagnostics)). `()` for languages declaring no
-    /// session extension. Available on a completed parse only: an aborted parse
-    /// (the strict-mode `Err`) drops the accumulated value with its session.
+    /// The language's own per-parse data at the end of the parse
+    /// ([`Lang::SessionExt`]), or `()` for a language that declares none.
+    ///
+    /// [`ParseDriver::observe_transition`] accumulates into this value while the parse
+    /// runs — how many times the parse entered math mode, for instance — and this
+    /// field is where the accumulated value comes out. Anything that hook chose to
+    /// *report* rather than accumulate is in
+    /// [`diagnostics`](ParseResult::diagnostics) instead.
+    ///
+    /// Only a completed parse yields this value; a parse that aborted drops it with
+    /// its session.
     pub session_ext: L::SessionExt,
 }
 

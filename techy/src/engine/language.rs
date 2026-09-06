@@ -1,12 +1,12 @@
-//! [`Language<L>`]: the long-lived runtime bundle and the `parse()` convenience entry.
+//! [`Language<L>`]: the long-lived bundle a parse starts from, and the entry points
+//! that run one.
 //!
-//! A `Language` is everything a parse needs that outlives any one parse: the frozen
-//! initial [`ParsingState`] and the [`ParseDriver`](crate::engine::ParseDriver)
-//! instance. It contributes at exactly one moment — seeding — and owns **no per-parse
-//! state**: define a language once, parse many documents in it. Per-parse
-//! accumulation lives on the transient [`ParserSession`]; results are frozen
-//! [`ParseResult`]s owning their tree and diagnostics (no borrow of the `Language` —
-//! nodes are self-contained).
+//! A `Language` holds what outlives any one parse — the frozen initial
+//! [`ParsingState`] and the [`ParseDriver`](crate::engine::ParseDriver) instance —
+//! and nothing else, so one value parses many documents. Everything one parse
+//! accumulates belongs to the transient [`ParserSession`], and the finished
+//! [`ParseResult`] owns its tree and diagnostics outright: it borrows nothing from
+//! the `Language`.
 
 use core::fmt;
 
@@ -246,18 +246,22 @@ impl<L: Lang> Language<L> {
         self.parse_setup(Source::new(content)).parse()
     }
 
-    /// Set up a parse of `source` — the configurable entry point. `source` is a
-    /// pre-minted [`Source`], by value or as an already-shared `Arc<Source>`: one
-    /// carrying an origin label (a file name for diagnostics) or provenance (a
-    /// [`resolve_source_reference`](crate::source::resolve_source_reference)
-    /// result), or simply one handle held across parses so that their positions
-    /// compare equal (see [`parse`](Language::parse)).
+    /// Sets up a parse of `source` — the configurable counterpart to
+    /// [`parse`](Language::parse).
+    ///
+    /// `source` is a [`Source`] you built yourself, by value or as an already-shared
+    /// `Arc<Source>`: one carrying an origin label (a file name, so diagnostics can
+    /// name it), one carrying provenance (the result of
+    /// [`resolve_source_reference`](crate::source::resolve_source_reference)), or
+    /// simply one handle held across several parses so that their positions compare
+    /// equal.
     ///
     /// The returned [`ParseSetup`] starts from this language's defaults — the
     /// [`initial_state`](Language::initial_state) and the driver's root parser
     /// ([`ParseDriver::make_root_parser`](crate::engine::ParseDriver::make_root_parser))
-    /// — which its `with_*` methods replace for this one parse;
-    /// [`ParseSetup::parse`] runs it:
+    /// — which its `with_*` methods replace for this one parse.
+    /// [`ParseSetup::parse`] then runs it and returns the same
+    /// [`ParseResult`]-or-[`ParseError`] answer as [`parse`](Language::parse):
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -303,10 +307,15 @@ impl<L: Lang> fmt::Debug for Language<L> {
     }
 }
 
-/// One parse being set up: the source plus this parse's deviations from its
-/// [`Language`]'s defaults. Created by [`Language::parse_setup`], configured with the
-/// `with_*` methods, run with [`parse`](ParseSetup::parse) — which consumes the
-/// setup (one setup, one parse):
+/// One parse, configured but not yet run: its source, plus whatever this parse does
+/// differently from its [`Language`]'s defaults.
+///
+/// Created by [`Language::parse_setup`], adjusted with the `with_*` methods, and run
+/// by [`parse`](ParseSetup::parse), which consumes the setup — one setup, one parse.
+///
+/// Only what varies per parse belongs here. What holds across parses — the driver,
+/// the language's initial state, the nesting-depth configuration — is set on the
+/// [`Language`].
 ///
 /// ```
 /// # use std::sync::Arc;
@@ -331,10 +340,8 @@ impl<L: Lang> fmt::Debug for Language<L> {
 /// assert!(Arc::ptr_eq(again.tree.root().parsing_state(), &node_state));
 /// ```
 ///
-/// Without any `with_*` call, `parse_setup(source).parse()` is exactly
-/// [`Language::parse`] over a pre-minted source. What lives here is what varies
-/// per parse; what holds across parses — the driver, the language's initial state,
-/// the descent-guard configuration — lives on the [`Language`].
+/// With no `with_*` call at all, `parse_setup(source).parse()` is exactly
+/// [`Language::parse`] over a source you built yourself.
 #[must_use = "a `ParseSetup` does nothing until `parse()` runs it"]
 pub struct ParseSetup<'l, 'p, L: Lang> {
     language: &'l Language<L>,
@@ -348,31 +355,36 @@ pub struct ParseSetup<'l, 'p, L: Lang> {
 }
 
 impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
-    /// Start this parse from `state` instead of the language's
-    /// [`initial_state`](Language::initial_state). Any state handle serves — the
-    /// language's seed with a delta applied
+    /// Starts this parse from `state` instead of the language's
+    /// [`initial_state`](Language::initial_state).
+    ///
+    /// Any state handle serves: the language's seed with a delta applied
     /// (`language.initial_state().derived(&delta)?`, the one derivation path), or
-    /// the state some parsed node recorded
-    /// ([`parsing_state`](crate::node::NodeRef::parsing_state)), to parse a
-    /// fragment under exactly the conditions that node was parsed under. A shared
-    /// `Arc` is used by identity: the root node records this very state, and the
-    /// driver's [`observe_parse_start`](ParseDriver::observe_parse_start) sees it as
-    /// the parse's initial state.
+    /// the state some already-parsed node recorded
+    /// ([`parsing_state`](crate::core::node::NodeRef::parsing_state)), which parses a
+    /// fragment under exactly the conditions that node was parsed under.
+    ///
+    /// A shared `Arc` is used by identity: the root node records this very state,
+    /// and the driver's
+    /// [`observe_parse_start`](ParseDriver::observe_parse_start) sees it as the
+    /// parse's initial state.
     pub fn with_initial_state(mut self, state: impl Into<Arc<ParsingState<L>>>) -> Self {
         self.initial_state = state.into();
         self
     }
 
-    /// Run `parser` as this parse's **root parser** — the parser the entry point
-    /// runs directly, at the root of the descent hierarchy — instead of the one the
-    /// driver's [`make_root_parser`](ParseDriver::make_root_parser) supplies. This is
-    /// the one-parse way to a different root shape (wrapping an auxiliary source's
-    /// content in scaffolding of your own, staging a different root node); a
-    /// language whose parses always need one overrides the factory instead. The
-    /// parser is borrowed for the parse's extent and is yours again afterwards, so a
-    /// root parser may collect data to read back after the parse. Its contract —
-    /// run at the top, not as a descent; its output is the tree's root — is
-    /// documented on [`RootNodesParser`](crate::constructs::RootNodesParser).
+    /// Runs `parser` at the root of this parse, instead of the parser the driver's
+    /// [`make_root_parser`](ParseDriver::make_root_parser) supplies.
+    ///
+    /// This is the one-parse way to a different root shape: wrapping an auxiliary
+    /// source's content in scaffolding of your own, or staging a different root
+    /// node. A language whose parses always need that overrides the factory instead.
+    ///
+    /// The parser is borrowed for the duration of the parse and is yours again
+    /// afterwards, so a root parser may collect data for you to read back once the
+    /// parse returns. Its contract — it runs at the top rather than as a descent,
+    /// and its output becomes the tree's root — is documented on
+    /// [`RootNodesParser`](crate::constructs::RootNodesParser).
     pub fn with_root_parser<'q>(
         self,
         parser: &'q mut dyn ConstructParser<L, Output = BuildId>,
@@ -385,23 +397,39 @@ impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
         }
     }
 
-    /// Run the parse: tokenize with the driver's reader over the source, create the
-    /// session (its diagnostics cap from
-    /// [`diagnostics_limit`](ParseDriver::diagnostics_limit), its descent guard from
-    /// the language's configuration), fire the driver's once-per-parse
-    /// [`observe_parse_start`](ParseDriver::observe_parse_start) with the parse's
-    /// initial state, run the root parser directly over a [`ParseContext`] at that
-    /// state (at the top, not as a descent — see [`RootNodesParser`](crate::constructs::RootNodesParser)), and freeze
-    /// the session around the root it returns into a [`ParseResult`].
+    /// Runs the parse and returns the resulting tree together with the diagnostics
+    /// recorded along the way.
     ///
-    /// Under the standard root parser, a stray group close at the root is
-    /// diagnosed as [`StrayGroupClose`](crate::constructs::StrayGroupClose) through the recovery entry point —
-    /// tolerant parses consume it, stage it as a `Chars` node, and resume; strict
-    /// parses abort — as documented on [`RootNodesParser`](crate::constructs::RootNodesParser).
+    /// The run proceeds in four steps:
     ///
-    /// `Err` is the strict-mode abort (or an implementation-contract violation, which
-    /// aborts under any policy — a root parser's factory failing to build its parser
-    /// included); `Ok` carries the tree plus any tolerantly recorded diagnostics.
+    /// 1. The driver builds a token reader over the source
+    ///    ([`make_token_reader`](ParseDriver::make_token_reader)).
+    /// 2. A [`ParserSession`] is created, with its diagnostics cap taken from
+    ///    [`diagnostics_limit`](ParseDriver::diagnostics_limit) and its descent
+    ///    guard from the language's nesting-depth configuration.
+    /// 3. The driver's once-per-parse
+    ///    [`observe_parse_start`](ParseDriver::observe_parse_start) hook is called
+    ///    with the state this parse starts from, before any token is read.
+    /// 4. The root parser runs over a [`ParseContext`] at that state — directly at
+    ///    the top, not as a descent (see
+    ///    [`RootNodesParser`](crate::constructs::RootNodesParser)) — and the session
+    ///    is frozen around the root node it returns into a [`ParseResult`].
+    ///
+    /// Under the standard root parser, a group close with no matching open at the
+    /// root is diagnosed as
+    /// [`StrayGroupClose`](crate::constructs::StrayGroupClose): a tolerant parse
+    /// consumes it, stages it as a `Chars` node, and continues, while a strict parse
+    /// aborts. [`RootNodesParser`](crate::constructs::RootNodesParser) documents the
+    /// rest of that behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ParseError`] that ended the parse: the first document problem
+    /// under [`Recovery::Strict`](crate::error::Recovery::Strict), or, under either
+    /// policy, a violation of a library contract by an extension — a root parser
+    /// factory that fails to build its parser included. Under
+    /// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) document problems are
+    /// recorded as diagnostics instead, and the call succeeds.
     pub fn parse(self) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>>
     where
         L::InvocationSyntax: FromInvocation<L>,

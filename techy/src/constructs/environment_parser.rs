@@ -14,9 +14,11 @@ use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{push_token_text, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
-/// Condition: an environment's body ran into the terminator of a *different*
-/// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
-/// so an enclosing level can claim its own terminator.
+/// Condition: an environment's body found the terminator of a *different* environment.
+///
+/// Raised for `\begin{A}…\end{B}`: the terminator names `B`, but the body being parsed
+/// belongs to `A`. The body closes at that point **without** consuming the terminator,
+/// so an enclosing level can still claim it as its own.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -31,8 +33,13 @@ pub struct EnvironmentTerminatorMismatch {
     pub found: String,
 }
 
-/// Condition: the terminator command was not followed immediately by its rigid name
-/// group (`\end[y]`, `\end{ A }`) — the command alone is consumed and the body closes.
+/// Condition: an environment's terminator command was not followed immediately by its
+/// name group.
+///
+/// The name group is rigid — no comment, no paragraph break, and no whitespace inside
+/// the name — so both `\end[y]` and `\end{ A }` raise this. The terminator command
+/// alone is consumed and the body closes; whatever follows it is parsed as content of
+/// the enclosing level.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -45,8 +52,11 @@ pub struct MalformedEnvironmentTerminator {
     pub environment: String,
 }
 
-/// Condition: an environment's body ended without its terminator ever appearing — at
-/// end of input, or unwound by a stray group close nobody at the body's level asked for.
+/// Condition: an environment's body ended without its terminator ever appearing.
+///
+/// Either the input ended inside the body, or a group close delimiter appeared that
+/// nothing at the body's level had opened;
+/// [`found`](MissingEnvironmentTerminator::found) says which.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.environments.missing-terminator")]
@@ -57,14 +67,15 @@ pub struct MissingEnvironmentTerminator {
     pub found: MissingTerminatorFound,
 }
 
-/// What ended a body missing its terminator ([`MissingEnvironmentTerminator`]).
+/// What ended a body whose terminator never appeared ([`MissingEnvironmentTerminator`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum MissingTerminatorFound {
     /// The input ended inside the body.
     EndOfInput,
-    /// A group close belonging to an enclosing level appeared (the body unwinds,
-    /// leaving the token for that level to claim).
+    /// A group close delimiter appeared that nothing at the body's level had opened.
+    /// The body closes without consuming it, leaving it for an enclosing level to
+    /// claim.
     StrayGroupClose,
 }
 
@@ -85,29 +96,26 @@ impl fmt::Display for MissingEnvironmentTerminator {
     }
 }
 
-/// A successfully read rigid name group: the name (the exact content between the
-/// delimiters, possibly empty), the stream position just past the close delimiter, and
-/// the group rule the delimiters matched.
+/// A rigid environment name group that was read successfully — `{align}` in
+/// `\begin{align}`.
 ///
-/// # Why a span *and* a text, rather than one `TextContent`
+/// Returned by [`read_rigid_name_group`], which consumes the whole group. The name is
+/// recorded twice, because the two forms can differ:
+/// [`name_span`](NameGroup::name_span) is *where* the name lies — the coordinates that
+/// anchor diagnostics and the parse that follows the group — and
+/// [`name_text`](NameGroup::name_text) is *what* the name is — the characters the parser
+/// read, which drive definition lookups, node data and diagnostic messages. The group
+/// also records the stream position just past the close delimiter
+/// ([`end`](NameGroup::end)) and the group rule its delimiters matched
+/// ([`rule`](NameGroup::rule)).
 ///
-/// The name is needed in two roles that are read through two getters:
-/// [`name_span()`](NameGroup::name_span) gives **where** the name lies — the
-/// coordinates that anchor diagnostics, the argument parse that follows the group, and
-/// the node's invocation-name span; [`name_text()`](NameGroup::name_text) gives
-/// **what** the name is — the characters the parser read, which drive lookups, node
-/// data and diagnostic messages. For a language that obeys span tiling
-/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) the two agree:
-/// the text is the span's [`content()`](SourceSpan::content). For a language with
-/// `OBEYS_SPAN_TILING = false` they need not: the span is only what the reader
-/// *described* for the stretch the name was read from, so the parser records the
-/// characters as read ([`with_name_as_read`](NameGroup::with_name_as_read)) and
-/// `name_text()` answers those — while the span is still needed, unchanged, as the
-/// coordinates. A [`TextContent`](crate::source::TextContent) models the opposite
-/// shape (content first, with a bare provenance range or none at all), so it could not
-/// replace the span without losing the coordinates in exactly the non-tiling case;
-/// stored beside the span it would only duplicate the span's range. The fields are
-/// private so that the name is never read off the span by accident.
+/// The two name forms agree for a language that obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)): there the text is
+/// the span's [`content()`](SourceSpan::content). For a language that does not obey it,
+/// the span only describes the stretch the name was read from and its content need not
+/// be the name, so the parser records the characters as read
+/// ([`with_name_as_read`](NameGroup::with_name_as_read)). Read the name through
+/// `name_text`, never off the span.
 pub struct NameGroup<L: Lang> {
     /// Where the name lies — see [`name_span`](NameGroup::name_span).
     name: SourceSpan<L::SourceOrigin>,
@@ -123,10 +131,12 @@ pub struct NameGroup<L: Lang> {
 }
 
 impl<L: Lang> NameGroup<L> {
-    /// A name group whose name is exactly what its `name` span covers — the case for a
-    /// language that obeys span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), and for
-    /// any name whose span was derived from a single token's own span.
+    /// Creates a name group whose name is exactly what the `name` span covers.
+    ///
+    /// That holds for a language that obeys span tiling
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), and for any
+    /// name whose span was derived from a single token's own span. Otherwise record the
+    /// characters as read with [`with_name_as_read`](NameGroup::with_name_as_read).
     pub fn new(
         name: SourceSpan<L::SourceOrigin>,
         end: StreamPosition<L>,
@@ -135,36 +145,41 @@ impl<L: Lang> NameGroup<L> {
         NameGroup { name, end, rule, name_as_read: None }
     }
 
-    /// Record the name **as read** — the characters the parser actually consumed —
-    /// which [`name_text`](NameGroup::name_text) then answers instead of the `name`
-    /// span's content. What a parser of a language with
-    /// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` records:
-    /// there the span is only what the reader *described* for the stretch the name was
-    /// read from, so its content need not be the name.
+    /// Records the name **as read** — the characters the parser actually consumed — so
+    /// that [`name_text`](NameGroup::name_text) answers those instead of the `name`
+    /// span's content.
+    ///
+    /// A parser for a language with
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false` must do
+    /// this: there the span only describes the stretch the name was read from, so its
+    /// content need not be the name.
     pub fn with_name_as_read(mut self, name: impl Into<Box<str>>) -> NameGroup<L> {
         self.name_as_read = Some(name.into());
         self
     }
 
-    /// Where the name lies — the coordinates: the stretch between the delimiters, as
-    /// the reader described it. Use this span to anchor diagnostics, to start the
-    /// argument parse that follows the group, and as the node's invocation-name span.
-    /// Its content is the name only for a language that obeys span tiling — read the
-    /// name through [`name_text`](NameGroup::name_text), never off this span.
+    /// Where the name lies: the stretch between the delimiters, as the reader described
+    /// it.
+    ///
+    /// Use this span to anchor diagnostics, to start the argument parse that follows the
+    /// group, and as the node's invocation-name span. Its content is the name only for a
+    /// language that obeys span tiling — read the name through
+    /// [`name_text`](NameGroup::name_text), never off this span.
     pub fn name_span(&self) -> &SourceSpan<L::SourceOrigin> {
         &self.name
     }
 
-    /// The name as read — the exact characters between the delimiters.
+    /// The name as read: the exact characters between the delimiters.
     ///
     /// For a language that obeys span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) that is the
-    /// [`name_span`](NameGroup::name_span)'s content. For a language with
-    /// `OBEYS_SPAN_TILING = false` the span is only what the reader described for the
-    /// stretch the name was read from — its content need not be the name at all — so
-    /// the parser records the characters as it reads them
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)) this is the
+    /// [`name_span`](NameGroup::name_span)'s content. For a language that does not, the
+    /// span only describes the stretch the name was read from — its content need not be
+    /// the name at all — so the parser records the characters as it reads them
     /// ([`with_name_as_read`](NameGroup::with_name_as_read)) and this method answers
-    /// those. The name drives lookups, node data and diagnostics.
+    /// those.
+    ///
+    /// The name is what drives definition lookups, node data and diagnostic messages.
     pub fn name_text(&self) -> &str {
         match &self.name_as_read {
             Some(name) => name,
@@ -177,12 +192,13 @@ impl<L: Lang> NameGroup<L> {
         &self.end
     }
 
-    /// The group rule the name group's delimiters matched — the `Arc` cloned from
-    /// the matched `GroupOpen` token, so its `open`/`close` strings are the exact
-    /// delimiter bytes as written (a name group never exists in delimiter-diverged
-    /// form: any deviation makes the whole read report "not a name group"). The
-    /// invocation-syntax recording channel: an environment payload stores this rule
-    /// as its name-group fact.
+    /// The group rule the name group's delimiters matched.
+    ///
+    /// The `Arc` is cloned from the matched group-open token, so the rule's
+    /// `open`/`close` strings are the delimiter characters exactly as written: a read
+    /// that deviates in any way reports "not a name group" rather than returning a group
+    /// with different delimiters. A language that records how an environment was written
+    /// stores this rule as the name group's spelling.
     pub fn rule(&self) -> &Arc<GroupRule<L>> {
         &self.rule
     }
@@ -213,18 +229,20 @@ impl<L: Lang> fmt::Debug for NameGroup<L> {
     }
 }
 
-/// The spelling facts of a consumed environment **begin** trigger — the
-/// begin-side channel of the Lang-owned invocation-syntax recording
-/// ([`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
-/// built by the driving composition from the validated command trigger and the
-/// matched rigid name group ([`read_rigid_name_group`]), and handed — together
-/// with the end side's [`EnvironmentTerminatorSyntaxData`] — to the environment
-/// record's constructor (the latexlike `EnvironmentSyntax::from_parsed`).
+/// How a consumed environment `\begin{name}` trigger was spelled in the source.
 ///
-/// Mirrors the [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) arm's
-/// fields: source-qualified spans, as the reader answered them, plus the matched
-/// name group. A site that records one of these spans as node data converts it
-/// first (a span that is not in the node's own source is recorded as text).
+/// The parser composition driving the environment builds this from the command token
+/// and the name group [`read_rigid_name_group`] matched, and passes it — together with
+/// the terminator's [`EnvironmentTerminatorSyntaxData`] — to the language's invocation
+/// syntax record, which the node stores as
+/// [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)
+/// so the environment can be re-emitted as written.
+///
+/// The fields mirror those of the
+/// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) variant: source-qualified
+/// spans, as the reader answered them, plus the matched name group. A site that records
+/// one of these spans as node data converts it first — a span that is not in the node's
+/// own source is recorded as text.
 pub struct EnvironmentBeginSyntaxData<L: Lang> {
     /// The begin command's escape character as written.
     pub escape_char: char,
@@ -261,19 +279,18 @@ impl<L: Lang> fmt::Debug for EnvironmentBeginSyntaxData<L> {
     }
 }
 
-/// The spelling facts of a consumed environment terminator, reported back on
-/// [`EnvironmentBody::terminator`] by the body parser (the terminator consumer) —
-/// the end-side channel of the Lang-owned invocation-syntax recording
-/// ([`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
-/// the driving composition hands these facts, together with the begin side's
-/// [`EnvironmentBeginSyntaxData`], to the environment record's constructor.
-/// See also [`EnvironmentBodyParser`].
+/// How a consumed environment terminator (`\end{name}`) was spelled in the source.
+///
+/// Reported on [`EnvironmentBody::terminator`] by the parser that consumed the
+/// terminator — [`EnvironmentBodyParser`] or
+/// [`VerbatimBodyParser`](super::VerbatimBodyParser). The composition driving the
+/// environment passes it, together with the begin side's
+/// [`EnvironmentBeginSyntaxData`], to the language's invocation syntax record.
 #[non_exhaustive]
 pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
-    /// The tokenized flow consumed a well-formed terminator — the stop command
-    /// followed by its rigid name group — and reports its full spelling, as
-    /// source-qualified spans (a site that records one of them as node data converts
-    /// it first).
+    /// The terminator was tokenized: the stop command followed by its rigid name group.
+    /// Its full spelling is reported as source-qualified spans (a site that records one
+    /// of them as node data converts it first).
     Scanned {
         /// The terminator command's escape character as written.
         escape_char: char,
@@ -285,12 +302,14 @@ pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
         /// The matched rigid name group (name, end, and the matched rule).
         name_group: NameGroup<L>,
     },
-    /// A body consumed its terminator as one **literal** string it was given no
-    /// finer description of ([`VerbatimBodyTerminator::Literal`](super::VerbatimBodyTerminator::Literal)):
-    /// the matched span is the only fact there is to report. A raw body whose
-    /// terminator *was* described piecewise reports
-    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) instead, even though it
-    /// too consumed the terminator as a single token.
+    /// The terminator was consumed as one **literal** string the parser was given no
+    /// finer description of
+    /// ([`VerbatimBodyTerminator::Literal`](super::VerbatimBodyTerminator::Literal)):
+    /// the matched span is the only fact there is to report.
+    ///
+    /// A raw body whose terminator *was* described piece by piece reports
+    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) instead, even though it too
+    /// consumed the terminator as a single token.
     Literal {
         /// The consumed literal terminator's span.
         span: SourceSpan<L::SourceOrigin>,
@@ -342,23 +361,32 @@ impl<L: Lang> fmt::Debug for EnvironmentTerminatorSyntaxData<L> {
     }
 }
 
-/// Try to read a **rigid** environment name group at the reader's position: a group open of class `name_group_type` as the immediately
-/// next token (no pre-space — inline whitespace after the introducing command is that
-/// token's own post-space, already consumed with it; comments and paragraph breaks are
-/// not tolerated), a chars-only interior with no whitespace, and the matching close
-/// delimiter.
+/// Reads a rigid environment name group at the reader's position — `{align}` in
+/// `\begin{align}`.
 ///
-/// On success the whole group is consumed and its facts returned. On **any** deviation
-/// nothing is consumed — the reader is rewound to where it stood — and `None` is
-/// returned; the caller applies its own recovery (the syntax is deliberately rigid, so
-/// "not a name group" needs no finer distinction). A tokenizer error while reading
-/// aborts under strict recovery; under tolerant it reports `None` without diagnosing or
-/// consuming — the enclosing content loop re-reads the error and applies its own token
-/// recovery (the argument-probe rule, [`ParseContext::probe_token`]).
+/// "Rigid" is the whole syntax: the group open of class `name_group_type` must be the
+/// immediately next token (no whitespace before it — inline whitespace after the
+/// introducing command is that command token's own post-space and was consumed with it;
+/// comments and paragraph breaks are not tolerated), the interior must be characters
+/// with no whitespace, and the matching close delimiter must follow.
 ///
-/// Public as a takeover-composition building block:
-/// a `\begin`-shaped `make_invocation_parser` override reads its rigid name group
-/// with this before resolving the environment and driving [`EnvironmentBodyParser`].
+/// On success the whole group is consumed and its facts are returned as a
+/// [`NameGroup`]. On **any** deviation nothing is consumed — the reader is rewound to
+/// where it stood — and `None` is returned; the caller applies its own recovery, since
+/// a syntax this rigid leaves no finer distinction to report than "not a name group".
+///
+/// Use this when composing an environment-shaped construct of your own: a
+/// `\begin`-shaped `make_invocation_parser` override reads the environment name with
+/// this call before resolving the environment and running an
+/// [`EnvironmentBodyParser`].
+///
+/// # Errors
+///
+/// Returns the parse error when the token reader fails and the driver's recovery is
+/// strict. Under tolerant recovery a token error is not diagnosed here: the read
+/// reports `None` and consumes nothing, and the enclosing content loop re-reads the
+/// failing token and applies its own token recovery
+/// ([`ParseContext::probe_token`]).
 pub fn read_rigid_name_group<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     name_group_type: L::GroupTypeId,
@@ -452,57 +480,64 @@ fn read_name_chars<L: Lang>(
     }
 }
 
-/// What [`EnvironmentBodyParser`] produces.
+/// A parsed environment body: the staged body node, where the environment ends, and how
+/// it was terminated.
+///
+/// Produced by [`EnvironmentBodyParser`] and by
+/// [`VerbatimBodyParser`](super::VerbatimBodyParser). The invocation parser driving the
+/// environment turns it into the callable's body slot.
 pub struct EnvironmentBody<L: Lang> {
-    /// The staged body `List` node: span = the body's content interior, children = the
-    /// body's nodes (an empty body is an empty `List` — a region that exists).
+    /// The staged body [`List`](crate::core::node::NodeKind::List) node: its span is the
+    /// body's content interior and its children are the body's nodes. An empty body is
+    /// an empty `List` node, not an absent one.
     pub body: BuildId,
     /// The stream position just past the environment's extent: past the consumed
-    /// `\end{name}` terminator — or, when the body closed without consuming one (name
-    /// mismatch, unexpected group close, end of input), the body's end. The driving
-    /// invocation parser ends the callable's span here (`cx.source_span_within(&begin,
-    /// &body.end)`).
+    /// terminator on the clean path, past the stop command alone after a malformed
+    /// terminator, and the body's end when the body closed with nothing consumed (name
+    /// mismatch, unexpected group close, end of input). The driving invocation parser
+    /// ends the callable's span here.
     pub end: StreamPosition<L>,
-    /// The body slot's **content designation**, ready for the driving composition's
-    /// [`ParsedSlot`](crate::node::ParsedSlot) record: which of the
-    /// body's nodes are the slot's content. The standard parser designates all of the
-    /// body `List`'s children; a verbatim body designates its gobbled leading newline
-    /// *out* ([`VerbatimBodyParser`](super::VerbatimBodyParser)) — the parser that
-    /// staged the body is the one that knows, exactly as for arguments
-    /// (parse-time designation).
+    /// Which of the body's nodes are the body slot's content, ready for the driving
+    /// composition's [`ParsedSlot`](crate::core::node::ParsedSlot) record.
+    ///
+    /// [`EnvironmentBodyParser`] designates all of the body `List`'s children. A
+    /// verbatim body designates its gobbled leading newline *out*
+    /// ([`VerbatimBodyParser`](super::VerbatimBodyParser)): the parser that staged the
+    /// body is the one that knows which nodes are content, exactly as for arguments.
     pub content: ContentNodes,
-    /// The consumed terminator's spelling ([`EnvironmentTerminatorSyntaxData`]),
-    /// `None` when the body closed without consuming one (name mismatch, malformed
-    /// terminator, unexpected group close, end of input) — the end-side channel of
-    /// the invocation-syntax recording: the driving composition hands these facts
-    /// to its environment record's constructor (together with the begin side's
-    /// [`EnvironmentBeginSyntaxData`]) when it builds the payload at staging time.
+    /// How the consumed terminator was spelled
+    /// ([`EnvironmentTerminatorSyntaxData`]), or `None` when the body closed without
+    /// consuming one (name mismatch, malformed terminator, unexpected group close, end
+    /// of input).
+    ///
+    /// The driving composition passes these facts, together with the begin side's
+    /// [`EnvironmentBeginSyntaxData`], to the language's invocation syntax record when
+    /// it builds the node's payload.
     pub terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
-    /// The body content run's **exit state** ([`NodesOutcome::state`](super::NodesOutcome::state)):
-    /// the state the run actually reached, after the sibling after-effects it applied
-    /// evolved it — and the only place the definitions [`after_effects`](EnvironmentBody::after_effects)
-    /// records are inspectable (`state.scopes().retrieve_spec(…)`), since the record
-    /// itself carries operations, not a symbol table. It dies with the invocation: the
-    /// driving composition's routing hook is its last reader.
+    /// The parsing state the body's content run ended in
+    /// ([`NodesOutcome::state`](super::NodesOutcome::state)): the state the run reached
+    /// after applying the after-effects of its own nodes.
     ///
-    /// A body that runs **no content loop** (a verbatim body — raw text, no sibling
-    /// after-effects possible) reports the state it read the body under at entry:
-    /// nothing evolved it.
+    /// This is the only place the definitions recorded in
+    /// [`after_effects`](EnvironmentBody::after_effects) can be inspected
+    /// (`state.scopes().retrieve_spec(…)`), since that record stores operations rather
+    /// than a symbol table. It is not kept anywhere once the invocation is parsed.
+    ///
+    /// A body that runs no content loop — a verbatim body, whose raw text can generate
+    /// no after-effects — reports the state it read the body under: nothing changed it.
     pub exit_state: Arc<ParsingState<L>>,
-    /// The body content run's merged after-effect record
-    /// ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)) — one
-    /// delta, the run's sibling after-effects merged in application order, with no
-    /// provenance — **raw and unfiltered**: a body parser is a blind helper like
-    /// [`NodesParser`](super::NodesParser), reporting what the parsed nodes generated,
-    /// and the driving composition decides what (if anything) escapes the environment.
-    /// `None` = the run applied none (and for a body that runs no content loop, where
-    /// nothing can escape).
+    /// The after-effects the body's nodes generated
+    /// ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)): one delta,
+    /// the run's sibling after-effects merged in application order, with no provenance.
+    /// `None` when the run applied none, and for a body that runs no content loop.
     ///
-    /// This is *reported*, never *returned*: the body parser's pass-through delta stays
-    /// `None` — routing an interior escape outward is the driving composition's
-    /// decision, not the body helper's (the preset routes it through
+    /// The record is raw and unfiltered. A body parser only *reports* what the parsed
+    /// nodes generated, exactly like [`NodesParser`](super::NodesParser); its own
+    /// pass-through delta stays `None`, and the composition driving the environment
+    /// decides what, if anything, escapes it. The LaTeX-like preset routes it through
     /// [`LatexlikeParseDriver::environment_after_effects`](crate::latexlike::LatexlikeParseDriver::environment_after_effects),
-    /// the environment sibling of [`GroupAfterEffectsFn`](super::GroupAfterEffectsFn)).
+    /// the environment counterpart of
+    /// [`GroupAfterEffectsFn`](super::GroupAfterEffectsFn).
     pub after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
@@ -534,76 +569,94 @@ impl<L: Lang> fmt::Debug for EnvironmentBody<L> {
     }
 }
 
-/// The environment-body construct parser: a tier-2 temporary constructed by the
-/// invocation parser driving the environment shape, parameterized by the terminator
-/// data (the stop command's name, the name group's class, whether the name must
-/// back-reference the invocation).
-/// 
-/// Techy's core has no builtin concept of an "environment".  Instead, it provides a
-/// collection of parsers that language presets (cf. e.g. [`techy::latexlike`]) can
-/// use to build their language constructs.  Specifically, the latexlike preset defines
-/// "environments" as a construct of the type `\begin{name} ... \end{name}` with
-/// two commands `\begin` and `\end` with matching environment names.  Techy provides
-/// helpers to parse the contents of such a construct.  The [`EnvironmentBodyParser`]
-/// can be used to parse the environment's "body", i.e., the ` ... \end{name}` part
-/// of the environment call.  The parser needs to know the end command name (`\end`)
-/// and the environment name (`name`) to know when the environment was closed.
-/// See also the related [`VerbatimBodyParser`](super::VerbatimBodyParser) parser,
-/// which parses a similar type of construct but treating the environment contents
-/// as a verbatim string with no special language-specific meaning.
+/// Parses the body of an environment-shaped construct: the content up to its
+/// terminator, and the terminator itself — the ` … \end{align}` part of
+/// `\begin{align} … \end{align}`.
 ///
-/// This parser parses sibling content up to the terminator command, and handles the
-/// terminator.  Possible conditions that can arise:
-/// [`EnvironmentTerminatorMismatch`], [`MalformedEnvironmentTerminator`],
-/// [`MissingEnvironmentTerminator`].  The parser stages the body `List`. It returns no
-/// pass-through after-effect delta — it *reports* the body content run's merged
-/// after-effect record and its exit state on the produced
-/// [`EnvironmentBody`](EnvironmentBody::after_effects) instead, for the driving
-/// composition to route (the parser is a blind helper: it says what the body's nodes
-/// generated, never what escapes the environment).
+/// The core has no built-in notion of an "environment": that is preset vocabulary (see
+/// [the language syntax guide](crate::guide::language_syntax#environments)). What the
+/// core provides is this parser, which reads sibling content until a chosen terminator
+/// command appears, checks the name group written after that command, and consumes the
+/// terminator. The LaTeX-like preset builds `\begin{name} … \end{name}` out of it. For
+/// a body read as raw text instead of parsed nodes, use
+/// [`VerbatimBodyParser`](super::VerbatimBodyParser).
 ///
-/// # Design
+/// The invocation parser driving the environment constructs one with
+/// [`new`](EnvironmentBodyParser::new), which takes the three facts about the
+/// terminator: the stop command's name (`end`), the group class its name group is
+/// written in (`{`…`}`), and — through
+/// [`with_match_invocation_name`](EnvironmentBodyParser::with_match_invocation_name) —
+/// whether that name must repeat the invocation's. None of this is declared spec-side:
+/// the composition driving the parser also mints the
+/// [`ParsedSlot`](crate::core::node::ParsedSlot) record for the body.
 ///
-/// **Slot terminators are parser business** — and slots have no spec-side declaration
-/// at all: the terminator data (the stop command's
-/// name, the name group's class, whether the name must back-reference the invocation)
-/// parameterizes this parser, and the composition driving it mints the
-/// [`ParsedSlot`](crate::node::ParsedSlot) records directly. A body state delta
-/// (pylatexenc's `make_body_parsing_state_delta`) lives as an ordinary field on the
-/// preset spec type that drives the parse (the preset's `EnvironmentSpec`) — the core
-/// never interprets it. Environments stay zero-custom-code for spec authors.
+/// # Where the body ends
 ///
-/// **The scaffolding is rigid and reconstructed, not recorded** : the
-/// terminator is the stop command followed **immediately** by its name group — no
-/// comments, no paragraph breaks, no whitespace inside the name; the command token's own
-/// syntactic post-space (`\end {name}`) is the one tolerated, unrecorded gap. The
-/// consumed terminator bytes appear in no node: they are the reconstructible complement
-/// between the body `List`'s end and the callable's span end.
+/// The content loop stops at the first command token named `stop_command_name` that
+/// occurs at the body's *own* nesting level; a terminator inside a nested group or a
+/// nested environment belongs to that construct and never ends this body.
 ///
-/// **The caller scopes the body's state**: `cx.state` is the slot's state — the driving
-/// invocation parser stacks the slot's `parsing_state_delta` on the invocation's base
-/// (session-mediated) and reverts structurally, exactly as for arguments. Both the body
-/// content *and the terminator* are read under it; a slot state that cannot tokenize the
-/// stop command runs the body to end of input (a known pitfall — environments do not
-/// self-heal the way group closes do).
+/// The terminator itself is rigid: the stop command followed **immediately** by its name
+/// group, with no comment, no paragraph break, and no whitespace inside the name. The
+/// command token's own syntactic post-space (`\end {name}`) is the one tolerated gap.
+/// The name in the group is compared for exact equality with the invocation name
+/// (`align` for `\begin{align} … \end{align}`) unless name matching was turned off.
+///
+/// # What ends up in the tree
+///
+/// The body's nodes become the children of one staged
+/// [`List`](crate::core::node::NodeKind::List) node, reported as
+/// [`EnvironmentBody::body`], and all of them are designated as the body slot's content
+/// ([`EnvironmentBody::content`]). The consumed terminator's characters appear in no
+/// node: they lie between the `List` node's end and the end of the callable's span
+/// ([`EnvironmentBody::end`]), and their spelling is reported separately as
+/// [`EnvironmentBody::terminator`], from which they can be reconstructed.
+///
+/// The parser returns no pass-through state delta. It reports the content run's merged
+/// after-effects and exit state on the produced [`EnvironmentBody`]
+/// ([`after_effects`](EnvironmentBody::after_effects),
+/// [`exit_state`](EnvironmentBody::exit_state)) instead, and the driving composition
+/// decides what, if anything, escapes the environment.
+///
+/// # The state the body is read under
+///
+/// Both the body content *and* the terminator are read under
+/// [`ParseContext::state`](ParseContext::state) as the caller left it: the driving
+/// invocation parser stacks the environment's body delta on the invocation's base state
+/// and reverts it structurally when the body ends, exactly as for arguments. The core
+/// never interprets that delta — in the preset it is an ordinary field of the
+/// environment's definition.
+///
+/// A body state that cannot tokenize the stop command runs the body to the end of the
+/// input. This is a genuine pitfall: environments do not recover the way an unclosed
+/// group does.
 ///
 /// # Recovery
 ///
-/// - *Name mismatch* (`\begin{A}…\begin{B}…\end{A}`): diagnostic + close the body
-///   **without consuming** the terminator — the unwinding lets the enclosing
-///   environment's parser find and consume its own `\end{A}`; an orphan terminator
-///   eventually reaches the root loop as an ordinary command and takes the
-///   unresolvable-command recovery.
-/// - *Malformed terminator* (no rigid name group after the stop command): diagnostic +
-///   consume the command **alone** + close — leaving it unconsumed would cascade the
-///   same malformed token through every enclosing level; what follows it is left as
-///   enclosing content.
-/// - *End of input*: missing-terminator diagnostic (anchored at the invocation trigger,
-///   the group parser's unclosed-at-open precedent) + close.
-/// - *Unexpected group close in the body*: diagnostic + close without consuming — every
-///   level consumes or unwinds, and the stray close is left for an enclosing level (or
-///   the root) to claim.
+/// Each case below is reported through [`ParseContext::recover`], so a strict driver
+/// aborts the parse and a tolerant one records the diagnostic and continues as
+/// described:
 ///
+/// - *Name mismatch* (`\begin{A}…\begin{B}…\end{A}`):
+///   [`EnvironmentTerminatorMismatch`], then close the body **without consuming** the
+///   terminator, so the enclosing environment's parser can find and consume its own
+///   `\end{A}`. A terminator no level claims eventually reaches the root content loop
+///   as an ordinary command and takes the unresolvable-command recovery.
+/// - *Malformed terminator* (no rigid name group after the stop command):
+///   [`MalformedEnvironmentTerminator`], then consume the command **alone** and close.
+///   Leaving it unconsumed would cascade the same malformed token through every
+///   enclosing level; what follows it is parsed as content of the enclosing level.
+/// - *End of input*: [`MissingEnvironmentTerminator`] with
+///   [`MissingTerminatorFound::EndOfInput`], anchored at the invocation trigger rather
+///   than at the end of the input, then close.
+/// - *A group close nobody at the body's level opened*:
+///   [`MissingEnvironmentTerminator`] with [`MissingTerminatorFound::StrayGroupClose`],
+///   then close without consuming it, leaving it for an enclosing level (or the root
+///   content loop) to claim.
+///
+/// On all four paths [`EnvironmentBody::terminator`] is `None`, and
+/// [`EnvironmentBody::end`] is the body's end — except after a malformed terminator,
+/// where it is the position just past the consumed stop command.
 pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{name}`'s command token), anchoring the
     /// missing-terminator diagnostic (the group parser's unclosed-at-open precedent).
@@ -626,9 +679,9 @@ pub struct EnvironmentBodyParser<'p, L: Lang> {
 }
 
 impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
-    /// A body parser for the environment invoked as `invocation_name` (trigger token
-    /// span `trigger_span`), terminated by the command `stop_command_name` followed by
-    /// its rigid name group of class `name_group_type`.
+    /// Creates a body parser for the environment invoked as `invocation_name` (trigger
+    /// token span `trigger_span`), terminated by the command `stop_command_name`
+    /// followed by its rigid name group of class `name_group_type`.
     pub fn new(
         trigger_span: SourceSpan<L::SourceOrigin>,
         invocation_name: &'p str,
@@ -645,25 +698,31 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
         }
     }
 
-    /// Set whether the terminator's name must match the invocation name (default:
-    /// `true`). Disabled, any rigid name group closes the body — for constructs whose
-    /// terminator does not back-reference the opening.
+    /// Sets whether the terminator's name must match the invocation name (default:
+    /// `true`).
+    ///
+    /// With matching off, any rigid name group closes the body — for constructs whose
+    /// terminator does not repeat the name written at the opening.
     pub fn with_match_invocation_name(mut self, match_invocation_name: bool) -> Self {
         self.match_invocation_name = match_invocation_name;
         self
     }
 
-    /// Provide the span of the invocation name as written in the source, so the body's
-    /// traceback frame can quote it (`environment ‘align’`). Drivers that read the name
-    /// from a name group pass that group's [`name_span()`](NameGroup::name_span).
+    /// Provides the span of the invocation name as written in the source, so the body's
+    /// traceback frame can quote it (`environment ‘align’`).
+    ///
+    /// Drivers that read the name from a name group pass that group's
+    /// [`name_span()`](NameGroup::name_span). Without it the frame is titled
+    /// "environment body".
     pub fn with_invocation_name_span(mut self, name_span: SourceSpan<L::SourceOrigin>) -> Self {
         self.invocation_name_span = Some(name_span);
         self
     }
 
     /// The terminator flow, entered with the matched stop command left unconsumed at
-    /// its span start: read the rigid name group that must follow immediately, verify
-    /// the back-reference, and consume — or unwind — per decision 8 (module docs).
+    /// its span start: read the rigid name group that must follow immediately, check the
+    /// name against the invocation's, and consume the terminator — or leave it
+    /// unconsumed for an enclosing level (the recovery rules on the type).
     /// Returns the environment's end position, plus the consumed terminator's
     /// spelling facts on the clean path ([`EnvironmentTerminatorSyntaxData::Scanned`];
     /// `None` on every recovery path — nothing well-formed was consumed).

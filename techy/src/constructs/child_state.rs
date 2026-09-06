@@ -1,14 +1,13 @@
 //! [`ChildStateSpec`]: per-use descent-state policy on [`NodesParser`] (ports pylatexenc's `make_child_parsing_state`).
 //!
-//! When the dispatch loop descends into a child construct — a group interior, or (6.4) a
+//! When the dispatch loop descends into a child construct — a group interior or a
 //! callable invocation — the child construct parser's **base state** is resolved through
 //! this policy instead of being unconditionally the loop's own state. Motivating use
 //! case: a macro argument parsed "chars except groups" — a delta-restricted state
 //! (commands/comments cleared, groups kept) whose group *interiors* revert to the outer,
 //! unrestricted state: `group: Fixed(outer)`.
 //!
-//! (The 6.5 consumer,
-//! [`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)'s
+//! ([`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)'s
 //! bracket-balancing policy, since detached: its keep-or-revert semantics are
 //! per-level by design — decided semantics 3 below — and are now carried by the
 //! state-scoped temporary-group-rules
@@ -55,7 +54,7 @@ pub enum GroupChildState<'p, L: Lang> {
     /// Compute the base from the loop's current state and the **opening token**,
     /// with a shared, call-scoped reference to the **reader that produced it**: the
     /// callback asks whatever it needs about the token —
-    /// [`token_kind`](crate::token::TokenReader::token_kind) carries `delim` and the
+    /// [`token_kind`](crate::token::TokenReader::token_kind) reports `delim` and the
     /// resolved `Arc<GroupRule>`, so a policy can key on the group's class — and
     /// cannot move the stream. Deterministic, no side effects: return one of the
     /// inputs or a precomputed state where possible — passing an input through
@@ -113,9 +112,18 @@ pub enum InvocationChildState<'p, L: Lang> {
     ),
 }
 
-/// Per-use descent-state configuration of a [`NodesParser`](super::NodesParser) — one
-/// policy per descent pathway. Same tier-2 borrowed-config role as
-/// [`StopSpec`](super::StopSpec); the default (`Inherit`/`Inherit`) is plain nesting.
+/// Decides which parsing state each child construct of a content loop is parsed
+/// under — one policy for group interiors, one for callable invocations.
+///
+/// A [`NodesParser`](super::NodesParser) consults this spec every time it descends
+/// into a child construct, instead of unconditionally passing its own state down. The
+/// default (`Inherit`/`Inherit`) is plain nesting: a child is parsed under the state
+/// the loop had reached. The case that motivates anything else is an argument parsed
+/// as "characters except groups" — a restricted state whose group *interiors* revert
+/// to the outer, unrestricted state (`group: Fixed(outer)`).
+///
+/// Like [`StopSpec`](super::StopSpec), it is per-use configuration borrowed for the
+/// duration of one content loop, not stored in a spec.
 pub struct ChildStateSpec<'p, L: Lang> {
     /// Base-state policy for group interiors (`GroupOpen` arm).
     pub group: GroupChildState<'p, L>,

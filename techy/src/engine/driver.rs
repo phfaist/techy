@@ -1,53 +1,49 @@
-//! [`ParseDriver`]: the Lang-provided parse-behavior object.
+//! [`ParseDriver`]: a language's parse-time behavior, as methods on a value.
 //!
-//! A driver is the **instance** face of a language's parse-time behavior: while
-//! [`Lang`](crate::state::Lang) stays the compile-time bundle of hooks belonging to
-//! layers callable outside a driven parse (state transitions, tokenizer specials, node
-//! finalization), everything that only runs *while a parse is driven* lives here — as
-//! `&self` methods on a value, so behavior can carry configuration that static `Lang`
-//! hooks never could (a recovery policy, a preset's package registry).
+//! [`Lang`](crate::state::Lang) stays the compile-time bundle: its hooks belong to
+//! layers callable outside a running parse (state transitions, tokenizer specials,
+//! node finalization). Everything that only runs *while a parse is running* is on the
+//! driver instead, as `&self` methods on a value, so the behavior can carry
+//! configuration that a static `Lang` hook could not (a recovery policy, a preset's
+//! package registry).
 //!
-//! The driver owns five concerns:
+//! The driver covers five concerns:
 //!
-//! - **policy** — the [`Recovery`] knob ([`recovery`](ParseDriver::recovery)) and the
-//!   funnels consulting it ([`recover`](ParseDriver::recover),
+//! - **policy** — the [`Recovery`] setting ([`recovery`](ParseDriver::recovery)) and
+//!   the two methods consulting it ([`recover`](ParseDriver::recover),
 //!   [`probe_token`](ParseDriver::probe_token));
 //! - **parse-time hooks** —
 //!   [`resolve_command`](ParseDriver::resolve_command),
 //!   [`make_paragraph_break_node`](ParseDriver::make_paragraph_break_node),
 //!   [`refine_diagnostic`](ParseDriver::refine_diagnostic),
-//!   [`observe_transition`](ParseDriver::observe_transition);
+//!   [`observe_transition`](ParseDriver::observe_transition),
+//!   [`resolve_state_event`](ParseDriver::resolve_state_event);
 //! - **source resolution** — the
 //!   [`source_resolver`](ParseDriver::source_resolver) accessor exposing the
 //!   embedding environment's [`SourceResolver`] for `\input`-like external
 //!   references (`None` = resolves nothing);
-//! - **the group descent-delta channel** —
-//!   [`group_interior_delta`](ParseDriver::group_interior_delta), the data plug that
-//!   lets a group class change the parsing state of its interior (a math group entering
-//!   math mode is one line: a delta with a [`mode`](crate::state::ParsingStateDelta::mode)
-//!   override);
+//! - **the group descent delta** —
+//!   [`group_interior_delta`](ParseDriver::group_interior_delta), through which a
+//!   group class changes the parsing state of its interior (a math group entering
+//!   math mode is one line: a delta with a
+//!   [`mode`](crate::state::ParsingStateDelta::mode) override);
 //! - **construct provision** — [`make_root_parser`](ParseDriver::make_root_parser),
 //!   [`make_nodes_parser`](ParseDriver::make_nodes_parser),
 //!   [`make_group_parser`](ParseDriver::make_group_parser),
 //!   [`make_invocation_parser`](ParseDriver::make_invocation_parser). Every descent
-//!   site routes through the [`ParseContext`](crate::constructs::ParseContext) wrappers
+//!   site goes through the [`ParseContext`](crate::constructs::ParseContext) wrappers
 //!   ([`parse_nodes`](crate::constructs::ParseContext::parse_nodes)/[`parse_group`](crate::constructs::ParseContext::parse_group)),
 //!   so one override applies uniformly to the whole parse; the root parser is what
 //!   the parse entry point ([`ParseSetup::parse`](super::ParseSetup::parse)) runs
 //!   directly.
 //!
-//! The driver is bound into the bundle as [`Lang::Driver`](crate::state::Lang::Driver)
-//! and reaches parsers as [`ParseContext::driver`](crate::constructs::ParseContext::driver) — **concretely typed through `L`**,
-//! so a preset's parsers call preset helper methods (inherent methods on the driver
-//! type) with zero downcasts, while generic code sees only this trait.
-//!
-//! Drivers are shared and immutable (`&self`, `Send + Sync`): per-parse mutable state
-//! belongs to the [`ParserSession`] (whose derivation memos the driver-consulting
-//! helpers [`ParserSession::derived_state`]/[`ParserSession::group_interior_state`]
-//! own), and per-language *data* belongs to the parsing state. [`StdParseDriver`] is
-//! the one canned implementation — the recovery knob, a pluggable [`CommandResolver`]
-//! strategy, an optional source resolver — and the
-//! [`TrivialLang`](crate::state::TrivialLang) default.
+//! Drivers are shared and immutable (`&self`, `Send + Sync`): mutable per-parse state
+//! belongs to the [`ParserSession`] (which owns the derivation memos the
+//! driver-consulting helpers [`ParserSession::derived_state`] and
+//! [`ParserSession::group_interior_state`] use), and per-language *data* belongs to
+//! the parsing state. [`StdParseDriver`] is the one ready-made implementation — the
+//! recovery setting, a pluggable [`CommandResolver`] strategy, an optional source
+//! resolver — and the [`TrivialLang`](crate::state::TrivialLang) default.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -74,24 +70,72 @@ use crate::token::{GroupRule, Token, TokenKind, TokenReader, Tokenization};
 
 use super::ParserSession;
 
-/// The Lang-provided parse-behavior object, grouping five concerns: the recovery
-/// policy, the parse-time hooks (command resolution, paragraph-break emission,
-/// diagnostic refinement, transition observation, event lowering), source
-/// resolution, the group descent-delta channel, and construct provision. **Every
-/// method is defaulted**, so `impl ParseDriver<MyLang> for MyDriver {}` is a complete
-/// driver — including its tokenization, which
-/// [`make_token_reader`](ParseDriver::make_token_reader) takes by default from the
-/// language's [`Lang::Tokenization`](crate::state::Lang::Tokenization).
-/// (Parsing depth is limited by the engine-owned
-/// [`StdDescentGuard`](super::StdDescentGuard), not a driver
-/// concern; its configuration travels on the [`Language`](super::Language) value,
-/// [`with_descent_guard_init`](super::Language::with_descent_guard_init).)
+/// A language's parse-time behavior: how commands resolve, whether a problem aborts
+/// the parse or is recorded and tolerated, and which parsers run at each step.
 ///
-/// Implementations are **stateless behavior objects**: `&self` everywhere, shared
-/// across parses (`Send + Sync`), carrying configuration but never per-parse state —
-/// that lives on the [`ParserSession`]. Hooks consulted by the session's memoized
-/// derivation helpers ([`group_interior_delta`](ParseDriver::group_interior_delta))
-/// must be pure; the per-method docs state their contracts.
+/// The engine consults the driver at fixed points of every parse. A language names
+/// its driver type as [`Lang::Driver`](crate::state::Lang::Driver), an instance is
+/// stored on the [`Language`](super::Language), and construct parsers reach it as
+/// [`ParseContext::driver`](crate::constructs::ParseContext::driver) — concretely
+/// typed through `L`, so a preset's own parsers can call inherent methods on the
+/// driver type without downcasting, while generic code sees only this trait.
+/// [Defining a language](crate::guide::custom_lang#the-driver) walks through writing
+/// one.
+///
+/// [`StdParseDriver`] is the ready-made implementation: a recovery policy, a
+/// pluggable [`CommandResolver`], and an optional source resolver. Many languages
+/// need nothing else.
+///
+/// # Which methods to implement
+///
+/// **Every method has a default**, so `impl ParseDriver<MyLang> for MyDriver {}` is
+/// already a complete driver — one that resolves no commands, aborts at the first
+/// problem, and uses the standard parsers everywhere. Tokenization is covered too:
+/// [`make_token_reader`](ParseDriver::make_token_reader) takes the reader from the
+/// language's [`Lang::Tokenization`](crate::state::Lang::Tokenization) by default.
+///
+/// What a real language usually overrides, and when the engine calls it:
+///
+/// - [`resolve_command`](ParseDriver::resolve_command) — **required for any language
+///   with command syntax.** The core cannot invent the language's callable type
+///   identifiers, and the default resolves nothing, so every command in the document
+///   would be diagnosed as unresolvable. Called once per command token.
+/// - [`recovery`](ParseDriver::recovery) — the strict-or-tolerant policy. The default
+///   is [`Recovery::Strict`]; read once per detected problem.
+/// - [`group_interior_delta`](ParseDriver::group_interior_delta) — set when entering a
+///   group of some class changes the state its interior is parsed under, such as a
+///   math group switching the mode. Called once per group descent, subject to
+///   memoization.
+/// - [`refine_diagnostic`](ParseDriver::refine_diagnostic) — replace a condition with
+///   a language-specific one before it is recorded. Called once per detected problem.
+/// - the `make_*` parser factories — supply parsers of the language's own for the
+///   root, for content runs, for groups, and for invocations. Called once per descent
+///   of the corresponding kind.
+/// - [`observe_parse_start`](ParseDriver::observe_parse_start) and
+///   [`observe_transition`](ParseDriver::observe_transition) — record what a parse
+///   did without changing it. The first is called once per parse before any token is
+///   read; the second on every state transition.
+/// - [`source_resolver`](ParseDriver::source_resolver) — supply the resolver for
+///   `\input`-like external references. Called once per such inclusion.
+/// - [`resolve_state_event`](ParseDriver::resolve_state_event) — turn a
+///   context-dependent transition event into an ordinary state patch. Called once per
+///   such event.
+/// - [`diagnostics_limit`](ParseDriver::diagnostics_limit) — cap how many diagnostics
+///   one parse retains. Called once per parse.
+///
+/// How deeply a parse may nest is deliberately *not* a driver concern: the engine
+/// owns that limit through [`StdDescentGuard`](super::StdDescentGuard), configured on
+/// the [`Language`](super::Language) with
+/// [`with_descent_guard_init`](super::Language::with_descent_guard_init).
+///
+/// # Instances are shared and hold no parse state
+///
+/// Every method takes `&self`, and one driver instance is shared across parses and
+/// across threads (`Send + Sync`). A driver may carry configuration, but never state
+/// belonging to a single parse — that belongs to the [`ParserSession`]. Hooks the
+/// session memoizes ([`group_interior_delta`](ParseDriver::group_interior_delta))
+/// must in addition be pure functions of their arguments; the per-method
+/// documentation states each contract.
 ///
 /// # Wrapping a driver
 ///
@@ -115,12 +159,13 @@ use super::ParserSession;
 pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     // --- policy -----------------------------------------------------------------
 
-    /// The tolerant-parsing policy this driver drives under. The default is
-    /// [`Recovery::Strict`]; [`StdParseDriver`] carries the policy as a field.
+    /// The recovery policy this driver parses under: abort at the first problem, or
+    /// record it and continue.
     ///
-    /// Consulted by the default [`recover`](ParseDriver::recover) and
-    /// [`probe_token`](ParseDriver::probe_token) paths — a custom policy beyond the
-    /// strict/tolerant enum overrides those methods instead.
+    /// The default is [`Recovery::Strict`]; [`StdParseDriver`] carries the policy as
+    /// a field. It is read by the default [`recover`](ParseDriver::recover) and
+    /// [`probe_token`](ParseDriver::probe_token) paths, so a policy finer than the
+    /// two-way choice overrides those methods instead of this one.
     ///
     /// Deliberately infallible: this is a pure read of configured policy, with no
     /// computation that could fail. Embedding or binding code whose implementation
@@ -131,33 +176,41 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Recovery::Strict
     }
 
-    /// The retention cap for the parse's diagnostics sink, consulted once per
-    /// parse: [`ParseSetup::parse`](super::ParseSetup::parse) seeds the
-    /// session's [`Diagnostics`] with [`Diagnostics::with_limit`] when this
-    /// answers `Some(limit)`; on `None` — the default — the sink keeps the
-    /// standard cap ([`Diagnostics::DEFAULT_LIMIT`]). Code driving construct
-    /// parsers over a hand-built [`ParserSession`] applies the cap itself (the
-    /// session's [`diagnostics`](ParserSession::diagnostics) field is public).
+    /// How many diagnostics one parse retains, or `None` — the default — for the
+    /// standard cap ([`Diagnostics::DEFAULT_LIMIT`]).
+    ///
+    /// Read once per parse: [`ParseSetup::parse`](super::ParseSetup::parse) creates
+    /// the session's [`Diagnostics`] with [`Diagnostics::with_limit`] when this
+    /// answers `Some(limit)`.
+    ///
+    /// Code that drives construct parsers over a [`ParserSession`] of its own
+    /// applies the cap itself; the session's
+    /// [`diagnostics`](ParserSession::diagnostics) field is public.
     fn diagnostics_limit(&self) -> Option<usize> {
         None
     }
 
-    /// Detection-site recovery — **the recovery hook**, reached through the parsers'
-    /// recovery entry point
-    /// ([`ParseContext::recover`](crate::constructs::ParseContext::recover)). The
-    /// default calls [`refine_diagnostic`](ParseDriver::refine_diagnostic) and
-    /// [`recovery`](ParseDriver::recovery) **through `self`** (a delegating driver
-    /// must account for that — see *Wrapping a driver* on the trait): it applies
-    /// the refinement exactly once, then — per the policy `recovery()` answers —
-    /// records the condition as an error-severity diagnostic and returns `Ok(())`
-    /// (tolerant — the caller continues with its site's local recovery) or returns it
-    /// as a [`ParseError`] to bubble (strict — nobody continues past an `Err`).
+    /// Decides what happens when a construct parser detects a problem: record it and
+    /// continue, or end the parse.
     ///
-    /// Overriding this method replaces the *policy*, not the plumbing: richer policies
-    /// (per-condition severities, whitelists, diagnostic budgets) decide per call
-    /// between [`ParserSession::recover`]'s record-or-abort modes. An override takes on
-    /// the refinement responsibility — route condition data through
-    /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) before recording, or
+    /// Called once per detected problem, from the parsers' recovery entry point
+    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover).
+    ///
+    /// The default applies [`refine_diagnostic`](ParseDriver::refine_diagnostic)
+    /// exactly once, then follows the policy
+    /// [`recovery`](ParseDriver::recovery) answers: under
+    /// [`Recovery::Tolerant`] it records the condition as an error-severity
+    /// diagnostic and returns `Ok(())`, so the caller continues with the local
+    /// recovery documented for that condition; under [`Recovery::Strict`] it returns
+    /// the condition as a [`ParseError`], and nothing continues past that. Both calls
+    /// go **through `self`**, which a delegating driver must account for — see
+    /// *Wrapping a driver* on the trait.
+    ///
+    /// Overriding this method replaces the policy, not the plumbing. A richer policy
+    /// — per-condition severities, a list of conditions to ignore, a budget of
+    /// problems — decides per call between [`ParserSession::recover`]'s two modes. An
+    /// override also takes on the refinement step: either route the condition through
+    /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) before recording it, or
     /// document that refinement does not apply.
     fn recover(
         &self,
@@ -172,10 +225,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- tokenization ---------------------------------------------------------
 
-    /// Build the token reader for one parse over `source` — **where a driver installs a
-    /// reader of its own**.
+    /// Builds the token reader one parse reads `source` through.
     ///
-    /// Both reader-construction sites go through this hook:
+    /// This is where a driver installs a reader of its own. Both
+    /// reader-construction sites go through it:
     /// [`ParseSetup::parse`](super::ParseSetup::parse) for the root parse and
     /// [`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)
     /// for an attached (included) source. A driver that returns its own reader thereby
@@ -200,15 +253,19 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         <L::Tokenization as Tokenization<L>>::make_token_reader(source)
     }
 
-    /// Probe the token at the reader's position under `state`, mapping a tokenizer
-    /// error per the recovery policy (the default reads it through
-    /// `self.`[`recovery()`](ParseDriver::recovery)) — the **probing peek** of the argument-probe
-    /// protocol, reached through [`ParseContext::probe_token`](crate::constructs::ParseContext::probe_token): strict mode aborts
-    /// with the token error (mirroring the content loop); tolerant mode reports `None`
-    /// **without diagnosing or consuming** — the caller treats the position as
-    /// unusable (argument absent, terminator malformed) and the enclosing content loop
-    /// re-reads the error and applies its own token recovery, avoiding a double
-    /// report.
+    /// Looks at the token at the reader's position under `state` without consuming
+    /// it, mapping a tokenizer error to the recovery policy.
+    ///
+    /// This is the peek an argument parser uses to find out whether an optional
+    /// argument is present, reached through
+    /// [`ParseContext::probe_token`](crate::constructs::ParseContext::probe_token).
+    /// The default reads the policy through
+    /// `self.`[`recovery()`](ParseDriver::recovery): strict mode aborts with the
+    /// token error, as the content loop would; tolerant mode reports `None` **without
+    /// diagnosing and without consuming**, so the caller treats the position as
+    /// unusable (the argument is absent, the terminator malformed) and the enclosing
+    /// content loop re-reads the error and applies its own token recovery. That is
+    /// what keeps one malformed token from being reported twice.
     ///
     /// A token error carrying **no** recovery is unrecoverable and aborts even under
     /// [`Recovery::Tolerant`] — mirroring the content loop, whose re-read would abort
@@ -234,17 +291,20 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         }
     }
 
-    // --- parse-time hooks (migrated off `Lang`, July 2026) -----------------------
+    // --- parse-time hooks ---------------------------------------------------------
 
-    /// Resolve a [`Command`](crate::token::TokenKind::Command) token to its
-    /// invocation form and behavior spec. Typically implemented by a preset
-    /// dispatching to the state's libraries via a
-    /// [`CallableQuery`](crate::scopes::CallableQuery) — carrying the name and the
-    /// fired escape character for syntax disambiguation. `Specials` tokens need no
-    /// hook: recognition = resolution, the token already carries its spec (that
-    /// asymmetry is deliberate — specials resolution is token-time and stays on
-    /// [`Lang::scan_specials`](crate::state::Lang::scan_specials); command resolution
-    /// is parse-time and lives here).
+    /// Resolves a [`Command`](crate::core::token::TokenKind::Command) token to its
+    /// invocation form and behavior spec.
+    ///
+    /// Called once per command token. A preset typically implements it by querying
+    /// the state's definitions with a
+    /// [`CallableQuery`](crate::core::specs::CallableQuery), which carries the name
+    /// and the escape character that fired, so that the syntax can be told apart.
+    ///
+    /// `Specials` tokens need no such hook: recognizing one already resolves it, and
+    /// the token carries its spec. Specials are resolved while tokenizing, by
+    /// [`Lang::scan_specials`](crate::state::Lang::scan_specials); commands are
+    /// resolved while parsing, here.
     ///
     /// The hook receives the triggering **token** and a shared, call-scoped reference
     /// to the **reader that produced it**, so a language may take over resolution by
@@ -366,10 +426,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         data
     }
 
-    /// Per-transition **observation**: called by the
-    /// session-mediated derivation helpers ([`ParserSession::derived_state`],
-    /// [`ParserSession::group_interior_state`]) on **every** transition event — memo
-    /// hits included, which is what
+    /// Records what a state transition did, without being able to change it.
+    ///
+    /// Called by the session's derivation helpers
+    /// ([`ParserSession::derived_state`], [`ParserSession::group_interior_state`]) on
+    /// **every** transition — memoized ones included, which is what
     /// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition)
     /// structurally cannot see (it runs once per unique *derivation*, not once per
     /// transition). Parse-history accumulation ("how many times did the parse enter
@@ -419,18 +480,23 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Ok(())
     }
 
-    /// Once-per-parse **initialization observation**: called by
-    /// [`ParseSetup::parse`](crate::engine::ParseSetup::parse) after the
-    /// session is created and before any token is read — the layering-correct
-    /// moment for registration-sanity diagnostics (the sink is live, and the
-    /// initial state's [`TokenRules`](crate::token::TokenRules) — escape characters
-    /// included — are known, which no registration-time layer can see).
+    /// Records observations about a parse before it starts.
+    ///
+    /// Called once per parse by
+    /// [`ParseSetup::parse`](crate::core::ParseSetup::parse), after the session is
+    /// created and before any token is read. That is the right moment to check that
+    /// the definitions loaded for this parse make sense: the diagnostics sink already
+    /// exists, and the initial state's
+    /// [`TokenRules`](crate::core::token::TokenRules) — escape characters included —
+    /// are known, which nothing at registration time can see.
+    ///
     /// `initial_state` is the state **this parse** starts from: the language's
-    /// initial state, or the one
-    /// [`ParseSetup::with_initial_state`](crate::engine::ParseSetup::with_initial_state)
-    /// put in its place. May record
-    /// **warnings/notes** into `diagnostics`; it cannot alter the parse. The
-    /// default does nothing.
+    /// initial state, or whatever
+    /// [`ParseSetup::with_initial_state`](crate::core::ParseSetup::with_initial_state)
+    /// put in its place.
+    ///
+    /// The hook may record warnings and notes into `diagnostics`, but it cannot alter
+    /// the parse. The default does nothing.
     ///
     /// The latexlike driver delegates to
     /// [`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
@@ -450,9 +516,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         let _ = (source, initial_state, diagnostics);
     }
 
-    /// Lower one **context-dependent** transition event to an ordinary state-delta
-    /// patch, given the session's live enclosing-state stack — the driver half of
-    /// the two-class event contract ([`Lang::Event`]), consulted by
+    /// Turns one **context-dependent** transition event into an ordinary state-delta
+    /// patch, using the states the parse has descended through.
+    ///
+    /// Events come in two classes ([`Lang::Event`]); this method handles the class
+    /// whose meaning depends on the surrounding context. It is consulted by
     /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
     /// once per event before the delta reaches the derivation point
     /// ([`ParsingState::derived`](crate::state::ParsingState::derived)).
@@ -521,11 +589,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- the group descent-delta channel ------------------------------------------
 
-    /// The extra state delta a group descent applies to its interior, keyed on the
-    /// entered rule — the data channel for "entering this group class changes the state"
-    /// (the latexlike math-interior delta: a math-class rule returns
-    /// `ParsingStateDelta::new().mode(Mode::Math)`, so the interior parses in math
-    /// mode). `None` — the default — means the canonical descent derivation alone.
+    /// The extra state change a group applies to its own interior, chosen from the
+    /// group rule being entered.
+    ///
+    /// This is how entering a group of some class changes the conditions its content
+    /// is parsed under. In the latexlike preset, a math-class rule returns
+    /// `ParsingStateDelta::new().mode(Mode::Math)`, and the interior therefore parses
+    /// in math mode. `None` — the default — applies no change beyond the standard
+    /// descent derivation.
     ///
     /// **Must be a deterministic pure function of `(base, rule)`** — the result is
     /// memoized per `(base, rule)` by [`ParserSession::group_interior_state`] (`Arc`
@@ -545,11 +616,12 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- construct provision -------------------------------------------------------
 
-    /// The factory producing the **root parser** for one parse — the parser the entry
-    /// point ([`ParseSetup::parse`](super::ParseSetup::parse)) runs directly, at the
-    /// root of the descent hierarchy, over the whole source: a fresh boxed parser per
-    /// parse, ownership moved to the caller. Its output is the tree's root
-    /// ([`BuildId`]), around which the entry point freezes the session.
+    /// Builds the parser that runs at the root of one parse, over the whole source.
+    ///
+    /// Called once per parse: [`ParseSetup::parse`](super::ParseSetup::parse) runs
+    /// the returned parser directly rather than as a descent, and freezes the session
+    /// around the root node ([`BuildId`]) it returns. Ownership of the parser moves
+    /// to the caller.
     ///
     /// The default is the standard [`RootNodesParser`] — the content loop over the
     /// whole source with stray-close recovery, staging the root `List`. Override it
@@ -579,12 +651,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Ok(Box::new(RootNodesParser::new()))
     }
 
-    /// The factory producing the content-loop parser for one nodes descent (group
-    /// interiors, environment bodies, the top-level drive) — a fresh boxed parser per
-    /// descent, ownership moved to the caller. Reached through
-    /// [`ParseContext::parse_nodes`](crate::constructs::ParseContext::parse_nodes), which every descent site routes through, so an
-    /// override applies uniformly (the supported extension point for a custom
-    /// dispatch loop).
+    /// Builds the parser for one run of content: a group interior, an environment
+    /// body, or the top level.
+    ///
+    /// Called once per such descent, through
+    /// [`ParseContext::parse_nodes`](crate::constructs::ParseContext::parse_nodes).
+    /// Every descent site goes through that wrapper, so one override applies to the
+    /// whole parse; this is the supported way to install a dispatch loop of your own.
+    /// Ownership of the parser moves to the caller.
     ///
     /// The default is the standard [`NodesParser`] over the given stop conditions and
     /// descent-state policies. A custom parser must uphold the `NodesParser` output
@@ -623,10 +697,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Ok(Box::new(NodesParser::new(stop).with_child_states(child_states)))
     }
 
-    /// The factory producing the parser for one group descent (the consumed
-    /// `GroupOpen` token and its resolved rule) — a fresh boxed parser
-    /// per descent. Reached through [`ParseContext::parse_group`](crate::constructs::ParseContext::parse_group) at every group
-    /// descent site.
+    /// Builds the parser for one group, given the `GroupOpen` token already consumed
+    /// and the rule it matched.
+    ///
+    /// Called once per group descent, through
+    /// [`ParseContext::parse_group`](crate::constructs::ParseContext::parse_group).
     ///
     /// The default is the standard [`GroupParser`], which derives the interior state
     /// through [`ParseContext::group_interior_state`](crate::constructs::ParseContext::group_interior_state) (where
@@ -668,13 +743,15 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         ))
     }
 
-    /// The interception point over
-    /// [`CallableSpec::make_invocation_parser`]: the dispatch loops obtain every
-    /// invocation parser through the driver, and the default delegates to the resolved
-    /// spec's own factory (`invocation.spec` — it builds no parser itself and calls
-    /// no other driver method) — specs keep owning their invocation behavior; the driver
-    /// merely gets a uniform veto/wrap point (instrumentation, per-language parser
-    /// substitution) that no per-spec override could provide.
+    /// Builds the parser for one invocation of a callable.
+    ///
+    /// Called once per invocation: the dispatch loops obtain every invocation parser
+    /// through the driver. The default delegates to the resolved spec's own factory
+    /// ([`CallableSpec::make_invocation_parser`] on `invocation.spec`), building no
+    /// parser itself and calling no other driver method, so specs keep owning their
+    /// invocation behavior. Overriding gives the driver one place to wrap or replace
+    /// every invocation parser — for instrumentation, or to substitute a parser per
+    /// language — which no per-spec override could provide.
     ///
     /// The caller has already consumed the trigger token whole; see
     /// [`StdInvocationParser`](crate::constructs::StdInvocationParser)'s
@@ -816,21 +893,17 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
 /// type — the standard shape for a command-bearing language; beyond those, implement
 /// [`CommandResolver`] (or a whole [`ParseDriver`]) yourself.
 ///
-/// # The two resolvers are deliberately asymmetric
+/// # Why the two resolvers are stored differently
 ///
-/// Storage matches how each part is consumed. The **command resolver** is part of the
-/// language *definition* — fixed when `type Driver = …` is written — and is consumed
-/// monomorphized through the concretely-typed
-/// [`ParseContext::driver`](crate::constructs::ParseContext::driver) on every
-/// command token — a performance-critical path — so a generic parameter is
-/// collected in full. The
-/// **source resolver** is an *embedding-environment* capability — it varies per
-/// deployment or run — and is consumed only through the type-erased
-/// [`ParseDriver::source_resolver`] accessor once per `\input`-style inclusion —
-/// far off any performance-critical path: a
-/// generic parameter there would be erased at its only point of use, while costing a
-/// none-placeholder type and `None`-inference noise. Hence `R` by value,
-/// [`source_resolver`](StdParseDriver::source_resolver) behind `Option<Arc<dyn …>>`.
+/// The command resolver is part of the language *definition*, fixed when
+/// `type Driver = …` is written, and it is called on every command token. It is
+/// therefore a generic parameter, `R`, resolved at compile time.
+///
+/// The source resolver is a capability of the embedding environment: it varies per
+/// deployment, and it is consulted only once per `\input`-style inclusion, through
+/// the type-erased [`ParseDriver::source_resolver`] accessor. It is therefore a
+/// plain `Option<Arc<dyn SourceResolver<_>>>` field, which also spares callers a
+/// placeholder type and `None`-inference noise when no resolver is configured.
 ///
 /// ```
 /// # use techy::core::StdParseDriver;

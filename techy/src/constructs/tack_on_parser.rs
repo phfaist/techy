@@ -1,7 +1,7 @@
 //! [`TackOnFieldsArgumentParser`]: the tack-on information-fields parser
-//! (ParserLibraryParity.md N6; pylatexenc's `LatexTackOnInformationFieldMacrosParser`)
-//! — absorbing trailing `\label{…}`-style invocations after a construct's declared
-//! arguments and attaching them to the invocation node.
+//! (pylatexenc's `LatexTackOnInformationFieldMacrosParser`) — absorbing trailing
+//! `\label{…}`-style invocations after a construct's declared arguments and
+//! attaching them to the invocation node.
 //!
 //! Used as a callable's **last declared argument** (the FLM `label_arg` precedent):
 //! attachment is the argument's region — the whole absorption happens at parse time
@@ -94,14 +94,22 @@ struct TackOnField<L: Lang> {
     repeatable: bool,
 }
 
-/// The tack-on information-fields parser: absorbs trailing `\label{…}`-style
-/// invocations after a construct's declared arguments, as the callable's **last
-/// declared argument**. It is configured with the invocation form its field nodes
-/// record and the accepted field commands by **name** — a peeked command token whose
-/// name is configured dispatches with the configured spec directly (the scope stack
-/// is never consulted); anything else ends the absorption, silently. Each absorbed
-/// field stages a full `Callable` node under the configured per-name spec; by-name
-/// reading is [`split_tack_on_fields`](crate::extract::split_tack_on_fields).
+/// An argument position that absorbs trailing `\label{…}`-style information fields
+/// and attaches them to the callable being parsed.
+///
+/// Declare it as a callable's **last** argument: the engine reaches for it when the
+/// preceding declared arguments are parsed, and it keeps absorbing field invocations
+/// for as long as it finds them.
+///
+/// It is configured with the invocation form its field nodes record and with the
+/// accepted field commands **by name**. When the next token is a command whose name
+/// is configured, it is parsed with the spec registered for that name — the scope
+/// stack is never consulted, so a field command like `\label` need not exist as a
+/// language command at all. Anything else ends the absorption, silently.
+///
+/// Each absorbed field stages a full `Callable` node under its configured spec, so
+/// the field carries its own name, spec, and parsed arguments. Read the fields back
+/// by name with [`split_tack_on_fields`](crate::extract::split_tack_on_fields).
 pub struct TackOnFieldsArgumentParser<L: Lang> {
     callable_type: L::CallableTypeId,
     fields: Vec<TackOnField<L>>,
@@ -297,8 +305,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    /// The `\label{…}` field spec: one chars-group argument (the intended pairing of
-    /// N4 and N6).
+    /// The `\label{…}` field spec: one chars-group argument.
     fn label_spec() -> Arc<dyn CallableSpec<Latexlike>> {
         Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new_unnamed(Arc::new(
             CharsGroupArgumentParser::new(GroupType::Content),
