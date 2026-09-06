@@ -1,24 +1,24 @@
-//! The session's derivation memo: key types and identity-based hashing.
+//! Key types and identity-based hashing for the session's derivation memos.
 //!
-//! [`ParserSession::derived_state`](super::ParserSession::derived_state) memoizes the
-//! *gated* subset of state derivations — deltas that carry only token-rules overrides
-//! and/or a mode override (no ext replacement, no events, no scope ops) — keyed on
-//! the base state's `Arc` identity plus the overrides, with every rule payload taken by
-//! `Arc` identity and the per-block `enabled` gates and the mode override by value
-//! (modes are
-//! `Copy + Eq` vocabulary — value keying is *exact* for them, not conservative).
-//! Pointer-equal inputs imply value-equal inputs, and `derived()` is a pure function of
-//! (base data, delta, events), so identity keying is conservatively correct: it can
-//! only miss (value-equal but distinct `Arc`s), never falsely hit.
+//! [`ParserSession::derived_state`](super::ParserSession::derived_state) memoizes
+//! derivations whose delta carries only token-rule overrides and/or a mode override
+//! (no ext replacement, no events, no scope ops). The key is the base state's `Arc`
+//! identity plus those overrides: rule payloads by `Arc` identity, the per-block
+//! `enabled` gates and the mode override by value.
 //!
-//! **Why keys own their `Arc`s:** an entry pins the allocations of its base state and
-//! payload rules, so a live `Arc` that compares pointer-equal to a stored key is
-//! necessarily the *same* object — no address reuse, no ABA false hits. The retention
-//! this implies (entries live until the session drops) is a decided trade: a session is one transient parse, and most
-//! memoized states end up pinned by the node tree anyway.
+//! Identity keying is conservatively correct. Pointer-equal inputs are value-equal,
+//! and `derived()` is a pure function of (base data, delta, events), so a hit is
+//! exact; a miss is possible on value-equal but distinct `Arc`s. The mode key is a
+//! `Copy + Eq` value, so it cannot even miss.
 //!
-//! Probes are allocation-free: lookups go through the borrowed [`StateMemoProbe`] view
-//! (hashbrown's `Equivalent` seam); the owned [`StateMemoKey`] is materialized only on
+//! Keys own their `Arc`s. An entry therefore pins the allocations of its base state
+//! and payload rules, so a live `Arc` that compares pointer-equal to a stored key is
+//! the same object — no address reuse, no ABA false hits. The retention that implies
+//! (entries live until the session drops) is bounded by one transient parse, and most
+//! memoized states are pinned by the node tree anyway.
+//!
+//! Lookups allocate nothing: they go through the borrowed [`StateMemoProbe`] view
+//! (hashbrown's `Equivalent` seam), and the owned [`StateMemoKey`] is built only on
 //! insert.
 
 use alloc::sync::Arc;
@@ -35,16 +35,19 @@ use crate::token::GroupRule;
 /// The memo map: owned keys → memoized derived states.
 pub(super) type StateMemo<L> = hashbrown::HashMap<StateMemoKey<L>, Arc<ParsingState<L>>>;
 
-/// The **group-interior** memo map: one entry per `(base, rule)` descent,
-/// deliberately separate from [`StateMemo`]. The group-interior derivation is its own
-/// operation — the canonical `expecting_group_close` override *plus* the driver's
+/// The group-interior memo map: one entry per `(base, rule)` descent.
+///
+/// Deliberately separate from [`StateMemo`]. A group-interior derivation is the
+/// canonical `expecting_group_close` override *plus* the driver's
 /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta), which
-/// runs on memo **miss** only. Sharing [`StateMemo`] would be unsound: a hand-built
-/// expecting-close-only delta and a driver-augmented descent would collide under one
-/// key while deriving different states. Keyed on `(base, rule)` `Arc` identities
-/// (sound because the driver hook is pure per `(state, rule)`); the entry stores the
-/// merged delta so hits can hand the true delta to `observe_transition`. Keys own
-/// their `Arc`s for the same no-ABA reason as [`StateMemoKey`].
+/// runs on a memo miss only; sharing [`StateMemo`] would let a hand-built
+/// expecting-close-only delta and a driver-augmented descent collide under one key
+/// while deriving different states.
+///
+/// Keyed on the `(base, rule)` `Arc` identities, which is sound because the driver
+/// hook is pure per `(state, rule)`. The entry stores the merged delta, so a hit can
+/// still pass the true delta to `observe_transition`. Keys own their `Arc`s for the
+/// same no-ABA reason as [`StateMemoKey`].
 pub(super) type GroupInteriorMemo<L> =
     hashbrown::HashMap<GroupInteriorKey<L>, GroupInteriorEntry<L>>;
 
@@ -95,7 +98,8 @@ impl<L: Lang> Equivalent<GroupInteriorKey<L>> for GroupInteriorProbe<'_, L> {
     }
 }
 
-/// Owned key of one memo entry (see the module docs for the pinning rationale).
+/// Owned key of one derivation-memo entry (the module docs explain why it owns its
+/// `Arc`s).
 pub(super) struct StateMemoKey<L: Lang> {
     pub(super) base: Arc<ParsingState<L>>,
     pub(super) mode: Option<L::ModeId>,
@@ -103,7 +107,7 @@ pub(super) struct StateMemoKey<L: Lang> {
 }
 
 /// Borrowed probe view of a [`StateMemoKey`]: hashes and compares exactly like the
-/// owned key without cloning anything (the mode override is `Copy` — carried by value).
+/// owned key, cloning nothing (the mode override is `Copy`, so it is carried by value).
 pub(super) struct StateMemoProbe<'a, L: Lang> {
     pub(super) base: &'a Arc<ParsingState<L>>,
     pub(super) mode: Option<L::ModeId>,
@@ -144,16 +148,14 @@ fn str_addr(arc: &Arc<str>) -> usize {
     Arc::as_ptr(arc) as *const u8 as usize
 }
 
-// hash_key/keys_eq walk the override blocks field by field, in the original
-// (pre-regrouping) field order, so hash values and equality answers are unchanged by
-// the M1 regrouping: gates and the mode by value, every rule payload by `Arc`
-// identity. Every field of every *present* feature's block is covered — none skipped,
-// none added. Since M2 a block whose feature the language declares absent contributes
-// nothing to the hash and is skipped in equality, and since M3 that block does not
-// even exist: its storage is the zero-sized store, so both functions reach the block
-// through the `store_get` projection — `Some` exactly for present features. The
-// projections stay in lockstep (the same presence declaration guards the same fields
-// in both functions, so hash-equal keys are still exactly the keys_eq-equal keys).
+// hash_key/keys_eq walk the override blocks field by field: gates and the mode by
+// value, every rule payload by `Arc` identity. Every field of every *present*
+// feature's block is covered — none skipped, none added. A block whose feature the
+// language declares absent has zero-sized storage and does not exist at all, so both
+// functions reach a block through the `store_get` projection — `Some` exactly for
+// present features. The projections stay in lockstep (the same presence declaration
+// guards the same fields in both functions), so hash-equal keys are still exactly the
+// keys_eq-equal keys.
 fn hash_key<L: Lang, H: Hasher>(
     base: &Arc<ParsingState<L>>,
     mode: Option<L::ModeId>,

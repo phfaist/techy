@@ -1,56 +1,64 @@
-//! [`GroupParser`]: parses one delimited group — interior content up to and including
-//! the close delimiter — into a `Group` node (pylatexenc's `LatexDelimitedGroupParser`).
+//! The parser for one delimited group: [`GroupParser`].
 //!
-//! # Contract
-//!
-//! Constructed with the opening delimiter's token and its resolved
-//! [`GroupRule`] — the token to ask the reader about the delimiter, the rule as the
-//! [`GroupOpen`](crate::token::TokenKind::GroupOpen) view reported it. The **caller
-//! consumes that token** before running the
-//! parser (the dispatch-loop arm that peeked it, under the state that tokenized it —
-//! the same at-match-time atomicity rule as the stop-condition consume flag; it also
-//! keeps this parser free of `'s`-bound token storage, which the uniform
-//! [`ConstructParser::parse`] signature could not tie to the context's reader). The
-//! token's pre-space is likewise the caller's (housed as sibling content).
-//!
-//! `cx.state` is the interior's **base** state (the caller resolves any
-//! [`ChildStateSpec`](super::ChildStateSpec) policy first); the parser derives the
-//! actual interior state from it — base + `expecting_group_close` from the opening
-//! rule, via the session's memoized
-//! [`group_interior_state`](crate::engine::ParserSession::group_interior_state) — so the
-//! close delimiter is guaranteed recognizable regardless of the base's delimiter table
-//! (the `$…$` case: the ambiguous `$` closes only through the expected-close rule). The
-//! interior state is scoped structurally: `cx.state` is swapped for the recursion and
-//! restored after, so a state change made inside the group ends with it.
-//!
-//! # Leaking an after-effect (the `\gdef` shape)
-//!
-//! By default the returned after-effect delta is `None`: the interior run's merged
-//! record ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)) is
-//! dropped with the descent, which is what makes a definition group-scoped. A language
-//! whose constructs may *escape* their enclosing group — TeX's `\gdef` — installs the
-//! [`GroupAfterEffectsFn`] hook
-//! ([`new_with_after_effects`](GroupParser::new_with_after_effects), from an overridden
-//! [`make_group_parser`](crate::engine::ParseDriver::make_group_parser)): it maps the
-//! interior record to the group's own after-effect for its caller. What the hook can and
-//! cannot discriminate is documented on the type.
+//! It reads a group's interior content up to and including the close delimiter and
+//! stages a `Group` node (pylatexenc's `LatexDelimitedGroupParser`). Every `{…}`, `[…]`
+//! or `$…$` in a parsed tree comes from a run of it, whether the group was met in
+//! ordinary content or as an argument's delimited form.
 //!
 //! # Matching and recovery
 //!
-//! The interior [`NodesParser`] stops at the exact `(group_type, close)` pairing the
-//! group opened with, **consuming** the close at match time (the consume flag's
-//! atomicity guarantee), and the `Group` node records both delimiters span-backed
-//! ([`GroupData`]). Tolerant recovery, at this detection site:
+//! The interior [`NodesParser`] stops at the exact `(group class, close delimiter)`
+//! pairing the group opened with, consuming the close as it matches it, and the `Group`
+//! node records both delimiters ([`GroupData`]). Two things can happen instead, and both
+//! are diagnosed here, as [`UnclosedGroup`]:
 //!
-//! - *End of input inside the group*: diagnostic (at the open delimiter) + close the
-//!   group with an **empty** `close` ([`GroupData`]'s documented recovery value).
-//! - *Unexpected group close inside* (a `]` under a `{`, a re-classed `}`): diagnostic +
-//!   close the group **without consuming** the stray token — the same unwinding rule as
-//!   environment-terminator mismatch: every level either consumes the token or
-//!   unwinds out of its own frame, and the stray close eventually reaches a level that
-//!   claims it (or the root, which diagnoses and skips).
+//! - *The input ends inside the group*: the diagnostic points at the open delimiter, and
+//!   the group is closed where the input ended.
+//! - *A close delimiter of a different pairing appears* — a `]` under a `{`, or a `}` a
+//!   state change has re-classed: the diagnostic points at that delimiter, and the group
+//!   is closed **without consuming** it. This is the same unwinding rule as an
+//!   environment-terminator mismatch: every level either consumes the token or unwinds
+//!   out of its own frame, so the stray close eventually reaches a level that claims it,
+//!   or the root, which diagnoses and skips it.
 //!
-//! Under [`Recovery::Strict`](crate::error::Recovery) both conditions abort instead.
+//! In both recovery situations the group node records an empty close delimiter, which is
+//! how a reader of the tree recognizes a group that was never closed. Under
+//! [`Recovery::Strict`](crate::error::Recovery) both situations abort the parse instead.
+//!
+//! # How the parser is called
+//!
+//! It is constructed with the opening delimiter's token and the [`GroupRule`] that the
+//! [`GroupOpen`](crate::core::token::TokenKind::GroupOpen) token view resolved for it:
+//! the token so that the parser can ask the reader about the delimiter, the rule so that
+//! it knows which close to match.
+//!
+//! **The caller consumes the opening token before running the parser** — the dispatch
+//! arm that peeked it, under the state that tokenized it, so that the token is claimed at
+//! the moment it matched. The token's pre-space is the caller's too, staged as sibling
+//! content.
+//!
+//! `cx.state` is the interior's **base** state; the caller resolves any
+//! [`ChildStateSpec`](super::ChildStateSpec) policy first. From it the parser derives the
+//! interior state — the base plus `expecting_group_close` taken from the opening rule,
+//! through the session's memoized
+//! [`group_interior_state`](crate::core::ParserSession::group_interior_state) — so that
+//! the close delimiter is recognizable whatever the base state's delimiter table holds.
+//! That is what closes a `$…$` group, whose ambiguous `$` is a close only through the
+//! expected-close rule. The interior state is scoped structurally: `cx.state` is swapped
+//! for the recursion and restored afterwards, so a state change made inside the group
+//! ends with it.
+//!
+//! # Letting a definition escape the group (the `\gdef` shape)
+//!
+//! By default the after-effect delta the parser returns is `None`: the interior run's
+//! merged record ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)) is
+//! dropped with the descent, which is what makes a definition group-scoped. A language
+//! whose constructs may escape their enclosing group — TeX's `\gdef` — installs the
+//! [`GroupAfterEffectsFn`] hook
+//! ([`new_with_after_effects`](GroupParser::new_with_after_effects), normally from an
+//! overridden [`make_group_parser`](crate::core::ParseDriver::make_group_parser)): it maps
+//! the interior record to the group's own after-effect for its caller. What the hook can
+//! and cannot tell apart is documented on that type.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -68,15 +76,18 @@ use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{node_text_content, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
-/// Condition: a delimited group was never closed with its expected delimiter — detected
-/// by [`GroupParser`], which defines the condition next to its detection site.
+/// Condition: a delimited group was never closed with its expected delimiter.
 ///
-/// Tolerant recovery, per [`found`](UnclosedGroup::found) situation: at end of input,
-/// the group closes with an empty recorded `close`
-/// ([`GroupData`](crate::node::GroupData)'s documented recovery value); on a close
-/// delimiter of a different pairing, the group closes **without consuming** the stray
-/// token, which is left for an enclosing level to claim (or for the root, which
-/// diagnoses and skips it). Strict parses abort instead.
+/// Raised by [`GroupParser`]. Under tolerant recovery the group is closed anyway, and its
+/// node records an empty close delimiter
+/// ([`GroupData::close`](crate::core::node::GroupData::close)); a strict parse aborts.
+/// [`found`](UnclosedGroup::found) says what blocked the close, and that decides what
+/// happens to the token the parser stopped at:
+///
+/// - at end of input there is no such token;
+/// - on a close delimiter of a different pairing, the group closes **without consuming**
+///   that token, which is left for an enclosing level to claim — or for the root, which
+///   diagnoses and skips it.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.groups.unclosed-group")]
