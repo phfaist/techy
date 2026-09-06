@@ -12,7 +12,8 @@
 //! expression, delimited verbatim) are core `ArgumentParser` implementations in
 //! [`constructs`](crate::core::constructs), parameterized by group types and rules. The
 //! latexlike preset turns the familiar `'{'` / `'['` / `'*'` / … argument codes into
-//! configured instances (`latexlike::argument_specs`).
+//! configured instances — [`argument_specs`](crate::latexlike::argument_specs)
+//! documents the code table.
 //!
 //! **Arguments and slots.** Arguments *configure* an invocation (`\frac{a}{b}`,
 //! `\item[label]`) and are declared here. Slots — the *content regions* of a parsed
@@ -53,16 +54,16 @@ pub struct ParsedArgumentNodes<L: Lang> {
     pub nodes: Vec<BuildId>,
     /// The content designation, relative to this region.
     pub content: ContentNodes,
-    /// The argument's ext (`Lang::NodeExts::ArgumentExt`), minted by the parser — the
-    /// knowledge-holder for the argument it just parsed. The standard parsers know
-    /// nothing about a custom ext and fill `Default::default()` under their
-    /// `where ArgumentExt<L>: Default` bound; custom parsers mint their own.
+    /// The argument's ext (`Lang::NodeExts::ArgumentExt`), built by the parser, which
+    /// is what knows about the argument it has just parsed. The standard parsers know
+    /// nothing about a custom ext and fill in `Default::default()` under their
+    /// `where ArgumentExt<L>: Default` bound; a custom parser builds its own.
     pub ext: ArgumentExt<L>,
 }
 
 impl<L: Lang> ParsedArgumentNodes<L> {
     /// A provided argument's output: the region's `nodes`, the `content` designation
-    /// among them, and the argument's minted `ext` (`()` for no-ext languages).
+    /// among them, and the argument's `ext` (`()` for a language with no argument ext).
     pub fn new(
         nodes: Vec<BuildId>,
         content: ContentNodes,

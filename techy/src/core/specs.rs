@@ -67,7 +67,7 @@
 //!
 //! # Changing definitions during a parse
 //!
-//! A parsing state delta carries [`ScopeOp`]s: push, unload or replace a provider, or
+//! A parsing state delta contains [`ScopeOp`]s: push, unload or replace a provider, or
 //! define and remove single names in a provider by name. A provider receives the
 //! definition changes addressed to it as [`DefinitionOp`]s, through
 //! [`with_definitions`](SpecsProvider::with_definitions). Failures are reported as

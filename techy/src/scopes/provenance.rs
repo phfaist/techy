@@ -1,5 +1,5 @@
 //! [`SpecProvenance`]: the record, carried by a callable spec, of which provider
-//! defined it under which key — what lets a spec that lives in a shared
+//! defined it under which key — what lets a spec held by a shared
 //! [`Package`](super::Package) be serialized by *identity* (a reference to its
 //! provider and its key) rather than described in full; and [`DefinitionKey`], the
 //! key a provider defines a spec under.
@@ -54,10 +54,10 @@ impl fmt::Display for DefinitionKey {
 /// form is then a reference to its provider's entry plus the key, and the reading
 /// side looks the spec up in the corresponding provider of its own environment
 /// ([`KnownProviders`](crate::serialize::KnownProviders)) — the very instance that
-/// provider holds. The crate's own [`Package`](super::Package) hands out stamps for
+/// provider holds. The crate's own [`Package`](super::Package) issues stamps for
 /// its definitions when it is built shared ([`Package::new_shared`](super::Package::new_shared),
 /// [`Package::provenance_for`](super::Package::provenance_for)); a concrete spec type
-/// carries the stamp in a field set at construction (`with_provenance` on the
+/// stores the stamp in a field set at construction (`with_provenance` on the
 /// crate's spec types) and its
 /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) writes
 /// the identity form through the stamp's own

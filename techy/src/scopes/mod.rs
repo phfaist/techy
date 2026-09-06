@@ -3,7 +3,7 @@
 //! A **provider** ([`SpecsProvider`]) is a named store of definitions: it answers a
 //! [`CallableQuery`] — an invocation form plus a name — with a [`CallableSpec`] or with
 //! "not defined here". The providers in effect are held in order by a [`ScopeStack`],
-//! which the parsing state carries ([`StateData::scopes`](crate::core::StateData)).
+//! which the parsing state holds ([`StateData::scopes`](crate::core::StateData)).
 //!
 //! **A name is looked up innermost first**: the provider pushed last is asked first,
 //! and the first one that answers wins. Loading a package that redefines a name
@@ -32,7 +32,7 @@
 //!
 //! # Changing definitions during a parse
 //!
-//! A parsing state delta carries [`ScopeOp`]s
+//! A parsing state delta contains [`ScopeOp`]s
 //! ([`ParsingStateDelta::scope_ops`](crate::core::ParsingStateDelta)): operations on the
 //! shape of the stack (push, unload, replace one provider, replace the whole stack) and
 //! definition operations addressed to a provider by name, which reach that provider as
@@ -204,8 +204,8 @@ impl fmt::Display for ProviderError {
 }
 
 /// A provider *within a stack* failed: the [`ProviderError`] plus which provider it was.
-/// The `Err` of [`ScopeStack::retrieve_spec`] (a failing provider aborts the resolution
-/// fold), and the payload of [`ScopeOpError::Provider`].
+/// The `Err` of [`ScopeStack::retrieve_spec`] — a failing provider stops the search —
+/// and the payload of [`ScopeOpError::Provider`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeStackError {
     /// The name of the provider that failed.
@@ -456,13 +456,22 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 
 // --- the provider contract -------------------------------------------------------------
 
-/// A scope-stack entry: a named source of callable definitions, with optional specials
-/// participation and optional functional updates.
+/// A named store of callable definitions: one entry of a [`ScopeStack`].
 ///
-/// Entries are **all-dyn** — the multi-method contract keeps generic ops and diagnostics
-/// available while admitting lazy-loading providers (large spec databases) that closed
-/// data would preclude. Standard implementations: [`Package`], [`Scope`],
-/// [`FallbackProvider`].
+/// A provider answers a [`CallableQuery`] through
+/// [`retrieve_spec`](SpecsProvider::retrieve_spec). It may additionally take part in
+/// the tokenizer's specials scan ([`scan_specials`](SpecsProvider::scan_specials) and
+/// [`specials_trigger_chars`](SpecsProvider::specials_trigger_chars)), accept changes
+/// to its definitions ([`with_definitions`](SpecsProvider::with_definitions)), and list
+/// what it defines ([`iter_symbols`](SpecsProvider::iter_symbols)); only
+/// [`name`](SpecsProvider::name) and `retrieve_spec` have to be implemented.
+///
+/// The shipped implementations are [`Package`], [`Scope`] and [`FallbackProvider`].
+/// Implement the trait yourself for a store of a different kind — a large spec database
+/// that loads definitions on demand, for instance, which no fixed data structure could
+/// express.
+///
+/// # Implementing this trait
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits; see
 /// [`CallableSpec`]'s note): every method takes `&self`, so a stateful implementation (a
@@ -494,8 +503,8 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableO
     /// defined here — continue outward" (which includes "not *visible* here": per-mode
     /// visibility is the provider's own business, checked against
     /// [`state.mode()`](ParsingState::mode); the stack is visibility-blind). `Err` means
-    /// the provider itself failed — an operational error that aborts the resolution
-    /// fold, never a panic.
+    /// the provider itself failed — an operational error that stops the search over the
+    /// stack, never a panic.
     fn retrieve_spec(
         &self,
         query: &CallableQuery<'_, L>,
@@ -505,7 +514,7 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableO
     /// Specials participation: is a callable-triggering character sequence of this
     /// provider at `content[pos..]`? Same contract as the
     /// [`Lang::scan_specials`] hook it feeds through
-    /// the [`ScopeStack::scan_specials`] fold — including the [`SpecialsMatch::end`]
+    /// the [`ScopeStack::scan_specials`] search — including the [`SpecialsMatch::end`]
     /// obligations and the recovery-token protocol (the `TokenResult` shape is
     /// deliberate: a scanning provider keeps the tokenizer's recoverable-failure
     /// channel, which a [`ProviderError`] could not express). Implementations should return their **longest** match at `pos`.
@@ -586,16 +595,19 @@ mod sealed {
     impl<L: Lang> SealedProvider<L> for Arc<dyn SpecsProvider<L>> {}
 }
 
-/// Sealed conversion into a shared [`SpecsProvider`] — the item contract of
-/// [`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages),
-/// following the crate's one Arc-removal conversion idiom (the spec-side sibling is
-/// [`IntoCallableSpec`](crate::spec::IntoCallableSpec)): a [`Package`] passes **by
-/// value** (`lang_initial_with_packages([minilatex_package(), my_pkg])`, no `Arc::new`
-/// noise), while an already-shared **`Arc<P>`** or **`Arc<dyn SpecsProvider<L>>`**
-/// passes through as-is — no double-wrap.
+/// Sealed conversion into a shared [`SpecsProvider`] — what
+/// [`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)
+/// accepts as its items.
 ///
-/// Sealed: the three impls above are the whole vocabulary; downstream code implements
-/// [`SpecsProvider`], never this trait.
+/// A [`Package`] passes **by value**
+/// (`lang_initial_with_packages([minilatex_package(), my_pkg])`, with no `Arc::new` at
+/// the call site), while an already-shared **`Arc<P>`** or
+/// **`Arc<dyn SpecsProvider<L>>`** passes through unchanged rather than being wrapped a
+/// second time. The spec-side counterpart is
+/// [`IntoCallableSpec`](crate::core::specs::IntoCallableSpec).
+///
+/// Sealed: the three implementations above are the whole vocabulary; downstream code
+/// implements [`SpecsProvider`], never this trait.
 pub trait IntoSpecsProvider<L: Lang>: sealed::SealedProvider<L> {
     /// Convert into the shared provider handle scope stacks store.
     fn into_specs_provider(self) -> Arc<dyn SpecsProvider<L>>;
@@ -652,15 +664,16 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
 
 // --- the parse-initialization escape-shadowing check -------------------------------------
 
-/// Condition (warning): every definition a provider advertises under one callable
-/// type begins with an escape character — the registration trap where names were
-/// inserted *with* their escape character (`"\greet"` instead of `"greet"`,
-/// [`Package::insert`]'s normalized-name contract), leaving the whole table
-/// unreachable: command tokens carry their name without the escape character, so
+/// Condition (warning): every definition a provider makes under one callable type
+/// begins with an escape character.
+///
+/// This is the registration mistake of inserting names *with* their escape character
+/// (`"\greet"` instead of `"greet"` — see [`Package::insert`]'s normalized-name
+/// contract). The name in a command token does not include the escape character, so
 /// none of these definitions can ever resolve.
 ///
-/// Emitted by [`check_provider_commands_shadowed_by_escape`] at parse
-/// initialization (the latexlike preset wires it for every parse).
+/// Recorded by [`check_provider_commands_shadowed_by_escape`] at parse initialization;
+/// the latexlike preset runs that check for every parse.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.provider-commands-shadowed-by-escape")]
@@ -698,33 +711,31 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
     }
 }
 
-/// Check the state's seeded providers for all-escape-shadowed definition tables
-/// and record one [`ProviderCommandsShadowedByEscape`] **warning** per affected
-/// (provider, callable type) — the parse-initialization half of the registration
-/// trap's defenses (the resolution-miss half is
-/// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes)'s
-/// did-you-mean detail, which an in-stack fallback provider can mute; this check
-/// fires regardless of fallbacks).
+/// Warns when every definition a provider makes under one callable type begins with an
+/// escape character — the registration mistake of writing `"\\greet"` where `"greet"`
+/// was meant, which leaves the whole table unreachable.
 ///
-/// For each provider on `state`'s scope stack and each callable type in the
-/// language's vocabulary, the provider's advertised names
-/// ([`SpecsProvider::iter_symbols`], unioned over every mode) are tested against
+/// One [`ProviderCommandsShadowedByEscape`] **warning** is recorded per affected
+/// (provider, callable type) pair, at `source`'s start. For each provider on `state`'s
+/// scope stack and each callable type in the language's vocabulary, the names the
+/// provider lists ([`SpecsProvider::iter_symbols`], over every mode) are tested against
 /// the state's command escape characters
-/// ([`TokenRules::command_rules`](crate::token::TokenRules::command_rules)): when **all**
-/// (≥ 1) of them begin with an escape character, a warning is recorded at
-/// `source`'s start. Nothing is checked when commands are disabled, and providers
-/// that cannot enumerate (a [`FallbackProvider`]) are skipped — the check is a
-/// best-effort diagnostics nicety, not semantics.
+/// ([`TokenRules::command_rules`](crate::core::token::TokenRules::command_rules)); the
+/// warning fires when **all** of them (at least one) begin with such a character.
 ///
-/// **Bound where used** ("provide, don't require"): enumerating *vocabularies*
-/// needs [`ClosedVocabulary`] on the callable-type and mode ids, so the bound sits
-/// on this function alone — never on [`Lang`](crate::state::Lang) or the latexlike
-/// role traits. The latexlike preset calls it unconditionally at parse
-/// initialization (its vocabularies are enumerable); a family member or framework
-/// with enumerable vocabularies wires it the same way
-/// ([`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
-/// or directly at its own parse entry); for non-enumerable vocabularies the check
-/// is gracefully absent.
+/// Nothing is checked when commands are disabled, and providers that cannot list their
+/// definitions (a [`FallbackProvider`]) are skipped: this is a best-effort check on the
+/// way in, not part of the language's semantics. The other half of the defense is the
+/// suggestion attached to a resolution miss
+/// ([`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes)),
+/// which a fallback provider on the stack can silence — this check fires either way.
+///
+/// Listing a language's callable types and modes requires [`ClosedVocabulary`] on both,
+/// so that bound sits on this function alone rather than on
+/// [`Lang`](crate::core::Lang). The latexlike preset calls the check at every parse
+/// initialization
+/// ([`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start));
+/// a language whose vocabularies are not listable simply does without it.
 pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
     state: &ParsingState<L>,
     source: &Arc<Source<L::SourceOrigin>>,
@@ -885,8 +896,8 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
 /// ([`insert_specials`](Package::insert_specials)) — `---`, `~`, `&`. Its scan returns
 /// the longest matching trigger.
 ///
-/// **Serialization.** A package is serialized by *identity*: its entry carries the
-/// package's name only, and the reading side looks the name up among the providers
+/// **Serialization.** A package is serialized by *identity*: its entry holds only the
+/// package's name, and the reading side looks the name up among the providers
 /// it already holds ([`KnownProviders`](crate::serialize::KnownProviders)) — a package
 /// is part of the reading program's own configuration, not something to describe in
 /// full. Its *definitions* are
@@ -977,7 +988,7 @@ impl<L: Lang> Package<L> {
     }
 
     /// Whether this package was built shared ([`new_shared`](Package::new_shared))
-    /// and so hands out provenance stamps.
+    /// and so issues provenance stamps.
     pub fn is_shared(&self) -> bool {
         self.self_weak.is_some()
     }
@@ -1021,8 +1032,8 @@ impl<L: Lang> Package<L> {
     /// returned; a key that had none returns `None`.
     ///
     /// **The name is the *normalized* spelling — never include the escape
-    /// character.** Register `"emph"`, not `"\\emph"`: a command token carries its name
-    /// *without* the escape character, so an escape-prefixed registration can never
+    /// character.** Register `"emph"`, not `"\\emph"`: the name in a command token does
+    /// not include the escape character, so an escape-prefixed registration can never
     /// match and the definition is silently unreachable.
     ///
     /// This is deliberately not validated here. Which characters are escape characters
@@ -1325,7 +1336,7 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
 
 /// A clone is a new, unshared package: it copies the name, the definitions (sharing
 /// their spec `Arc`s), and the visibility, but not the shared identity — the clone
-/// hands out no provenance stamps of its own, and the stamps its specs may carry keep
+/// issues no provenance stamps of its own, and the stamps its specs may hold go on
 /// naming the package they were cloned from.
 ///
 /// Consequence for serialization: a parse driven by a clone (the clone in the scope
@@ -1613,8 +1624,11 @@ impl<L: Lang> fmt::Debug for FallbackProvider<L> {
 
 // --- ErrorCallableSpec ---------------------------------------------------------------------
 
-/// Condition: a callable that is *defined to be an error* was invoked — the
-/// [`ErrorCallableSpec`] mechanism ("undefined on purpose" as an ordinary definition). The invocation recovers as a span-backed chars fallback.
+/// Condition: a callable defined to be an error was invoked.
+///
+/// [`ErrorCallableSpec`] is that definition — a name made undefined on purpose. The
+/// invocation recovers by staging the trigger as a `Chars` node over its own source
+/// span.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.callable-defined-as-error")]
@@ -1664,7 +1678,7 @@ impl ErrorCallableSpec {
         ErrorCallableSpec { detail: None }
     }
 
-    /// An error spec whose diagnostic carries `detail`.
+    /// An error spec whose diagnostic includes `detail`.
     pub fn with_detail(detail: impl Into<Box<str>>) -> ErrorCallableSpec {
         ErrorCallableSpec { detail: Some(detail.into()) }
     }
@@ -1726,20 +1740,22 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, L> {
 
 // --- ScopeStack ---------------------------------------------------------------------------
 
-/// The ordered provider stack stored in the parsing state
-/// ([`StateData::scopes`](crate::state::StateData)): resolution and specials fold over
-/// `Arc<dyn SpecsProvider<L>>` entries, **innermost (last-pushed) first** — lexical
-/// shadowing (`\newcommand` semantics; no `ConflictStrategy`).
+/// The ordered list of providers in effect, stored in the parsing state
+/// ([`StateData::scopes`](crate::core::StateData)).
 ///
-/// The stack is deliberately **not** a [`SpecsProvider`] (stacks do not nest — the
-/// nested-fallback-preemption hazard is removed rather than re-mitigated) and
-/// carries **no** fallback map: unknown-callable policy is an ordinary bottom
-/// [`FallbackProvider`]. It is also visibility-blind — a mode-restricted [`Package`]
-/// declines inside its own methods.
+/// Name resolution ([`retrieve_spec`](ScopeStack::retrieve_spec)) and the specials scan
+/// ([`scan_specials`](ScopeStack::scan_specials)) both go over the entries **innermost
+/// (last-pushed) first**, and the first provider that answers wins — so a later
+/// definition of a name shadows an earlier one, the way `\newcommand` does.
 ///
-/// Mid-parse changes go through [`ScopeOp`]s in a state delta; [`apply_op`](ScopeStack::apply_op)
-/// is the primitive behind them (also usable directly on an owned stack, e.g. while
-/// seeding an initial state).
+/// The stack is deliberately not itself a [`SpecsProvider`] — stacks do not nest — and
+/// holds no fallback of its own: what happens for an unknown name is decided by an
+/// ordinary [`FallbackProvider`] at the bottom of the stack. It does not look at mode
+/// visibility either; a mode-restricted [`Package`] declines inside its own methods.
+///
+/// Changes during a parse go through [`ScopeOp`]s in a parsing state delta;
+/// [`apply_op`](ScopeStack::apply_op) is the operation behind them, and can also be
+/// called directly on an owned stack, for example while seeding an initial state.
 ///
 /// **Storage follows the language's feature declarations.** Like the token-rules
 /// blocks, the provider list is stored through the scopes presence declaration of
@@ -1750,7 +1766,7 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, L> {
 /// ([`LangHasScopes`]), and [`apply_op`](ScopeStack::apply_op) reports
 /// [`ScopeOpError::ScopesAbsent`].
 pub struct ScopeStack<L: Lang> {
-    /// Outermost first; folds iterate in reverse. For a language that declares the
+    /// Outermost first; searches iterate in reverse. For a language that declares the
     /// scope stack absent, this is the zero-sized store — no list exists.
     // The store projection is the point of the field; an alias would hide the very
     // indirection this declaration exists to state.
@@ -1800,7 +1816,7 @@ impl<L: Lang> ScopeStack<L> {
         self.stack.push(provider);
     }
 
-    /// The providers, outermost first (the storage order; folds run innermost-first).
+    /// The providers, outermost first (the storage order; searches run innermost-first).
     /// The empty slice when the language declares the scope stack absent.
     pub fn providers(&self) -> &[Arc<dyn SpecsProvider<L>>] {
         self.entries()
@@ -1830,10 +1846,10 @@ impl<L: Lang> ScopeStack<L> {
         self.entries().is_empty()
     }
 
-    /// Resolve `query`: fold over the providers innermost-first; the first hit wins.
+    /// Resolve `query`: search the providers innermost-first; the first hit wins.
     /// `Ok(None)` is the structured miss — the whole stack was searched (compose the
     /// diagnostic detail via [`searched_providers`](ScopeStack::searched_providers)).
-    /// A provider `Err` aborts the fold and propagates with the provider's name
+    /// A provider `Err` stops the search and propagates with the provider's name
     /// attached.
     pub fn retrieve_spec(
         &self,
@@ -1852,12 +1868,12 @@ impl<L: Lang> ScopeStack<L> {
         Ok(None)
     }
 
-    /// The specials fold (the standard body of a preset's
+    /// The specials scan (the standard body of a preset's
     /// [`Lang::scan_specials`]): consult **every**
     /// provider innermost-first; the **longest** match wins, ties go **innermost**
     /// (pylatexenc `test_for_specials` parity — `---` beats `--` across providers, and
     /// an equal-length match is the same spelling, so the tie rule implements
-    /// shadowing). A provider's scan `Err` aborts the fold and propagates.
+    /// shadowing). A provider's scan `Err` stops the search and propagates.
     /// `pos` is passed through to every provider unchecked, under the `pos`
     /// contract documented on [`SpecsProvider::scan_specials`] (within
     /// `content`'s bounds, on a character boundary).

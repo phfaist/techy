@@ -1,6 +1,6 @@
-//! [`ParsingStateStack`]: the enclosing-state stack — the session's live record of
-//! the states a parse descended through, and the constructible post-parse
-//! equivalent.
+//! [`ParsingStateStack`]: the stack of parsing states enclosing one position — the
+//! record a running parse keeps, and the same thing rebuilt from a parsed tree
+//! afterwards.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -11,39 +11,36 @@ use crate::node::NodeRef;
 use super::lang::Lang;
 use super::parsing_state::ParsingState;
 
-/// A stack of enclosing [`ParsingState`]s, **innermost-first**: the context a
-/// parse position sits in — the current state first, then each enclosing scope's
-/// state outward to the outermost (seed) state.
+/// The [`ParsingState`]s enclosing one position, **innermost first**: the current
+/// state, then each enclosing scope's state outward to the outermost (seed) state.
 ///
-/// Two producers feed the same consumer signatures:
+/// A stack comes from one of two places, and both are used the same way:
 ///
-/// - **The live session stack.** During a parse, the
-///   [`ParserSession`](crate::engine::ParserSession) maintains its enclosing-state
-///   stack as one of these — pushed/popped at the same descent points as the
-///   traceback frame stack (every scoped-state descent,
-///   [`ParseContext::with_parsing_state`](crate::constructs::ParseContext::with_parsing_state))
-///   — and lends it by reference to the driver's event-lowering hook
-///   ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event)).
-///   The engine retains exactly these states implicitly anyway (leaving a scope
-///   structurally restores the outer `Arc`); the stack only materializes them, and
-///   it is **dropped with the session** — no ancestry data survives into parsed
-///   material.
-/// - **Post-parse construction.** [`from_states`](ParsingStateStack::from_states)
-///   assembles one from explicit states, and
-///   [`from_node_ancestors`](ParsingStateStack::from_node_ancestors) recovers one
-///   from a parsed node — so post-parse processing (transforms synthesizing nodes)
-///   can feed the same `LLL`-generic behavior functions the driver hook feeds, e.g.
-///   [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta), with
-///   no session anywhere.
+/// - **While a parse runs.** The
+///   [`ParserSession`](crate::core::ParserSession) keeps one, pushing and popping it
+///   at the same points as the traceback frames — every descent under a scoped state,
+///   [`ParseContext::with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state)
+///   — and passes it by reference to the driver hook that translates state events,
+///   [`ParseDriver::resolve_state_event`](crate::core::ParseDriver::resolve_state_event).
+///   The engine already holds exactly these states anyway, since leaving a scope means
+///   continuing with the outer `Arc`; the stack only lists them. It is **dropped with
+///   the session**, so no record of the ancestry survives into the parsed tree.
+/// - **After a parse.** [`from_states`](ParsingStateStack::from_states) builds one from
+///   states you supply, and
+///   [`from_node_ancestors`](ParsingStateStack::from_node_ancestors) recovers one from
+///   a parsed node. That lets later processing — a transform building new nodes — call
+///   the same language-generic helpers the driver hook calls, such as
+///   [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta), with no
+///   session anywhere.
 ///
-/// # Scan semantics, not stack identity
+/// # What the stack promises
 ///
-/// Consumers of this type scan it (innermost-first) for the first state matching a
-/// predicate, with the outermost entry as the fallback. That **scan contract** is
-/// the type's interface — deliberately *not* an entry-for-entry reproduction of
-/// any particular parse's descent history: a node-ancestor walk contains
-/// `Arc`-equal duplicates (ancestors that share one state) and entries for
-/// non-group ancestors, none of which can change what a scan finds.
+/// Code that uses a stack searches it from the innermost entry outward for the first
+/// state satisfying some condition, falling back to the outermost entry. *That* is what
+/// the type guarantees, and it is deliberately not an entry-for-entry reproduction of
+/// a parse's descent history: an ancestor walk repeats a state whenever consecutive
+/// ancestors share one, and includes entries for ancestors that are not groups. Neither
+/// can change what such a search finds.
 pub struct ParsingStateStack<L: Lang> {
     /// Stored outermost-first (push/pop at the `Vec` tail = the innermost end);
     /// the public iteration order is innermost-first.
@@ -51,33 +48,34 @@ pub struct ParsingStateStack<L: Lang> {
 }
 
 impl<L: Lang> ParsingStateStack<L> {
-    /// The empty stack (no enclosing context at all). Scans over it find nothing
-    /// and have no fallback entry; the documented consumer behavior is a no-op
-    /// answer (e.g. [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta)
-    /// returns the empty delta).
+    /// The empty stack: no enclosing context at all.
+    ///
+    /// A search over it finds nothing and has no fallback entry, so the answer is
+    /// whatever the consumer documents as its do-nothing result — for instance,
+    /// [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta) returns
+    /// an empty delta.
     pub fn new() -> ParsingStateStack<L> {
         ParsingStateStack { states: Vec::new() }
     }
 
-    /// A stack from explicit states, given **innermost-first** (the same order
-    /// [`iter`](ParsingStateStack::iter) yields): `states[0]` is the current
-    /// (innermost) state, the last element the outermost.
+    /// A stack built from the given states, listed **innermost first** — the same
+    /// order [`iter()`](ParsingStateStack::iter) returns them in. `states[0]` is the
+    /// current, innermost state and the last element is the outermost.
     pub fn from_states(states: Vec<Arc<ParsingState<L>>>) -> ParsingStateStack<L> {
         let mut states = states;
         states.reverse();
         ParsingStateStack { states }
     }
 
-    /// The enclosing-state stack at `node`'s position, recovered from the parsed
-    /// tree: the node's own recorded parse-time state first, then each parent's
-    /// outward via the stored parent table — innermost-first, current state first,
-    /// exactly the live stack's convention.
+    /// The states enclosing `node`'s position, recovered from the parsed tree: the
+    /// node's own recorded parse-time state first, then each parent's outward,
+    /// innermost first — the same order a stack from a running parse uses.
     ///
-    /// The contract is **scan semantics** (see the type docs), not stack identity:
-    /// the ancestor walk is not entry-for-entry the parse-time session stack —
-    /// consecutive ancestors often share one state (`Arc`-equal duplicates) and
-    /// non-group ancestors contribute entries too — but a first-match scan with an
-    /// outermost fallback cannot tell the difference.
+    /// What this walk reproduces is the search behavior described on the type, not the
+    /// session's stack entry for entry: consecutive ancestors often share one state, and
+    /// ancestors that are not groups contribute entries of their own. A search from the
+    /// innermost entry outward, with the outermost as fallback, cannot tell the
+    /// difference.
     pub fn from_node_ancestors<A>(node: NodeRef<'_, L, A>) -> ParsingStateStack<L> {
         let mut states = Vec::new();
         states.push(Arc::clone(node.parsing_state()));
@@ -89,14 +87,14 @@ impl<L: Lang> ParsingStateStack<L> {
         ParsingStateStack::from_states(states)
     }
 
-    /// The states, **innermost-first**: the current state, then each enclosing
-    /// state outward; the last item is the outermost (seed) state.
+    /// The states, **innermost first**: the current state, then each enclosing state
+    /// outward, ending with the outermost (seed) state.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<ParsingState<L>>> {
         self.states.iter().rev()
     }
 
-    /// The outermost (seed-side) entry — the scan fallback. `None` only on the
-    /// empty stack.
+    /// The outermost entry, the one a search falls back to. `None` only for an empty
+    /// stack.
     pub fn outermost(&self) -> Option<&Arc<ParsingState<L>>> {
         self.states.first()
     }
@@ -111,12 +109,12 @@ impl<L: Lang> ParsingStateStack<L> {
         self.states.is_empty()
     }
 
-    /// Push `state` as the new innermost entry (the session's descent op).
+    /// Push `state` as the new innermost entry; what the session does on descent.
     pub(crate) fn push(&mut self, state: Arc<ParsingState<L>>) {
         self.states.push(state);
     }
 
-    /// Pop the innermost entry (the session's scope-exit op).
+    /// Pop the innermost entry; what the session does when leaving a scope.
     pub(crate) fn pop(&mut self) -> Option<Arc<ParsingState<L>>> {
         self.states.pop()
     }

@@ -1,91 +1,32 @@
-//! [`NodesParser`]: the main content dispatch loop, with
-//! its stop machinery ([`StopSpec`], [`TokenStopCondition`], [`StopCause`]).
+//! [`NodesParser`], the content dispatch loop, and its stop machinery
+//! ([`StopSpec`], [`TokenStopCondition`], [`StopCause`]).
 //!
-//! The parser peeks one token at a time and dispatches on its kind — never on parser
-//! registries. The content arms (6.2) cover chars accumulation, paragraph breaks
-//! (via [`ParseDriver::make_paragraph_break_node`]), comments, and end of stream. The
-//! `GroupOpen` arm (6.3) descends: it resolves the interior's base state through the
+//! The loop peeks one token at a time and dispatches on the token's kind, never on a
+//! registry of parsers keyed by syntax. The content arms stage directly: character
+//! accumulation, paragraph breaks (whose node kind comes from
+//! [`ParseDriver::make_paragraph_break_node`]), comments, and end of stream.
+//!
+//! The `GroupOpen` arm descends. It resolves the interior's base state through the
 //! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
-//! [`GroupParser`] under the policy's state (structural swap/revert), applying the delta
-//! it returns like an invocation's (normally `None` — a group leaks an after-effect only
-//! where the language installed [`GroupAfterEffectsFn`]). The
-//! `Command`/`Specials` invocation arms (6.4) descend the same way: a `Command` token
-//! resolves through [`ParseDriver::resolve_command`] under the loop's own state (resolution
-//! precedes the descent policy), a `Specials` token carries its resolution; the
-//! arm consumes the trigger whole, builds the [`Invocation`], and runs the parser
-//! returned by the spec's
-//! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
-//! factory under the policy's state. The state delta an invocation parser returns is
-//! the invocation's after-effect for subsequent siblings (`\newcommand`), applied to
-//! the loop's own state session-mediated (`cx.session.derived_state(…)`); the applied
-//! deltas are also merged into one record the outcome exports
-//! ([`NodesOutcome::after_effects`]) for callers that propagate the run's state
-//! effects elsewhere.
+//! [`GroupParser`] under the policy's state, reverting to the loop's own state
+//! afterwards. A group normally returns no state delta; one leaks an after-effect only
+//! where the language installed [`GroupAfterEffectsFn`].
 //!
-//! # Whitespace and span invariants
+//! The `Command` and `Specials` arms descend the same way. A `Command` token resolves
+//! through [`ParseDriver::resolve_command`] under the loop's own state, so resolution
+//! precedes the descent policy; a `Specials` token already carries its resolution. The
+//! arm then consumes the trigger whole, builds the [`Invocation`], and runs the parser
+//! the spec's
+//! [`make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser)
+//! factory returns, under the policy's state.
 //!
-//! 1. `Char` tokens accumulate into **maximal** `Chars` nodes; every token's `pre_space`
-//!    (content whitespace) joins the pending run, and pending whitespace with no
-//!    adjacent chars becomes a whitespace-only `Chars` node. The content is recorded as
-//!    [`TextContent::Spanned`](crate::source::TextContent::Spanned) — the exact span
-//!    slice — for a language that obeys span tiling
-//!    ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)); for a
-//!    language with `OBEYS_SPAN_TILING = false` it is
-//!    [`TextContent::Owned`](crate::source::TextContent::Owned), accumulated token by
-//!    token from what the reader answers about each of them — there the run's tokens
-//!    need not form one contiguous stretch of one source (they may cross a seam
-//!    between two sources), and a span would then name the wrong bytes.
-//! 2. Paragraph breaks are their own nodes (the `Lang` hook's kind, staged by the loop
-//!    over the full token span); runs flush at breaks and never merge across them.
-//! 3. Comment nodes come straight from whole-comment tokens (start delimiter, content,
-//!    and post-space each recorded).
-//! 4. At end of stream, the terminal token's `pre_space` materializes as a final
-//!    whitespace-only `Chars` node (or joins a pending run).
+//! The state delta an invocation parser returns becomes the invocation's after-effect
+//! for the following siblings (`\newcommand`). It is applied to the loop's own state
+//! through the session, so state transitions are observed, and the applied deltas are
+//! also merged into the single record [`NodesOutcome::after_effects`] exports.
 //!
-//! For a language that obeys span tiling these give span tiling: the staged sibling
-//! spans tile the parsed extent exactly, with no gaps and no double counting. For a
-//! language with `OBEYS_SPAN_TILING = false` no such accounting is claimed — the nodes
-//! carry the spans the reader described and the content it answered.
-//!
-//! # Stop conditions and the position seam
-//!
-//! A [`StopSpec`] carries two independent triggers: a *token*
-//! condition tested on peek — a match ends the parse and, per the condition's
-//! [`consume`](TokenStopCondition::consume) switch, either leaves the token unconsumed
-//! for the caller or consumes it here — and a *node* condition tested after each staged
-//! node — a match includes that node and stops after it. Conditions are tested only at
-//! this parser's own nesting level (a nested group is consumed whole by the group
-//! parser). Abnormal endings are **data**, not errors: the parser reports its
-//! [`StopCause`] and the caller decides — an unexpected group close stays
-//! unconsumed.
-//!
-//! On *any* return the stop token's pre-space is first flushed into the sibling nodes
-//! (the whitespace before a `}` or `\end` is interior content and belongs to a sibling
-//! node — that is what keeps a tiled language's siblings tiling the parsed extent). A **left** stop token then sits at its own `span.start`, so
-//! re-peeking yields it with an **empty** `pre_space` and no byte is represented twice; a
-//! **consumed** stop token is taken whole, including any syntactic post-space (a command
-//! name's terminating whitespace), so the reader stands just past it. The matched span is
-//! reported in [`StopCause::TokenCondition`] either way.
-//!
-//! When the two triggers collide — the pre-stop flush stages a node the node condition
-//! would match — the token condition wins outright: that flush does **not**
-//! consult the node predicate. Its answer could change nothing (the parse ends as
-//! `TokenCondition` either way; honoring it would instead leave a `consume = true` token
-//! unconsumed, breaking the flag's atomicity), and the predicate is a stateful `FnMut`
-//! that must not observe a consulted-but-ignored call.
-//!
-//! # Recovery
-//!
-//! Recovery happens where a problem is detected, through the session's policy helper.
-//! Tokenizer errors continue with their [`TokenRecovery`](crate::token::TokenRecovery)
-//! placeholder token, the reader repositioned to the error's `resume` position (so the error
-//! is never re-read); an unresolvable command recovers as a diagnostic plus a chars
-//! fallback node over the token's span (specials never take this path: recognition =
-//! resolution, so a recognized trigger always dispatches).
-//! Markup text inside a `Chars` node is an accepted tolerant-recovery artifact, always
-//! accompanied by a diagnostic; fallback nodes are deliberately *not* merged into
-//! neighboring chars runs. Group recovery (unclosed at end of input, mismatched close)
-//! lives in [`GroupParser`]. `Err` means abort — nobody continues past one.
+//! The user-facing contract — the stop conditions, the whitespace and span invariants,
+//! and the recovery behavior — is documented on [`NodesParser`] itself.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -108,10 +49,17 @@ use super::{
     ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext,
 };
 
-/// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
-/// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
-/// [`Resolved`](crate::engine::CommandResolution::Resolved)) — the content loop recovers
-/// with a span-backed chars fallback.
+/// Diagnostic condition: a [`Command`](crate::core::token::TokenKind::Command) token
+/// names no callable.
+///
+/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command) answered
+/// something other than
+/// [`Resolved`](crate::core::specs::CommandResolution::Resolved). In tolerant parsing
+/// [`NodesParser`] recovers by staging a `Chars` node over the command token's span, so
+/// the source text survives in the tree; a strict parse stops with this condition.
+///
+/// A resolver that failed while answering, rather than answering "no such callable",
+/// raises [`CommandResolutionFailed`] instead.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.unresolvable-command")]
@@ -120,11 +68,12 @@ pub struct UnresolvableCommand {
     pub name: String,
     /// The escape character that introduced the command.
     pub escape_char: char,
-    /// Optional detail on why resolution failed, straight from
-    /// [`CommandResolution::Unresolved`](crate::engine::CommandResolution::Unresolved):
-    /// the trait's default hook reports that command resolution is not implemented;
-    /// a resolver may report where it searched or hint at a fix. Appended to the
-    /// message.
+    /// Optional detail on why resolution failed, taken from
+    /// [`CommandResolution::Unresolved`](crate::core::specs::CommandResolution::Unresolved)
+    /// and appended to the message.
+    ///
+    /// The default hook reports that command resolution is not implemented; a resolver
+    /// may report where it searched, or hint at a fix.
     pub detail: Option<String>,
 }
 
@@ -140,15 +89,17 @@ impl fmt::Display for UnresolvableCommand {
     }
 }
 
-/// Condition: a [`Command`](TokenKind::Command) token's resolution *failed
-/// operationally* — a definition provider errored while answering the query
-/// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)
-/// returned [`Failed`](crate::engine::CommandResolution::Failed)) — as opposed to a
-/// clean miss ([`UnresolvableCommand`]). The content loop recovers the same way (a
-/// span-backed chars fallback), but the distinct condition
-/// lets tooling tell "command unknown" from "resolver broken" (mirrors the
-/// [`ScopeOpFailed`](crate::constructs::ScopeOpFailed) precedent for operational
-/// scope-op failures).
+/// Diagnostic condition: resolving a
+/// [`Command`](crate::core::token::TokenKind::Command) token failed operationally — a
+/// definition provider errored while answering the query.
+///
+/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command) answered
+/// [`Failed`](crate::core::specs::CommandResolution::Failed). [`NodesParser`] recovers
+/// exactly as it does for a clean miss, by staging a `Chars` node over the command
+/// token's span, but the condition is a separate one so that tooling can tell "this
+/// command is unknown" from "the resolver is broken".
+///
+/// A resolver that answered "no such callable" raises [`UnresolvableCommand`] instead.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.command-resolution-failed")]
@@ -157,9 +108,9 @@ pub struct CommandResolutionFailed {
     pub name: String,
     /// The escape character that introduced the command.
     pub escape_char: char,
-    /// Optional detail on the operational failure — typically the provider's rendered
-    /// error, straight from [`CommandResolution::Failed`](crate::engine::CommandResolution::Failed).
-    /// Appended to the message.
+    /// Optional detail on the operational failure, taken from
+    /// [`CommandResolution::Failed`](crate::core::specs::CommandResolution::Failed) and
+    /// appended to the message. Typically the provider's rendered error.
     pub detail: Option<String>,
 }
 

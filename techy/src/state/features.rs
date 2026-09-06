@@ -31,30 +31,32 @@ pub trait FeaturePresence: sealed::Sealed + 'static {
     /// declaration makes the value known.
     const PRESENT: bool;
 
-    /// The storage a value of type `T` occupies under this presence answer: `T`
-    /// itself when the feature is present ([`FeaturePresent`]), the zero-sized
+    /// The storage a value of type `T` occupies under this presence answer: `T` itself
+    /// when the feature is present ([`FeaturePresent`]), the zero-sized
     /// `PhantomData<T>` when it is absent ([`FeatureAbsent`]).
     ///
-    /// This is how an absent feature's data takes no storage: the seven
-    /// [`TokenRules`](crate::token::TokenRules) feature blocks, their override
-    /// blocks, the scope-op list and the scope stack, and the two derived caches
-    /// (the delimiter prefix table and the specials trigger-character filter) are
-    /// all stored through it.
+    /// This is how an absent feature's data takes no space at all. The seven
+    /// [`TokenRules`](crate::core::token::TokenRules) feature blocks, their override
+    /// blocks, the scope-operation list and the scope stack, and the two derived caches
+    /// — the delimiter prefix table and the specials trigger-character filter — are all
+    /// stored through it.
     ///
-    /// The bounds are what generic code may do with any store directly: clone it,
-    /// format it for debugging, and share or move it across threads (containers of
-    /// state-changing values — a spec carrying a prepared delta, for example — must
-    /// stay thread-safe for every language, which only a promise on the store
-    /// itself can guarantee under a generic `L`; both markers' stores are
-    /// `Send`/`Sync` whenever `T` is, so the promise costs nothing). Everything
-    /// else goes through the four
-    /// projection functions ([`store_with`](Self::store_with),
-    /// [`store_get`](Self::store_get), [`store_get_mut`](Self::store_get_mut),
-    /// [`store_into_inner`](Self::store_into_inner)). Equality is deliberately
-    /// **not** promised: not every stored type has it (a list of scope providers,
-    /// for example, has no equality comparison). `Default` is likewise not
-    /// promised — construction goes through [`store_with`](Self::store_with) with
-    /// an explicit constructor.
+    /// The bounds say what generic code may do with a store directly: clone it, format
+    /// it for debugging, and move or share it across threads. Everything else goes
+    /// through the four projection functions
+    /// ([`store_with`](Self::store_with), [`store_get`](Self::store_get),
+    /// [`store_get_mut`](Self::store_get_mut),
+    /// [`store_into_inner`](Self::store_into_inner)).
+    ///
+    /// Thread safety has to be promised here rather than derived: a value that holds a
+    /// prepared state change — a spec, say — must stay usable across threads for every
+    /// language, and under a generic `L` only a bound on the store itself guarantees
+    /// that. Both markers' stores are `Send` and `Sync` whenever `T` is, so the promise
+    /// costs nothing.
+    ///
+    /// Equality is deliberately **not** promised, because not every stored type has it:
+    /// a list of scope providers cannot be compared. Neither is `Default` — a store is
+    /// built by [`store_with`](Self::store_with) from an explicit constructor.
     type Store<T: Clone + fmt::Debug + Send + Sync>: Clone + fmt::Debug + Send + Sync;
 
     /// Builds a store around the value `make` returns. For a present feature, this
@@ -160,10 +162,10 @@ impl FeaturePresence for FeatureAbsent {
 /// each answering at compile time whether the language has that feature at all.
 /// [`Lang::Features`] names the implementing type.
 ///
-/// The eight members mirror the [`TokenRules`](crate::token::TokenRules) feature
+/// The eight members mirror the [`TokenRules`](crate::core::token::TokenRules) feature
 /// blocks — whitespace handling, paragraph breaks, group delimiters, command syntax,
 /// comment syntax, the specials scan, forbidden characters — plus the definition
-/// scope stack ([`ScopeStack`](crate::scopes::ScopeStack)).
+/// scope stack ([`ScopeStack`](crate::core::specs::ScopeStack)).
 ///
 /// Declaring a member [`FeatureAbsent`] means the feature is **absent**: the language
 /// has no such feature, and no runtime data can change that. Absent is one of three
@@ -178,38 +180,40 @@ impl FeaturePresence for FeatureAbsent {
 /// Ready-made bundles cover the two ends: [`AllLangFeatures`] (every member present)
 /// and [`NoLangFeatures`] (every member absent). This trait is deliberately **not**
 /// sealed: a language with any other combination defines its own bundle — a unit
-/// struct with the eight members filled in.
+/// struct with the eight members filled in. [Defining a custom
+/// language](crate::guide::custom_lang#declaring-which-features-the-language-has)
+/// works through an example.
 pub trait LangFeatures: 'static {
     /// Presence of whitespace handling
-    /// ([`WhitespaceRules`](crate::token::WhitespaceRules)).
+    /// ([`WhitespaceRules`](crate::core::token::WhitespaceRules)).
     type Whitespace: FeaturePresence;
 
     /// Presence of paragraph-break detection
-    /// ([`ParagraphRules`](crate::token::ParagraphRules)). Paragraph breaks are found
+    /// ([`ParagraphRules`](crate::core::token::ParagraphRules)). Paragraph breaks are found
     /// inside whitespace runs, so interfaces that require paragraphs require
     /// whitespace too ([`LangHasParagraphs`]).
     type Paragraphs: FeaturePresence;
 
-    /// Presence of group delimiters ([`GroupRules`](crate::token::GroupRules)).
+    /// Presence of group delimiters ([`GroupRules`](crate::core::token::GroupRules)).
     type Groups: FeaturePresence;
 
-    /// Presence of command syntax ([`CommandRules`](crate::token::CommandRules)).
+    /// Presence of command syntax ([`CommandRules`](crate::core::token::CommandRules)).
     type Commands: FeaturePresence;
 
-    /// Presence of comment syntax ([`CommentRules`](crate::token::CommentRules)).
+    /// Presence of comment syntax ([`CommentRules`](crate::core::token::CommentRules)).
     type Comments: FeaturePresence;
 
-    /// Presence of the specials scan ([`SpecialsRules`](crate::token::SpecialsRules)).
+    /// Presence of the specials scan ([`SpecialsRules`](crate::core::token::SpecialsRules)).
     type Specials: FeaturePresence;
 
     /// Presence of the forbidden-character check
-    /// ([`ForbiddenCharsRules`](crate::token::ForbiddenCharsRules)). This feature has
+    /// ([`ForbiddenCharsRules`](crate::core::token::ForbiddenCharsRules)). This feature has
     /// no runtime `enabled` flag — an empty character set already spells the runtime
     /// off — but it is a full member on the compile-time axis like every other.
     type ForbiddenChars: FeaturePresence;
 
     /// Presence of the definition scope stack
-    /// ([`ScopeStack`](crate::scopes::ScopeStack)). Deliberately independent of
+    /// ([`ScopeStack`](crate::core::specs::ScopeStack)). Deliberately independent of
     /// [`Commands`](LangFeatures::Commands): a language may resolve its callables
     /// from a fixed table with no scoped definitions at all.
     type Scopes: FeaturePresence;
@@ -218,7 +222,7 @@ pub trait LangFeatures: 'static {
 /// The every-feature-present bundle: each [`LangFeatures`] member is
 /// [`FeaturePresent`]. The declaration for full-syntax languages — the
 /// [`latexlike`](crate::latexlike) preset uses it, and
-/// [`TrivialLang`](crate::state::TrivialLang)'s blanket implementation supplies it
+/// [`TrivialLang`](crate::core::TrivialLang)'s blanket implementation supplies it
 /// for every trivial language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AllLangFeatures;

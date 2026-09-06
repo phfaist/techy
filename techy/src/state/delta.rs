@@ -546,7 +546,7 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// Merge `stronger` into `self`: every `Some` field of `stronger` replaces
     /// `self`'s, every `None` field leaves `self`'s untouched — the override-layer
     /// composition used by event lowering
-    /// ([`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)).
+    /// ([`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state)).
     pub(crate) fn merge_from(&mut self, stronger: TokenRulesOverrides<L>) {
         // Matched projections per feature: both sides' stores carry the same
         // presence marker, so either both project `Some` (present — merge the
@@ -838,7 +838,7 @@ impl<L: Lang> ParsingStateDelta<L> {
 
     /// Whether this delta changes nothing: no rules overrides, no scope ops, no
     /// mode/ext override, no events. Internal — the merged after-effect record
-    /// ([`NodesOutcome::after_effects`](crate::constructs::NodesOutcome::after_effects))
+    /// ([`NodesOutcome::after_effects`](crate::core::constructs::NodesOutcome::after_effects))
     /// spells "no after-effects" as `None`, never as an empty delta. Per-block
     /// comparisons rather than a whole-value `==`: the store-level equality bounds
     /// do not resolve under a bare `L: Lang`.
@@ -853,7 +853,7 @@ impl<L: Lang> ParsingStateDelta<L> {
 
     /// Merge `later` into `self` as a **sequentially later** delta — the composition
     /// used by the merged after-effect record
-    /// ([`NodesOutcome::after_effects`](crate::constructs::NodesOutcome::after_effects)):
+    /// ([`NodesOutcome::after_effects`](crate::core::constructs::NodesOutcome::after_effects)):
     /// applying `self` then `later` to a base is reproduced by applying the merged
     /// value once. Rules overrides: `later`'s `Some` fields win
     /// ([`TokenRulesOverrides`] fields replace wholesale, so last-writer-wins is

@@ -25,18 +25,40 @@ use crate::state::{Lang, ParsingState};
 
 use super::{ParseResult, ParserSession};
 
-/// The runtime bundle of a language: initial state and driver — long-lived, shareable
-/// (`Send + Sync` through its parts), owning no per-parse state.
+/// A language ready to parse: the parsing state every parse starts from, and the
+/// driver supplying the language's parse-time behavior.
 ///
-/// [`new`](Language::new) asks for the real inputs — the driver (with its explicit
-/// recovery policy) and the initial state — kept cheap by the two seed constructors:
-/// [`ParsingState::lang_initial()`] is the `Lang`'s canonical seed, and
-/// [`ParsingState::lang_initial_with_packages`] is the everyday "seed plus these
-/// packages" form. Any further customization derives
-/// *before* construction, through the single derivation point:
-/// `Language::new(driver, ParsingState::lang_initial()?.derived(&delta)?)` — so
-/// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition) holds its
-/// invariants over every customized seed.
+/// A `Language` holds nothing belonging to a single parse, so one value defines a
+/// language once and parses any number of documents. It is cheap to share (`Send +
+/// Sync` whenever its two parts are), and a [`ParseResult`] borrows nothing from it:
+/// results outlive the language that produced them.
+///
+/// # Building one
+///
+/// [`new`](Language::new) takes the two mandatory inputs: the
+/// [`ParseDriver`](crate::engine::ParseDriver) instance — which carries the recovery
+/// policy — and the initial [`ParsingState`]. That state normally comes from one of
+/// two seed constructors: [`ParsingState::lang_initial`] for the language's own
+/// canonical seed, and [`ParsingState::lang_initial_with_packages`] for that seed
+/// plus the packages whose definitions the parse should see.
+///
+/// Anything further — different token rules, a different starting mode — is applied
+/// to the seed *before* construction, through the one derivation path:
+/// `Language::new(driver, ParsingState::lang_initial()?.derived(&delta)?)`. Deriving
+/// is what lets the language check its own invariants
+/// ([`Lang::finalize_transition`](crate::state::Lang::finalize_transition)) over
+/// every customized seed.
+///
+/// # Running a parse
+///
+/// [`parse`](Language::parse) is the everyday call: pass a string, get a
+/// [`ParseResult`]. [`parse_setup`](Language::parse_setup) is the configurable form,
+/// taking a [`Source`] you built yourself and returning a [`ParseSetup`] on which
+/// this one parse's initial state and root parser can be replaced before
+/// [`ParseSetup::parse`] runs it.
+///
+/// [Running the parser](crate::guide::parsing) covers both, along with the
+/// strict-versus-tolerant choice and what to do with the diagnostics.
 ///
 /// ```
 /// # use techy::core::{Language, ParsingState, StdParseDriver, TrivialLang};
@@ -52,14 +74,10 @@ use super::{ParseResult, ParserSession};
 /// assert_eq!(result.tree.root().chars(), None); // the root is a List
 /// ```
 ///
-/// **Entry points**: [`parse`](Language::parse) is the everyday shorthand;
-/// [`parse_setup`](Language::parse_setup) returns a [`ParseSetup`] for a pre-minted
-/// source, on which this one parse's initial state and root parser can be replaced
-/// before [`ParseSetup::parse`] runs it.
-///
-/// **The advanced path** (driving construct parsers directly under this language's
-/// defaults) composes from the accessors — a [`ParserSession`] is `Language`-independent
-/// scratch, created directly:
+/// To drive construct parsers yourself rather than run a whole parse, take the two
+/// pieces from [`initial_state`](Language::initial_state) and
+/// [`driver`](Language::driver) and pair them with a [`ParserSession`] of your own,
+/// which is independent of any `Language`:
 ///
 /// ```ignore
 /// let mut session = ParserSession::new();
@@ -85,15 +103,22 @@ pub struct Language<L: Lang> {
 }
 
 impl<L: Lang> Language<L> {
-    /// A language over `driver`, parsing from `initial_state`. Both inputs are
-    /// mandatory — the type-level docs show the canonical construction, and the
-    /// [`ParsingState::lang_initial`]`[_with_packages]` constructors keep the everyday
-    /// spellings short. `initial_state` accepts a state by value or an already-shared
-    /// `Arc<ParsingState<L>>`: passing the shared handle preserves the state's
-    /// identity (states are shared by handle — a data-equal copy is a different
-    /// state), so a language can start parses from exactly the state some parsed
-    /// node carries. The parsing-depth limit starts at the guard's default
-    /// configuration; choose one explicitly with
+    /// Creates a language that parses with `driver`, starting every parse from
+    /// `initial_state`.
+    ///
+    /// Both inputs are mandatory; the type-level documentation shows the canonical
+    /// construction, and [`ParsingState::lang_initial`] and
+    /// [`ParsingState::lang_initial_with_packages`] keep the everyday spellings
+    /// short.
+    ///
+    /// `initial_state` accepts a state by value or an already-shared
+    /// `Arc<ParsingState<L>>`. Passing the shared handle preserves the state's
+    /// identity — states are shared by handle, and a data-equal copy is a different
+    /// state — so a language can start its parses from exactly the state some
+    /// already-parsed node recorded.
+    ///
+    /// Nesting depth is capped by the default descent-guard configuration; choose
+    /// the cap explicitly with
     /// [`with_descent_guard_init`](Language::with_descent_guard_init).
     pub fn new(
         driver: L::Driver,
@@ -106,15 +131,18 @@ impl<L: Lang> Language<L> {
         }
     }
 
-    /// Use `init` as the configuration of the per-parse [`StdDescentGuard`] — the
-    /// parsing-depth limiter that refuses input nested too deeply instead of
-    /// letting it crash the process by stack exhaustion. See
-    /// [`StdDescentGuardInit`]'s docs for
-    /// choosing among a byte budget, a depth limit, and off. Without this call,
-    /// parses run under the guard's default configuration:
-    /// a deliberately tight built-in stack budget that also emits a one-time
-    /// warning diagnostic at half use, so that an untuned deep parse fails early,
-    /// pointing at this method, instead of consuming an unknown amount of stack.
+    /// Sets how deeply this language's parses may nest, by configuring the
+    /// per-parse [`StdDescentGuard`].
+    ///
+    /// The guard caps nesting so that pathological input is refused with an ordinary
+    /// error instead of crashing the process by exhausting the call stack. See
+    /// [`StdDescentGuardInit`] for the choice between a stack budget, a plain depth
+    /// limit, and no cap at all.
+    ///
+    /// Without this call, parses run under a deliberately tight built-in stack
+    /// budget that also records a one-time warning diagnostic once half of it is
+    /// used. An untuned deep parse therefore fails early, with a message naming this
+    /// method, rather than consuming an unknown amount of stack.
     pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> Language<L> {
         self.descent_guard_init = init;
         self

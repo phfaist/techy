@@ -1,51 +1,78 @@
-//! The standard [`ArgumentParser`] implementations and the shared
-//! noise-scan helper: [`GroupArgumentParser`] (mandatory delimited group — by class
-//! or by a per-use minted rule — with a configurable single-expression
-//! fallback: class defaults on, rule off),
-//! [`OptionalGroupArgumentParser`] (optional group whose
-//! delimiters are minted for the occasion), [`MarkerArgumentParser`] (literal markers
-//! like `*`), and [`ExpressionParser`] (one node: group / full invocation / single
-//! char) — pylatexenc's `'{'` / `'['` / `'*'` argument shorthands resolved into core
-//! parsers, parameterized by group types and rules (no privileged spellings;
-//! the preset one-liner constructor is `latexlike::argument_specs`; the delimited
-//! verbatim sibling lives in [`verbatim_parser`](super::VerbatimArgumentParser)).
+//! The standard [`ArgumentParser`] implementations and the helpers they share.
 //!
-//! # Regions, noise, and the absent contract
+//! Each parser accepts one shape of source syntax at the position that follows a
+//! callable's trigger:
 //!
-//! An argument parser owns its argument's **entire region**, leading noise included: it
-//! scans whitespace and comments itself ([`scan_argument_noise`]) and stages them as
-//! ordinary nodes ahead of the argument's syntax, under the argument's own state — the
-//! caller ([`StdInvocationParser`](super::StdInvocationParser)) has already stacked the
-//! [`ArgumentSpec::parsing_state_delta`] on the invocation's base state, so noise
-//! policy runs under the argument's rules. Because the leading scan is the parser's
-//! own step, a parser can also *decline* it: the group parsers' adjacency opt-in
-//! ([`GroupArgumentParser::require_adjacent`],
-//! [`OptionalGroupArgumentParser::require_adjacent`]) replaces the scan with
-//! [`peek_adjacent_argument`], which accepts the argument only when nothing — no
-//! whitespace, no comment — separates it from what precedes (pylatexenc's
-//! `allow_pre_space=False`). That policy lives in the parser precisely because a
-//! state delta could not express it: a delta governs the whole argument, contents
-//! included, while adjacency is a property of the argument's leading edge alone.
-//! Content is designated at parse time
-//! ([`ContentNodes`]): the parser knows whether a group's braces are argument syntax
-//! (content = the group's children) or the node itself is the value (a `\frac 1 2`
-//! single token, a `*` marker — both **count as content**, pylatexenc parity).
+//! | parser | accepts | when it is not there |
+//! |---|---|---|
+//! | [`GroupArgumentParser`] | a delimited group — `{…}`, or the pair it was configured with, say `(…)` — falling back by default to a single expression (`\frac12`) | reports a missing mandatory argument |
+//! | [`OptionalGroupArgumentParser`] | a delimited group whose delimiter pair is minted for this argument, typically `[…]` | absent, silently |
+//! | [`MarkerArgumentParser`] | a literal marker, such as the `*` of `\section*` | absent, silently |
+//! | [`ExpressionParser`] | exactly one node: a group, a whole callable invocation, or a single character | reports that an expression was expected |
 //!
-//! **Absent means nothing was consumed**: the reader is rewound to where the scan
-//! started (probed noise is re-parsed as enclosing content — an absent-optional probe
-//! before a present mandatory re-scans the same noise, by design) and speculatively
-//! staged nodes are never claimed (the builder drops them).
+//! No delimiter spelling is built into these parsers: `{…}` and `[…]` are what the
+//! latexlike preset configures them with, and any group class or delimiter pair works
+//! the same way. Delimited verbatim arguments (`\verb|…|`) have their own parser,
+//! [`VerbatimArgumentParser`](super::VerbatimArgumentParser).
 //!
-//! # Recovery (detection-site rules)
+//! These are the parsers the latexlike argument codes select: `"m"` and `"{"` build a
+//! [`GroupArgumentParser`], `"o"` and `"["` an [`OptionalGroupArgumentParser`], `"s"`
+//! and `"*"` a [`MarkerArgumentParser`], `"r()"` a [`GroupArgumentParser`] delimited by
+//! `(`…`)`. The complete code table is on
+//! [`argument_specs`](crate::latexlike::argument_specs), and the guide introduces it
+//! under [argument codes](crate::guide::specs#argument-codes). Constructing a parser
+//! directly and attaching it to an [`ArgumentSpec`] is always available, and is how the
+//! settings that no code selects — such as the adjacency requirement below — are
+//! reached.
 //!
-//! A missing *mandatory* argument is diagnosed here — tolerant: diagnostic + report
-//! absent; strict: abort — while a missing optional or marker is silent. An
-//! unresolvable command in expression position takes the loop's chars-fallback
-//! recovery. A tokenizer error encountered while probing is **not** consumed and not
-//! diagnosed here: the argument is reported absent and the enclosing content loop
-//! re-reads the error and applies its own token recovery (diagnosing it here too would
-//! double-report); under strict mode the probe aborts with the token error, exactly as
-//! the loop would.
+//! # The argument's region
+//!
+//! An argument parser owns the entire region of its argument, the whitespace and
+//! comments that precede it included: it scans them itself with
+//! [`scan_argument_noise`] and stages them as ordinary nodes ahead of the argument's
+//! syntax. The scan runs under the argument's own parsing state — the caller,
+//! [`StdInvocationParser`](super::StdInvocationParser), has already applied the
+//! [`ArgumentSpec::parsing_state_delta`] on top of the invocation's base state — so the
+//! argument's own rules decide what counts as whitespace or a comment.
+//!
+//! Which of the staged nodes are the argument's *content* is decided as the argument is
+//! parsed ([`ContentNodes`]). Where a group's delimiters are argument syntax, the
+//! content is the group's children; where the argument is a single node — the `1` of
+//! `\frac 1 2`, a `*` marker — that node is itself the content.
+//!
+//! # Requiring an adjacent argument
+//!
+//! Because the leading scan is the parser's own step, a parser can decline it. The
+//! group parsers' [`require_adjacent`](GroupArgumentParser::require_adjacent) opt-in
+//! ([`OptionalGroupArgumentParser::require_adjacent`] for the optional flavor) replaces
+//! the scan with [`peek_adjacent_argument`], which accepts the argument only when
+//! nothing — no whitespace, no comment — separates it from what precedes (pylatexenc's
+//! `allow_pre_space=False`). This is a setting on the parser rather than a parsing-state
+//! delta because a delta governs the whole argument, contents included, while adjacency
+//! constrains the argument's leading edge alone.
+//!
+//! # What "absent" means
+//!
+//! An absent argument consumes nothing. The reader is repositioned to where the leading
+//! scan started, so the whitespace and comments it probed are parsed again as content of
+//! the enclosing construct, and the nodes the parser staged speculatively are never
+//! claimed (the tree builder drops them). An absent optional argument probed just before
+//! a present mandatory one therefore scans the same whitespace twice, which is intended.
+//!
+//! # What is diagnosed here
+//!
+//! A missing *mandatory* argument is diagnosed at the position where it was expected:
+//! under tolerant recovery a [`MissingMandatoryArgument`] diagnostic is recorded and the
+//! argument is reported absent; under strict recovery the parse aborts. A missing
+//! optional argument or marker is silent. An unresolvable command in expression position
+//! takes the same recovery as in ordinary content: a diagnostic, and the trigger kept as
+//! characters.
+//!
+//! A tokenizer error met while probing is neither consumed nor diagnosed here. The
+//! argument is reported absent, and the enclosing content loop reads the error again and
+//! applies its own token recovery, so the error is reported once rather than twice. Under
+//! strict recovery the probe aborts with the token error, exactly as the content loop
+//! would.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -76,11 +103,17 @@ use super::{
     comment_node_kind, ConstructParserResult, FromInvocation, Invocation, ParseContext,
 };
 
-/// Condition: a mandatory argument was missing at its position (end of input, a
-/// paragraph break, an enclosing group close) — detected by the mandatory argument
-/// parsers, which report the argument absent after recording it.
-/// No callable name in the payload: the frame stack renders
-/// the enclosing invocation.
+/// Condition: a mandatory argument was not there where the callable's syntax required
+/// one.
+///
+/// Raised by the mandatory argument parsers — [`GroupArgumentParser`] and
+/// [`CharsGroupArgumentParser`](super::CharsGroupArgumentParser) — when nothing that
+/// could be the argument follows: end of input, a paragraph break, or the close
+/// delimiter of an enclosing group. Under tolerant recovery the argument is then
+/// reported absent and nothing is consumed; under strict recovery the parse aborts.
+///
+/// The payload names no callable: the diagnostic's frame stack already identifies the
+/// enclosing invocation.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.arguments.missing-mandatory-argument")]
@@ -101,8 +134,13 @@ impl fmt::Display for MissingMandatoryArgument {
     }
 }
 
-/// Condition: no expression could start at a mandatory single-expression argument's
-/// position ([`ExpressionParser`]).
+/// Condition: an [`ExpressionParser`] argument found nothing that could begin an
+/// expression.
+///
+/// No group, callable invocation, or content character was there — the position holds
+/// end of input, a paragraph break, or the close delimiter of an enclosing group
+/// instead. Under tolerant recovery the argument is reported absent and nothing is
+/// consumed; under strict recovery the parse aborts.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.arguments.expected-expression-argument")]
@@ -130,32 +168,39 @@ fn argument_name<L: Lang>(spec: &ArgumentSpec<L>) -> Option<String> {
 
 // --- the shared noise scan ----------------------------------------------------------
 
-/// The result of [`scan_argument_noise`]: staged leading-noise nodes, the rewind
-/// target, and the first non-noise token.
+/// The outcome of scanning the whitespace and comments that precede an argument.
+///
+/// Returned by [`scan_argument_noise`] and by [`peek_adjacent_argument`]. It holds the
+/// nodes staged for that leading noise, the position to return to if the argument turns
+/// out to be absent ([`rewind`](ArgumentNoise::rewind)), and the first token that is not
+/// noise.
 pub struct ArgumentNoise<L: Lang> {
     /// The staged noise nodes (comment nodes, whitespace-only `Chars` nodes), in source
     /// order — the leading part of the argument's region if the argument turns out
-    /// present; unclaimed (and dropped by the builder) otherwise.
+    /// present; unclaimed (and dropped by the tree builder) otherwise.
     pub nodes: Vec<BuildId>,
     /// The stream position before the scan: where [`rewind`](ArgumentNoise::rewind)
     /// returns to when the argument is absent.
     pub start: StreamPosition<L>,
-    /// The first non-noise token, peeked and left unconsumed; its `pre_space` is *not*
-    /// staged (the parser stages it via [`stage_pre_space`] once it commits to the
-    /// argument being present). `None` when a tokenizer error sits at the position
-    /// (tolerant mode): the error is neither consumed nor diagnosed by the argument
-    /// parser — it reports the argument absent, and the enclosing content loop
-    /// re-reads and recovers the token itself. Also `None` from
-    /// [`peek_adjacent_argument`] when the next token is *not* adjacent (it carries
-    /// pre-space, or is a comment): the adjacency-requiring parsers take their absent
-    /// path on that answer exactly as they would at end of input.
+    /// The first non-noise token, peeked and left unconsumed.
+    ///
+    /// Its pre-space is *not* staged yet; the parser stages it with [`stage_pre_space`]
+    /// once it commits to the argument being present.
+    ///
+    /// `None` tells the parser to take its absent path. Under tolerant recovery that is
+    /// the answer when a tokenizer error sits at the position: the error is neither
+    /// consumed nor diagnosed here, and the enclosing content loop reads it again and
+    /// recovers it. [`peek_adjacent_argument`] also answers `None` when the next token
+    /// is not adjacent — it carries pre-space, or it is a comment.
     pub next: Option<Token<L>>,
 }
 
 impl<L: Lang> ArgumentNoise<L> {
-    /// Report the argument absent: reposition the reader to where the scan started, so
-    /// the probed noise is re-parsed as enclosing content. The staged noise nodes are
-    /// simply never claimed — the builder drops them.
+    /// Reposition the reader to where the scan started, so that the whitespace and
+    /// comments it probed are parsed again as content of the enclosing construct.
+    ///
+    /// Called by an argument parser on its absent path. The noise nodes it staged are
+    /// simply never claimed, and the tree builder drops them.
     pub fn rewind(&self, cx: &mut ParseContext<'_, '_, L>) {
         cx.tokens.move_to_position(&self.start);
     }

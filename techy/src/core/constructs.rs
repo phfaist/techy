@@ -1,29 +1,29 @@
-//! Construct parsing: the [`ConstructParser`] contract and everything written
-//! against it.
+//! Construct parsers: the [`ConstructParser`] contract, and the standard parsers
+//! and argument parsers written against it.
 //!
-//! Every construct is parsed by a [`ConstructParser`] implementation reading tokens
-//! and staging nodes through one [`ParseContext`]: the root parse
-//! ([`RootNodesParser`], the parser the entry point runs directly, above every
-//! descent), the main content loop
-//! ([`NodesParser`], with its stop conditions [`StopSpec`]/[`StopCause`]), groups
-//! ([`GroupParser`], the [`ChildStateSpec`] descent policy), callable invocations
-//! ([`StdInvocationParser`], with [`Invocation`] as the parsers' input bundle),
-//! arguments, environment bodies ([`EnvironmentBodyParser`]), and verbatim.
+//! Every construct is parsed by a [`ConstructParser`] implementation that reads
+//! tokens and stages nodes through one [`ParseContext`]. The standard shapes ship
+//! here: the root parse ([`RootNodesParser`], which the parse entry point runs
+//! directly, above every descent), the content loop that dispatches on each token
+//! ([`NodesParser`], with its stop conditions [`StopSpec`] and [`StopCause`]),
+//! groups ([`GroupParser`], with the [`ChildStateSpec`] policy deciding the state a
+//! child construct is parsed under), callable invocations
+//! ([`StdInvocationParser`], which takes the resolved [`Invocation`] as its input),
+//! environment bodies ([`EnvironmentBodyParser`]), and verbatim material
+//! ([`VerbatimBodyParser`]).
 //!
-//! The argument-parsing contract lives here beside its implementations: an argument
-//! **is a parser** — [`ArgumentParser`], returning [`ParsedArgumentNodes`] — and the
-//! standard forms (delimited group, optional group, chars group, literal marker,
-//! verbatim, embellishments, tack-on fields) are shipped as ordinary construct
-//! parsers, parameterized by group types and rules.
+//! An argument is a parser too: [`ArgumentParser`] returns
+//! [`ParsedArgumentNodes`], and the standard argument forms — delimited group,
+//! optional group, chars group, literal marker, verbatim, embellishments, tack-on
+//! fields — are shipped as ordinary parsers you configure with the group types and
+//! rules they should use. Each parser's diagnostic conditions are documented next
+//! to the parser that raises them.
 //!
-//! Diagnostic condition types stay producer-side: each parser's conditions are
-//! defined here, next to the parser that raises them — with one deliberate exception,
-//! [`InvalidSourceReferenceArgument`], which is defined beside the two conditions of
-//! [`ParseContext::attach_source_reference`] and raised by the include-like specs that
-//! read a source reference out of an argument, so that all three failures of an
-//! inclusion read the same wherever they come from.
+//! [Writing a construct parser](crate::guide::construct_parsers) introduces the job
+//! from scratch, and [the parsing model](crate::guide::parsing_model) shows where
+//! these parsers sit in a whole parse.
 //!
-//! Three module-level contracts hold for everything in this module:
+//! Three contracts hold for everything in this module.
 //!
 //! # The two-tier ownership model
 //!
@@ -56,6 +56,12 @@
 //! detection site — every detected problem is reported through
 //! [`ParseContext::recover`], which applies the driver's recovery policy — and
 //! abnormal endings of sub-parses travel as data ([`StopCause`]).
+
+// Condition types stay next to the parser that raises them, with one deliberate
+// exception: `InvalidSourceReferenceArgument` is defined beside the two conditions
+// of `ParseContext::attach_source_reference` and raised by the include-like specs
+// that read a source reference out of an argument, so that all three failures of an
+// inclusion read the same wherever they come from.
 
 pub use crate::constructs::{
     parse_declared_arguments, peek_adjacent_argument, read_rigid_name_group,

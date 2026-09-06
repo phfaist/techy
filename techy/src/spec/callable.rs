@@ -41,7 +41,7 @@ pub enum FrameRole {
 /// The behavior of anything invocable from the token stream: which arguments it takes
 /// and how its invocation is parsed.
 ///
-/// A spec carries no name and no invocation form of its own. The name belongs to the
+/// A spec has no name and no invocation form of its own. The name belongs to the
 /// key a [`SpecsProvider`](crate::core::specs::SpecsProvider) stores the spec under, so
 /// one spec value may be stored under several names (`\emph` and `\textit` can share
 /// one), and one shared spec can answer for every unknown callable of a callable type.
@@ -164,7 +164,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     /// `Err` means **the parser could not be built** — what the factory needs
     /// (spec-side definition data, an embedding's runtime) is broken or
     /// unavailable — and **aborts the parse** under any recovery policy; the
-    /// dispatch site attaches the live traceback when the error carries no
+    /// dispatch site attaches the live traceback when the error has no
     /// frames of its own
     /// ([`ParseContext::attach_hook_frames`](crate::constructs::ParseContext::attach_hook_frames)).
     /// Refusing to parse *deeper* is deliberately not this
@@ -239,8 +239,8 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     /// spec as `self.arguments()[index]` again (the default of
     /// [`deserialize_argument_spec`](CallableSpec::deserialize_argument_spec)).
     ///
-    /// **When to override.** A callable spec whose invocation parser hands parsed
-    /// arguments an argument spec that is *not* one of its declared ones — minted per
+    /// **When to override.** A callable spec whose invocation parser gives its parsed
+    /// arguments an argument spec that is *not* one of its declared ones — built per
     /// invocation, say, or chosen among alternatives — has *out-of-band* argument
     /// specs; the default cannot serialize those. Such a spec overrides this method to
     /// return `Ok(Some(value))` with whatever describes the argument spec, and

@@ -23,7 +23,7 @@
 //!
 //! Slots — a parsed callable's *content regions*, such as an environment body — have
 //! no spec-side declaration; they exist only as records
-//! ([`ParsedSlot`](crate::core::node::ParsedSlot)) minted by the parser that reads the
+//! ([`ParsedSlot`](crate::core::node::ParsedSlot)) created by the parser that reads the
 //! body. A spec announces that it takes material at all through
 //! [`CallableSpec::requires_content`].
 //!
@@ -89,11 +89,12 @@ mod tests {
         Arc::new(StubParser)
     }
 
-    /// The named-first constructor family ([§dd-dr:named-first-constructors]):
-    /// `new(parser, name)` is the encouraged spelling, `new_unnamed(parser)` the
-    /// marked anonymous one; the parser passes by value, pre-`Arc`'d, or as an
-    /// `Arc<dyn …>` through the sealed [`IntoArgumentParser`] conversion — shared
-    /// handles pass through without double-wrap.
+    // The named-first constructor family (DESIGN_RATIONALE.md
+    // [§dd-dr:named-first-constructors]): `new(parser, name)` is the encouraged
+    // spelling, `new_unnamed(parser)` the marked anonymous one; the parser passes by
+    // value, pre-`Arc`'d, or as an `Arc<dyn …>` through the sealed
+    // `IntoArgumentParser` conversion — shared handles pass through without
+    // double-wrap.
     #[test]
     fn argument_spec_constructors_take_names_and_any_parser_shape() {
         // By value — no `Arc::new` at the call site.

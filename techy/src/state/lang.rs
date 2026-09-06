@@ -274,76 +274,75 @@ pub trait Lang: Sized + 'static {
     /// [`Source<O>`](crate::source::Source). Conventionally `Option<String>`.
     type SourceOrigin: SourceOrigin;
 
-    /// The language's tokenization, declared as one type
-    /// ([`Tokenization`](crate::token::Tokenization)): the token type its readers
-    /// produce ([`Token<Self>`](crate::token::Token)), the stream-position type they
-    /// hand out ([`StreamPosition<Self>`](crate::token::StreamPosition)), and how the
-    /// reader for a parse over one source is built.
+    /// How the language is tokenized, declared as one type
+    /// ([`Tokenization`](crate::core::token::Tokenization)): the token type its readers
+    /// produce ([`Token<Self>`](crate::core::token::Token)), the stream-position type
+    /// they return ([`StreamPosition<Self>`](crate::core::token::StreamPosition)), and
+    /// how the reader for a parse over one source is built.
     ///
-    /// Languages tokenized by [`StdTokenReader`](crate::token::StdTokenReader) — every
-    /// language of this crate — declare
-    /// [`StdTokenization`](crate::token::StdTokenization), which supplies
-    /// [`StdToken<Self>`](crate::token::StdToken),
-    /// [`StdStreamPosition`](crate::token::StdStreamPosition), and that reader. A
+    /// A language tokenized by [`StdTokenReader`](crate::core::token::StdTokenReader) —
+    /// every language in this crate — declares
+    /// [`StdTokenization`](crate::core::token::StdTokenization), which supplies
+    /// [`StdToken<Self>`](crate::core::token::StdToken),
+    /// [`StdStreamPosition`](crate::core::token::StdStreamPosition), and that reader. A
     /// language tokenized differently declares a zero-sized type of its own that
-    /// implements [`Tokenization`](crate::token::Tokenization).
+    /// implements [`Tokenization`](crate::core::token::Tokenization).
     ///
-    /// The declaration fixes the *types* for the whole parse; which reader **instance**
-    /// serves one parse is still a driver decision, through
-    /// [`ParseDriver::make_token_reader`](crate::engine::ParseDriver::make_token_reader) —
-    /// whose default body builds the reader this declaration names. A driver that hands
-    /// its reader configuration it holds overrides that hook.
+    /// This declaration fixes the *types* for the whole parse. Which reader
+    /// **instance** serves a given parse remains the driver's decision, through
+    /// [`ParseDriver::make_token_reader`](crate::core::ParseDriver::make_token_reader),
+    /// whose default body builds the reader this declaration names; a driver that
+    /// passes configuration of its own to the reader overrides that hook.
     type Tokenization: Tokenization<Self>;
 
-    /// The node extension type bundle ([`NodeExtTypes`]); `()` for languages without
-    /// custom node data.
+    /// The node extension types ([`NodeExtTypes`]); `()` for a language with no custom
+    /// node data.
     type NodeExts: NodeExtTypes;
 
-    /// The language's recorded **invocation-syntax payload**
-    /// (the [`InvocationSyntax`] bound trait): the trigger-spelling facts stored
-    /// per callable invocation on
-    /// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax).
-    /// `()` records nothing; the latexlike preset records its macro / environment /
+    /// What the language records about how each callable invocation was written (the
+    /// [`InvocationSyntax`] trait). The value is stored on
+    /// [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax).
+    ///
+    /// `()` records nothing; the latexlike preset records its macro, environment, and
     /// specials forms
     /// ([`latexlike::InvocationSyntaxData`](crate::latexlike::InvocationSyntaxData)).
     ///
-    /// Minted by the invocation parser that stages the node — the standard sites
-    /// construct it via the opt-in
-    /// [`FromInvocation`](crate::constructs::FromInvocation) contract; takeover
-    /// parsers staging through
-    /// [`stage_node`](crate::constructs::ParseContext::stage_node) supply the
-    /// value themselves.
+    /// The value is built by the invocation parser that stages the node: the standard
+    /// sites build it through the opt-in
+    /// [`FromInvocation`](crate::core::constructs::FromInvocation) contract, while a
+    /// parser staging a node itself with
+    /// [`stage_node`](crate::core::constructs::ParseContext::stage_node) supplies the
+    /// value directly.
     type InvocationSyntax: InvocationSyntax<Self>;
 
-    /// The language's [`ParseDriver`] type — the **instance** face of parse-time
-    /// behavior: recovery policy, command
-    /// resolution, the group descent-delta channel, construct provision. Reached by
-    /// construct parsers as
-    /// [`ParseContext::driver`](crate::constructs::ParseContext::driver), **concretely
-    /// typed** — preset parsers call preset helper methods on it with no downcasts.
+    /// The language's [`ParseDriver`] type: the object that carries the behavior of a
+    /// running parse — the recovery policy, command resolution, the state a group
+    /// descent installs, and which construct parser handles what. A construct parser
+    /// reaches it, with this exact type and no downcast, as
+    /// [`ParseContext::driver`](crate::core::constructs::ParseContext::driver).
     ///
-    /// Placement rule: `Lang` keeps the static hooks of layers callable outside a
-    /// driven parse — [`initial_state_data`](Lang::initial_state_data)/
-    /// [`finalize_transition`](Lang::finalize_transition) (state layer; `derived()` is
-    /// out-of-parse-callable), [`scan_specials`](Lang::scan_specials)/
-    /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (tokenizer layer),
-    /// [`make_node_ext`](Lang::make_node_ext) (staging/transform layer). Everything
-    /// that only runs while a parse is driven lives on the driver. [`TrivialLang`]
-    /// defaults this to [`StdParseDriver`].
+    /// The division of labor: `Lang` holds the hooks that can also be called outside a
+    /// running parse — [`initial_state_data`](Lang::initial_state_data) and
+    /// [`finalize_transition`](Lang::finalize_transition) (state, since `derived()` can
+    /// be called anywhere), [`scan_specials`](Lang::scan_specials) and
+    /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (tokenization), and
+    /// [`make_node_ext`](Lang::make_node_ext) (building nodes, in a parse or in a
+    /// transform). Everything that only happens while a parse runs is on the driver
+    /// instead. [`TrivialLang`] uses [`StdParseDriver`].
     type Driver: ParseDriver<Self>;
 
     /// Whether this language's parse trees are **span-tiled**.
     ///
     /// *Span tiling* is the property that:
     ///
-    /// - the children of every [`List`](crate::node::NodeKind::List) and
-    ///   [`Group`](crate::node::NodeKind::Group) node tile the parent's interior —
+    /// - the children of every [`List`](crate::core::node::NodeKind::List) and
+    ///   [`Group`](crate::core::node::NodeKind::Group) node tile the parent's interior —
     ///   they lie in one source, in reading order, with no gaps and no overlaps;
-    /// - a [`Callable`](crate::node::NodeKind::Callable)'s children block is
+    /// - a [`Callable`](crate::core::node::NodeKind::Callable)'s children block is
     ///   span-contiguous within the node's span (with the documented exclusions for
     ///   attached and hidden regions, which lie outside it);
     /// - every positional payload sits at its pinned position: a
-    ///   [`Chars`](crate::node::NodeKind::Chars) node's content is its whole span, a
+    ///   [`Chars`](crate::core::node::NodeKind::Chars) node's content is its whole span, a
     ///   comment's start delimiter, content and post-space partition the comment
     ///   node's span, a group's delimiters are the prefix and the suffix of the group
     ///   node's span, and so on.
@@ -355,15 +354,15 @@ pub trait Lang: Sized + 'static {
     /// property holds exactly when the language's token readers serve each parse in
     /// reading order, without gaps, from one source, and a source changes only where a
     /// parser builds a new reader over another source
-    /// ([`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)).
+    /// ([`ParseContext::parse_attached_source`](crate::core::constructs::ParseContext::parse_attached_source)).
     /// Hence the name: the language *obeys* span tiling, or it does not.
     ///
     /// `true` (the default): the parsing machinery enforces the property — a token
     /// stream that breaks it is reported as an implementation error — and every
     /// span-based accessor answers exactly:
-    /// [`NodeSlice::span`](crate::node::NodeSlice::span) and
-    /// [`source_text`](crate::node::NodeSlice::source_text) cover a sibling run with
-    /// no holes, [`NodeRef::span_content`](crate::node::NodeRef::span_content) reads
+    /// [`NodeSlice::span`](crate::core::node::NodeSlice::span) and
+    /// [`source_text`](crate::core::node::NodeSlice::source_text) cover a sibling run with
+    /// no holes, [`NodeRef::span_content`](crate::core::node::NodeRef::span_content) reads
     /// back the text the node was parsed from, and the source recomposer re-emits the
     /// input byte for byte.
     ///
@@ -376,95 +375,96 @@ pub trait Lang: Sized + 'static {
     /// nothing about how many sources a reader draws on. The parsers then make no
     /// assumption about where tokens come from: a node covering several tokens is
     /// recorded with the span the reader *describes*
-    /// ([`TokenReader::source_span_describing`](crate::token::TokenReader::source_span_describing));
+    /// ([`TokenReader::source_span_describing`](crate::core::token::TokenReader::source_span_describing));
     /// its content is recorded as owned text
     /// ([`TextContent::Owned`](crate::source::TextContent::Owned)) unless it lies in the
     /// node's own source; and no tiling holds — span-based accessors answer the
     /// coordinates the parser recorded, nothing more. Trees still satisfy every rule
-    /// [`validate_tree`](crate::node::validate_tree) checks, and every consumer that
+    /// [`validate_tree`](crate::core::node::validate_tree) checks, and every consumer that
     /// reads node *data* (text content, names, delimiters, payloads) works exactly as
     /// documented.
     const OBEYS_SPAN_TILING: bool = true;
 
-    /// The language's canonical initial (seed) state data: base token rules, the seed
-    /// scope stack (fallback providers included), and the initial state ext.
-    /// The crate freezes the returned data into the seed state
-    /// ([`ParsingState::lang_initial`]) — the data→state step is crate-owned, so every other
-    /// state a parse sees comes from [`derived()`](ParsingState::derived) and passes
-    /// through [`finalize_transition`](Lang::finalize_transition). Callers customize the
-    /// starting point by deriving from the seed with a delta, never by assembling a
-    /// state from scratch.
+    /// The language's initial (seed) state data: its base token rules, its initial
+    /// scope stack including any fallback providers, and its initial state extension.
     ///
-    /// **Coherence contract:** `finalize_transition` does *not* run on the seed (it has
-    /// no previous state), so the returned data must already satisfy every invariant the
-    /// customizer maintains — if `finalize_transition` installs a `$…$` group rule
-    /// whenever the mode is math, a seed whose mode is math must come with that rule in
-    /// place. Both hooks have the same author, which keeps the contract local; a test
-    /// asserting `lang_initial()?.derived(&ParsingStateDelta::new())` is data-equivalent
-    /// to `lang_initial()?` pins it mechanically.
+    /// The crate freezes what this returns into the seed state,
+    /// [`ParsingState::lang_initial`]. Turning data into a state is the crate's job, so
+    /// every other state a parse sees comes from
+    /// [`derived()`](ParsingState::derived) and has passed through
+    /// [`finalize_transition`](Lang::finalize_transition). A caller who wants a
+    /// different starting point derives from the seed with a delta; there is no way to
+    /// assemble a state from scratch.
     ///
-    /// The default is the most neutral data — [`StateData::empty`]: every syntax gate
-    /// off (character-level content — no whitespace handling, groups, commands,
-    /// comments, or specials), an empty scope stack, default mode and ext. Real
-    /// languages return their canonical rules instead.
+    /// **The seed must already be consistent.** `finalize_transition` does not run on
+    /// it — there is no previous state — so the data returned here must already satisfy
+    /// every invariant that hook maintains. If `finalize_transition` installs a `$…$`
+    /// group rule whenever the mode is math, then a seed whose mode is math must come
+    /// with that rule already in place. The same author writes both hooks, and a test
+    /// asserting that `lang_initial()?.derived(&ParsingStateDelta::new())` holds the
+    /// same data as `lang_initial()?` checks it mechanically.
     ///
-    /// # Fallibility
+    /// The default is the most neutral data possible, [`StateData::empty`]: every
+    /// syntax feature turned off, so the content is plain characters with no whitespace
+    /// handling, groups, commands, comments, or specials; an empty scope stack; the
+    /// default mode and extension. A real language returns its own rules instead.
     ///
-    /// Returns `Err` ([`FinalizeError`]) when the seed data cannot be assembled —
-    /// a seed built from configuration or external definition data can be invalid
-    /// or unavailable, and this is where that failure surfaces (an embedding whose
-    /// seed-building code fails reports through the same channel). The failure
-    /// surfaces from the [`lang_initial`](ParsingState::lang_initial) family, before
-    /// any parse exists — a broken seed is never parsed with. An implementation
-    /// that cannot fail wraps its data in `Ok(...)` and that is the only change;
-    /// the default does exactly that.
+    /// # Errors
+    ///
+    /// Return `Err` ([`FinalizeError`]) when the seed data cannot be assembled: a seed
+    /// built from configuration or from external definition data can be invalid or
+    /// unavailable, and an embedding whose seed-building code fails reports it the same
+    /// way. The failure comes out of the
+    /// [`lang_initial()`](ParsingState::lang_initial) family, before any parse exists,
+    /// so a broken seed is never parsed with. An implementation that cannot fail wraps
+    /// its data in `Ok(...)`, as the default does.
     fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
         Ok(StateData::empty())
     }
 
-    /// Transition customizer — the choke-point hook, run exactly once per
-    /// [`derived()`](ParsingState::derived) call, after the delta's overrides have
-    /// been applied and before the new state is frozen. Cross-cutting rules centralize
-    /// here (e.g. FLM's "in math mode the escape char is `#`"); the override policy —
-    /// pure normalization vs. event-driven — is this function's business.
-    /// Never runs on the seed state (see
-    /// [`initial_state_data`](Lang::initial_state_data)'s coherence contract). The
-    /// default does nothing.
+    /// Adjusts the new state data at every state transition: run exactly once per
+    /// [`derived()`](ParsingState::derived) call, after the delta's overrides have been
+    /// applied and before the new state is frozen.
     ///
-    /// **Mode transitions are interpreted here**:
-    /// a delta's [`mode`](super::ParsingStateDelta::mode) override is already applied to
-    /// `new.mode` when this hook runs — the override *is* the signal, no
-    /// [`Event`](Lang::Event) needed for mode-shaped transitions. Compare
-    /// [`prev.mode()`](ParsingState::mode) with `new.mode` to react to the change
-    /// (adjust rules, disable features); events remain for non-modal semantics.
+    /// This is where a rule that must hold in *every* state is written, once — "in math
+    /// mode the escape character is `#`" — instead of in each piece of code that writes
+    /// a delta. Whether the implementation recomputes dependent settings from the data
+    /// every time or acts only on events is its own choice. It never runs on the seed
+    /// state, which has no previous state (see
+    /// [`initial_state_data`](Lang::initial_state_data)). The default does nothing.
     ///
-    /// **Must be a deterministic pure function of `(new, prev, events)`** — no side
-    /// effects, no interior mutability, no dependence on call count. Derivations are
-    /// deduplicated (the session's derivation memo — overrides-only deltas, keyed by
-    /// `Arc` identity), so this runs once per unique *derivation*, not once per
-    /// transition: `{a}{b}` under one state runs it **once** for two descents. That
-    /// purity is also what makes the memo sound: a pointer-keyed hit substitutes a
-    /// previous run's result. Anything history-shaped (counters, caches keyed by
-    /// occurrence) belongs in
-    /// [`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition), which
-    /// fires on every transition, memo hits included.
+    /// **Mode changes are interpreted here.** A delta's
+    /// [`mode`](super::ParsingStateDelta::mode) override is already applied to
+    /// `new.mode` by the time this hook runs, and that is the whole signal — a mode
+    /// change needs no [`Event`](Lang::Event). Compare
+    /// [`prev.mode()`](ParsingState::mode) with `new.mode` to react to the change, by
+    /// adjusting rules or turning features off. Events remain for changes that are not
+    /// mode-shaped.
     ///
-    /// # Fallibility
+    /// **It must be a deterministic function of `(new, prev, events)`**: no side
+    /// effects, no interior mutability, no dependence on how often it has been called.
+    /// The session computes a repeated identical derivation only once, so this hook
+    /// runs once per distinct *derivation* rather than once per transition — parsing
+    /// `{a}{b}` under one state runs it **once** for the two descents. Determinism is
+    /// what makes reusing the earlier result correct. Anything that must see every
+    /// occurrence — counters, caches keyed by position in the document — belongs in
+    /// [`ParseDriver::observe_transition`](crate::core::ParseDriver::observe_transition),
+    /// which does run at every transition.
     ///
-    /// Returns `Err` ([`FinalizeError`]) to **refuse** the transition — above all
-    /// for a *context-dependent* event reaching this hook (see the two-class
-    /// contract on [`Event`](Lang::Event)): such an event is meaningless without
-    /// the enclosing-state context that only in-parse driver lowering has, and a
-    /// customizer that recognizes one here must fail loudly rather than silently
-    /// ignore it. The failure folds into the
-    /// [`DeriveError`](super::DeriveError) that
-    /// [`derived()`](ParsingState::derived) returns
-    /// ([`finalize_error`](super::DeriveError::finalize_error)); inside a driven
-    /// parse it aborts as an implementation error (the driver failed to lower —
-    /// extension wiring, not source input). The default does nothing and returns
-    /// `Ok(())`. The seed never runs this hook, so seed construction stays
-    /// infallible ([`initial_state_data`](Lang::initial_state_data)'s coherence
-    /// contract).
+    /// # Errors
+    ///
+    /// Return `Err` ([`FinalizeError`]) to **refuse** the transition. The main reason
+    /// is a *context-dependent* event reaching this hook (see the two kinds of event on
+    /// [`Event`](Lang::Event)): such an event means nothing without the enclosing
+    /// states, which only the driver has while a parse runs, so an implementation that
+    /// recognizes one here must fail rather than quietly ignore it.
+    ///
+    /// The refusal comes back to the caller as
+    /// [`DeriveError::finalize_error`](super::DeriveError::finalize_error). Inside a
+    /// driven parse it aborts the parse as an implementation error, since it means the
+    /// driver failed to translate the event — a wiring mistake in an extension, not
+    /// bad input. The default returns `Ok(())`. This hook never runs on the seed, so
+    /// building the seed cannot fail here.
     fn finalize_transition(
         new: &mut StateData<Self>,
         prev: &ParsingState<Self>,
@@ -474,17 +474,19 @@ pub trait Lang: Sized + 'static {
         Ok(())
     }
 
-    /// Specials scan: is a callable-triggering character sequence at `content[pos..]`?
+    /// Reports whether a character sequence that invokes a callable starts at
+    /// `content[pos..]`, and which callable it invokes.
     ///
-    /// Recognition and resolution happen in one call — a [`SpecialsMatch`] carries the
-    /// resolved spec (unknown-name fallback policy included) and the matched text is the
-    /// name, which makes scanning/lookup mismatches impossible by construction. Typically implemented
-    /// as a fold over the state's scope stack
-    /// ([`ScopeStack::scan_specials`](crate::scopes::ScopeStack::scan_specials)). Positions are
-    /// absolute byte offsets into `content`; `pos` is passed through to implementations
-    /// unchecked, under the `pos` contract documented on
-    /// [`SpecsProvider::scan_specials`](crate::scopes::SpecsProvider::scan_specials)
-    /// (within `content`'s bounds, on a character boundary).
+    /// Recognition and lookup happen in the same call: the returned
+    /// [`SpecialsMatch`] holds the resolved spec — including whatever the language does
+    /// with an unknown name — and the matched text is the name, so the two can never
+    /// disagree. A typical implementation searches the state's scope stack
+    /// ([`ScopeStack::scan_specials`](crate::core::specs::ScopeStack::scan_specials)).
+    ///
+    /// Positions are absolute byte offsets into `content`. `pos` is passed to the
+    /// implementation unchecked, under the contract documented on
+    /// [`SpecsProvider::scan_specials`](crate::core::specs::SpecsProvider::scan_specials):
+    /// it is within `content`'s bounds and on a character boundary.
     ///
     /// **Implementer obligations:**
     ///
@@ -492,11 +494,12 @@ pub trait Lang: Sized + 'static {
     ///   [`SpecialsMatch::end`]. A zero-width match would hang the parse loop; the
     ///   reader validates the contract.
     /// - A failure is a [`SpecialsScanError`]: a condition plus a byte range in
-    ///   `content`. The hook cannot describe how to carry on past it — it knows neither
-    ///   the reader's token type nor its stream positions — so the reader lifts the
-    ///   failure into an unrecoverable [`TokenError`](crate::token::TokenError), which
-    ///   aborts the parse even in tolerant mode. A condition the scan *can* carry on
-    ///   from is expressed as a match to a spec whose parser diagnoses it.
+    ///   `content`. This function cannot describe how to carry on past one — it knows
+    ///   neither the reader's token type nor its stream positions — so the reader turns
+    ///   the failure into an unrecoverable
+    ///   [`TokenError`](crate::core::token::TokenError), which aborts the parse even in
+    ///   tolerant mode. A problem the scan *can* carry on from is better expressed as a
+    ///   match to a spec whose parser reports it.
     /// - Specials have the *lowest* recognition precedence: the reader tries group
     ///   delimiters, command escapes, and comment starts first, so a trigger that
     ///   overlaps any of those silently never fires (no diagnostic). The `Lang` author
@@ -514,12 +517,15 @@ pub trait Lang: Sized + 'static {
         Ok(None)
     }
 
-    /// The characters that may start a specials trigger under `data` — the fast
-    /// pre-check filter for [`scan_specials`](Lang::scan_specials). Computed when a state is
-    /// frozen and cached on the state instance (rebuilt only at transitions, like the
-    /// `PrefixTable`); receives [`StateData`] rather than [`ParsingState`] because it
-    /// runs *while* the state is being built. Return [`TriggerChars::Any`] for fully
-    /// dynamic scanners. The default: no specials.
+    /// The characters that may start a specials trigger under `data`: the quick filter
+    /// that decides whether [`scan_specials`](Lang::scan_specials) is worth calling at
+    /// all.
+    ///
+    /// It is computed when a state is frozen and stored on that state, so it is
+    /// recomputed only at a transition, like the delimiter prefix table. It receives
+    /// [`StateData`] rather than [`ParsingState`] because it runs while the state is
+    /// still being built. Return [`TriggerChars::Any`] for a scanner too dynamic to
+    /// enumerate. The default declares no specials.
     ///
     /// **Implementer obligations:**
     ///
@@ -529,12 +535,12 @@ pub trait Lang: Sized + 'static {
     ///   trigger silently never fires — no error, no diagnostic.
     /// - Must be a pure function of `data` — the result is cached on the frozen state
     ///   and never re-consulted.
-    /// - The specials gate ([`SpecialsRules::enabled`](crate::token::SpecialsRules::enabled))
+    /// - The specials gate ([`SpecialsRules::enabled`](crate::core::token::SpecialsRules::enabled))
     ///   is applied by the core; the implementation need not
     ///   check it.
-    /// - "Rebuilt at transitions" means once per group descent, optional-argument probe,
-    ///   and argument delta — keep it cheap (cache expensive derivations in an `Arc`
-    ///   inside `StateExt` if needed).
+    /// - Recomputing at every transition means once per group descent, optional-argument
+    ///   probe, and argument delta, so keep it cheap — put anything expensive behind an
+    ///   `Arc` in [`StateExt`](Lang::StateExt) and read it from there.
     ///
     /// Deliberately infallible: a conservative superset is always answerable —
     /// [`TriggerChars::Any`] satisfies the contract with no computation at all.
@@ -554,62 +560,62 @@ pub trait Lang: Sized + 'static {
     // to the `ParseDriver` in Phase 7.2 (placement doctrine, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]):
     // `Lang` keeps only hooks of layers callable outside a driven parse.
 
-    /// Mint the [`NodeExt`] of one node about to be staged — the language's **one**
-    /// chance to compute per-node data, with the node's full parts in view.
+    /// Computes the [`NodeExt`] of one node that is about to be staged: the language's
+    /// single opportunity to derive per-node data, with all of the node's parts in
+    /// view.
     ///
-    /// **The only required [`Lang`] method** (every other method has a working
-    /// default): [`NodeExt`] carries no `Default` bound, so a lang that declares a
-    /// real ext type must say how it is initialized — and a lang without one returns
-    /// `Ok(())` (what [`TrivialLang`]'s blanket impl does; a `Lang` written directly
-    /// spells the `Ok(())` one-liner).
+    /// **This is the only required [`Lang`] method**; every other one has a working
+    /// default. [`NodeExt`] has no `Default` bound, so a language that declares a real
+    /// extension type has to say how it is initialized, and a language without one
+    /// writes `Ok(())` — which is what [`TrivialLang`]'s blanket implementation
+    /// provides.
     ///
-    /// **Who runs it, when**: `make_node_ext` runs inside
-    /// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node)
-    /// during parsing, and wherever a transform author writes the call explicitly
-    /// (mint, inspect/adjust if needed, then
-    /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add)); nowhere else,
-    /// ever. It runs **once per node, at creation** — restaged copies carry their
-    /// already-minted exts verbatim as frozen parse facts, never re-minted (there is
-    /// no idempotence contract because there is no re-run).
+    /// **When it runs.** During parsing, inside
+    /// [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node);
+    /// outside parsing, wherever a transform author calls it explicitly before
+    /// [`NodeTreeBuilder::add`](crate::core::node::NodeTreeBuilder::add). Nowhere else.
+    /// It runs **once per node, when the node is created**: a restaged copy keeps the
+    /// extension it already has, so there is no second run and no idempotence
+    /// requirement.
     ///
-    /// `kind` is the node's structural payload, by shared reference — the hook reads,
-    /// it cannot change the kind. A preset dispatches to spec-specific behavior
-    /// itself (match a `Callable`, read its `spec`, downcast, compute ext).
-    /// `children` is the **subtree-deep, descent-only** view of the node's staged
-    /// children ([`StagedChildren`]): child views resolve *their* children
-    /// recursively — argument content at grandchild depth is reachable (computing
-    /// `{domain, key}` from `\ref{fig:abc}`) — but no siblings, ancestors, or
-    /// unrelated staged nodes are exposed. There is deliberately no parent access:
-    /// staging is bottom-up, the parent does not exist yet; downward context is
-    /// [`StateExt`](Lang::StateExt)'s job.
+    /// `kind` is the node's structural payload, by shared reference — this method reads
+    /// it and cannot change it. A language that needs behavior specific to one spec
+    /// does the dispatch itself: match a `Callable`, read its `spec`, downcast, compute
+    /// the extension.
     ///
-    /// The view **borrows the staging storage the pending staging call is about to
-    /// grow** — nothing borrowed from it may be held past this call; whatever the
-    /// ext needs is copied into the returned value. A safe Rust implementation
-    /// cannot get this wrong (the view's lifetime is call-scoped and
-    /// [`NodeExt`] carries none), so the rule is stated for the code the compiler
-    /// is not checking: an embedding that adapts this hook across a boundary
-    /// where lifetimes are erased must enforce it itself.
+    /// `children` is a view of the node's already-staged children
+    /// ([`StagedChildren`]) that reaches down the whole subtree: a child view resolves
+    /// *its* children in turn, so argument content two levels down is reachable — which
+    /// is how `{domain, key}` is computed from `\ref{fig:abc}`. It exposes no siblings,
+    /// no ancestors, and no unrelated staged nodes. There is no access to the parent,
+    /// because staging works bottom-up and the parent does not exist yet; data that has
+    /// to come from above belongs in [`StateExt`](Lang::StateExt).
+    ///
+    /// The view borrows the staging storage that the pending staging call is about to
+    /// grow, so nothing borrowed from it may outlive this call: copy whatever the
+    /// extension needs into the returned value. Safe Rust cannot get this wrong, since
+    /// the view's lifetime ends with the call and [`NodeExt`] has none; the rule is
+    /// stated for code the compiler does not check, such as an embedding that forwards
+    /// this hook across a boundary where lifetimes are erased.
     ///
     /// # Errors
     ///
-    /// `Err` means the ext could not be computed — typically
-    /// [`NodeBuildError::ExtMintFailed`], the variant that exists as this hook's
-    /// error channel. The error type is the **builder-level** [`NodeBuildError`],
-    /// not a parse error, because the mint also runs for consumer-built trees
-    /// (the explicit transform-side recipe), where no parse or span context
-    /// exists. Inside a parse, the staging entry point
-    /// ([`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node))
-    /// reports it like every other builder error, and its callers' lift applies
-    /// the condition split: `ExtMintFailed` — the mint's own reported operational
-    /// failure — becomes a [`HookFailed`](crate::error::HookFailed) condition,
-    /// while every other builder error becomes an
-    /// [`ImplementationError`](crate::constructs::ImplementationError)
-    /// (via [`implementation_error`](crate::constructs::ParseContext::implementation_error));
-    /// either way the parse aborts under any recovery policy, with the live
-    /// traceback attached.
-    /// An infallible implementation wraps its ext in `Ok(...)` and that is the
-    /// only change.
+    /// Return `Err` when the extension cannot be computed — normally
+    /// [`NodeBuildError::ExtMintFailed`], the variant that exists for exactly this.
+    /// The error type is the builder's [`NodeBuildError`] rather than a parse error,
+    /// because this method also runs while a consumer builds a tree by hand, where
+    /// there is no parse and no span context.
+    ///
+    /// Inside a parse,
+    /// [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node)
+    /// reports it like any other builder error, and its callers then split the two
+    /// cases: `ExtMintFailed`, this method's own reported failure, becomes a
+    /// [`HookFailed`](crate::error::HookFailed) condition, while every other builder
+    /// error becomes an
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) (through
+    /// [`implementation_error`](crate::core::constructs::ParseContext::implementation_error)).
+    /// Either way the parse aborts under any recovery policy, with the live traceback
+    /// attached. An implementation that cannot fail wraps its extension in `Ok(...)`.
     fn make_node_ext(
         kind: &NodeKind<Self>,
         span: &SourceSpan<Self::SourceOrigin>,
@@ -618,18 +624,20 @@ pub trait Lang: Sized + 'static {
     ) -> Result<NodeExt<Self>, NodeBuildError>;
 }
 
-/// The trivial language — for tests and machinery experiments: `impl TrivialLang for
-/// MyLang {}` yields a [`Lang`] with every associated type defaulted
-/// (`Features` = [`AllLangFeatures`], `ModeId`/`StateExt`/`Event`/`SessionExt`/
-/// `NodeExts` = `()`, `SourceOrigin` = `Option<String>`,
-/// `Tokenization` = [`StdTokenization`](crate::token::StdTokenization),
-/// `GroupTypeId`/`CallableTypeId` = `u32`) and the default method
-/// behavior — the workaround for associated-type defaults being unstable. The default
-/// driver resolves nothing.
+/// An all-defaults language for tests and for experiments with the machinery: writing
+/// `impl TrivialLang for MyLang {}` gives `MyLang` a full [`Lang`] implementation.
 ///
-/// Any customization means implementing [`Lang`] directly: the blanket impl makes the
-/// two mutually exclusive, so the first command, real id enum, or hook forces the full
-/// [`Lang`] implementation.
+/// Every associated type is filled in — `Features` = [`AllLangFeatures`],
+/// `ModeId`, `StateExt`, `Event`, `SessionExt` and `NodeExts` = `()`, `SourceOrigin` =
+/// `Option<String>`, `Tokenization` =
+/// [`StdTokenization`](crate::core::token::StdTokenization), `GroupTypeId` and
+/// `CallableTypeId` = `u32` — and every method keeps its default behavior. The default
+/// driver resolves no commands. (Rust has no defaults for associated types, which is
+/// why this is a separate trait rather than defaults on [`Lang`].)
+///
+/// Customizing anything means implementing [`Lang`] directly: a blanket implementation
+/// makes the two mutually exclusive, so the first command, real identifier enum, or
+/// hook calls for the full implementation.
 pub trait TrivialLang: Sized + 'static {}
 
 impl<T: TrivialLang> Lang for T {
@@ -646,7 +654,7 @@ impl<T: TrivialLang> Lang for T {
     type InvocationSyntax = ();
     type Driver = StdParseDriver;
 
-    /// The trivial mint: no ext data (`NodeExt = ()`), infallibly.
+    /// No extension data (`NodeExt = ()`), and it cannot fail.
     fn make_node_ext(
         _kind: &NodeKind<Self>,
         _span: &SourceSpan<Self::SourceOrigin>,
@@ -657,21 +665,20 @@ impl<T: TrivialLang> Lang for T {
     }
 }
 
-/// A closed vocabulary type that can list all of its values — the opt-in tooling bound
-/// for the closed per-language vocabularies ([`Lang::CallableTypeId`],
-/// [`Lang::GroupTypeId`], [`Lang::ModeId`]).
+/// A type whose values can all be listed: the opt-in bound for the three per-language
+/// vocabularies whose values are fixed when the language is written
+/// ([`Lang::CallableTypeId`], [`Lang::GroupTypeId`], [`Lang::ModeId`]).
 ///
-/// "Closed per language" means the values are known when the `Lang` is written; this
-/// trait makes that closedness *statically listable*, so generic tooling can enumerate
-/// (e.g. drive [`ScopeStack::iter_symbols`](crate::scopes::ScopeStack::iter_symbols)
-/// once per callable type in `L::CallableTypeId::ALL`).
+/// Those types are already closed by construction; this trait makes the list available
+/// to generic code, so a tool can iterate over every value — calling
+/// [`ScopeStack::iter_symbols`](crate::core::specs::ScopeStack::iter_symbols) once for
+/// each callable type in `L::CallableTypeId::ALL`, for instance.
 ///
-/// Deliberately **not** a required bound on the `Lang` associated types: [`TrivialLang`]
-/// defaults the type ids to `u32`, and
-/// an open integer type has no value list. Languages with real id enums implement it
-/// (the latexlike preset does for all three vocabularies); tooling that needs
-/// enumeration states the bound where it is used
-/// (`where L::CallableTypeId: ClosedVocabulary`).
+/// It is deliberately **not** required by [`Lang`]: [`TrivialLang`] uses `u32` for the
+/// identifier types, and an integer type has no list of values. A language with real
+/// enums implements it — the latexlike preset does for all three — and code that needs
+/// to enumerate states the bound where it uses it, as
+/// `where L::CallableTypeId: ClosedVocabulary`.
 pub trait ClosedVocabulary: Copy + Sized + 'static {
     /// Every value of the vocabulary, in declaration order.
     ///
@@ -681,8 +688,8 @@ pub trait ClosedVocabulary: Copy + Sized + 'static {
     const ALL: &'static [Self];
 }
 
-/// The unit vocabulary: one value. (Matches [`TrivialLang`]'s `ModeId = ()` — "no modes"
-/// still has the one mode a state is always in.)
+/// The one-value vocabulary. This is [`TrivialLang`]'s `ModeId`: a language with "no
+/// modes" still has the single mode every one of its states is in.
 impl ClosedVocabulary for () {
     const ALL: &'static [()] = &[()];
 }
