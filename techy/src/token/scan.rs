@@ -335,9 +335,14 @@ pub struct CommandMatch {
     /// The name — what follows the escape character: a run of the rule's name
     /// characters, or a single character when the first one is not a name character.
     pub name: Span,
-    /// The syntactic whitespace after a multi-character name ([`skip_whitespace`] from
-    /// the name's end, so it never crosses a paragraph break); empty after a
-    /// single-character name.
+    /// The syntactic whitespace the command consumes after its name.
+    ///
+    /// A command consumes its post-space when the character right after the escape
+    /// character is one of the rule's name characters. The span then runs from the end
+    /// of the name over the whitespace that follows ([`skip_whitespace`], so it never
+    /// crosses a paragraph break). Otherwise it is empty at the name's end, and that
+    /// whitespace stays content: `\&  x` keeps both spaces, while `\textbf  {x}` and
+    /// the single-character `\t  x` consume theirs.
     pub post_space: Span,
 }
 
@@ -398,7 +403,8 @@ pub fn scan_command<L: Lang>(
         }
     }
 
-    // Only multi-character (name-chars) commands swallow their post-space; `\&` and
+    // A command consumes its post-space exactly when its first name character is one of
+    // the rule's name chars -- length plays no part, so `\t` consumes it too. `\&` and
     // friends do not (pylatexenc behavior).
     let post_space = if is_named {
         Span::new(name_end, skip_whitespace(s, name_end, rules))
