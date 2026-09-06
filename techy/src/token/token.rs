@@ -12,12 +12,15 @@ use crate::state::Lang;
 use super::reader::TokenEdge;
 use super::rules::GroupRule;
 
-/// The parser-facing view of a token: **what a token is**, and nothing about where it
-/// is.
+/// What a token is: the parser-facing view of a token, and nothing about where it is.
 ///
 /// A construct parser never reads a token itself; it asks the reader that produced it
 /// ([`TokenReader::token_kind`](super::TokenReader::token_kind)) and matches on the
-/// answer. *Where* the token sits is a separate family of reader answers
+/// answer. This closed set of kinds is the whole vocabulary a parser dispatches on, and
+/// each variant below says what the standard content loop
+/// ([`NodesParser`](crate::core::constructs::NodesParser)) does with it.
+///
+/// *Where* the token sits is a separate family of reader answers
 /// ([`source_span_of`](super::TokenReader::source_span_of),
 /// [`source_span_between`](super::TokenReader::source_span_between),
 /// [`position_at`](super::TokenReader::position_at)) — which is why this type has no
@@ -33,53 +36,56 @@ use super::rules::GroupRule;
 /// `start_delim`, `content` are text), where the reader's own token records whatever
 /// it finds convenient.
 ///
-/// # Design invariants of the token taxonomy
-///
-/// - **No invocation-form knowledge on tokens whose resolution happens at parse
-///   time.** There is no macro/environment/specials taxonomy on
-///   [`Command`](TokenKind::Command) tokens and no `CallableTypeId`: `\begin`
-///   tokenizes exactly like `\foobar`; which names are macros or environments is
-///   decided at parse time by the preset. [`Specials`](TokenKind::Specials) is the
-///   scoped exception: there recognition *is* resolution, so the token carries the
-///   full resolved pair (`callable_type`, `spec`). (Terminology: *command* is the
-///   token-level syntactic form; *callable* the parse-level concept;
-///   *macro*/*environment* preset-level flavors.)
-/// - **Single-character content tokens.** [`Char`](TokenKind::Char) covers exactly one
-///   character: a token is an atomic unit, and construct parsers may need
-///   char-by-char reading (e.g. tabular preambles). Chars accumulate into nodes at the
-///   node level.
-/// - **Two callable-trigger kinds, by mechanism.** [`Command`](TokenKind::Command) is
-///   recognized from [`CommandRule`](super::CommandRule) *data*;
-///   [`Specials`](TokenKind::Specials) is recognized by the `Lang::scan_specials`
-///   *hook* and already carries its resolved spec.
-/// - **Whole-comment tokens.** A [`Comment`](TokenKind::Comment) covers delimiter and
-///   content (the parser does not care about comment interiors).
-/// - **A terminal [`EndOfStream`](TokenKind::EndOfStream) token** (idempotent) instead
-///   of an `Option`, so that final whitespace — reported as that token's pre-space by
-///   the reader — can land in the node tree.
+/// Two kinds trigger a callable, and they differ in how the reader recognized them: a
+/// [`Command`](TokenKind::Command) is matched against the
+/// [`CommandRule`](super::CommandRule) data in the token rules and resolved to a spec at
+/// parse time, while a [`Specials`](TokenKind::Specials) is recognized by the
+/// [`Lang::scan_specials`](crate::core::Lang::scan_specials) hook, which resolves it in
+/// the same step. Terminology: *command* is the token-level syntactic form, *callable*
+/// the parse-level concept, and *macro*/*environment* preset-level flavors of a
+/// callable.
 pub enum TokenKind<'t, L: Lang> {
-    /// A single ordinary content character. With whitespace handling disabled,
-    /// whitespace characters appear as ordinary `Char` tokens too.
+    /// A single ordinary content character.
+    ///
+    /// The parser appends it to the run of characters it is accumulating; consecutive
+    /// `Char` tokens become one character-run node. A `Char` token covers exactly one
+    /// character, so a parser that must read character by character (a tabular
+    /// preamble, say) can. With whitespace handling disabled, whitespace characters
+    /// appear as ordinary `Char` tokens too.
     Char(char),
     /// An opening group delimiter (`{`, `[`, `$`, `\(`, … — whatever the rules
     /// declare).
+    ///
+    /// The parser passes it to a group parser, which parses the interior up to the
+    /// matching close delimiter and stages a single group node for the whole thing.
     GroupOpen {
         /// The delimiter as matched.
         delim: &'t str,
         /// The [`GroupRule`] that matched, as resolved by the tokenizer's priority
-        /// order. It travels with the token so the parser learns the close delimiter
-        /// to expect and the group's class without re-deriving the match.
+        /// order. It is stored on the token, so the parser learns the close delimiter
+        /// to expect and the group's class without matching again.
         rule: &'t Arc<GroupRule<L>>,
     },
-    /// A closing group delimiter. Carries only the matched string: the parser knows
-    /// which close it expects (it entered the group), and a stray close needs no more.
+    /// A closing group delimiter.
+    ///
+    /// A parser reading the inside of a group ends the group at the close it was
+    /// waiting for. Any other close ends the run of content being parsed and is
+    /// reported to the caller as a stray close, with the token left unconsumed.
+    ///
+    /// Carries only the matched string: the parser knows which close it expects (it
+    /// entered the group), and a stray close needs no more.
     GroupClose {
         /// The delimiter as matched.
         delim: &'t str,
     },
     /// A command: escape character followed by a name (`\textbf`, `\&`, `\begin`).
-    /// Resolution to a spec happens at parse time
-    /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)).
+    ///
+    /// The token says nothing about what the name means. The parser resolves the name
+    /// to a spec at parse time
+    /// ([`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command))
+    /// and runs the parser that spec supplies; a name that resolves to nothing is
+    /// reported as a diagnostic and kept as literal characters. `\begin` tokenizes
+    /// exactly like `\foobar` — environments are decided at parse time, not here.
     Command {
         /// The command name, without the escape character.
         name: &'t str,
@@ -87,10 +93,14 @@ pub enum TokenKind<'t, L: Lang> {
         /// parse-time lookup needs when several command syntaxes coexist.
         escape_char: char,
     },
-    /// A specials trigger (`~`, `&`, `---`, …), recognized *and* resolved by the
-    /// `Lang::scan_specials` hook, so the view carries the full resolution: the
-    /// invocation form *and* the spec — exactly a
-    /// [`ResolvedCallable`](crate::engine::ResolvedCallable)'s pair.
+    /// A specials trigger (`~`, `&`, `---`, …): a character sequence that invokes a
+    /// callable without being written as a command.
+    ///
+    /// The [`Lang::scan_specials`](crate::core::Lang::scan_specials) hook recognizes
+    /// *and* resolves it in one step, so the view already holds the resolution — the
+    /// invocation form and the spec, the pair a
+    /// [`ResolvedCallable`](crate::core::specs::ResolvedCallable) holds. The parser
+    /// runs the spec's parser directly, resolving nothing itself.
     Specials {
         /// The invocation form the trigger resolved to.
         callable_type: L::CallableTypeId,
@@ -100,8 +110,11 @@ pub enum TokenKind<'t, L: Lang> {
         spec: &'t Arc<dyn CallableSpec<L>>,
     },
     /// A whole comment: start delimiter plus content, up to (not including) the
-    /// terminating newline. Where the two lie is a reader answer:
-    /// `Start..ContentStart` for the delimiter, `ContentStart..End` for the text (see
+    /// terminating newline.
+    ///
+    /// The parser stages one comment node for it and never looks inside. Where the two
+    /// parts lie is a reader answer: `Start..ContentStart` for the delimiter,
+    /// `ContentStart..End` for the text (see
     /// [`source_span_between`](super::TokenReader::source_span_between)).
     Comment {
         /// The start delimiter as matched (`%` in LaTeX).
@@ -109,22 +122,29 @@ pub enum TokenKind<'t, L: Lang> {
         /// The comment text after the start delimiter, without the newline.
         content: &'t str,
     },
-    /// A paragraph break: a whitespace run containing two or more newlines. The
-    /// token runs from the first through the last newline (whitespace between them
-    /// included); the text is recoverable from the reader's span.
+    /// A paragraph break: a whitespace run containing two or more newlines.
+    ///
+    /// The parser stages it as a node of its own, and character runs never merge
+    /// across it. The token runs from the first through the last newline (whitespace
+    /// between them included); the text is recoverable from the reader's span.
     ParagraphBreak,
-    /// End of the token stream. Terminal and idempotent: every further read at the end
-    /// yields it again.
+    /// End of the token stream: there is nothing left to read.
+    ///
+    /// The parser stops its content loop here. The token is terminal and idempotent —
+    /// every further read yields it again — and its pre-space is the input's trailing
+    /// whitespace, which is how that whitespace still reaches the node tree. Ending the
+    /// stream with a token rather than with nothing is why reading never answers an
+    /// `Option`.
     EndOfStream,
 }
 
 impl<L: Lang> TokenKind<'_, L> {
-    /// The variant's static name — the bare name without the variant's data
-    /// (`"Char"`, `"GroupOpen"`, `"GroupClose"`, `"Command"`, `"Specials"`,
-    /// `"Comment"`, `"ParagraphBreak"`, or `"EndOfStream"`), following
-    /// [`NodeKind::as_str`](crate::node::NodeKind::as_str): for log labels and
-    /// name-keyed tables. Independent of the language parameter; the data is on the
-    /// variants themselves.
+    /// The variant's bare name, without any of the variant's data: `"Char"`,
+    /// `"GroupOpen"`, `"GroupClose"`, `"Command"`, `"Specials"`, `"Comment"`,
+    /// `"ParagraphBreak"`, or `"EndOfStream"`.
+    ///
+    /// For log labels and name-keyed tables. The node-side counterpart is
+    /// [`NodeKind::as_str`](crate::core::node::NodeKind::as_str).
     pub const fn as_str(&self) -> &'static str {
         match self {
             TokenKind::Char(_) => "Char",
@@ -257,7 +277,7 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
 pub(crate) enum StdTokenKindData<L: Lang> {
     /// A single ordinary content character.
     Char(char),
-    /// An opening group delimiter; the matched rule travels with the token.
+    /// An opening group delimiter; the matched rule is stored on the token.
     GroupOpen {
         /// The [`GroupRule`] that matched.
         rule: Arc<GroupRule<L>>,
@@ -294,9 +314,9 @@ pub(crate) enum StdTokenKindData<L: Lang> {
     EndOfStream,
 }
 
-/// The standard token value: what [`StdTokenReader`](super::StdTokenReader) produces,
-/// and the [`Token<L>`](super::Token) of every language this crate defines (they all
-/// declare [`StdTokenization`](super::StdTokenization)).
+/// The standard token: what [`StdTokenReader`](super::StdTokenReader) produces, and the
+/// [`Token<L>`](super::Token) of every language this crate defines (they all declare
+/// [`StdTokenization`](super::StdTokenization)).
 ///
 /// # Opaque by construction
 ///
@@ -342,8 +362,8 @@ pub(crate) enum StdTokenKindData<L: Lang> {
 ///   construct and ignored as content. It is a trailing sub-range **inside** the span
 ///   (so the span's end is past it), and never crosses a paragraph break.
 ///
-/// These are *token*-level conventions; node span semantics are a separate,
-/// deliberately decoupled contract — tokens are transient engine internals.
+/// These are *token*-level conventions. A token is a transient value inside a parse;
+/// node spans follow a contract of their own, so do not read one from the other.
 pub struct StdToken<L: Lang> {
     kind: StdTokenKindData<L>,
     span: Span,

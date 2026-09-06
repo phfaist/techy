@@ -1,55 +1,65 @@
-//! Tokenization: opaque tokens, tokenization rules, and the standard token reader.
+//! Tokenization: the token types, the token reader, the token rules, and the scan
+//! helpers behind them.
 //!
-//! The whole token topic lives in the **S1 core stratum**: tokens are
-//! generic over `L: Lang` (a `Specials` token carries its resolution), the reader reads
-//! the full [`ParsingState<L>`](crate::state::ParsingState), and token errors are free to
-//! grow language/state context. The only tokenization-adjacent S0 type is the plain byte
-//! range [`Span`](crate::source::Span), which lives in the source topic.
+//! Tokenizing turns source text into **tokens**: minimal, opaque values that each name
+//! one thing to parse next — one character, a group delimiter, a command, a specials
+//! trigger, a whole comment, a paragraph break, or the end of the input. Nothing is read
+//! off a token directly: a construct parser holds tokens and passes them back to the
+//! [`TokenReader`] that produced them, asking what a token *is*
+//! ([`TokenReader::token_kind`], answered as a [`TokenKind`] view) and where it is
+//! ([`TokenReader::source_span_of`], and the spans and stream positions taken at a
+//! [`TokenEdge`]).
 //!
-//! # Design highlights
+//! The types, in the order a reader meets them:
 //!
-//! - **Tokens are structural and minimal — and single-character for content**: a token is
-//!   an atomic unit identifying *what to parse next*. [`TokenKind::Char`] covers exactly
-//!   one character (construct parsers may need char-by-char reading); chars accumulate
-//!   into nodes at the node level.
-//! - **No invocation forms on parse-time-resolved tokens**: no macro/environment/specials
-//!   taxonomy on [`Command`](TokenKind::Command) tokens, no begin/end-environment tokens.
-//!   `\begin` is a `Command` like any other; what its name *means* is decided at parse
-//!   time by the preset. ([`Specials`](TokenKind::Specials) is the scoped exception:
-//!   recognition *is* resolution there, so it carries its `CallableTypeId` and spec.)
-//! - **Two callable-trigger token kinds, split by mechanism**:
-//!   [`Command`](TokenKind::Command) is recognized from [`CommandRule`] *data* in the
-//!   rules; [`Specials`](TokenKind::Specials) is recognized by the
-//!   [`Lang::scan_specials`](crate::state::Lang::scan_specials) *hook* (recognition =
-//!   resolution: the token carries the spec, and the matched text is the name), gated by
-//!   the state's cached [`TriggerChars`] filter.
-//! - **A language declares its tokenization as one type**: [`Tokenization`], named as
-//!   [`Lang::Tokenization`](crate::state::Lang::Tokenization) — the token type, the
-//!   stream-position type, and how the reader for one parse is built. The two types
-//!   are spelled [`Token<L>`](Token) and [`StreamPosition<L>`](StreamPosition)
-//!   everywhere else. [`StdTokenization`] is the standard bundle: [`StdToken`],
-//!   [`StdStreamPosition`], [`StdTokenReader`].
-//! - **What a token is, and where it is, are both the reader's answers**: a token
-//!   ([`Token`], and the standard [`StdToken`] this crate's languages use) is an
-//!   opaque value with no readable data. A construct parser asks the reader what the
-//!   token *is* ([`TokenReader::token_kind`] → a [`TokenKind`] view) and where it is
-//!   ([`TokenReader::source_span_of`], `source_span_between` at a [`TokenEdge`],
-//!   `position_here`/`position_at`); it never computes either itself.
-//! - **Syntactic vs. content whitespace**: pre-space (on every token) is content
-//!   whitespace belonging to the document flow; post-space (only on
-//!   [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)) is whitespace
-//!   consumed by the construct's syntax and ignored as content. One primitive,
-//!   [`skip_whitespace`], enforces the paragraph rule everywhere: skipped whitespace
-//!   never consumes a newline of a `\n\s*\n` sequence.
-//! - **A terminal [`EndOfStream`](TokenKind::EndOfStream) token** whose pre-space
-//!   reports final whitespace; `peek` never returns an `Option`.
-//! - **Tolerant parsing hooks**: recoverable conditions yield a [`TokenError`] carrying a
-//!   [`TokenRecovery`] (placeholder token + the stream position to resume at); the
-//!   strict/tolerant decision belongs to the session's
-//!   [`Recovery`](crate::error::Recovery) policy, not the reader. A
-//!   [`Lang::scan_specials`](crate::state::Lang::scan_specials) failure
-//!   ([`SpecialsScanError`]) carries no recovery: the hook cannot describe one, so the
-//!   reader reports it as unrecoverable.
+//! - [`Tokenization`] is how a language declares its tokenization — as one bundle, named
+//!   as [`Lang::Tokenization`](crate::core::Lang::Tokenization): the token type, the type
+//!   naming a place in the token stream, and how the reader for one parse is built.
+//!   Elsewhere those two types are spelled [`Token<L>`](Token) and
+//!   [`StreamPosition<L>`](StreamPosition). [`StdTokenization`] is the standard bundle:
+//!   [`StdToken`], [`StdStreamPosition`], [`StdTokenReader`].
+//! - [`TokenKind`] is the parser-facing view of a token: the closed set of what a token
+//!   can be, with the spellings the reader matched.
+//! - [`TokenReader`] is the trait every reader implements and the parser side calls.
+//!   [`StdTokenReader`] is the standard implementation; it recognizes constructs by
+//!   composing the scan helpers ([`skip_whitespace`], [`scan_paragraph_break`],
+//!   [`scan_group_delimiter`], [`command_rule_at`], [`scan_command`], [`scan_comment`],
+//!   [`scan_specials_trigger`]), free functions a reader of one's own may compose
+//!   differently.
+//! - [`TokenRules`] is the data a reader works from — which characters are whitespace,
+//!   which delimiters open groups, which characters start commands and comments. It is
+//!   held in the parsing state, so it can change mid-parse; [`PrefixTable`] and
+//!   [`TriggerChars`] are the caches derived from it for the two lookups that run at
+//!   every position.
+//! - [`TokenError`] reports a condition met while reading, optionally with a
+//!   [`TokenRecovery`]: a placeholder token and the stream position to resume at.
+//!   Whether a parse stops there or continues with the placeholder is decided by the
+//!   session's [`Recovery`](crate::error::Recovery) policy, not by the reader.
+//!
+//! Four properties of this token model shape the parsers written against it:
+//!
+//! - A [`Char`](TokenKind::Char) token covers exactly one character. Consecutive
+//!   characters are joined into a single node later, so a parser that must read
+//!   character by character (a tabular preamble, say) can.
+//! - A command token says only that a name was written after an escape character, not
+//!   what that name means: `\begin` is a [`Command`](TokenKind::Command) token like
+//!   `\foobar`, and which names are macros, environments, or anything else is decided at
+//!   parse time. [`Specials`](TokenKind::Specials) is the exception — recognizing a
+//!   trigger there is already resolving it, so the token holds the spec it matched.
+//! - Whitespace before a token (its *pre-space*) is content and reaches the node tree;
+//!   whitespace a command or a comment absorbs after itself (its *post-space*) is syntax
+//!   and does not. [`skip_whitespace`] applies the paragraph rule to both: skipped
+//!   whitespace never consumes a newline that belongs to a paragraph break.
+//! - Every stream ends with a terminal [`EndOfStream`](TokenKind::EndOfStream) token
+//!   whose pre-space carries the input's final whitespace, so reading a token never
+//!   answers an `Option`.
+//!
+//! [Language syntax](crate::guide::language_syntax) describes the constructs these
+//! tokens stand for, [Tokens and token
+//! rules](crate::guide::concepts_overview#tokens-and-token-rules) places them in the
+//! parsing model, and [Defining a custom
+//! language](crate::guide::custom_lang#token-rules-and-specials-recognition) covers
+//! writing rules and specials recognition for a language of one's own.
 
 mod error;
 #[cfg(test)]

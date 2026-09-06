@@ -3,17 +3,18 @@
 //!
 //! Specials trigger strings are the one part of tokenization that is *not* plain
 //! [`TokenRules`](super::TokenRules) data: a language may have many trigger strings in
-//! scope, changing with scope-stack ops, so their recognition is delegated to a
-//! [`Lang`](crate::state::Lang) hook (`Lang::scan_specials`) instead of being enumerated in
-//! the rules. Recognition and resolution happen in one call: a
-//! [`SpecialsMatch`] carries the resolved spec, and the matched text is the name, which
-//! removes normalization and scoping mismatches between scanning and lookup by
-//! construction.
+//! scope, and which ones they are changes as scopes are pushed and popped, so
+//! recognizing them is delegated to a [`Lang`](crate::core::Lang) hook
+//! (`Lang::scan_specials`) instead of being enumerated in the rules.
 //!
-//! The hot path is protected by [`TriggerChars`]: the set of characters that may start a
-//! specials trigger, reported by `Lang::specials_trigger_chars` and cached per parsing
-//! state (rebuilt only at transitions, like the
-//! [`PrefixTable`](super::PrefixTable)). The scan hook is consulted only when the current
+//! Recognition and resolution happen in one call: a [`SpecialsMatch`] holds the
+//! resolved spec, and the matched text *is* the name, so scanning and lookup cannot
+//! disagree about normalization or scoping.
+//!
+//! [`TriggerChars`] keeps the hook off the hot path: it is the set of characters that may
+//! start a specials trigger, reported by `Lang::specials_trigger_chars` and cached per
+//! parsing state (rebuilt only at state transitions, like the
+//! [`PrefixTable`](super::PrefixTable)). The hook is consulted only when the current
 //! character is in the set.
 
 use alloc::string::String;
@@ -28,9 +29,10 @@ use super::error::TokenErrorKind;
 
 /// A successful specials scan: a callable trigger matched at the scanned position.
 ///
-/// Returned by `Lang::scan_specials(state, content, pos)`. Positions are absolute byte
-/// offsets into `content` (not relative to the scanned tail), so spans in errors and in the
-/// resulting token need no offset arithmetic.
+/// Returned by `Lang::scan_specials(state, content, pos)`, and by
+/// [`scan_specials_trigger`](super::scan_specials_trigger), which calls that hook.
+/// Positions are absolute byte offsets into `content` (not relative to the scanned tail),
+/// so spans in errors and in the resulting token need no offset arithmetic.
 pub struct SpecialsMatch<L: Lang> {
     /// Byte offset one past the end of the matched trigger.
     ///
@@ -45,10 +47,11 @@ pub struct SpecialsMatch<L: Lang> {
     /// span. The standard reader validates the contract at the call site and reports a
     /// violation as an unrecoverable implementation error — never a panic.
     pub end: usize,
-    /// The invocation form the trigger resolved to (recorded on the token; the dispatch
-    /// loop needs it to build an `Invocation`). Recognition = resolution, and a
-    /// resolution is the *(callable type, spec)* pair — the same shape as
-    /// [`ResolvedCallable`](crate::engine::ResolvedCallable).
+    /// The invocation form the trigger resolved to.
+    ///
+    /// It is recorded on the token, and the parser needs it to build the invocation it
+    /// dispatches. Together with `spec` it is the same *(callable type, spec)* pair a
+    /// [`ResolvedCallable`](crate::core::specs::ResolvedCallable) holds.
     pub callable_type: L::CallableTypeId,
     /// The resolved behavior spec. Never absent: unknown-name policy (fallback specs) is
     /// the scan implementation's business, applied *before* returning a match.
@@ -97,10 +100,12 @@ impl core::error::Error for SpecialsScanError {}
 
 /// The characters that may start a specials trigger in some parsing state.
 ///
-/// Computed by `Lang::specials_trigger_chars(&StateData<L>)` when a state is frozen and
-/// cached on the state instance. A scan hook whose triggers cannot be summarized by first
-/// characters (fully dynamic recognition) returns [`TriggerChars::Any`] — correct but paying
-/// the scan on every character.
+/// A language reports it from `Lang::specials_trigger_chars(&StateData<L>)`; the parsing
+/// state computes it once, when it is built, and caches it. Every scan of a specials
+/// trigger is gated by it, so the scan hook runs only at characters that could start
+/// one. A hook whose triggers cannot be summarized by their first characters (fully
+/// dynamic recognition) returns [`TriggerChars::Any`] — correct, but it pays for the scan
+/// at every character.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerChars {
     /// Only these characters can start a trigger; the empty string means "no specials at
@@ -120,10 +125,13 @@ impl TriggerChars {
         }
     }
 
-    /// The union of two filters: a character may start a trigger in the union iff it may
-    /// in either operand ([`Any`](TriggerChars::Any) absorbs). The fold behind a
-    /// multi-provider scan: the state caches one filter for the whole
-    /// [`ScopeStack`](crate::scopes::ScopeStack), unioned over its providers at freeze.
+    /// The union of two filters: a character may start a trigger in the union exactly
+    /// when it may in either operand, and [`Any`](TriggerChars::Any) unioned with
+    /// anything is `Any`.
+    ///
+    /// A parsing state caches one filter for its whole
+    /// [`ScopeStack`](crate::core::specs::ScopeStack) by combining the filters of the
+    /// providers in it with this method.
     #[must_use]
     pub fn union(&self, other: &TriggerChars) -> TriggerChars {
         match (self, other) {

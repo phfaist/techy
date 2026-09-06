@@ -5,12 +5,13 @@
 //! token reader itself is policy-free — it always reports the error; the session-level
 //! [`Recovery`](crate::error::Recovery) policy decides whether to abort (strict)
 //! or to record a [`Diagnostic`](crate::error::Diagnostic) and continue with the recovery
-//! token (tolerant). Conversion to Arc-span diagnostics happens there too; within the token
-//! layer, errors are transient values carrying plain byte [`Span`]s, like tokens themselves.
+//! token (tolerant). Conversion to diagnostics happens there too; within the token layer,
+//! errors are transient values carrying plain byte [`Span`](crate::source::Span)s, like
+//! tokens themselves.
 //!
-//! Like the tokens themselves, these types are generic over `L: Lang` (the recovery token rides
-//! inside, and `Lang::scan_specials` implementations return them) — token machinery lives
-//! wholly in the S1 stratum, so error types are free to grow language/state context later.
+//! Like the tokens themselves, these types are generic over the language type `L`: a
+//! recovery holds one of the language's own tokens, and implementations of
+//! `Lang::scan_specials` report their failures as these conditions.
 
 use alloc::boxed::Box;
 use core::fmt;
@@ -21,13 +22,14 @@ use crate::state::Lang;
 
 use super::tokenization::{StreamPosition, Token};
 
-/// Result type of tokenization operations.
+/// Result of a tokenization operation: `T`, or a [`TokenError`] for the language `L`.
 pub type TokenResult<L, T> = core::result::Result<T, TokenError<L>>;
 
 /// Condition: the input ended immediately after a command escape character, before any
-/// name (the token layer's conditions are ordinary
-/// [`DiagnosticInfo`] data structs, wrapped by [`TokenErrorKind`] for the recovery
-/// protocol).
+/// name.
+///
+/// Like every token-layer condition, it is a plain [`DiagnosticInfo`] data struct, which
+/// [`TokenErrorKind`] wraps for the recovery protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -40,7 +42,8 @@ pub struct EndOfStreamAfterEscape {
     pub escape_char: char,
 }
 
-/// Condition: a character listed in `ForbiddenCharsRules::chars` appeared as content.
+/// Condition: a character listed in
+/// [`ForbiddenCharsRules::chars`](super::ForbiddenCharsRules::chars) appeared as content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.token.forbidden-char")]
@@ -58,15 +61,17 @@ impl fmt::Display for ForbiddenChar {
     }
 }
 
-/// What went wrong while reading a token.
+/// What went wrong while reading a token: the condition carried by a [`TokenError`].
 ///
-/// Closed enum per the naming rule (`…Kind`); grows as the tokenizer learns to detect
-/// more error conditions — hence `#[non_exhaustive]`. The built-in variants wrap plain
-/// condition structs (each a [`DiagnosticInfo`] impl) and [`Custom`](Self::Custom)
-/// carries any language-defined payload, so token errors join the structured-diagnostics
-/// model while the token layer keeps a concrete matchable enum for the recovery protocol.
-/// Not `Copy` (a custom payload is boxed) and no `PartialEq`
-/// — consumers match the variants or downcast the payload.
+/// The built-in variants wrap plain condition structs, each of them a
+/// [`DiagnosticInfo`] implementation, and [`Custom`](Self::Custom) carries a
+/// language-defined payload — so a token error becomes a structured diagnostic like any
+/// other, while the token layer keeps a concrete enum to match on.
+///
+/// More variants may be added for conditions the tokenizer learns to detect, which is
+/// what `#[non_exhaustive]` reserves; match with a catch-all arm. The type is neither
+/// `Copy` (a custom payload is boxed) nor `PartialEq`: match the variants, or downcast
+/// the payload.
 #[derive(Debug, Clone)]
 // `Custom` and `#[non_exhaustive]` serve different extension axes: `Custom` lets third
 // parties define new condition *payloads*, while `non_exhaustive` reserves *our* right to
@@ -76,12 +81,13 @@ impl fmt::Display for ForbiddenChar {
 pub enum TokenErrorKind {
     /// The input ended immediately after a command escape character, before any name.
     EndOfStreamAfterEscape(EndOfStreamAfterEscape),
-    /// A character listed in `ForbiddenCharsRules::chars` appeared as content.
+    /// A character listed in
+    /// [`ForbiddenCharsRules::chars`](super::ForbiddenCharsRules::chars) appeared as
+    /// content.
     ForbiddenChar(ForbiddenChar),
-    /// A language-defined condition, reported by an extension point participating in
-    /// the recovery protocol (`Lang::scan_specials`, a custom
-    /// [`TokenReader`](super::TokenReader)) — one extension mechanism serves both
-    /// layers.
+    /// A language-defined condition, reported by an extension point that takes part in
+    /// the recovery protocol: `Lang::scan_specials`, or a custom
+    /// [`TokenReader`](super::TokenReader).
     Custom(Box<dyn DiagnosticData>),
 }
 
@@ -99,9 +105,18 @@ impl TokenErrorKind {
 
 /// An error encountered while reading a token, with an optional recovery possibility.
 ///
-/// The recovery payload is boxed: every `peek`/`next` returns a `Result` sized by its
-/// error variant, and the error path is cold by construction — boxing keeps the hot
-/// `Result` at payload-plus-tag size.
+/// Returned by the reading methods of [`TokenReader`](super::TokenReader). It carries
+/// what went wrong ([`kind`](TokenError::kind)), where
+/// ([`span`](TokenError::span) — already source-qualified, so it is a diagnostic anchor
+/// as it stands), and, when the reader could describe how to carry on, a
+/// [`TokenRecovery`] ([`recovery`](TokenError::recovery)).
+///
+/// The reader applies no policy of its own: whether the parse stops here or continues
+/// with the recovery token is the session's [`Recovery`](crate::error::Recovery)
+/// decision.
+// The recovery payload is boxed: every `peek`/`next` returns a `Result` sized by its
+// error variant, and the error path is cold by construction — boxing keeps the hot
+// `Result` at payload-plus-tag size.
 pub struct TokenError<L: Lang> {
     kind: TokenErrorKind,
     span: SourceSpan<L::SourceOrigin>,
@@ -136,7 +151,8 @@ pub struct TokenRecovery<L: Lang> {
 }
 
 impl<L: Lang> TokenError<L> {
-    /// Create a token error.
+    /// Creates a token error from a condition, the source-qualified span it was
+    /// detected at, and a [`TokenRecovery`] when the caller can describe one.
     pub fn new(
         kind: TokenErrorKind,
         span: SourceSpan<L::SourceOrigin>,

@@ -30,15 +30,19 @@ use super::error::{EndOfStreamAfterEscape, TokenErrorKind};
 use super::rules::{CommandRule, GroupRule, TokenRules};
 use super::specials::{SpecialsMatch, SpecialsScanError};
 
-/// End position of the whitespace run starting at `pos` (= `pos` if none, if
-/// whitespace handling is disabled, or if the language declares it absent —
-/// [`LangFeatures::Whitespace`], whose absent store holds no whitespace data at all).
+/// Returns the byte offset just past the whitespace run that starts at `pos`.
 ///
-/// **The multi-newline rule** (`TokenRules::paragraphs_enabled`): skipped
-/// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
-/// skipping stops right *before* the first newline of a paragraph break. This one
-/// primitive serves pre-space, command post-space, and comment post-space, which is what
-/// makes "post-space never crosses a paragraph break" hold everywhere by construction.
+/// Nothing is advanced and no token is built: the answer is an offset into `content`,
+/// equal to `pos` when there is no whitespace there, when whitespace handling is
+/// disabled in `rules`, or when the language declares the whitespace feature absent
+/// ([`LangFeatures::Whitespace`]).
+///
+/// **The paragraph rule** (`TokenRules::paragraphs_enabled`): skipped whitespace never
+/// contains `\n\s*\n`, nor consumes a newline from such a sequence — skipping stops
+/// right *before* the first newline of a paragraph break, which
+/// [`scan_paragraph_break`] then reads. This one primitive serves pre-space, command
+/// post-space, and comment post-space, which is what makes "post-space never crosses a
+/// paragraph break" hold everywhere by construction.
 ///
 /// # Panics
 ///
@@ -99,15 +103,18 @@ fn check_pos(content: &str, pos: usize) {
     );
 }
 
-/// A paragraph break — a whitespace run holding two or more newlines — beginning
-/// exactly at `pos`: `Some(span)` from the first newline through the last newline of the
-/// run (whitespace after the last newline is left for the next token's pre-space).
+/// Returns the span of the paragraph break beginning exactly at `pos`, if one does.
+///
+/// A paragraph break is a whitespace run holding two or more newlines. The span runs
+/// from the first newline through the last one; whitespace after the last newline is
+/// left for the next token's pre-space. Nothing is advanced.
+///
+/// Call this at the offset [`skip_whitespace`] answered, which stops right before the
+/// first newline of such a run.
 ///
 /// `None` when the paragraphs or whitespace feature is absent or disabled, when `'\n'`
 /// is not a whitespace character, when the text at `pos` does not start with `'\n'`, or
-/// when the run holds a single newline. Intended to be called at the offset
-/// [`skip_whitespace`] answered, which stops right before the first newline of such a
-/// run.
+/// when the run holds a single newline.
 ///
 /// # Panics
 ///
@@ -150,9 +157,10 @@ pub fn scan_paragraph_break<L: Lang>(
     Some(Span::new(pos, last_nl_end))
 }
 
-/// A group delimiter recognized at a position, with the rule it belongs to.
+/// A group delimiter recognized at a position, with the rule it belongs to — what
+/// [`scan_group_delimiter`] answers.
 ///
-/// The rule travels with the match in both directions: a reader building a group-open
+/// The rule is part of the match in both directions: a reader building a group-open
 /// token needs the close delimiter to expect and the group's class without matching
 /// again, and a reader that builds tokens of its own may want the same of a close. Only
 /// byte ranges into the scanned content and that borrowed rule are carried — nothing
@@ -236,12 +244,19 @@ impl<L: Lang> fmt::Debug for GroupDelimiterMatch<'_, L> {
     }
 }
 
-/// The delimiter the standard reader recognizes at `pos`: the close delimiter of
-/// [`TokenRules::expecting_group_close`] when that rule has a non-empty close and it
-/// stands at `pos` — regardless of the groups gate, since the expected close is what the
-/// parser inside the group waits for — and otherwise the longest entry of the state's
-/// [`PrefixTable`](super::PrefixTable), read as an opener when the string is both an open
-/// and a close delimiter.
+/// Returns the group delimiter the standard reader recognizes at `pos`, if any.
+///
+/// The answer is a [`GroupDelimiterMatch`]: the delimiter's byte range in `content`
+/// together with the [`GroupRule`] it belongs to, read as an open or as a close. Nothing
+/// is advanced.
+///
+/// Two lookups decide it, in this order:
+///
+/// 1. the close delimiter of [`TokenRules::expecting_group_close`], when that rule has a
+///    non-empty close and it stands at `pos` — that close is recognized regardless of
+///    the groups gate, since it is what the parser inside the group waits for;
+/// 2. otherwise the longest entry of the state's [`PrefixTable`](super::PrefixTable),
+///    read as an opener when the matched string both opens and closes a group.
 ///
 /// `None` when nothing matches, when the groups feature is absent (there is no table),
 /// or when it is disabled (the table is empty).
@@ -278,8 +293,11 @@ pub fn scan_group_delimiter<'r, L: Lang>(
     })
 }
 
-/// The first command rule (in [`TokenRules::command_rules`] order) whose escape character
-/// stands at `pos` — the rule [`scan_command`] then reads the command under.
+/// Returns the first command rule whose escape character stands at `pos`.
+///
+/// Rules are tried in [`TokenRules::command_rules`] order. The answer is the rule to
+/// pass to [`scan_command`], which reads the command's name under it; nothing is
+/// advanced.
 ///
 /// `None` at the end of the content, when the commands feature is absent or disabled, or
 /// when no rule's escape character stands there.
@@ -323,13 +341,19 @@ pub struct CommandMatch {
     pub post_space: Span,
 }
 
-/// Read the command whose escape character (`rule.escape_char`) stands at `pos`.
+/// Reads the command whose escape character (`rule.escape_char`) stands at `pos`.
+///
+/// The answer is a [`CommandMatch`] of byte ranges into `content`: the whole command,
+/// its name, and the syntactic whitespace after it. Nothing is advanced and no token is
+/// built. [`command_rule_at`] answers the `rule` to read under.
 ///
 /// The name is a greedy run of the rule's name characters, or a single character when the
 /// first one is not a name character. Only a multi-character name consumes its following
 /// whitespace as post-space — `\&` and friends do not (pylatexenc behavior).
 ///
-/// `Err(EndOfStreamAfterEscape)` when the escape character is the last character of the
+/// # Errors
+///
+/// [`EndOfStreamAfterEscape`] when the escape character is the last character of the
 /// content: there is no name to read. That is the condition the standard reader reports
 /// with a [`Char`](super::TokenKind::Char) placeholder holding the escape character over
 /// `pos..content.len()`, resuming at `content.len()`.
@@ -411,11 +435,18 @@ pub struct CommentMatch {
     pub post_space: Span,
 }
 
-/// The comment starting at `pos` when a comment-start delimiter matches there: the
-/// longest non-empty one across [`TokenRules::comment_rules`].
+/// Returns the comment starting at `pos`, when a comment-start delimiter matches there.
 ///
-/// `None` when none does, or when the comments feature is absent or disabled. `'\n'` is
-/// the sole line terminator; `'\r'` is ordinary content.
+/// The delimiter matched is the longest non-empty one across
+/// [`TokenRules::comment_rules`]. The answer is a [`CommentMatch`] of byte ranges into
+/// `content`: the whole comment, its start delimiter, its text, and the syntactic
+/// whitespace after it. Nothing is advanced.
+///
+/// `'\n'` is the sole line terminator and `'\r'` is ordinary content, so a comment with
+/// no newline after it runs to the end of the content.
+///
+/// `None` when no delimiter matches at `pos`, or when the comments feature is absent or
+/// disabled.
 ///
 /// # Panics
 ///
@@ -458,27 +489,36 @@ pub fn scan_comment<L: Lang>(
     })
 }
 
-/// The specials step of the standard reader at `pos`: ask
-/// [`Lang::scan_specials`](crate::state::Lang::scan_specials) whether a
-/// callable-triggering character sequence starts there, after the state's
-/// [`TriggerChars`](super::TriggerChars) filter says a trigger could.
+/// Returns the specials trigger recognized at `pos`, if any.
+///
+/// This is the specials step of the standard reader. A specials trigger is a character
+/// sequence that invokes a callable without being written as a command (`~`, `&`, `---`).
+/// Recognizing one is the language's business, so this asks the [`Lang::scan_specials`](crate::core::Lang::scan_specials) hook, which
+/// recognizes and resolves in one step: the [`SpecialsMatch`] answered holds the end of
+/// the matched text together with the spec it resolved to. Nothing is advanced.
+///
+/// The hook is consulted only once the state's [`TriggerChars`](super::TriggerChars)
+/// filter says a trigger could start with the character at `pos`.
 ///
 /// `Ok(None)` when the specials feature is absent, at the end of the content, when the
 /// character at `pos` is not in the filter (no filter at all, or
 /// [`may_start`](super::TriggerChars::may_start) `false` — which is also how a disabled
 /// specials gate reads, since the gate is applied when the filter is derived), or when
-/// the hook answers no match. `Ok(Some(m))` for a match whose `m.end` is what the
+/// the hook answers no match. In `Ok(Some(m))`, `m.end` is always what the
 /// [`SpecialsMatch::end`](super::SpecialsMatch::end) documentation requires (`pos < end
 /// <= content.len()`, on a `char` boundary).
 ///
-/// `Err(e)` for a hook failure: `e` is the hook's own error when the span it reported
-/// lies within the content on `char` boundaries. Otherwise — and likewise for an `m.end`
-/// the `SpecialsMatch` documentation rules out — `e` is a
-/// [`SpecialsScanError`] whose `kind` is an implementation error naming the violation and
-/// whose `span` is `Span::empty(pos)`. No failure of this step can carry a recovery: the
-/// hook knows neither the reader's token type nor its stream positions, so the standard
-/// reader reports every one of them as `TokenError::new(e.kind, SourceSpan::new(source,
-/// e.span), None)`.
+/// # Errors
+///
+/// [`SpecialsScanError`], for a hook failure: the hook's own error when the span it
+/// reported lies within the content on `char` boundaries. Otherwise — and likewise for an
+/// `m.end` the `SpecialsMatch` documentation rules out — the error's `kind` is an
+/// implementation error naming the violation, and its `span` is `Span::empty(pos)`.
+///
+/// No failure of this step can carry a recovery: the hook knows neither the reader's
+/// token type nor its stream positions, so the standard reader reports every one of them
+/// as `TokenError::new(e.kind, SourceSpan::new(source, e.span), None)`, which aborts the
+/// parse even under tolerant recovery.
 ///
 /// # Panics
 ///
@@ -529,9 +569,10 @@ pub fn scan_specials_trigger<L: Lang>(
 ///
 /// The hook is outer-layer code, so its span is *validated*, not trusted: a span out of
 /// the content's bounds or cutting a character would make `SourceSpan::new` assert once
-/// the reader qualifies it with a source. Such a span is itself a contract violation,
-/// reported the way every other extension-contract violation in this file is — an
-/// implementation error anchored where the scan was asked for ([§dd-dr:panic-policy]).
+/// the reader qualifies it with a source.
+// Such a span is itself a contract violation, reported the way every other
+// extension-contract violation in this file is — an implementation error anchored where
+// the scan was asked for ([§dd-dr:panic-policy]).
 fn checked_scan_error(
     error: SpecialsScanError,
     content: &str,
