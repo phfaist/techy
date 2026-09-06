@@ -101,13 +101,15 @@ use super::ParserSession;
 ///   identifiers, and the default resolves nothing, so every command in the document
 ///   would be diagnosed as unresolvable. Called once per command token.
 /// - [`recovery`](ParseDriver::recovery) — the strict-or-tolerant policy. The default
-///   is [`Recovery::Strict`]; read once per detected problem.
+///   is [`Recovery::Strict`]; read whenever a problem is detected and on every token
+///   probe.
 /// - [`group_interior_delta`](ParseDriver::group_interior_delta) — set when entering a
 ///   group of some class changes the state its interior is parsed under, such as a
-///   math group switching the mode. Called once per group descent, subject to
-///   memoization.
+///   math group switching the mode. Called once per distinct base state and group
+///   rule, since the result is memoized for the parse.
 /// - [`refine_diagnostic`](ParseDriver::refine_diagnostic) — replace a condition with
-///   a language-specific one before it is recorded. Called once per detected problem.
+///   a language-specific one before it is recorded. Called once per detected problem
+///   by the default [`recover`](ParseDriver::recover).
 /// - the `make_*` parser factories — supply parsers of the language's own for the
 ///   root, for content runs, for groups, and for invocations. Called once per descent
 ///   of the corresponding kind.

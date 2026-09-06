@@ -613,8 +613,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// another [`ConstructParser`] over the same input) MUST go through — the
     /// counterpart of pylatexenc's `walker.parse_content(parser, …, parsing_state)`.
     ///
-    /// The contract is **normative**: a `ConstructParser` runs only through this
-    /// method — called directly, or through the thin wrappers
+    /// The contract is **normative**: every descent — a parser running another
+    /// parser for a construct *nested* inside its own — goes through this method,
+    /// either called directly or through the thin wrappers
     /// [`parse_nodes`](ParseContext::parse_nodes) and
     /// [`parse_group`](ParseContext::parse_group), which delegate here. One shared
     /// entry point is what lets the engine attach its per-descent bookkeeping (the
@@ -624,6 +625,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// bypasses it — code calling another parser's
     /// [`parse`](ConstructParser::parse) method directly — cannot be detected by
     /// the library. The rule is documented, not enforceable.
+    ///
+    /// Two runs are deliberately **not** descents and call
+    /// [`parse`](ConstructParser::parse) directly instead: the parse entry point
+    /// running the root parser (see [`RootNodesParser`]), and a parser that
+    /// delegates to an inner parser for the *same* construct — a wrapper adding an
+    /// after-effect delta around [`StdInvocationParser`], say — which must not open
+    /// a second nesting level or push a second frame for one construct.
     ///
     /// Before the sub-parse runs, the session's per-parse
     /// [`DescentGuard`](crate::engine::DescentGuard) is asked whether the parse
@@ -1395,12 +1403,14 @@ pub type ConstructParserResult<L, T> = Result<T, ParseError<<L as Lang>::SourceO
 ///   invocation shorthand [`stage_invocation`](ParseContext::stage_invocation)).
 ///   There is no other route to the tree, which is what lets the engine mint each
 ///   node's language extension without the parser's cooperation.
-/// - **Run any sub-parse** through
+/// - **Run any nested construct** through
 ///   [`parse_construct`](ParseContext::parse_construct) or its wrappers
 ///   [`parse_nodes`](ParseContext::parse_nodes) and
-///   [`parse_group`](ParseContext::parse_group) — never by calling another
-///   parser's [`parse`](ConstructParser::parse) directly, which would bypass the
-///   engine's per-descent bookkeeping.
+///   [`parse_group`](ParseContext::parse_group) — never by calling that parser's
+///   [`parse`](ConstructParser::parse) directly, which would bypass the engine's
+///   per-descent bookkeeping. Calling [`parse`](ConstructParser::parse) directly is
+///   right in one case only: delegating to an inner parser for the **same**
+///   construct, which must not open a second nesting level.
 /// - **Report every problem it finds in the source** through
 ///   [`recover`](ParseContext::recover), at the point of detection, and continue
 ///   locally if it returns `Ok(())`. Report a violated library contract through
@@ -1438,12 +1448,12 @@ pub trait ConstructParser<L: Lang> {
 
     /// Parses the construct at the context's current position, staging its nodes.
     ///
-    /// Called exactly once per construct, by
+    /// Called once per run of the construct, by
     /// [`ParseContext::parse_construct`](ParseContext::parse_construct) (see the
     /// guarantees on the trait). On entry, `cx.state` is the construct's input
     /// parsing state and the reader stands at the construct's first unconsumed
-    /// token — for an invocation parser, the token that triggered the invocation has
-    /// already been consumed by the caller.
+    /// token: a parser dispatched on a trigger token — an invocation, a group —
+    /// finds that token already consumed by the caller, post-space included.
     ///
     /// Returns the parser's [`Output`](ConstructParser::Output) together with an
     /// optional [`ParsingStateDelta`]: the construct's **after-effect for the
@@ -1456,11 +1466,13 @@ pub trait ConstructParser<L: Lang> {
     ///
     /// An `Err` **aborts the whole parse**: nobody continues past it. Problems in
     /// the source are therefore not returned as errors — they are reported through
-    /// [`recover`](ParseContext::recover) where they are detected, which returns
-    /// `Err` only when the parse is running under
-    /// [`Recovery::Strict`](crate::error::Recovery::Strict). Reserve a directly
-    /// constructed `Err` for conditions no recovery can survive, such as a violated
-    /// library contract
+    /// [`recover`](ParseContext::recover) where they are detected, and it returns
+    /// `Err` only when the driver's recovery policy says the parse must end (the
+    /// default policy does so under
+    /// [`Recovery::Strict`](crate::error::Recovery::Strict), and returns `Ok(())`
+    /// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant)). Reserve a
+    /// directly constructed `Err` for conditions no recovery can survive, such as a
+    /// violated library contract
     /// ([`implementation_error`](ParseContext::implementation_error)).
     // The output-plus-delta pair is the decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]);
     // splitting it into a named type would only rename the complexity. The delta is

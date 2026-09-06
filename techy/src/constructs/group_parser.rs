@@ -129,12 +129,14 @@ impl fmt::Display for UnclosedGroup {
     }
 }
 
-/// The hook by which a group **leaks an after-effect** to its caller: it maps the
-/// interior content run's merged after-effect record to the delta the group returns as
-/// its own after-effect (the `\gdef` shape). Installed per descent with
+/// The callback that lets a group pass an after-effect out to its caller, so that a
+/// definition made inside the group survives it (the `\gdef` shape).
+///
+/// It maps the interior content run's merged after-effect record to the delta the group
+/// returns as its own after-effect. Installed per descent with
 /// [`GroupParser::new_with_after_effects`], normally from an overridden
-/// [`make_group_parser`](crate::engine::ParseDriver::make_group_parser) so that every
-/// group descent of the language carries it.
+/// [`make_group_parser`](crate::core::ParseDriver::make_group_parser) so that every group
+/// descent of the language has it.
 ///
 /// The arguments, in order:
 ///
@@ -143,7 +145,7 @@ impl fmt::Display for UnclosedGroup {
 ///    a `$…$` one.
 /// 2. The **interior's initial state** — what the interior parsed under before any
 ///    sibling after-effect evolved it (base + `expecting_group_close` + the driver's
-///    [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)).
+///    [`group_interior_delta`](crate::core::ParseDriver::group_interior_delta)).
 /// 3. The **interior's exit state** ([`NodesOutcome::state`](super::NodesOutcome::state))
 ///    — the state the interior run actually reached, and the only place the definitions
 ///    the record made are inspectable (`state.scopes().retrieve_spec(…)`). It is
@@ -156,19 +158,22 @@ impl fmt::Display for UnclosedGroup {
 /// The return is the group's after-effect for its caller — `None` for the ordinary
 /// "nothing escapes" answer, which is also what a group with no hook returns.
 ///
-/// # What a hook can discriminate
+/// # What a hook can tell apart
 ///
-/// The record is **one merged delta** — rules overrides last-writer-wins, scope ops and
-/// events concatenated in application order — and carries no provenance: it cannot say which construct contributed what. A
-/// `\gdef`-vs-`\def` split is therefore expressed **structurally**, by the language
-/// tagging its own ops — `\gdef` emitting a [`ScopeOp::Define`](crate::scopes::ScopeOp)
-/// against a globally-named scope, `\def` a local one — after which the hook keeps the
-/// globally-targeted ops and drops the rest (the ops read through
-/// `<L::Features as LangFeatures>::Scopes::store_get(&delta.scope_ops)`). The rules,
-/// mode and ext overrides carry no such tag and merge last-writer-wins, so for those the
+/// The record is **one merged delta**: rules overrides are merged last-writer-wins, and
+/// scope operations and events are concatenated in application order. It does not record
+/// which construct contributed what.
+///
+/// A `\gdef`-versus-`\def` split is therefore expressed structurally, by the language
+/// tagging its own operations: `\gdef` emits a
+/// [`ScopeOp::Define`](crate::core::specs::ScopeOp) against a globally-named scope and
+/// `\def` a local one, after which the hook keeps the globally-targeted operations and
+/// drops the rest (read them through
+/// `<L::Features as LangFeatures>::Scopes::store_get(&delta.scope_ops)`). The rules, mode
+/// and extension overrides have no such tag and merge last-writer-wins, so for those the
 /// only honest answers are all or nothing.
 ///
-/// Escapes **compose outward** one level per hook: the enclosing content loop applies the
+/// Escapes compose outward, one level per hook: the enclosing content loop applies the
 /// returned delta to its own state *and* merges it into its own record, so the next group
 /// out sees it in argument 4 and may let it escape again.
 ///
@@ -195,13 +200,15 @@ pub type GroupAfterEffectsFn<'p, L> = &'p dyn Fn(
     ParseError<<L as Lang>::SourceOrigin>,
 >;
 
-/// The group construct parser: a tier-2 temporary, constructed per group descent
-/// from the opening token's facts (its span and resolved
-/// [`GroupRule`](crate::token::GroupRule)). The caller has already consumed the
-/// opening token; `cx.state` is the interior's **base** state, from which the parser
-/// derives the actual interior state (base plus the expected close delimiter from
-/// the opening rule), scoped structurally over the descent. Recovery for a group
-/// that never closes is documented on [`UnclosedGroup`].
+/// Parses one delimited group — `{a b}`, `[…]`, `$…$` — and stages its `Group` node.
+///
+/// Constructed for a single group descent from the opening token and its resolved
+/// [`GroupRule`](crate::core::token::GroupRule), then run once and dropped. The caller has
+/// already consumed the opening token, and `cx.state` is the interior's **base** state,
+/// from which the parser derives the actual interior state — the base plus the expected
+/// close delimiter taken from the opening rule — scoped structurally over the descent.
+///
+/// Recovery for a group that never closes is documented on [`UnclosedGroup`].
 pub struct GroupParser<'p, L: Lang> {
     /// The consumed `GroupOpen` token: the group's open delimiter, as the reader
     /// records it (its span and its stream position come from the reader).
@@ -209,23 +216,20 @@ pub struct GroupParser<'p, L: Lang> {
     /// The opening token's resolved rule: the close spelling and group class of the
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
-    /// Descent-state policy handed to the interior [`NodesParser`]; defaults to
-    /// inherit-everywhere (policies are one level deep, so a
-    /// plain arm-driven descent never propagates one). A parser that scopes the group's
-    /// interior state sets it per use — e.g. the chars-except-groups argument pattern,
-    /// whose group interiors revert to the outer, unrestricted state. (The 6.5
-    /// motivating consumer, the optional-group argument parser's brace protection,
-    /// since detached in favor of the state-scoped temporary-group-rules
-    /// ([`GroupRules::temporary`](crate::token::GroupRules::temporary)) lifecycle.)
+    /// Descent-state policy passed to the interior [`NodesParser`]; defaults to
+    /// inherit-everywhere. A policy reaches one level deep, so a plain arm-driven descent
+    /// never propagates one. A parser that scopes the group's interior state sets it per
+    /// use — the chars-except-groups argument pattern does, its group interiors reverting
+    /// to the outer, unrestricted state.
     child_states: ChildStateSpec<'p, L>,
-    /// The after-effect leak hook, `None` for the scoped-descent default (nothing
-    /// escapes the group). See [`GroupAfterEffectsFn`].
+    /// The hook that lets an after-effect escape the group; `None` for the default, under
+    /// which nothing escapes. See [`GroupAfterEffectsFn`].
     compute_after_effects: Option<GroupAfterEffectsFn<'p, L>>,
 }
 
 impl<'p, L: Lang> GroupParser<'p, L> {
-    /// A parser for the group opened by the consumed `GroupOpen` token `open`, with
-    /// resolved rule `rule`.
+    /// A parser for the group opened by `open`, an already-consumed `GroupOpen` token,
+    /// with the rule `rule` that token resolved to.
     pub fn new(open: Token<L>, rule: Arc<GroupRule<L>>) -> GroupParser<'p, L> {
         GroupParser {
             open,
@@ -235,17 +239,18 @@ impl<'p, L: Lang> GroupParser<'p, L> {
         }
     }
 
-    /// [`new`](GroupParser::new) with the **after-effect leak hook** installed: instead
-    /// of dropping the interior run's merged after-effect record with the descent, the
-    /// parser hands it to `compute_after_effects`, whose answer becomes the group's own
-    /// after-effect for its caller (the `\gdef` shape). The hook may still answer `None`,
-    /// which is the default behavior.
+    /// [`new`](GroupParser::new) with the escape hook installed: instead of dropping the
+    /// interior run's merged after-effect record with the descent, the parser passes it to
+    /// `compute_after_effects`, whose answer becomes the group's own after-effect for its
+    /// caller (the `\gdef` shape).
     ///
-    /// The hook is per descent, so the plug-in point is an overridden
-    /// [`make_group_parser`](crate::engine::ParseDriver::make_group_parser) — that is what
-    /// gives a language the hook at *every* group site, which is in turn what makes an
-    /// escape compose outward through nested groups. The full contract, including what
-    /// the merged record can and cannot discriminate, is on [`GroupAfterEffectsFn`].
+    /// The hook may still answer `None`, which is what a group without one does.
+    ///
+    /// A hook is installed per descent, so the place to plug one in is an overridden
+    /// [`make_group_parser`](crate::core::ParseDriver::make_group_parser): that gives a
+    /// language the hook at *every* group site, which is what makes an escape compose
+    /// outward through nested groups. The full contract, including what the merged record
+    /// can and cannot tell apart, is on [`GroupAfterEffectsFn`].
     pub fn new_with_after_effects(
         open: Token<L>,
         rule: Arc<GroupRule<L>>,
@@ -259,8 +264,8 @@ impl<'p, L: Lang> GroupParser<'p, L> {
         }
     }
 
-    /// Replace the interior's descent-state policy (default: inherit everywhere). See
-    /// [`ChildStateSpec`].
+    /// Replaces the descent-state policy the group's interior runs under; the default
+    /// inherits everywhere. See [`ChildStateSpec`].
     pub fn with_child_states(mut self, child_states: ChildStateSpec<'p, L>) -> Self {
         self.child_states = child_states;
         self

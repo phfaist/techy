@@ -524,7 +524,9 @@ pub struct EnvironmentBody<L: Lang> {
     /// than a symbol table. It is not kept anywhere once the invocation is parsed.
     ///
     /// A body that runs no content loop — a verbatim body, whose raw text can generate
-    /// no after-effects — reports the state it read the body under: nothing changed it.
+    /// no after-effects — reports the state the parser was entered with, unchanged. (Its
+    /// raw content is read under a state derived from that one, which is recorded on the
+    /// content node rather than here.)
     pub exit_state: Arc<ParsingState<L>>,
     /// The after-effects the body's nodes generated
     /// ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)): one delta,

@@ -137,10 +137,16 @@ pub fn parse_declared_arguments<L: Lang>(
 /// detection-site business: by the time `parse_argument` reports absent, any
 /// diagnostic is already recorded.
 ///
-/// The node's span runs from the trigger token through the last child (the children
-/// block is span-contiguous by construction: each region starts where the previous
-/// ended). Argument parsers return no after-effect deltas (an argument scopes no state
-/// beyond its own extent) and neither does this parser.
+/// The node's span starts where the trigger token starts and ends at the last staged
+/// child (the children block is span-contiguous by construction: each argument region
+/// starts where the previous one ended). With no argument provided there is no such
+/// child, and the node ends where the reader stands — just past the trigger's own
+/// syntactic post-space. Both are the standard rule of
+/// [`stage_invocation`](ParseContext::stage_invocation), which states the exact
+/// contract.
+///
+/// Argument parsers return no after-effect deltas (an argument scopes no state beyond
+/// its own extent) and neither does this parser.
 ///
 /// # Invocation syntax
 ///
@@ -203,8 +209,8 @@ where
 
         // The transcription-case staging shorthand: callable_type/name/spec and the
         // invocation-syntax payload transcribed from the bundle; `None` = the std
-        // span rule — trigger through the last staged child, the trigger's span
-        // alone for argument-less shapes (6.4 parity).
+        // span rule — trigger through the last staged child, and, with no child, up
+        // to where the reader stands (past the trigger's own syntactic post-space).
         let id = cx.stage_invocation(
             &self.invocation,
             ParsedArguments::from(arguments),
