@@ -1,25 +1,32 @@
-//! [`NodeTreeBuilder`]: the staging builder that produces frozen [`NodeTree`]s.
+//! Node construction: [`NodeTreeBuilder`], which stages nodes and freezes them into a
+//! finished [`NodeTree`].
+//!
+//! Nodes are staged bottom-up — a parent's child list is made of its children's
+//! [`BuildId`]s, so the children go in first — and [`finish`](NodeTreeBuilder::finish)
+//! turns everything reachable from a designated root into the flat tree.
 //!
 //! # Why staging, then flattening
 //!
-//! `NodeData.children: Range<u32>` requires **sibling-contiguous** storage. Pushing nodes
-//! into the arena directly during recursive descent cannot provide that: emission orders
-//! are subtree-contiguous, not sibling-contiguous (`G(c1(d1,d2), c2(e1))` emits
-//! `d1,d2,c1,e1,c2,G` post-order — `c1` and `c2` are not adjacent). The builder therefore
-//! stages nodes with explicit child lists and lays the tree out breadth-first in
-//! [`finish`](NodeTreeBuilder::finish): the root lands at index 0, and each node's
-//! children are appended as one contiguous block. O(n), one transient copy.
+//! `NodeData.children: Range<u32>` requires sibling-contiguous storage, and pushing
+//! nodes into the arena directly during recursive descent cannot provide that:
+//! emission order is subtree-contiguous, not sibling-contiguous (`G(c1(d1,d2), c2(e1))`
+//! emits `d1,d2,c1,e1,c2,G` post-order — `c1` and `c2` are not adjacent). The builder
+//! therefore stages nodes with explicit child lists and lays the tree out breadth-first
+//! in `finish()`: the root lands at index 0, and each node's children are appended as
+//! one contiguous block. O(n), one transient copy.
 //!
 //! # Region resolution (the two-phase record contract)
 //!
-//! For the same reason, `finish()` also **resolves** each callable's staged
-//! argument/slot regions ([`ChildRegion`](super::ChildRegion)) from staging coordinates
-//! (child offsets + [`ContentNodes`](super::ContentNodes) designations in `BuildId`
-//! terms) into global node-index ranges: those ranges name positions in the flattened
-//! layout, which exists only here. This is the accepted "honest cost" of letting
-//! parsers build `ParsedArguments`/`ParsedSlots` directly and stage them through the
-//! one `add()` — the record's phase is a runtime invariant, contained by
-//! resolving at exactly this one point, so a finished tree never holds staged regions.
+//! For the same reason, `finish()` also resolves each callable's staged argument and
+//! slot regions ([`ChildRegion`](super::ChildRegion)) from staging coordinates (child
+//! offsets plus [`ContentNodes`](super::ContentNodes) designations in `BuildId` terms)
+//! into global node-index ranges, which name positions in the flattened layout — a
+//! layout that exists only here.
+//!
+//! That is what lets parsers build `ParsedArguments`/`ParsedSlots` directly and stage
+//! them through the one `add()`. The price is that a record's phase is a runtime
+//! invariant rather than a type-level one; it stays contained because resolution
+//! happens at exactly this one point, so a finished tree never holds staged regions.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -35,9 +42,13 @@ use super::kind::{CallableData, NodeKind};
 use super::tree::{NodeData, NodeTree, TreeCore, TreeTag, NO_PARENT};
 use super::NodeExt;
 
-/// Id of a staged node within its builder. Deliberately distinct from
-/// [`NodeId`](super::NodeId): staging order is construction order, while final ids
-/// reflect the flattened breadth-first layout.
+/// The id of a node staged in a [`NodeTreeBuilder`], returned by
+/// [`add`](NodeTreeBuilder::add).
+///
+/// Build ids number nodes in staging order and mean nothing outside the builder that
+/// minted them. They are deliberately a different type from [`NodeId`](super::NodeId),
+/// which numbers the nodes of a finished tree in the breadth-first layout
+/// [`finish`](NodeTreeBuilder::finish) produces.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BuildId(u32);
 
@@ -58,52 +69,67 @@ struct Staged<L: Lang> {
     claimed: bool,
 }
 
-/// Builds a [`NodeTree`] bottom-up: children are staged before their parent (their
-/// `BuildId`s go into the parent's child list), and [`finish`](NodeTreeBuilder::finish)
-/// freezes everything reachable from the designated root into flat storage.
+/// Builds a [`NodeTree`]: stage every node with [`add`](NodeTreeBuilder::add), then
+/// freeze the result with [`finish`](NodeTreeBuilder::finish).
 ///
-/// This is the mutation boundary of the node system: trees are immutable, and this
-/// builder — driven by `ParserSession`, tests, and transforms — is the
-/// only place nodes are assembled.
+/// Trees are immutable, so this builder is the only place nodes are assembled. During a
+/// parse the [`ParserSession`](crate::core::ParserSession) drives it, and a construct
+/// parser reaches it through
+/// [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node)
+/// rather than directly — see the guide chapter on
+/// [custom construct parsers](crate::guide::construct_parsers). Transforms, extraction
+/// helpers, and tests use it directly.
 ///
-/// The builder is **hook-free and mode-free**: it runs no `Lang` hook and demands
-/// ready values — the one staging method, [`add`](NodeTreeBuilder::add), takes the
-/// already-minted [`NodeExt`] and the node's annotation
-/// ([`restage_node`](NodeTreeBuilder::restage_node) is not a
-/// second staging path: it clones an existing node's data and lowers onto `add`). During parsing the ext is
-/// minted automatically by the single staging entry point,
-/// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node); a
-/// transform author writes the explicit two-line recipe (call
-/// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext) — via
-/// [`staged_children`](NodeTreeBuilder::staged_children) — then `add`), or supplies a
-/// bespoke value (ext population is the staging caller's choice — the builder never
-/// runs hooks).
+/// # Order of construction
 ///
-/// # Contract (validated at the boundary — violations return [`NodeBuildError`])
+/// Nodes are staged bottom-up. `add` takes the [`BuildId`]s of the node's children, so
+/// every child must already be staged when its parent is added; `add` returns the new
+/// node's own `BuildId`. `finish` then takes the id of the node that is to become the
+/// root, and returns the tree.
 ///
-/// The staging input comes from argument/construct parser implementations —
-/// outer layers whose bugs must surface as errors, not
-/// panics. Every check runs in every build:
+/// Staged nodes not reachable from that root are dropped without complaint: a parser
+/// recovering from malformed input may abandon nodes it staged speculatively.
 ///
-/// - A child `BuildId` must already be staged (which also makes cycles unrepresentable).
-/// - Each staged node is used as a child at most once, and the root must not be anyone's
-///   child.
-/// - A `Callable` kind's `ParsedArguments`/`ParsedSlots` regions must be *staged* (never
-///   reuse records from a finished tree — ranges are only meaningful for the layout that
-///   minted them) and must **tile** the child list exactly, in order (argument regions,
-///   then slot regions, no gaps — every child accounted for: the partition
-///   invariant); content designations must fit their parent's child list, and a content
-///   parent must lie inside its own region's subtree (checked in
+/// The finished tree's node order is not the staging order — `finish` lays the nodes
+/// out breadth-first, and that is also where each callable's argument and slot regions
+/// are resolved into node-index ranges.
+///
+/// # What the builder does not do
+///
+/// It runs no hook and has no modes; `add` demands ready values, namely the
+/// already-minted [`NodeExt`] and the node's annotation. Parse staging mints the ext
+/// automatically inside
+/// [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node). A
+/// transform author mints it explicitly — call
+/// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) with the view
+/// [`staged_children`](NodeTreeBuilder::staged_children) returns, then `add` — or
+/// supplies a value of their own. [`restage_node`](NodeTreeBuilder::restage_node) is
+/// not a second staging path: it clones an existing node's data and calls `add`.
+///
+/// # Contract
+///
+/// Staged input comes from argument and construct parser implementations, whose bugs
+/// must surface as errors rather than panics, so every rule below is checked on every
+/// call, in every build, and a violation is returned as a [`NodeBuildError`]:
+///
+/// - A child `BuildId` must already be staged in this builder (which also makes cycles
+///   unrepresentable), each staged node may be used as a child at most once, and the
+///   root must not be anyone's child.
+/// - A `Callable`'s [`ParsedArguments`](super::ParsedArguments) and
+///   [`ParsedSlots`](super::ParsedSlots) regions must still be *staged* — records read
+///   back from a finished tree may not be reused, because their ranges mean something
+///   only for the layout that minted them — and they must tile the child list exactly,
+///   in order: one region per provided argument, then one per slot, with no gap and no
+///   child left over.
+/// - A content designation must fit the child list it points into, and a content parent
+///   must lie inside its own region's subtree (checked in
 ///   [`finish`](NodeTreeBuilder::finish), where the layout exists).
-/// - The `TextContent` invariant: `Spanned` ranges must lie inside the node's own source
-///   content, on `char` boundaries.
+/// - A `Spanned` text payload must be a valid range of the node's own source content,
+///   on `char` boundaries.
 ///
-/// A builder whose `add` returned an `Err` is **poisoned**: children claimed by the
-/// failed call may stay claimed, so the build must be abandoned — the error reports an
+/// A builder whose `add` returned an `Err` is **poisoned**: children the failed call
+/// already claimed stay claimed, so the build must be abandoned. The error reports an
 /// implementation bug to fix, not a condition to recover from.
-///
-/// Staged nodes unreachable from the root are silently dropped: parsers may abandon
-/// speculatively built nodes (tolerant-parsing recovery paths).
 pub struct NodeTreeBuilder<L: Lang, A = ()> {
     staged: Vec<Staged<L>>,
     /// The staged nodes' annotations, parallel to `staged` (kept out of `Staged` so
@@ -119,26 +145,39 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
 }
 
 impl<L: Lang, A> NodeTreeBuilder<L, A> {
-    /// Stage a node — **the** staging method (there is exactly one). Positional, in
-    /// the fixed order *identity → provenance → context → structure → lang-data →
-    /// consumer-data*:
+    /// Stages one node and returns its [`BuildId`].
+    ///
+    /// This is the builder's only staging method. The nodes named in `children` must
+    /// already be staged, and none of them may already be another node's child; the
+    /// node staged here can in turn serve as a child of a later `add`, or as the root
+    /// of [`finish`](NodeTreeBuilder::finish).
+    ///
+    /// The parameters are positional, in the fixed order *identity → provenance →
+    /// context → structure → language data → consumer data*:
     ///
     /// 1. `kind` — what the node structurally is;
-    /// 2. `span` — its provenance span;
-    /// 3. `parsing_state` — the state it was parsed (or synthesized) under;
-    /// 4. `children` — its structural children in order (for a `Callable`: the
-    ///    concatenation of one child region per provided argument, then one per
-    ///    slot — the `ParsedArguments`/`ParsedSlots` regions index this list);
-    /// 5. `ext` — the **already-minted** [`NodeExt`] (the builder never mints:
-    ///    parse staging mints via
-    ///    [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node);
-    ///    transforms call [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)
-    ///    explicitly or pass a bespoke value; restaged copies carry their old ext
-    ///    verbatim);
+    /// 2. `span` — the source range it was parsed (or synthesized) from;
+    /// 3. `parsing_state` — the state it was parsed under;
+    /// 4. `children` — its structural children in order. For a `Callable` this is the
+    ///    concatenation of one child region per provided argument, then one per slot;
+    ///    the [`ParsedArguments`](super::ParsedArguments) and
+    ///    [`ParsedSlots`](super::ParsedSlots) records index this list and must tile it
+    ///    exactly;
+    /// 5. `ext` — the **already-minted** [`NodeExt`]; the builder never mints one
+    ///    itself (parse staging mints through
+    ///    [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node),
+    ///    transforms call
+    ///    [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) explicitly or pass
+    ///    a value of their own, and restaged copies keep their old ext unchanged);
     /// 6. `annotation` — the node's consumer-side annotation (`()` on parse paths).
     ///
-    /// `Err` means the input violated the staging contract (see the type docs; the
-    /// builder is poisoned then).
+    /// # Errors
+    ///
+    /// Returns a [`NodeBuildError`] when the input violates the staging contract
+    /// documented on [`NodeTreeBuilder`]: an unstaged or already-claimed child, a
+    /// callable whose argument and slot regions do not tile its child list, a text
+    /// payload outside the node's own source, and so on. The builder is poisoned once
+    /// that happens — abandon it rather than staging further nodes.
     pub fn add(
         &mut self,
         kind: NodeKind<L>,
@@ -222,17 +261,19 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
         Ok(id)
     }
 
-    /// A read-only view of the nodes staged so far, keyed by [`BuildId`] (what
-    /// node-based stop predicates consume; the
-    /// [`ParseContext::staged_nodes`](crate::constructs::ParseContext::staged_nodes)
-    /// read view).
+    /// A read-only view of the nodes staged so far, keyed by [`BuildId`].
+    ///
+    /// Node-based stop predicates read this view; during a parse it is reached through
+    /// [`ParseContext::staged_nodes`](crate::core::constructs::ParseContext::staged_nodes).
     pub fn staged_nodes(&self) -> StagedNodes<'_, L> {
         StagedNodes { staged: &self.staged }
     }
 
     /// The descent-only view of `children` — the shape
-    /// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext) receives; the
-    /// transform-side minting recipe builds it here before calling the hook:
+    /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) receives.
+    ///
+    /// A transform that mints an ext itself builds the view here and passes it to the
+    /// hook, then stages the node:
     ///
     /// ```ignore
     /// let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children))?;
@@ -245,13 +286,23 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
         StagedChildren { arena: &self.staged, children }
     }
 
-    /// Freeze everything reachable from `root` into a flat [`NodeTree`] (breadth-first:
-    /// root at index 0, each node's children as one contiguous block), **resolving**
-    /// every callable's staged argument/slot regions into global node-index ranges
-    /// (the two-phase region contract on [`ChildRegion`](super::ChildRegion)).
-    /// Staged nodes not reachable from `root` are dropped. `Err`
-    /// means the staged input violated the contract's layout-time obligations (root
-    /// staged and unclaimed; content parents inside their region's subtree).
+    /// Freezes everything reachable from `root` into a flat [`NodeTree`], consuming
+    /// the builder.
+    ///
+    /// The nodes are laid out breadth-first — the root at index 0, each node's children
+    /// as one contiguous block — and every callable's staged argument and slot regions
+    /// are resolved into global node-index ranges of that layout (the two-phase record
+    /// contract on [`ChildRegion`](super::ChildRegion)). Staged nodes not reachable
+    /// from `root` are dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`NodeBuildError`] for the parts of the builder's contract that can
+    /// only be checked once the layout exists: `root` must itself be staged
+    /// ([`RootNotStaged`](NodeBuildError::RootNotStaged)) and must not be another
+    /// node's child ([`RootClaimed`](NodeBuildError::RootClaimed)), and every content
+    /// parent must be reachable from `root` and lie inside its own argument or slot
+    /// region's subtree.
     pub fn finish(self, root: BuildId) -> Result<NodeTree<L, A>, NodeBuildError> {
         const NONE: u32 = NO_PARENT; // safe sentinel: add() caps staging below u32::MAX
         let tree_tag = super::tree::next_tree_tag();
@@ -388,12 +439,15 @@ fn resolve_regions<L: Lang>(
     Ok(())
 }
 
-/// A read-only view over a [`NodeTreeBuilder`]'s staged nodes, keyed by [`BuildId`] —
-/// the "already staged" context handed to node-based stop predicates
-/// (obtained from [`NodeTreeBuilder::staged_nodes`] /
-/// [`ParseContext::staged_nodes`](crate::constructs::ParseContext::staged_nodes);
-/// borrows the builder, no mutation). Ext minting uses the narrower, descent-only
-/// [`StagedChildren`] view instead.
+/// A read-only view of every node staged in a [`NodeTreeBuilder`] so far, keyed by
+/// [`BuildId`].
+///
+/// Node-based stop predicates read their "already staged" context through it. Obtain
+/// one from [`NodeTreeBuilder::staged_nodes`] or, inside a parse, from
+/// [`ParseContext::staged_nodes`](crate::core::constructs::ParseContext::staged_nodes);
+/// it borrows the builder and cannot mutate it.
+///
+/// Ext minting receives the narrower, descent-only [`StagedChildren`] view instead.
 pub struct StagedNodes<'b, L: Lang> {
     staged: &'b [Staged<L>],
 }
@@ -415,8 +469,10 @@ impl<'b, L: Lang> StagedNodes<'b, L> {
     }
 }
 
-/// One staged node, viewed read-only (see [`StagedNodes`]). Accessors return
-/// `'b`-borrowed data (borrowing the builder, not this transient proxy), mirroring
+/// One staged node of a [`NodeTreeBuilder`], viewed read-only.
+///
+/// Obtained from [`StagedNodes::get`]. Its accessors return data borrowed from the
+/// builder rather than from this transient proxy, mirroring
 /// [`NodeRef`](super::NodeRef) over finished trees.
 pub struct StagedNodeView<'b, L: Lang> {
     id: BuildId,
@@ -455,28 +511,27 @@ impl<'b, L: Lang> StagedNodeView<'b, L> {
     }
 }
 
-/// The **subtree-deep, descent-only** view of one staged node's children — the
-/// `children` parameter of [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)
-/// (built via [`NodeTreeBuilder::staged_children`]).
+/// A subtree-deep view of one staged node's children — the `children` parameter of
+/// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext), built by
+/// [`NodeTreeBuilder::staged_children`].
 ///
-/// Descent-only: the view exposes exactly the given children, and each child view
-/// resolves *its* children recursively ([`StagedChildView::children`]) — argument
-/// content at grandchild depth is reachable — but no siblings, ancestors, or
-/// unrelated staged nodes are, and there is no [`BuildId`]-keyed lookup (that wider
-/// view is [`StagedNodes`], which stop predicates consume).
+/// The view descends and only descends: it exposes exactly the children it was built
+/// from, and each child view resolves *its* own children in turn
+/// ([`StagedChildView::children`]), so argument content at grandchild depth is
+/// reachable. Siblings, ancestors, and unrelated staged nodes are not, and there is no
+/// lookup by [`BuildId`] — the wider view is [`StagedNodes`].
 ///
-/// A child id that was never staged in this builder — a caller bug the subsequent
-/// [`add`](NodeTreeBuilder::add) diagnoses as
-/// [`ChildNotStaged`](NodeBuildError::ChildNotStaged) — reads as absent here:
-/// [`get`](StagedChildren::get) answers `None` and [`iter`](StagedChildren::iter)
-/// skips it (this view never panics).
+/// A child id that was never staged in this builder reads as absent rather than
+/// failing: [`get`](StagedChildren::get) answers `None` and
+/// [`iter`](StagedChildren::iter) skips it, and neither panics. The subsequent
+/// [`add`](NodeTreeBuilder::add) reports the same caller mistake as
+/// [`ChildNotStaged`](NodeBuildError::ChildNotStaged).
 ///
-/// The view **borrows the builder's staging storage, which the very next staging
-/// call grows** — nothing borrowed through it (child views and everything they
-/// hand out) may be held past the call that received the view; copy out what is
-/// needed. Safe Rust cannot violate this (the lifetimes forbid it); the rule is
-/// stated for embeddings that adapt the receiving hook across a boundary where
-/// lifetimes are erased.
+/// The view borrows the builder's staging storage, which the very next staging call
+/// grows, so nothing reached through it — child views and everything they return — may
+/// be kept past the call that received the view; copy out what is needed. Safe Rust
+/// cannot break this rule, since the lifetimes forbid it; it is stated for embeddings
+/// that adapt the receiving hook across a boundary where lifetimes are erased.
 pub struct StagedChildren<'b, L: Lang> {
     arena: &'b [Staged<L>],
     children: &'b [BuildId],
@@ -511,9 +566,11 @@ impl<'b, L: Lang> StagedChildren<'b, L> {
     }
 }
 
-/// One staged child, viewed read-only through [`StagedChildren`]. Accessors return
-/// `'b`-borrowed data (borrowing the builder, not this transient proxy);
-/// [`children`](StagedChildView::children) descends — and only descends.
+/// One staged child, viewed read-only through [`StagedChildren`].
+///
+/// Its accessors return data borrowed from the builder rather than from this transient
+/// proxy, and [`children`](StagedChildView::children) descends to that child's own
+/// children — and only descends.
 pub struct StagedChildView<'b, L: Lang> {
     arena: &'b [Staged<L>],
     staged: &'b Staged<L>,
@@ -662,36 +719,34 @@ fn check_spanned_contents<L: Lang>(
     }
 }
 
-/// Contract-violation error of [`NodeTreeBuilder`]: the staged input — produced by an
-/// argument/construct parser implementation or a transform — broke the builder's
-/// documented contract (see [`NodeTreeBuilder`]'s type docs).
+/// The error of [`NodeTreeBuilder`]: staged input broke the builder's contract.
 ///
-/// This reports an **implementation bug** in an extension, not a source-input
-/// condition: parse layers lift it into a `ParseError` that aborts even under tolerant
-/// recovery, and a builder that returned one is poisoned (the build must be
-/// abandoned) — with the one exception below.
+/// It reports an implementation bug in the code doing the staging — an argument or
+/// construct parser, or a transform — not a condition in the parsed document. A parse
+/// lifts it into a `ParseError` that aborts even under tolerant recovery, and the
+/// builder that returned it is poisoned, so the build must be abandoned. The contract
+/// itself, and the one exception to the poisoning rule, are documented on
+/// [`NodeTreeBuilder`] and below.
 ///
-/// One variant carries a reported failure rather than a violated contract:
-/// [`ExtMintFailed`](NodeBuildError::ExtMintFailed) is
-/// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)'s own error channel —
-/// minting is part of staging, and the hook also runs for consumer-built trees,
-/// where no parse-side error type exists. It comes out of the mint call itself,
-/// never out of [`add`](NodeTreeBuilder::add): no children have been claimed, the
-/// builder stays usable, and the poisoned-builder rule above does not apply to
-/// it. Inside a parse it aborts like every other value of this type, but the
-/// lift raises a [`HookFailed`](crate::error::HookFailed) condition — an
-/// operational failure in consumer-supplied hook code — instead of an
-/// implementation error.
+/// One variant reports a failure rather than a violated contract:
+/// [`ExtMintFailed`](NodeBuildError::ExtMintFailed) is the error channel of
+/// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext). Minting is part of
+/// staging, and the hook also runs for consumer-built trees, where no parse-side error
+/// type exists. That variant comes out of the mint call itself and never out of
+/// [`add`](NodeTreeBuilder::add), so no children have been claimed and the builder
+/// stays usable. Inside a parse it aborts like every other value of this type, but it
+/// is raised as a [`HookFailed`](crate::error::HookFailed) condition — an operational
+/// failure in consumer-supplied hook code — rather than an implementation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NodeBuildError {
     /// Staging would exceed the `u32` id space.
     TooManyNodes,
-    /// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext) reported a
-    /// failure while minting a node's ext. `detail` is the implementation's own
-    /// description of what went wrong; an implementation with an underlying error
-    /// chain renders it into the string (this variant stays plain data so the
-    /// enum keeps its derived `PartialEq`/`Eq`).
+    /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) reported a failure
+    /// while minting a node's ext. `detail` is the implementation's own description of
+    /// what went wrong; an implementation with an underlying error chain renders it
+    /// into that string, which keeps this variant plain data so the enum can derive
+    /// `PartialEq`/`Eq`.
     ExtMintFailed {
         /// The mint's description of the failure.
         detail: String,

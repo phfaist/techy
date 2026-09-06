@@ -1,17 +1,21 @@
-//! Tree validation: [`validate_tree`] checks the **all-trees law** — what every
-//! finished tree must satisfy regardless of origin — as a `Result`; the crate-internal
-//! `check_tree_invariants` (test builds only) is the panicking test-suite oracle for
-//! the stricter **span-tiling law** (byte accounting), layered on top of it.
+//! Tree validation: [`validate_tree`], the public checker of the invariants every
+//! finished tree satisfies, and the test oracle layered on top of it.
 //!
-//! The split is deliberate: legitimate transform output (spliced, reordered,
-//! synthesized nodes) breaks the span-tiling law's byte accounting *by design*, so the
-//! byte checks are **a test utility, not builder law** — a future construct that
-//! legitimately breaks byte accounting (e.g. a tolerant root recovery that *skips* a
-//! stray close, leaving an unrepresented byte) amends a test, not the architecture.
-//! The all-trees law is a subset of the span-tiling law. The span-tiling law applies
-//! to the parse trees of a language that obeys span tiling
-//! ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)); the trees of a
-//! language that does not satisfy the all-trees law only.
+//! [`validate_tree`] checks the **all-trees law** — what every finished tree must
+//! satisfy whatever its origin — and reports the first violation as a `Result`. In test
+//! builds only, the crate-internal `check_tree_invariants` additionally asserts the
+//! stricter **span-tiling law**, the byte accounting that holds for the parse trees of
+//! a language declaring
+//! [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING).
+//!
+//! The split is deliberate: legitimate transform output (spliced, reordered, or
+//! synthesized nodes) breaks the byte accounting *by design*, so the byte checks are
+//! **a test utility, not builder law** — a future construct that legitimately breaks
+//! byte accounting (say a tolerant root recovery that *skips* a stray close delimiter,
+//! leaving an unrepresented byte) amends a test, not the architecture.
+//!
+//! The all-trees law is a subset of the span-tiling law, and the trees of a language
+//! that does not declare span tiling owe the all-trees law alone.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -24,33 +28,41 @@ use crate::state::Lang;
 use super::kind::NodeKind;
 use super::tree::{NodeData, NodeId, NodeTree};
 
-/// Check a tree against the **all-trees law** — the invariants every finished
-/// [`NodeTree`] satisfies regardless of how it was built (parsed, restaged, spliced
-/// across trees, synthesized):
+/// Checks a tree against the **all-trees law**: the invariants every finished
+/// [`NodeTree`] satisfies however it was built — parsed, restaged, spliced together
+/// from several trees, or synthesized.
 ///
-/// 1. **Structural sanity.** Children ranges are in bounds and only ever *after*
-///    their node (the breadth-first layout); every non-root node is inside exactly
-///    one parent's children range (single parent + reachability); the root is
-///    nobody's child; `Chars` and `Comment` nodes are childless.
-/// 2. **Region tiling.** A `Callable`'s argument/slot regions are resolved and tile
-///    its children block exactly, in order (arguments before slots, independent of
-///    each slot's [`SlotRole`](super::SlotRole)); every content range lies within its
-///    content parent's children, and a content parent other than the callable itself
+/// Reach for it wherever trees of unknown provenance arrive: a framework accepting
+/// rebuilt or spliced trees, a binding for another language, a fuzzer. It never panics,
+/// and it is O(n) in the number of nodes.
+///
+/// A tree that passes guarantees:
+///
+/// 1. **Structural sanity.** Children ranges are in bounds and lie after their own node
+///    (the breadth-first layout); every non-root node is inside exactly one parent's
+///    children range, so each node has a single parent and is reachable from the root;
+///    the root is nobody's child; `Chars` and `Comment` nodes are childless.
+/// 2. **Region tiling.** A `Callable`'s argument and slot regions are resolved and tile
+///    its children block exactly, in order (arguments before slots, whatever each
+///    slot's [`SlotRole`](super::SlotRole)); every content range lies within its
+///    content parent's children; and a content parent other than the callable itself
 ///    lies inside its own region's subtree.
-/// 3. **`TextContent::Spanned` residency.** Every `Spanned` payload is a valid,
-///    char-boundary range of the node's own source — residency only, no positional
-///    pinning.
+/// 3. **Text payload residency.** Every span-backed payload
+///    ([`TextContent::Spanned`](crate::source::TextContent)) is a valid
+///    `char`-boundary range of the node's own source. Residency only: nothing is
+///    checked about *where* within the node such a payload sits.
 ///
-/// Deliberately **not** checked — the span-tiling law's byte accounting, which
-/// legitimate transform output breaks by design: no byte partition of content
-/// interiors, no children-share-parent's-source, no sibling source order, no
-/// positional payload pins (chars content = the node's span, delimiter
-/// prefix/suffix positions, …). A multi-source tree (attached `\input` content, a
-/// cross-tree splice) passes this function.
+/// Deliberately **not** checked: the span-tiling law's byte accounting, which
+/// legitimate transform output breaks by design — no byte partition of content
+/// interiors, no requirement that children share their parent's source or follow one
+/// another in source order, no positional pinning of payloads (chars content equal to
+/// the node's span, delimiters as prefix and suffix, and so on). A tree drawing on
+/// several sources (attached `\input` content, a cross-tree splice) passes.
 ///
-/// Returns the first violation found as an `Err` — this function **never panics**:
-/// it is the runtime validator for frameworks accepting rebuilt or spliced trees
-/// (FFI included), not a test assertion. O(n) in the number of nodes.
+/// # Errors
+///
+/// Returns the first violation found, as a [`TreeViolation`] naming the offending node
+/// and what is wrong with it.
 pub fn validate_tree<L: Lang, A>(tree: &NodeTree<L, A>) -> Result<(), TreeViolation> {
     let n = tree.node_count();
     if n == 0 {
@@ -289,8 +301,9 @@ fn validate_regions<L: Lang, A>(
 
 /// A violation of the all-trees law, reported by [`validate_tree`].
 ///
-/// Carries the offending node (where one is identifiable) and the violation detail —
-/// rich enough that a `Display` rendering serves directly as a panic or log message.
+/// It records the offending node, where one is identifiable, and what was violated. The
+/// [`Display`](core::fmt::Display) rendering is detailed enough to serve directly as a
+/// log or panic message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TreeViolation {
@@ -303,10 +316,11 @@ pub struct TreeViolation {
 }
 
 impl TreeViolation {
-    /// A violation value from its parts — for consumers of [`validate_tree`]
-    /// manufacturing violations to test their own handling code. (The struct is
-    /// `#[non_exhaustive]`: its fields read publicly, but it cannot be built with
-    /// a struct literal outside this crate.)
+    /// A violation value from its parts, for consumers of [`validate_tree`] that need
+    /// to manufacture violations to test their own handling code.
+    ///
+    /// The struct is `#[non_exhaustive]`: its fields are readable everywhere, but
+    /// outside this crate a value cannot be built with a struct literal.
     pub fn new(node: Option<NodeId>, kind: TreeViolationKind) -> TreeViolation {
         TreeViolation { node, kind }
     }
@@ -425,13 +439,12 @@ pub enum TreeViolationKind {
 }
 
 impl TreeViolationKind {
-    /// The variant's static name — the bare name without the variant's data
-    /// (`"Empty"`, `"ChildrenOutOfBounds"`, …), following
-    /// [`NodeKind::as_str`](super::NodeKind::as_str): for log labels and name-keyed
-    /// tables that must not fall out of step when a variant is added or renamed
-    /// (the enum is `#[non_exhaustive]`). The full detail is the
-    /// [`Display`](core::fmt::Display) rendering; the data is on the variants
-    /// themselves.
+    /// The variant's name without its data (`"Empty"`, `"ChildrenOutOfBounds"`, …),
+    /// for log labels and name-keyed tables.
+    ///
+    /// Follows [`NodeKind::as_str`](super::NodeKind::as_str). The full detail is the
+    /// [`Display`](core::fmt::Display) rendering of the violation; the offending values
+    /// are on the variants themselves.
     pub const fn as_str(&self) -> &'static str {
         match self {
             TreeViolationKind::Empty => "Empty",
@@ -560,7 +573,7 @@ impl core::error::Error for TreeViolation {}
 /// Check a finished tree against the **span-tiling law** — the all-trees law
 /// ([`validate_tree`]) plus the byte accounting that holds for the parse trees of a
 /// language that obeys span tiling
-/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) — panicking
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)) — panicking
 /// with a description of the first violation. The in-crate test oracle (assert every
 /// tree a parser produces); run it liberally, it is O(n).
 ///

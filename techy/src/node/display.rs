@@ -1,4 +1,4 @@
-//! [`display_tree`]: a human-oriented one-line-per-node subtree rendering.
+//! [`display_tree`]: a debugging rendering of a subtree, one line per node.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -11,11 +11,10 @@ use crate::state::Lang;
 
 use super::node_ref::NodeRef;
 
-/// Render the subtree under `node` for human eyes: one line per node — box-drawing
-/// guides, the node's [`summary`](NodeRef::summary), and its span as `line:column`
-/// positions (computed through each source's lazy
-/// [`LineIndex`](crate::source::LineIndex); spans in a source too large to index
-/// fall back to raw byte offsets):
+/// Renders the subtree under `node` as one line per node, for debugging.
+///
+/// Every line shows box-drawing guides, the node's [`summary`](NodeRef::summary),
+/// and the node's span as `line:column` positions:
 ///
 /// ```text
 /// list(3) @ 1:1..1:20
@@ -26,17 +25,26 @@ use super::node_ref::NodeRef;
 /// └── comment( note) @ 1:14..1:20
 /// ```
 ///
-/// On multi-source trees (attached `\input` content, cross-tree splices), a line
-/// whose node lives in a **different source than the previous line's** carries that
-/// source's name (`[source: …]` — the origin label when one is set, otherwise the
-/// provenance's reference/description); the initial source is not named.
+/// The positions are computed through each source's lazily built
+/// [`LineIndex`](crate::source::LineIndex); spans in a source too large to index fall
+/// back to raw byte offsets.
 ///
-/// The output is human-oriented and **not a stability contract** (the same caveat as
-/// [`summary`](NodeRef::summary)) — compare trees structurally where exactness
-/// matters beyond a test's lifetime. Annotations are ignored.
+/// On a tree drawing on several sources (attached `\input` content, nodes spliced in
+/// from another tree), a line whose node belongs to a **different source than the
+/// previous line's** names that source as `[source: …]` — the origin label when one is
+/// set, otherwise the provenance's reference or description. The initial source is not
+/// named.
 ///
-/// A free function, deliberately not a `NodeRef`/`NodeTree` method: display sugar
-/// stays out of the core read surface and is dead-code-eliminated when unused.
+/// The output describes the tree's structure; it is **not** a re-emission of the source
+/// text, and its exact shape is not a stability contract (the same caveat as
+/// [`summary`](NodeRef::summary)) — compare trees structurally where exactness must
+/// outlive a test. Annotations are ignored. To turn a tree back into source text, use
+/// the recomposition facility ([`recompose`](crate::recompose), with the preset's
+/// [`SourceRecomposer`](crate::latexlike::SourceRecomposer)).
+///
+/// This is deliberately a free function rather than a `NodeRef` or `NodeTree` method:
+/// the rendering stays out of the core read surface, and is dropped from a build that
+/// never calls it.
 pub fn display_tree<L: Lang, A>(node: NodeRef<'_, L, A>) -> String {
     let mut renderer = Renderer {
         out: String::new(),

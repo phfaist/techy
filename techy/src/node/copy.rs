@@ -1,16 +1,18 @@
-//! The level-0 restage primitive ([`NodeTreeBuilder::restage_node`]) — a single-node
-//! copy with a per-child replacement mapping — plus the crate-internal bulk subtree
-//! copy built on it (the machinery behind the [`extract`](crate::extract) helpers).
+//! Copying nodes into a builder: [`NodeTreeBuilder::restage_node`], the single-node
+//! copy with a per-child replacement mapping, plus the crate-internal bulk subtree copy
+//! built on it (which the [`extract`](crate::extract) helpers use).
 //!
-//! Restaging is *by value*: the new tree owns fresh node data (spans, states, specs,
-//! and ext payloads are `Arc`-shared or cloned), and the staged copies get **new ids**
-//! in the new layout. What makes this non-trivial is the two-phase region contract: a
-//! finished callable's `ParsedArguments`/`ParsedSlots` regions are *resolved* (global
-//! node-index ranges of the source tree), while [`NodeTreeBuilder::add`] requires
-//! *staged* records — so each region is translated back to staging coordinates (child
-//! offsets + [`ContentNodes`] designations in new-`BuildId` terms), stretched or
-//! shrunk per the replacement mapping, and the builder's `finish()` re-resolves them
-//! for the new layout.
+//! Restaging copies *by value*: the new tree owns fresh node data (spans, states,
+//! specs, and ext payloads are `Arc`-shared or cloned), and the copies get **new ids**
+//! in the new layout.
+//!
+//! What makes this non-trivial is the two-phase region contract. A finished callable's
+//! `ParsedArguments`/`ParsedSlots` regions are *resolved* — global node-index ranges of
+//! the source tree — while [`NodeTreeBuilder::add`] requires *staged* records. Each
+//! region is therefore translated back into staging coordinates (child offsets plus
+//! [`ContentNodes`] designations in new-`BuildId` terms), stretched or shrunk per the
+//! replacement mapping, and re-resolved for the new layout by the builder's
+//! `finish()`.
 
 use alloc::vec::Vec;
 
@@ -26,46 +28,50 @@ use super::tree::NodeId;
 use super::NodeBuildError;
 
 impl<L: Lang, A> NodeTreeBuilder<L, A> {
-    /// Stage a copy of one node — the **level-0 restage primitive**: `node`'s kind,
-    /// span, parsing state, and ext are cloned, its children are replaced per the
-    /// given mapping, and a `Callable`'s argument/slot region records are translated
-    /// into the staging coordinates of the replacement layout.
+    /// Stages a copy of one node, with its children replaced per the given mapping.
+    ///
+    /// The node's kind, span, parsing state, and ext are cloned, and a `Callable`'s
+    /// argument and slot region records are translated into the staging coordinates of
+    /// the replacement layout. This is the primitive every larger copy is built from,
+    /// including the tree-to-tree driver of [`transform`](crate::transform).
     ///
     /// `replacements` maps the node's children **positionally**: entry `i` holds the
-    /// already-staged ids that replace child `i` — empty (the child is dropped), one,
-    /// or several. The new node's child list is the concatenation of all entries in
-    /// order, and each argument/slot region shrinks or grows with the entries of the
-    /// children it spanned. A region all of whose children are dropped restages as
-    /// provided-with-an-empty-region — dropping every node of an argument does not
-    /// flip the argument to absent.
+    /// already-staged ids that replace child `i` — none of them (the child is dropped),
+    /// one, or several. The new node's child list is the concatenation of all entries
+    /// in order, and each argument or slot region shrinks or grows with the entries of
+    /// the children it spanned. A region all of whose children are dropped is restaged
+    /// as provided with an empty region: dropping every node of an argument does not
+    /// turn the argument into an absent one.
     ///
     /// `content_parents` translates the content-parent node of every
-    /// [`ContentNodes::InChildrenOf`] content designation: it receives the old
-    /// tree's [`NodeId`] and answers the staged id replacing that node, or `None`
-    /// if it has no staged counterpart (an error, see below). The designation's
-    /// child-offset range is carried over verbatim relative to the mapped parent —
-    /// [`add`](NodeTreeBuilder::add)/[`finish`](NodeTreeBuilder::finish) re-validate
-    /// it like any staged record. Nodes without such designations never consult the
-    /// mapping (`|_| None` is fine for them).
+    /// [`ContentNodes::InChildrenOf`] designation. It receives the old tree's
+    /// [`NodeId`] and answers the staged id that replaces that node, or `None` if it
+    /// has no staged counterpart (an error — see below). The designation's child-offset
+    /// range is carried over verbatim relative to the mapped parent, and
+    /// [`add`](NodeTreeBuilder::add) and [`finish`](NodeTreeBuilder::finish) re-check
+    /// it like any staged record. A node without such designations never consults the
+    /// mapping, so `|_| None` will do for it.
     ///
-    /// **Cross-tree by contract**: `node` may come from *any* tree — this method is
-    /// the supported route for assembling a new tree out of pieces of several
-    /// others, and a same-tree assertion may never be added here. The node's ext is
-    /// **cloned verbatim, never re-minted**: restaged copies carry frozen parse
-    /// facts ([`Lang::make_node_ext`](crate::state::Lang::make_node_ext) runs at
-    /// parse staging, and where a transform author calls it explicitly — nowhere
-    /// else). `annotation` becomes the staged node's annotation, supplied by the
-    /// caller exactly as in [`add`](NodeTreeBuilder::add).
+    /// `node` may come from **any** tree, deliberately: this method is the supported
+    /// route for assembling a new tree out of pieces of several others, and no
+    /// same-tree check will ever be added here.
+    ///
+    /// The node's ext is cloned verbatim and never re-minted, so a restaged copy keeps
+    /// the parse facts recorded when it was first staged
+    /// ([`Lang::make_node_ext`](crate::core::Lang::make_node_ext) runs at parse
+    /// staging, and wherever a transform author calls it explicitly — nowhere else).
+    /// `annotation` becomes the staged node's annotation, supplied by the caller
+    /// exactly as in [`add`](NodeTreeBuilder::add).
     ///
     /// # Errors
     ///
     /// [`ReplacementsLengthMismatch`](NodeBuildError::ReplacementsLengthMismatch)
-    /// unless `replacements` has exactly one entry per child of `node`;
+    /// unless `replacements` has exactly one entry per child of `node`, and
     /// [`ContentParentUnmapped`](NodeBuildError::ContentParentUnmapped) when
-    /// `content_parents` answers `None` for a content parent the records need;
-    /// plus every [`add`](NodeTreeBuilder::add) contract error (the replacement ids
-    /// must be staged and unclaimed, and so on). As with `add`, an `Err` poisons
-    /// the builder.
+    /// `content_parents` answers `None` for a content parent the records need — plus
+    /// every contract error of [`add`](NodeTreeBuilder::add), since the replacement
+    /// ids must be staged and unclaimed like any other child. As with `add`, an `Err`
+    /// poisons the builder.
     pub fn restage_node<AOld>(
         &mut self,
         node: NodeRef<'_, L, AOld>,
@@ -221,14 +227,17 @@ fn restage_region<'a, L: Lang, AOld>(
 }
 
 /// Stage a copy of `node` and its whole subtree into `builder`, returning the copy's
-/// [`BuildId`] — the degenerate recursion over
-/// [`restage_node`](NodeTreeBuilder::restage_node): children are staged bottom-up in
-/// source order, each as the singleton replacement of itself, with the accumulated
-/// old-id map as the content-parent mapping. Copied nodes carry their exts
-/// **verbatim** (frozen parse facts — `make_node_ext` never re-runs on copies);
-/// `annotate` supplies each copy's annotation from the node it was copied from
-/// (the extract producers route their annotation-mint callback through here;
-/// `&mut |_| ()` for annotation-free trees).
+/// [`BuildId`].
+///
+/// This is the plain recursion over [`restage_node`](NodeTreeBuilder::restage_node):
+/// children are staged bottom-up in source order, each as the single replacement of
+/// itself, with the accumulated old-id map serving as the content-parent mapping.
+/// Copied nodes keep their exts unchanged, as everywhere else — `make_node_ext` never
+/// re-runs on a copy.
+///
+/// `annotate` supplies each copy's annotation from the node it was copied from (the
+/// extract producers pass their annotation-minting callback through here; `&mut |_| ()`
+/// for annotation-free trees).
 pub(crate) fn copy_subtree_into<'t, L: Lang, AOld, B>(
     builder: &mut NodeTreeBuilder<L, B>,
     node: NodeRef<'t, L, AOld>,
