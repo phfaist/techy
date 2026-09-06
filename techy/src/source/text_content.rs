@@ -72,8 +72,14 @@ impl TextContent {
     /// [`Owned`](TextContent::Owned) value.
     ///
     /// Use this before detaching a payload from the source its span points into. The
-    /// `source` argument and the panic condition are those of
-    /// [`resolve`](TextContent::resolve).
+    /// `source` argument is the one [`resolve`](TextContent::resolve) takes: the
+    /// carrying node's own source.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a `Spanned` range is out of bounds for `source`'s content, or if
+    /// either end falls inside a multi-byte character — the same contract, and the
+    /// same broken invariant, as [`resolve`](TextContent::resolve).
     pub fn materialized<O: SourceOrigin>(&self, source: &Source<O>) -> TextContent {
         match self {
             TextContent::Spanned(span) => {

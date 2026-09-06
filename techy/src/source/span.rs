@@ -22,7 +22,9 @@ use core::ops::Range;
 ///
 /// Every span satisfies `start <= end`. [`new`](Span::new) asserts it, and the only
 /// in-place mutation, [`extend_to`](Span::extend_to), can move the end forward but not
-/// backward.
+/// backward. The `From<Range<usize>>` conversion goes through `new`, so
+/// `Span::from(7..3)` — and `7..3` passed to any argument taking an
+/// `impl Into<Span>` — panics on the same assert.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// Byte offset of the first byte of the range.
@@ -38,7 +40,9 @@ impl Span {
     ///
     /// Panics if `start > end`. Keeping the two ends ordered is the caller's contract,
     /// and it is checked in all builds — one of the crate's few deliberate panics (see
-    /// the [list of panicking items](crate::guide::panics)).
+    /// the [list of panicking items](crate::guide::panics)). The
+    /// `From<Range<usize>>` conversion delegates here and panics on the same
+    /// condition.
     #[inline]
     pub fn new(start: usize, end: usize) -> Span {
         assert!(start <= end, "span start {} is after end {}", start, end);
@@ -152,6 +156,14 @@ impl Span {
 }
 
 impl From<Range<usize>> for Span {
+    /// Creates the span covering `range`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is inverted (`range.start > range.end`): the conversion
+    /// delegates to [`Span::new`] and inherits its precondition, so `Span::from(7..3)`
+    /// panics, in all builds (see the [list of panicking
+    /// items](crate::guide::panics)).
     fn from(range: Range<usize>) -> Span {
         Span::new(range.start, range.end)
     }

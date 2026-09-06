@@ -45,6 +45,12 @@ use super::node_ref::NodeRef;
 /// This is deliberately a free function rather than a `NodeRef` or `NodeTree` method:
 /// the rendering stays out of the core read surface, and is dropped from a build that
 /// never calls it.
+///
+/// # Panics
+///
+/// Each line renders a node's [`summary`](NodeRef::summary), so this panics on a
+/// broken tree invariant, exactly as `summary` does: a payload recorded as a span must
+/// be a valid `char`-boundary range of its own node's source.
 pub fn display_tree<L: Lang, A>(node: NodeRef<'_, L, A>) -> String {
     let mut renderer = Renderer {
         out: String::new(),

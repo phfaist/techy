@@ -454,6 +454,15 @@ impl<L: Lang, A> NodeTree<L, A> {
     /// `self` is untouched, as trees are immutable. Spans, states, and specs stay
     /// `Arc`-shared, and the copy is **layout-preserving**: it keeps this tree's
     /// [`TreeTag`], so ids remain interchangeable, and it clones the annotations.
+    ///
+    /// # Panics
+    ///
+    /// Every span-backed payload is resolved against its own node's source, so this
+    /// panics if any of those recorded ranges is not a valid `char`-boundary range of
+    /// that source. That is a broken tree invariant, which no parsed input can cause
+    /// and which [`validate_tree`](super::validate_tree) detects; the panic is
+    /// [`TextContent::resolve`](crate::source::TextContent::resolve)'s (see the [list
+    /// of panicking items](crate::guide::panics)).
     pub fn materialize(&self) -> NodeTree<L, A>
     where
         A: Clone,

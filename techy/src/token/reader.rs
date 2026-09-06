@@ -568,6 +568,13 @@ pub trait TokenReader<'s, L: Lang> {
 
     /// The source span delimited by two edges of `tok`, in either argument order (see
     /// contract clause 6).
+    ///
+    /// # Panics
+    ///
+    /// Passing a token this reader did not produce violates contract clause 4 above,
+    /// and an implementation is free to panic on it. [`StdTokenReader`] does: it hands
+    /// the token's offsets to [`SourceSpan::new`], whose precondition assert then fires
+    /// (see the [list of panicking items](crate::guide::panics)).
     fn source_span_between(
         &self,
         tok: &Token<L>,

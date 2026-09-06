@@ -166,6 +166,11 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// porting the test suite — can reproduce it verbatim. Where exactness has to
     /// outlast a test, compare trees structurally instead, through kinds, spans, and
     /// accessors.
+    ///
+    /// # Panics
+    ///
+    /// The rendering resolves the node's span-backed text, so it panics on a broken
+    /// tree invariant, exactly as [`chars`](NodeRef::chars) does.
     pub fn summary(&self) -> String {
         if let Some(text) = self.chars() {
             format!("chars({text})")
@@ -251,6 +256,15 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
 
     /// A `Chars` node's logical text — its recorded content, resolved against the
     /// node's own source.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node records its content as a span that is not a valid
+    /// `char`-boundary range of the node's own source. That is a broken tree
+    /// invariant, which no parsed input can cause and which
+    /// [`validate_tree`](super::validate_tree) detects; the panic is
+    /// [`TextContent::resolve`](crate::source::TextContent::resolve)'s (see the [list
+    /// of panicking items](crate::guide::panics)).
     pub fn chars(&self) -> Option<&'t str> {
         match self.kind() {
             NodeKind::Chars { content, .. } => Some(content.resolve(self.source())),
@@ -287,6 +301,12 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
 
     /// A `Group` node's delimiters, as logical text: the opening one and the closing
     /// one. The closing delimiter is empty when the close was never found.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a broken tree invariant, exactly as [`chars`](NodeRef::chars) does:
+    /// a delimiter recorded as a span must be a valid `char`-boundary range of the
+    /// node's own source.
     pub fn group_delimiters(&self) -> Option<(&'t str, &'t str)> {
         self.group().map(|data| {
             (data.open.resolve(self.source()), data.close.resolve(self.source()))
