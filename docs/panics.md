@@ -7,15 +7,18 @@ families below; those panics guard against programming errors in calling code �
 document content can trigger them.
 
 **Precondition asserts.** Four span and position functions, the seven scan helpers of
-[`core::token`](crate::core::token), and the seven span-taking
-[`StdToken`](crate::core::token::StdToken) constructors document a precondition on their
+[`core::token`](crate::core::token), the seven span-taking
+[`StdToken`](crate::core::token::StdToken) constructors, and the five location methods of
+[`TokenReader`](crate::core::token::TokenReader) document a precondition on their
 arguments and panic, in all builds, when calling code violates it. These functions are
 either deliberately infallible (there is no error channel to prefer), or they report
 about the scanned content through their own error channel, which a mistake in calling
 code does not belong in; the checks are cheap, and the immediate panic keeps invalid
 values unrepresentable instead of letting them cause misbehavior far from the mistake:
 
-- [`Span::new`](crate::source::Span::new) — requires `start <= end`;
+- [`Span::new`](crate::source::Span::new) — requires `start <= end`; the
+  `From<Range<usize>>` conversion for [`Span`](crate::source::Span) delegates here, so
+  `Span::from(7..3)` panics on the same assert;
 - [`Span::extend_to`](crate::source::Span::extend_to) — requires the new end not to
   precede the span's current end;
 - [`SourceSpan::new`](crate::source::SourceSpan::new) — requires the range to lie within
@@ -43,7 +46,19 @@ values unrepresentable instead of letting them cause misbehavior far from the mi
   [`scan_comment`](crate::core::token::scan_comment) and
   [`scan_specials_trigger`](crate::core::token::scan_specials_trigger) — each requires
   `pos` to lie within the content, on a `char` boundary; `scan_command` additionally
-  requires `rule.escape_char` to stand at `pos`.
+  requires `rule.escape_char` to stand at `pos`;
+- the location methods of [`TokenReader`](crate::core::token::TokenReader) —
+  [`source_span_between`](crate::core::token::TokenReader::source_span_between),
+  [`source_span_of`](crate::core::token::TokenReader::source_span_of),
+  [`source_position_at`](crate::core::token::TokenReader::source_position_at),
+  [`source_span_within`](crate::core::token::TokenReader::source_span_within) and
+  [`source_span_describing`](crate::core::token::TokenReader::source_span_describing) —
+  each requires the token or the stream position it is given to be one this reader
+  produced. An implementation is free to panic on a foreign one, and
+  [`StdTokenReader`](crate::core::token::StdTokenReader) does: it passes the stored
+  offsets straight to `SourceSpan::new` / `SourcePos::new`, whose asserts then fire.
+  [`ParseContext::here`](crate::core::constructs::ParseContext::here) ends in
+  `source_position_at` and inherits this.
 
 **Indexing-style accessors.** Accessors that follow the standard library's
 slice-indexing convention: the panicking form is for ids, spans, and regions
@@ -62,14 +77,17 @@ the non-panicking companion:
   range invalid for the given source's content (a broken invariant, which no
   parsed input can cause; every operation that resolves or materializes a tree's
   span-backed text — among others
+  [`TextContent::materialized`](crate::source::TextContent::materialized),
   [`NodeRef::chars`](crate::core::node::NodeRef::chars),
   [`NodeRef::group_delimiters`](crate::core::node::NodeRef::group_delimiters),
   [`NodeRef::summary`](crate::core::node::NodeRef::summary),
   [`NodeTree::materialize`](crate::core::node::NodeTree::materialize),
+  [`display_tree`](crate::core::node::display_tree), the content-reading helpers of
+  [`extract`](crate::extract),
   [`core_source_instruction`](crate::recompose::core_source_instruction), the preset's
   source recomposer, and the tree serialization of [`serialize`](crate::serialize) —
   reaches this panic on a consumer-built tree that breaks the invariant, and on no other
-  input);
+  input; [`validate_tree`](crate::core::node::validate_tree) is the check for it);
 - [`ChildRegion::children`](crate::core::node::ChildRegion::children),
   [`ChildRegion::content_range`](crate::core::node::ChildRegion::content_range), and
   [`ChildRegion::content_parent`](crate::core::node::ChildRegion::content_parent) —

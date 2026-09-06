@@ -1,14 +1,20 @@
-//! Read-only structural traversal: the **walk engine** shared with
-//! [`recompose`](crate::recompose).
+//! Read-only traversal of a parsed node tree.
 //!
-//! [`TreeWalker`] drives a [`NodeVisitor`] over a subtree in **document order**
-//! (preorder: [`enter`](NodeVisitor::enter) before the children,
-//! [`exit`](NodeVisitor::exit) after them), with structural control per node
-//! ([`VisitFlow`]): descend, skip the children, or stop the whole walk. This is
-//! the structured sibling of the flat iterators
-//! ([`descendants`](crate::core::node::NodeRef::descendants) yields the same
-//! nodes but without nesting structure — legitimate for structure-free
-//! queries).
+//! [`TreeWalker`] drives a [`NodeVisitor`] over a subtree in document order:
+//! [`enter`](NodeVisitor::enter) is called for a node before its children and
+//! [`exit`](NodeVisitor::exit) after them, and the [`VisitFlow`] value returned
+//! from `enter` decides what the walk does next — descend into the children,
+//! skip them, or stop the whole walk.
+//!
+//! Use a walk when a pass needs to know how nodes are nested, or needs a hook
+//! that fires after a node's children. When it needs neither, the flat iterator
+//! [`descendants`](crate::core::node::NodeRef::descendants) yields the same
+//! nodes without the enter/exit pairing and is simpler.
+//!
+//! The same traversal engine also drives [`recompose`](crate::recompose), which
+//! combines a value out of the nodes it visits instead of only reading them.
+//! The guide compares the tree consumers side by side:
+//! [Traversing](crate::guide::node_trees#traversing-techyvisit).
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -42,46 +48,47 @@
 //! );
 //! ```
 //!
-//! # The three-channel state discipline
+//! # Every node is visited the same way
 //!
-//! [`VisitContext`] carries **engine bookkeeping only** — depth and tree
-//! access — and deliberately no user state. Consumer state lives in exactly
-//! three places, none of them the context:
-//!
-//! - **run-spanning state** — the visitor's (or recomposer's) own `&mut self`
-//!   fields;
-//! - **fold accumulation** — the driver's locals and the call stack (the
-//!   recompose fold composes values, [`recompose`](crate::recompose));
-//! - **downward context** — the argument-threaded state `S` of a
-//!   [`Recomposer`](crate::recompose::Recomposer).
-//!
-//! There is no fourth channel: a walk that needs *scoped* (downward) state IS
-//! a [`Recomposer`](crate::recompose::Recomposer) with `Piece = ()`.
-//!
-//! # The walk is role-blind
-//!
-//! The walk visits **everything** — children in
+//! The walk visits every child of every node, and does not look at the role a
+//! node plays in its parent: children in
 //! [`Attached`](crate::core::node::SlotRole::Attached) and
-//! [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions included, like
-//! any other child (reads show reality; `Hidden` is never read-invisibility).
-//! This is a deliberate contrast to recompose's
-//! [`Concat`](crate::recompose::Recompose::Concat) default scope, which skips
-//! both roles: the read/compose asymmetry is part of the slot-role contract
-//! ([`SlotRole`]), not an accident of implementation.
+//! [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions are entered
+//! like any other child. `Hidden` marks a node that recomposition leaves out by
+//! default, not one that reading passes cannot see (see [`SlotRole`]).
 //!
-//! # The walk is depth-guarded
+//! Recomposition differs here on purpose: the default scope of
+//! [`Concat`](crate::recompose::Recompose::Concat) skips children in both of
+//! those roles.
 //!
-//! The walk recurses once per tree nesting level (at a small, constant stack
-//! cost per level), and every level passes the run's descent guard
-//! ([`StdDescentGuard`], configured per run with
-//! [`with_descent_guard_init`](TreeWalker::with_descent_guard_init)): a tree
-//! nested too deeply for the configured limit — hand-built through
-//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), say, or walked on a
-//! thread with a smaller stack than the parse's — is refused with
-//! [`WalkError::DescentLimitExceeded`] instead of exhausting the thread's
-//! stack. The guard's early warning (emitted under the unconfigured default at
-//! half the stack budget) reaches the visitor's
-//! [`observe_descent_warning`](NodeVisitor::observe_descent_warning) hook.
+//! # Nesting depth is capped
+//!
+//! The walk recurses once per level of nesting, so a deeply nested tree would
+//! otherwise be able to exhaust the thread's stack. Every level therefore asks
+//! the run's descent guard ([`StdDescentGuard`]) for permission first, and a
+//! tree nested deeper than the limit allows makes
+//! [`walk`](TreeWalker::walk) return
+//! [`WalkError::DescentLimitExceeded`] rather than crash. Set the limit for a
+//! run with
+//! [`with_descent_guard_init`](TreeWalker::with_descent_guard_init).
+//!
+//! The limit is reached by trees the parser itself would have refused: one
+//! built by hand through
+//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or one parsed on a
+//! thread with more stack than the thread that walks it. Shortly before
+//! refusing, the guard emits a warning, which the walk reports to the visitor's
+//! [`observe_descent_warning`](NodeVisitor::observe_descent_warning) method.
+//!
+//! # Where a visitor keeps its own state
+//!
+//! [`VisitContext`] gives a visitor the walk's own bookkeeping — the current
+//! depth and the tree — and no state of the consumer's. State that spans the
+//! run belongs in the visitor's own `&mut self` fields, which stay owned by the
+//! caller and can be read back after [`walk`](TreeWalker::walk) returns.
+//!
+//! A pass that instead needs state handed *down* to the nodes below a given
+//! node is a [`Recomposer`](crate::recompose::Recomposer) with `Piece = ()`:
+//! its state parameter `S` is threaded down the tree that way.
 
 use core::fmt;
 use core::ops::ControlFlow;
@@ -93,66 +100,78 @@ use crate::engine::{DescentGuard, DescentWarning, StdDescentGuard, StdDescentGua
 use crate::node::{NodeKind, NodeRef, NodeTree, SlotRole};
 use crate::state::Lang;
 
-/// The visitor's verdict about one entered node (returned from
-/// [`NodeVisitor::enter`]).
+/// What a walk does after entering one node.
+///
+/// [`NodeVisitor::enter`] returns one of these values for every node it is
+/// given, and [`TreeWalker`] continues accordingly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisitFlow {
-    /// Continue into this node's children (then [`exit`](NodeVisitor::exit)
-    /// fires after them).
+    /// Visit this node's children next, then call
+    /// [`exit`](NodeVisitor::exit) for this node, then continue with its
+    /// next sibling.
     Descend,
-    /// Do not visit this node's children; the walk continues with its
-    /// siblings ([`exit`](NodeVisitor::exit) still fires for the node itself).
+    /// Leave this node's children unvisited: call
+    /// [`exit`](NodeVisitor::exit) for this node right away, then continue
+    /// with its next sibling.
     SkipChildren,
-    /// Abort the **whole walk** immediately: no further
-    /// [`enter`](NodeVisitor::enter) or [`exit`](NodeVisitor::exit) calls
-    /// happen, the pending ancestors' exits included.
+    /// End the whole walk immediately. No further
+    /// [`enter`](NodeVisitor::enter) or [`exit`](NodeVisitor::exit) call
+    /// happens, not even [`exit`](NodeVisitor::exit) for this node or for the
+    /// ancestors already entered above it, and
+    /// [`walk`](TreeWalker::walk) returns `Ok(())`.
     Stop,
 }
 
-/// A structural visitor for [`TreeWalker`]: [`enter`](NodeVisitor::enter) is invoked
-/// once per visited node in document order and steers the traversal via
-/// [`VisitFlow`]; the defaulted [`exit`](NodeVisitor::exit) fires after the
-/// node's (possibly skipped) children — the "closing bracket" hook that flat
-/// iteration cannot provide.
+/// The callback side of a walk: what [`TreeWalker`] calls for each node.
 ///
-/// For enter-only passes, any
-/// `FnMut(NodeRef<'_, L, A>, &VisitContext<'_, L, A>) -> VisitFlow` closure is
-/// a visitor via the blanket impl. One inference note: an **inline closure
-/// must annotate its two parameter types** (the [module](self) doctest models
-/// the spelling; a fully unannotated `|node, cx|` does not infer against the
-/// generic visitor parameter), while a fn item needs no annotations.
+/// [`enter`](NodeVisitor::enter) is called once per visited node, in document
+/// order, and its [`VisitFlow`] return value decides what the walk does next.
+/// The defaulted [`exit`](NodeVisitor::exit) is called after the node's
+/// children (or right after `enter`, when the children were skipped); it is the
+/// hook that flat iteration over
+/// [`descendants`](crate::core::node::NodeRef::descendants) cannot offer.
 ///
-/// **Visitors are infallible** by design: a visitor that discovers an error
-/// condition records it in its own `&mut self` state and returns
-/// [`VisitFlow::Stop`] — the run itself fails only through the descent guard's
-/// refusal ([`WalkError`]). Deliberately **no
-/// `Send`/`Sync` bounds** (the same argument as
-/// [`RestageVisitor`](crate::transform::RestageVisitor): the walk runs
-/// synchronously on the calling thread — a bound would demand without buying).
+/// A pass that only needs `enter` can pass a closure instead of implementing
+/// this trait: every
+/// `FnMut(NodeRef<'_, L, A>, &VisitContext<'_, L, A>) -> VisitFlow` is a
+/// visitor. An inline closure has to annotate both of its parameter types — a
+/// bare `|node, cx|` does not infer against the generic visitor parameter — as
+/// the [module-level example](self) shows; a named function needs no
+/// annotations.
+///
+/// A visitor cannot fail: there is no error return. A visitor that finds a
+/// problem records it in its own `&mut self` fields and returns
+/// [`VisitFlow::Stop`]; the only way a run itself fails is the descent guard
+/// refusing to go deeper ([`WalkError`]). Visitors need not be `Send` or
+/// `Sync`, because a walk runs on the calling thread.
 pub trait NodeVisitor<L: Lang, A> {
     /// Visit `node` (before its children) and steer the walk.
     fn enter(&mut self, node: NodeRef<'_, L, A>, cx: &VisitContext<'_, L, A>) -> VisitFlow;
 
-    /// Called after `node`'s children (or right after
-    /// [`enter`](NodeVisitor::enter), for
-    /// [`SkipChildren`](VisitFlow::SkipChildren)); never called once the walk
-    /// was [`Stop`](VisitFlow::Stop)ped. Defaults to a no-op.
+    /// Visit `node` again, after its children.
+    ///
+    /// This is called right after [`enter`](NodeVisitor::enter) when that
+    /// returned [`SkipChildren`](VisitFlow::SkipChildren), and not at all once
+    /// a visitor has returned [`Stop`](VisitFlow::Stop). Defaults to doing
+    /// nothing.
     fn exit(&mut self, node: NodeRef<'_, L, A>, cx: &VisitContext<'_, L, A>) {
         let _ = (node, cx);
     }
 
-    /// Notification: the walk's descent guard granted a descent with an early
-    /// warning (under the unconfigured default, at half the stack budget — see
-    /// [`StdDescentGuardInit`]). Run-spanning
-    /// consumer state lives in the visitor's own `&mut self` (the three-channel
-    /// discipline, [module docs](self)), so the warning is delivered here.
-    /// Defaults to ignoring it.
+    /// Report that the walk is approaching its nesting-depth limit.
+    ///
+    /// The walk's descent guard allowed the descent but warned about it — under
+    /// the default configuration, once half the stack budget is used (see
+    /// [`StdDescentGuardInit`]). Going deeper still would make
+    /// [`walk`](TreeWalker::walk) fail with
+    /// [`WalkError::DescentLimitExceeded`]. Defaults to ignoring the warning.
     fn observe_descent_warning(&mut self, warning: DescentWarning) {
         let _ = warning;
     }
 }
 
-/// Closures are enter-only visitors (see [`NodeVisitor`]'s docs).
+/// Any suitable closure is a visitor whose only hook is
+/// [`enter`](NodeVisitor::enter).
 impl<L: Lang, A, F> NodeVisitor<L, A> for F
 where
     F: FnMut(NodeRef<'_, L, A>, &VisitContext<'_, L, A>) -> VisitFlow,
@@ -162,10 +181,13 @@ where
     }
 }
 
-/// The engine bookkeeping of one walk (or one
-/// [recompose](crate::recompose) run), lent to every visitor
-/// call. Deliberately **no user state** — see the [module docs](self) for the
-/// three-channel discipline.
+/// The walk's own bookkeeping, passed to every [`NodeVisitor`] call.
+///
+/// It answers where in the tree the walk currently is — [`depth`](Self::depth)
+/// and [`tree`](Self::tree) — and holds no state belonging to the visitor. A
+/// visitor keeps its own state in its `&mut self` fields (see the
+/// [module docs](self)). The [`recompose`](crate::recompose) driver passes the
+/// same type to its callbacks.
 pub struct VisitContext<'t, L: Lang, A = ()> {
     tree: &'t NodeTree<L, A>,
     depth: usize,
@@ -178,7 +200,8 @@ impl<'t, L: Lang, A> VisitContext<'t, L, A> {
         self.depth
     }
 
-    /// The tree being walked (the start node's tree).
+    /// The tree being walked — the tree of the node
+    /// [`walk`](TreeWalker::walk) was given.
     pub fn tree(&self) -> &'t NodeTree<L, A> {
         self.tree
     }
@@ -190,50 +213,110 @@ impl<L: Lang, A> fmt::Debug for VisitContext<'_, L, A> {
     }
 }
 
-/// The walk driver: holds the visitor and the run configuration, and
-/// [`walk`](TreeWalker::walk)s a subtree — see [`NodeVisitor`] and the
-/// [module docs](self).
+/// The driver side of a walk: runs a [`NodeVisitor`] over a subtree.
 ///
-/// ```text
-/// TreeWalker::new(&mut visitor).walk(tree.root())?;                 // whole tree
-/// TreeWalker::new(&mut visitor)
-///     .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
-///     .walk(node)?;                                                 // one subtree
+/// Build one with [`new`](TreeWalker::new), optionally adjust the
+/// nesting-depth limit with
+/// [`with_descent_guard_init`](TreeWalker::with_descent_guard_init), then call
+/// [`walk`](TreeWalker::walk) with the node to start from — `tree.root()` for a
+/// whole tree, any other node for just its subtree.
+///
+/// The walker borrows the visitor mutably for the duration of the run, so
+/// whatever the visitor collected is still owned by the caller and can be read
+/// afterwards.
+///
+/// # Examples
+///
+/// A visitor with both hooks: `enter` records each group node with its nesting
+/// depth, and `exit` closes it again.
+///
 /// ```
+/// use techy::core::node::NodeRef;
+/// use techy::core::{Language, ParsingState};
+/// use techy::error::Recovery;
+/// use techy::latexlike::{Latexlike, LatexlikeDriver};
+/// use techy::visit::{NodeVisitor, TreeWalker, VisitContext, VisitFlow};
 ///
-/// The visitor is held by `&mut` borrow: its run-spanning state (the
-/// three-channel discipline, [module docs](self)) stays caller-owned and is
-/// read back after the run.
+/// struct Outline {
+///     lines: Vec<String>,
+///     open: usize,
+/// }
+///
+/// impl NodeVisitor<Latexlike, ()> for Outline {
+///     fn enter(
+///         &mut self,
+///         node: NodeRef<'_, Latexlike, ()>,
+///         cx: &VisitContext<'_, Latexlike, ()>,
+///     ) -> VisitFlow {
+///         if node.is_group() {
+///             self.lines.push(format!("{}group", "  ".repeat(cx.depth())));
+///             self.open += 1;
+///         }
+///         VisitFlow::Descend
+///     }
+///
+///     fn exit(&mut self, node: NodeRef<'_, Latexlike, ()>, _cx: &VisitContext<'_, Latexlike, ()>) {
+///         if node.is_group() {
+///             self.open -= 1;
+///         }
+///     }
+/// }
+///
+/// let language: Language<Latexlike> = Language::new(
+///     LatexlikeDriver::new(Recovery::Strict),
+///     ParsingState::lang_initial().expect("seed state"),
+/// );
+/// let tree = language.parse("a{b{c}}d").unwrap().tree;
+///
+/// let mut outline = Outline { lines: Vec::new(), open: 0 };
+/// TreeWalker::new(&mut outline).walk(tree.root()).unwrap();
+///
+/// assert_eq!(outline.lines, ["  group", "    group"]);
+/// assert_eq!(outline.open, 0); // every `enter` was matched by an `exit`
+/// ```
 pub struct TreeWalker<'v, V: ?Sized> {
     visitor: &'v mut V,
     descent_guard_init: StdDescentGuardInit,
 }
 
 impl<'v, V: ?Sized> TreeWalker<'v, V> {
-    /// A walker driving `visitor` — configure with the `with_*` methods, then
-    /// run with [`walk`](TreeWalker::walk).
+    /// Creates a walker that will drive `visitor`.
+    ///
+    /// Adjust the run with the `with_*` methods, then start it with
+    /// [`walk`](TreeWalker::walk).
     pub fn new(visitor: &'v mut V) -> TreeWalker<'v, V> {
         TreeWalker { visitor, descent_guard_init: StdDescentGuardInit::default() }
     }
 
-    /// Configure the run's descent guard
-    /// ([`StdDescentGuardInit`]: a stack
-    /// budget, a depth limit, or off; a traversal costs one descent per tree
-    /// nesting level). Without this call the run uses the guard's default — a
-    /// deliberately tight stack budget whose refusal names this method family.
+    /// Sets how deep this run may descend.
+    ///
+    /// A walk costs one descent per level of nesting, and
+    /// [`StdDescentGuardInit`] expresses the limit as a stack budget, as a
+    /// depth limit, or as no limit at all. Without this call the run uses the
+    /// guard's default, a deliberately small stack budget; a tree that exceeds
+    /// the limit makes [`walk`](TreeWalker::walk) return
+    /// [`WalkError::DescentLimitExceeded`].
     pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> TreeWalker<'v, V> {
         self.descent_guard_init = init;
         self
     }
 
-    /// Walk the subtree rooted at `node` (the node itself included) in document
-    /// order, driving the visitor. The whole tree is `walk(tree.root())`; any
-    /// other node walks just its subtree, with [`depth`](VisitContext::depth)
-    /// `0` at the start node. A visitor [`Stop`](VisitFlow::Stop) is an `Ok`
-    /// outcome; the one error is the descent guard's refusal.
+    /// Runs the walk over the subtree rooted at `node`, `node` itself included.
     ///
-    /// The walk is **role-blind**: children in `Attached` and `Hidden` slot
-    /// regions are visited like any others (module docs).
+    /// Nodes are visited in document order, and
+    /// [`depth`](VisitContext::depth) is `0` at `node`. Pass `tree.root()` to
+    /// walk a whole tree, any other node to walk just its subtree.
+    ///
+    /// Every child of every visited node is entered, whatever role it plays in
+    /// its parent — children in `Attached` and `Hidden` slot regions included
+    /// (module docs).
+    ///
+    /// # Errors
+    ///
+    /// [`WalkError::DescentLimitExceeded`] if the subtree is nested deeper than
+    /// this run's descent guard allows; the walk is then abandoned partway
+    /// through. A visitor that returns [`VisitFlow::Stop`] ends the walk early
+    /// but is not an error: the result is `Ok(())`.
     pub fn walk<L, A>(self, node: NodeRef<'_, L, A>) -> Result<(), WalkError>
     where
         L: Lang,
@@ -256,14 +339,16 @@ impl<V: ?Sized> fmt::Debug for TreeWalker<'_, V> {
     }
 }
 
-/// Error of a [`TreeWalker`] run. Visitors themselves are infallible
-/// ([`NodeVisitor`]); the run fails only through the descent guard.
+/// The reason a [`TreeWalker`] run failed.
+///
+/// A [`NodeVisitor`] has no way to report an error, so this has the single
+/// variant below: a run fails only by hitting its nesting-depth limit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WalkError {
-    /// The run's descent guard refused to go one level deeper (the tree is
-    /// nested too deeply for the configured limit): the walk is abandoned.
-    /// Configure the limit with
+    /// The subtree is nested deeper than the run's descent guard allows, so
+    /// the guard refused to go one level further and the walk was abandoned
+    /// partway through. Raise or remove the limit with
     /// [`with_descent_guard_init`](TreeWalker::with_descent_guard_init).
     DescentLimitExceeded {
         /// Which limit was hit and how to configure it.
@@ -340,9 +425,10 @@ where
 
 // --- the shared descent kernel ---------------------------------------------------------
 
-/// The one child-iteration kernel every traversal descends through — the walk
-/// (role-blind: both flags `true`) and the recompose driver's `Concat`
-/// lowering (the instruction's scope flags) are clients of the same kernel.
+/// The single child-iteration routine every traversal descends through: the
+/// walk (which passes `true` for both flags, so that every child is yielded)
+/// and the recompose driver's `Concat` lowering (which passes the
+/// instruction's scope flags).
 ///
 /// Yields `node`'s structural children in order, skipping children that lie in
 /// an [`Attached`](SlotRole::Attached) slot region (unless `include_attached`)

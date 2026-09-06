@@ -585,6 +585,11 @@ pub trait TokenReader<'s, L: Lang> {
     /// The token's own span, from [`Start`](TokenEdge::Start) to
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace): pre-space excluded,
     /// post-space included.
+    ///
+    /// # Panics
+    ///
+    /// This calls [`source_span_between`](TokenReader::source_span_between) and
+    /// panics under the same condition: a token the reader did not produce.
     fn source_span_of(&self, tok: &Token<L>) -> SourceSpan<L::SourceOrigin> {
         self.source_span_between(tok, TokenEdge::Start, TokenEdge::EndPastPostSpace)
     }
@@ -601,6 +606,13 @@ pub trait TokenReader<'s, L: Lang> {
     ///
     /// To anchor a diagnostic at a position, build the empty span there with
     /// [`SourceSpan::at`].
+    ///
+    /// # Panics
+    ///
+    /// Passing a position this reader did not produce violates contract clause 4
+    /// above, and an implementation is free to panic on it. [`StdTokenReader`] does:
+    /// it hands the offset to [`SourcePos::new`], whose precondition assert then fires
+    /// (see the [list of panicking items](crate::guide::panics)).
     fn source_position_at(&self, at: &StreamPosition<L>) -> SourcePos<L::SourceOrigin>;
 
     /// The source span running from `begin` to `end`, when the two positions delimit one
@@ -609,6 +621,14 @@ pub trait TokenReader<'s, L: Lang> {
     /// `None` means the pair is incoherent: `end` before `begin`, or the two in
     /// different sources. That is a bug in the calling code, not a condition of the
     /// parsed content, and the caller reports it as an implementation error.
+    ///
+    /// # Panics
+    ///
+    /// A position this reader did not produce is *not* answered with `None`: it
+    /// violates contract clause 4 above, and an implementation is free to panic on it.
+    /// [`StdTokenReader`] does: it hands the two offsets to [`SourceSpan::new`], whose
+    /// precondition assert then fires (see the [list of panicking
+    /// items](crate::guide::panics)).
     fn source_span_within(
         &self,
         begin: &StreamPosition<L>,
@@ -636,6 +656,14 @@ pub trait TokenReader<'s, L: Lang> {
     ///
     /// This method always answers: the empty span at `begin` — [`SourceSpan::at`] of
     /// [`source_position_at`](TokenReader::source_position_at) — is always available.
+    ///
+    /// # Panics
+    ///
+    /// "Always answers" holds for positions the reader produced. A foreign position
+    /// violates contract clause 4 above, and an implementation is free to panic on it.
+    /// [`StdTokenReader`] does: it hands the offsets to [`SourceSpan::new`], whose
+    /// precondition assert then fires (see the [list of panicking
+    /// items](crate::guide::panics)).
     fn source_span_describing(
         &self,
         begin: &StreamPosition<L>,

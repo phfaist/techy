@@ -32,45 +32,65 @@ impl fmt::Display for OriginLabel<'_> {
     }
 }
 
-/// Error of the write side: what a
-/// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) call,
-/// a [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
-/// call, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), or the session
-/// driving them ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern),
-/// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern)) can
-/// report. Every variant names what failed; a failure inside a nested call is wrapped
-/// in [`InTable`](SerializeError::InTable) with the table it happened in, and a
-/// failure while serializing one node of a tree in [`InNode`](SerializeError::InNode)
-/// with the node's position.
+/// What can go wrong while serializing an object.
 ///
-/// Not `PartialEq`: [`Failed`](SerializeError::Failed) carries an arbitrary
-/// underlying error.
+/// Every write-side call reports this type: the
+/// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) of the
+/// object being written, the
+/// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
+/// of a callable spec, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), and
+/// the session driving them ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern),
+/// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern)).
+///
+/// Most variants name something the writing program has not set up — a table it never
+/// registered, a spec it built outside a shared package — or something the objects
+/// themselves rule out, such as a cycle among them.
+/// [`Failed`](SerializeError::Failed) is an implementation's own failure, described in
+/// words.
+///
+/// Two variants say only *where* a failure happened:
+/// [`InTable`](SerializeError::InTable) names the table an inner failure occurred in, and
+/// [`InNode`](SerializeError::InNode) the tree node. Their innermost `cause` is the
+/// failure itself.
+///
+/// The type is not `PartialEq`, because [`Failed`](SerializeError::Failed) can hold an
+/// arbitrary underlying error.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum SerializeError {
-    /// The type does not participate in serialization: its
-    /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object)
-    /// is the default, which reports exactly this.
+    /// The type of the object being written does not support serialization.
+    ///
+    /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) is
+    /// defaulted to report exactly this, so a type that takes no part in serialization writes
+    /// an empty impl. Implement the method to make the type serializable.
     Unsupported,
-    /// A parsed argument was parsed against an argument spec that is not the one its
-    /// callable spec declares at that index — an *out-of-band* argument spec — and the
-    /// callable spec's
+    /// A parsed argument was parsed against an argument spec its callable spec does not
+    /// declare at that index, and the callable spec cannot describe such a spec.
+    ///
+    /// An argument parsed against one of the callable spec's own declared argument specs is
+    /// written as that spec's index, and the index is all the default
     /// [`serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
-    /// is the default, which handles declared argument specs only. `count` is the
-    /// number of argument specs the callable spec declares (`index >= count` means the
-    /// index itself is out of range).
+    /// writes. An argument spec supplied for one invocation alone — an *out-of-band* argument
+    /// spec — therefore needs a callable spec that overrides the method and writes a
+    /// description of it.
+    ///
+    /// `count` is the number of argument specs the callable spec declares; `index >= count`
+    /// means the argument's index is itself beyond them.
     ArgumentSpecOutOfBand {
         /// The parsed argument's index in invocation order.
         index: usize,
         /// The number of argument specs the callable spec declares.
         count: usize,
     },
-    /// An implementation — a
-    /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object)
-    /// or a driver — could not produce the serialized form, for a reason of its own:
-    /// `detail` says which, in words; `cause` optionally carries the underlying error
-    /// (the shape of [`HookFailed`](crate::error::HookFailed); the `Arc` keeps the
-    /// error `Clone`). Construct with [`failed`](SerializeError::failed) and
+    /// An implementation could not produce the serialized form, for a reason of its own.
+    ///
+    /// Reported by a
+    /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) or by a
+    /// driver: `detail` describes the failure in words, and `cause` holds the underlying
+    /// error when the implementation has one to attach (an `Arc`, so that the error stays
+    /// `Clone`, reachable through [`Error::source`](core::error::Error::source)).
+    ///
+    /// Build one with [`failed`](SerializeError::failed) and
     /// [`with_cause`](SerializeError::with_cause).
     Failed {
         /// Human-readable description of the failure.
@@ -78,40 +98,46 @@ pub enum SerializeError {
         /// The underlying error, if the implementation has one to attach.
         cause: Option<SharedCause>,
     },
-    /// A value could not be represented in the value model — an integer outside
-    /// `i64`, a floating-point number, a map with non-string keys, an entry nesting
-    /// deeper than the bound (the [`SerialValueError`] says which); the conversion of
-    /// a serialized structure or of a payload through the serde bridge reported it,
-    /// or the session refused the entry.
+    /// A value has no representation in the value model.
+    ///
+    /// The [`SerialValueError`] says which: an integer outside `i64`, a floating-point
+    /// number, a map with non-string keys, or an entry nesting deeper than the bound. It
+    /// comes from the conversion of a serialized structure, from the conversion of a payload
+    /// through the serde bridge, or from the session refusing the entry.
     Value(SerialValueError),
-    /// The table handle names no table of the session it was used with — it comes
-    /// from another session, or the table at that ordinal is registered with a
-    /// different driver type.
+    /// The table handle names no table of the session it was used with.
+    ///
+    /// The handle comes from another session, or the table at that ordinal is registered with
+    /// a driver of a different type. A [`TableHandle`](crate::serialize::TableHandle) is
+    /// valid only for the session that registered its table.
     UnknownTable {
         /// The id the handle carries.
         table: TableId,
     },
-    /// The session has no table of that name registered with the expected driver
-    /// type: an accessor of the crate's standard tables (see
-    /// [`StandardTableInterning`](crate::serialize::StandardTableInterning)) was
-    /// used on a session that lacks the table — a session built with
+    /// The session has no table of that name registered with the expected driver type.
+    ///
+    /// The accessors of the crate's standard tables (see
+    /// [`StandardTableInterning`](crate::serialize::StandardTableInterning)) find their table
+    /// by name, so this means the session lacks it: it was built with
     /// [`SerdeSession::empty`](crate::serialize::SerdeSession::empty) rather than
-    /// [`SerdeSession::new`](crate::serialize::SerdeSession::new), or one that
-    /// registered another driver under that name.
+    /// [`SerdeSession::new`](crate::serialize::SerdeSession::new), or another driver is
+    /// registered under that name.
     UnknownTableName {
         /// The table's name.
         name: String,
     },
-    /// The table has reached the maximum number of entries (`u32::MAX`), so no
-    /// further object can be interned into it.
+    /// The table already holds `u32::MAX` entries, so no further object can be interned into
+    /// it.
     TableFull {
         /// The table's name.
         table: &'static str,
     },
-    /// A position names an entry beyond the end of its table: position `index` of
-    /// table `table`, which holds `len` entries — the main entry given to
+    /// A position names an entry its table does not hold: position `index` of table `table`,
+    /// which holds `len` entries.
+    ///
+    /// Reported when the main entry given to
     /// [`take_segment_with_main`](crate::serialize::SerdeSession::take_segment_with_main)
-    /// does not exist in the session.
+    /// does not exist in the session; no segment is emitted then.
     IndexOutOfRange {
         /// The table's name.
         table: &'static str,
@@ -120,31 +146,35 @@ pub enum SerializeError {
         /// The number of entries the table holds.
         len: u32,
     },
-    /// The serialized reference graph would be cyclic: while an object of table
-    /// `referrer` was being serialized, an object whose serialization is itself still
-    /// in progress — of table `table` — was interned again (an object refers, directly
-    /// or through others, back to itself). Serialized references must form no cycles:
-    /// deserialization rebuilds objects from their references, which is impossible
-    /// for a cycle.
+    /// The objects being written refer to one another in a cycle.
+    ///
+    /// While an object of table `referrer` was being serialized, an object of table `table`
+    /// whose own serialization is still in progress was interned again — that object refers,
+    /// directly or through others, back to itself.
+    ///
+    /// Serialized references must form no cycles: the reading side rebuilds each object from
+    /// the objects it refers to, which is impossible for a cycle.
     ReferenceCycle {
         /// The table of the object whose serialization was still in progress.
         table: &'static str,
         /// The table of the object whose serialization interned it again.
         referrer: &'static str,
     },
-    /// The session's descent guard refused to go one level deeper (the objects refer
-    /// to one another more deeply than the configured limit): the call is abandoned.
-    /// Configure the limit with
+    /// The objects refer to one another more deeply than the session's descent limit allows,
+    /// and the call is abandoned.
+    ///
+    /// `detail` says which limit was hit and how to configure it; the limit is set with
     /// [`SerdeSession::with_descent_guard_init`](crate::serialize::SerdeSession::with_descent_guard_init).
     DescentLimitExceeded {
         /// Which limit was hit and how to configure it.
         detail: String,
     },
-    /// The entry a driver produced for a table holding objects of one kind only
-    /// carries an identifier other than the table's: a driver bug. `expected` is the
-    /// table's identifier (the driver's
-    /// [`homogeneous_identifier`](crate::serialize::ObjectSerdeDriver::homogeneous_identifier)),
-    /// `found` the identifier of the entry.
+    /// A driver produced an entry whose identifier is not the one its table requires: a bug
+    /// in that driver.
+    ///
+    /// A table holding objects of one kind only declares their identifier as its driver's
+    /// [`homogeneous_identifier`](crate::serialize::ObjectSerdeDriver::homogeneous_identifier)
+    /// (`expected`), and every entry it produces must carry it; this one carried `found`.
     UnexpectedIdentifier {
         /// The table's name.
         table: &'static str,
@@ -153,44 +183,54 @@ pub enum SerializeError {
         /// The identifier the entry carried.
         found: String,
     },
-    /// The spec carries no provenance stamp, and its type has no self-contained
-    /// serialized form: it can only be serialized by identity — as a reference to the
-    /// provider that defined it — which needs the stamp a shared package hands out
-    /// ([`Package::new_shared`](crate::core::specs::Package::new_shared),
-    /// [`SpecProvenance`](crate::core::specs::SpecProvenance)). The spec was built outside
-    /// a shared package (or not stamped). `spec` names the spec's type.
+    /// A spec that can only be serialized by identity has no provenance stamp.
+    ///
+    /// A spec of the type `spec` names has no self-contained serialized form: it is written
+    /// as a reference to the provider that defined it, which needs the provenance stamp
+    /// ([`SpecProvenance`](crate::core::specs::SpecProvenance)) that only a package built
+    /// with [`Package::new_shared`](crate::core::specs::Package::new_shared) gives its
+    /// definitions. This spec was built outside such a package, or was left unstamped.
     MissingProvenance {
         /// The name of the spec's type.
         spec: &'static str,
     },
-    /// The provider that defined the spec — named by its provenance stamp — no longer
-    /// exists (the stamp refers to it weakly, and every strong reference has been
-    /// dropped), so the spec's identity cannot be serialized. `callable_type` is the
-    /// invocation form's debug rendering; `key` the definition key.
+    /// The provider that defined the spec no longer exists, so the spec's identity cannot be
+    /// written.
+    ///
+    /// A provenance stamp refers to its provider weakly, and every strong reference to this
+    /// one has been dropped. Keep the package a spec is defined in alive for as long as
+    /// objects referring to that spec are serialized.
+    ///
+    /// `callable_type` is the invocation form's debug rendering, `key` the definition key the
+    /// spec was defined under.
     ProviderDropped {
         /// The invocation form the spec was defined under (its debug rendering).
         callable_type: String,
         /// The key the spec was defined under.
         key: DefinitionKey,
     },
-    /// The failure happened while serializing an object into table `table`: the
-    /// location wrapper the session adds around a driver's failure. Only the innermost
-    /// table location is recorded — a `cause` is never itself an `InTable`. It may be
-    /// an [`InNode`](SerializeError::InNode) whose own cause is the `InTable` of another
-    /// table: the failure of an object a tree node interned (its spec, say).
+    /// Where a failure happened: while serializing an object into table `table`.
+    ///
+    /// The session adds this wrapper around a driver's failure, which `cause` holds. Only the
+    /// innermost table is recorded, so a `cause` is never itself an `InTable`; it may be an
+    /// [`InNode`](SerializeError::InNode) whose own cause is the `InTable` of another table —
+    /// the failure of an object a tree node interned, its spec for instance.
     InTable {
         /// The table's name.
         table: &'static str,
         /// The failure.
         cause: Box<SerializeError>,
     },
-    /// The failure happened while serializing node `node` of a tree — its payload, its
-    /// argument specs, or an object it interned: the location wrapper the tree driver
-    /// ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)) adds around a per-node
-    /// failure, itself wrapped in the [`InTable`](SerializeError::InTable) of the trees
-    /// table. `node` is the node's position in the tree's storage order (root first);
-    /// `callable` is the invocation name when the node is a callable. Only the
-    /// innermost node is recorded — a `cause` is never itself an `InNode`.
+    /// Where a failure happened: while serializing node `node` of a tree — its payload, its
+    /// argument specs, or an object it interned.
+    ///
+    /// The tree driver ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)) adds this
+    /// wrapper around a per-node failure, and the session wraps the result in the
+    /// [`InTable`](SerializeError::InTable) of the trees table. Only the innermost node is
+    /// recorded, so a `cause` is never itself an `InNode`.
+    ///
+    /// `node` is the node's position in the tree's storage order (root first); `callable` is
+    /// the invocation name when the node is a callable.
     InNode {
         /// The node's position in storage order.
         node: u32,
@@ -202,24 +242,28 @@ pub enum SerializeError {
 }
 
 impl SerializeError {
-    /// The error the default
-    /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object)
-    /// reports: the type does not participate in serialization.
+    /// The [`Unsupported`](SerializeError::Unsupported) error: the type does not support
+    /// serialization.
+    ///
+    /// This is what the default
+    /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) returns.
     pub fn unsupported() -> SerializeError {
         SerializeError::Unsupported
     }
 
-    /// An implementation's own failure ([`Failed`](SerializeError::Failed)) with the
-    /// given description and no underlying error; attach one with
-    /// [`with_cause`](SerializeError::with_cause).
+    /// An implementation's own failure ([`Failed`](SerializeError::Failed)) with the given
+    /// description and no underlying error.
+    ///
+    /// Attach one with [`with_cause`](SerializeError::with_cause).
     pub fn failed(detail: impl Into<String>) -> SerializeError {
         SerializeError::Failed { detail: detail.into(), cause: None }
     }
 
-    /// Attach the underlying error to a [`Failed`](SerializeError::Failed) (any other
-    /// variant is returned unchanged): the error is shared internally (`Arc`) so that
-    /// the value stays `Clone`, and reachable through
-    /// [`Error::source`](core::error::Error::source).
+    /// Attach the underlying error to a [`Failed`](SerializeError::Failed); any other variant
+    /// is returned unchanged.
+    ///
+    /// The error is stored in an `Arc`, so that the value stays `Clone`, and is reachable
+    /// through [`Error::source`](core::error::Error::source).
     pub fn with_cause(self, cause: impl core::error::Error + Send + Sync + 'static) -> SerializeError {
         match self {
             SerializeError::Failed { detail, .. } => {

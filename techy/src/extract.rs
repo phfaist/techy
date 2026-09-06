@@ -1,78 +1,24 @@
-//! Content-extraction helpers over parsed node lists — the pylatexenc-style read
-//! package.
+//! Helpers that read content out of a parsed node list.
 //!
-//! Free functions over the node read API, deliberately **not** methods of the core node
-//! types: the core stays "storage + access", and helpers
-//! are added here without touching what a node list *is*. Two input shapes:
+//! These answer the everyday questions about a tree the parser already
+//! produced: give me the text of this argument, split this list at commas, read
+//! these `key=value` pairs. They are free functions over the node read API
+//! rather than methods, which leaves [`core::node`](crate::core::node) a plain
+//! storage-and-access layer that helpers can be added around.
 //!
-//! - **Readers** take any node sequence (`impl IntoIterator<Item = NodeRef>`):
-//!   [`content_as_chars`].
-//! - **Builders** take a [`NodeSlice`] and return an owned result holding a new
-//!   [`NodeTree`]: [`split_at_chars`] (→ [`SplitAtChars`]), [`parse_keyval`], and the
-//!   argument-run readers [`split_embellishments`] / [`split_tack_on_fields`]
-//!   (→ [`KeyVals`]). They need the slice's tree anchor (parsing state, source) even
-//!   when the slice is empty, which a bare iterator cannot provide.
+//! - [`content_as_chars`] — flattens a node sequence to a plain string.
+//! - [`split_at_chars`] — splits a run of sibling nodes at a separator string,
+//!   with grouped content protected; returns a [`SplitAtChars`].
+//! - [`parse_keyval`] — reads `key1=value1,key2=value2,…` content; returns a
+//!   [`KeyVals`].
+//! - [`split_embellishments`] and [`split_tack_on_fields`] — read the two
+//!   argument-content runs that the matching standard argument parsers produce,
+//!   also as a [`KeyVals`].
 //!
-//! # Builders mint real trees
-//!
-//! Splitting can cut *through* a chars node (`\cite{key1,my{x,y}z}`), and the source
-//! tree is frozen — so, exactly like pylatexenc (whose `split_at_chars` mints new
-//! `LatexCharsNode`s), the builder helpers assemble a **new tree**: unaffected nodes are
-//! copied wholesale (spans, states, and specs `Arc`-shared; new ids), and boundary
-//! partials become fresh `Chars` nodes whose content is cut from the node's own
-//! content — span-backed into the *same* source (an exact sub-span, zero-copy text)
-//! when the node's content is span-backed, owned sub-text when it is owned. Segments
-//! are then ordinary [`NodeSlice`] views into the result — one node-list currency
-//! everywhere, and every helper composes with every other. Two documented edge
-//! behaviors: a partial of an **owned-content** chars node (a materialized tree, the
-//! output of a transform pass, or a parse of a language with
-//! [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`) keeps the
-//! whole original node's span as its provenance — there is no byte mapping to
-//! subdivide — and partial nodes are *fresh* nodes: their ext is minted by
-//! `Lang::make_node_ext`, not copied from the node they were cut from. Result trees
-//! are derived views: their sibling spans do *not* tile their parents' interiors
-//! (separators are omitted) — they satisfy the all-trees law
-//! ([`validate_tree`](crate::core::node::validate_tree)) but not the byte accounting
-//! of span tiling.
-//!
-//! Every helper reads **node data** — chars content resolved against the node's own
-//! source, group delimiters, callable names, argument regions — and never the text a
-//! node's span points at. The answers below therefore hold whatever a node's content
-//! is stored as, and the spans the helpers record on their output are provenance
-//! coordinates, nothing more.
-//!
-//! # Producers mint output annotations
-//!
-//! The producers accept input with **any** annotation type and mint the output
-//! tree's annotations through a per-part callback — the consumer-side mirror of
-//! `Lang::make_node_ext` (consumer-owned data ⇒ consumer callback). Each of the
-//! four producers ships three spellings, the **general form owning the bare
-//! name**:
-//!
-//! - [`split_at_chars(nodes, sep, f)`](split_at_chars) — `f` is called once per
-//!   staged output node with an opaque part context ([`SplitAtCharsPart`] /
-//!   [`KeyValsPart`]) answering what the callback cannot recover itself: the
-//!   [`original()`](SplitAtCharsPart::original) input node this output node
-//!   derives from (`None` exactly for the synthesized `List` wrappers and the
-//!   root), cut-piece facts ([`is_partial()`](SplitAtCharsPart::is_partial) /
-//!   [`partial_text()`](SplitAtCharsPart::partial_text)), and the
-//!   segment/entry index;
-//! - [`split_at_chars_drop_annotations(nodes, sep)`](split_at_chars_drop_annotations)
-//!   — the `B = ()` shorthand;
-//! - [`split_at_chars_keep_annotations(nodes, sep)`](split_at_chars_keep_annotations)
-//!   — `A → A` clone-through (`A: Clone + Default`, bound only here; synthesized
-//!   nodes get `A::default()`).
-//!
-//! Same triple for [`parse_keyval`], [`split_embellishments`], and
-//! [`split_tack_on_fields`]. Each triple is **one operation in three spellings**:
-//! the two suffixed forms are the general form with a canned callback —
-//! `*_drop_annotations` passes `|_| ()`, and `*_keep_annotations` passes
-//! `|part| part.original().map(|node| node.annotation().clone()).unwrap_or_default()`
-//! — and the triple exists so the `A: Clone + Default` bound lands only on the
-//! `_keep_annotations` form, leaving the general form free of annotation bounds.
-//! Boundary: the callback **mints annotations only** —
-//! vetoing or modifying nodes is the job of
-//! [`techy::transform`](crate::transform)'s restage pass.
+//! The guide puts these next to the other tree consumers, in [Extracting
+//! content](crate::guide::node_trees#extracting-content-techyextract), and
+//! works through them in [Learn techy by
+//! example](crate::guide::learn_by_example#extracting-content).
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -98,6 +44,91 @@
 //! assert_eq!(split.segment(1).unwrap().source_text(), Some("beta{x,y}"));
 //! assert_eq!(extract::content_as_chars(split.segment(1).unwrap()).unwrap(), "betax,y");
 //! ```
+//!
+//! # What the helpers take
+//!
+//! [`content_as_chars`] reads any node sequence
+//! (`impl IntoIterator<Item = NodeRef>`): a [`NodeSlice`], an iterator, or a
+//! node's children all work.
+//!
+//! The other helpers take a [`NodeSlice`], because they build a tree and need
+//! the slice's own tree — its parsing state and its source — even when the
+//! slice is empty, which a bare iterator cannot supply.
+//!
+//! # What the helpers return
+//!
+//! Splitting can cut *through* a chars node (`\cite{key1,my{x,y}z}`), and a
+//! parsed tree is frozen, so the splitting helpers assemble a new [`NodeTree`]
+//! and return it inside a [`SplitAtChars`] or a [`KeyVals`]. Nodes the split
+//! did not touch are copied whole — spans, parsing states, and specs shared
+//! through `Arc`, with fresh node ids — and a node a separator cut through
+//! becomes a new `Chars` node holding the piece of that node's own content.
+//!
+//! Segments and values are then ordinary [`NodeSlice`] views into that result,
+//! which is what makes the helpers compose with each other and with the rest of
+//! the crate: a segment can be split again, flattened with
+//! [`content_as_chars`], traversed with [`visit`](crate::visit), or rewritten
+//! with [`transform`](crate::transform).
+//!
+//! Two things are worth knowing before reading spans off a result:
+//!
+//! - A piece cut out of a chars node whose content is **span-backed** records
+//!   the exact sub-span of the original source. A piece cut out of a chars node
+//!   whose content is **owned** — a materialized tree, the output of a
+//!   transform pass, or a parse of a language with
+//!   [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false` —
+//!   keeps the whole original node's span instead, because owned text has no
+//!   byte mapping into the source that could be subdivided.
+//! - A result tree is a derived view: its sibling spans do not tile their
+//!   parent's interior, since the separators are left out. It satisfies the law
+//!   that every tree must satisfy
+//!   ([`validate_tree`](crate::core::node::validate_tree)), but not the byte
+//!   accounting of span tiling.
+//!
+//! Every helper reads a node's recorded **data** — chars content resolved
+//! against the node's own source, group delimiters, callable names, argument
+//! regions — and never the text a node's span points at. The answers below
+//! therefore hold however a node stores its content, and the spans recorded on
+//! a result are provenance coordinates and nothing more. Resolving span-backed
+//! content is also the one way these helpers can panic: reading a tree that was
+//! built by hand and records ranges that do not fit its source panics in
+//! [`TextContent::resolve`](crate::source::TextContent::resolve). No parsed
+//! input can produce such a tree.
+//!
+//! # Choosing the annotations of the result
+//!
+//! Every node of a tree holds a consumer-chosen annotation (the `A` of
+//! `NodeTree<L, A>`). The four tree-building helpers accept input with any
+//! annotation type and let the caller decide the output's, through a callback
+//! invoked once for each node placed into the result. Each of the four
+//! therefore comes in three spellings, the bare name being the general one:
+//!
+//! - [`split_at_chars(nodes, sep, f)`](split_at_chars) — `f` returns the
+//!   annotation for one output node, given a part context
+//!   ([`SplitAtCharsPart`] here, [`KeyValsPart`] for the other three helpers).
+//!   The context answers what the callback cannot work out for itself: which
+//!   input node this output node came from
+//!   ([`original()`](SplitAtCharsPart::original) — `None` exactly for the
+//!   synthesized `List` wrappers and the root), whether the output node is a
+//!   piece cut out of that input node and what text was cut
+//!   ([`is_partial()`](SplitAtCharsPart::is_partial),
+//!   [`partial_text()`](SplitAtCharsPart::partial_text)), and which segment or
+//!   entry the output node belongs to;
+//! - [`split_at_chars_drop_annotations(nodes, sep)`](split_at_chars_drop_annotations)
+//!   — every output node gets `()`;
+//! - [`split_at_chars_keep_annotations(nodes, sep)`](split_at_chars_keep_annotations)
+//!   — every output node keeps the annotation of the input node it came from
+//!   (`A: Clone + Default`; the synthesized nodes get `A::default()`).
+//!
+//! [`parse_keyval`], [`split_embellishments`], and [`split_tack_on_fields`]
+//! come in the same three spellings. The two suffixed forms are the general
+//! form with a fixed callback, and they exist so that the `A: Clone + Default`
+//! requirement falls on `_keep_annotations` alone, leaving the general form
+//! free of any bound on the annotation type.
+//!
+//! The callback supplies annotations and nothing else. Dropping, replacing, or
+//! rewriting nodes is what the restaging pass of
+//! [`transform`](crate::transform) is for.
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -117,34 +148,39 @@ use crate::node::{
 
 // --- errors -----------------------------------------------------------------------------
 
-/// Error of the extraction helpers. These are read-time operations outside any parse
-/// run, so there is no tolerant mode: unsuitable content is always a plain `Err`.
+/// The reason an extraction helper failed.
+///
+/// The helpers run over an already-parsed tree, outside any parse, so there is no
+/// tolerant mode and nothing is reported as a diagnostic: input a helper cannot
+/// handle is always an `Err`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtractError {
-    /// [`content_as_chars`] (directly, or on a keyval key) met a node that cannot
-    /// flatten to characters — anything but chars, comments (skipped), and
-    /// group/list containers (recursed).
+    /// A node that cannot flatten to characters was met — anything other than a
+    /// chars node, a comment (skipped), or a group or list container (whose
+    /// children are read instead). In practice this means a callable node,
+    /// reached either by [`content_as_chars`] itself or by [`parse_keyval`]
+    /// while flattening a key.
     NonCharsContent {
         /// The offending node, in the tree the input nodes came from.
         node: NodeId,
     },
-    /// The separator passed to [`split_at_chars`] was empty.
+    /// The separator passed to [`split_at_chars`] was the empty string, which
+    /// has no occurrences to split at.
     EmptySeparator,
-    /// A run-shaped helper ([`split_embellishments`], [`split_tack_on_fields`]) met a
-    /// node that is neither skippable noise (whitespace-only chars, comments) nor an
-    /// entry of the shape it reads — the input was not the argument-content run the
-    /// helper is documented for.
+    /// [`split_embellishments`] or [`split_tack_on_fields`] met a node that is
+    /// neither ignorable filler (a whitespace-only chars node, a comment) nor an
+    /// entry of the shape it reads: the input was not the argument-content run
+    /// that helper is documented for.
     UnexpectedContent {
         /// The offending node, in the tree the input nodes came from.
         node: NodeId,
     },
-    /// Building the result tree failed — the builder surfaced an implementation bug,
-    /// never a source-input condition — or the ext mint
-    /// ([`Lang::make_node_ext`], run for every fresh node) reported its own
-    /// operational failure
-    /// ([`ExtMintFailed`](NodeBuildError::ExtMintFailed), the one variant carrying
-    /// a reported failure rather than a violated contract).
+    /// Building the result tree failed. Every variant of [`NodeBuildError`] but
+    /// one reports a violated builder contract, which is an implementation bug
+    /// rather than anything about the input; the exception is
+    /// [`ExtMintFailed`](NodeBuildError::ExtMintFailed), which reports that
+    /// [`Lang::make_node_ext`] — called for each newly created node — failed.
     Build(NodeBuildError),
 }
 
@@ -181,9 +217,8 @@ impl core::error::Error for ExtractError {
 // --- pieces (internal currency between splitting and tree building) ---------------------
 
 /// One piece of a split segment: a whole node, or — when a separator cut through a
-/// chars node — a byte sub-range of a chars node's logical content. Internal: the
-/// public currency is trees and [`NodeSlice`]s (7.8 decision — no second public
-/// node-list type).
+/// chars node — a byte sub-range of a chars node's logical content. Internal; the
+/// public types are trees and [`NodeSlice`]s.
 struct Piece<'t, L: Lang, A> {
     node: NodeRef<'t, L, A>,
     /// `Some(sub)` = the sub-range `sub` of the node's chars content; `None` = whole
@@ -230,14 +265,39 @@ fn piece_span<L: Lang, A>(piece: &Piece<'_, L, A>) -> SourceSpan<L::SourceOrigin
 
 // --- content_as_chars -------------------------------------------------------------------
 
-/// The character content of a node sequence, flattened: chars nodes contribute their
-/// text, comments are skipped, groups and lists contribute their children recursively
-/// (group delimiters dropped), and anything else — a callable — is an error.
+/// Flattens a node sequence to its character content.
 ///
-/// pylatexenc's `get_content_as_chars()`: extracts string arguments from calls like
-/// `\label{my-label}` or `\href{https://…}{…}`, including nested-group cases like
-/// `\item[{*}]`. Zero-copy (`Cow::Borrowed`) when the flattened text is a single
-/// contiguous piece — the common single-chars-node argument.
+/// Chars nodes contribute their text, comments are skipped, and groups and lists
+/// contribute their children recursively with the group delimiters left out.
+/// Anything else — a callable — is an error.
+///
+/// This is how a string argument is read out of a call such as `\label{my-label}`
+/// or `\href{https://…}{…}`, nested-group spellings like `\item[{*}]` included.
+/// The input is any sequence of sibling nodes: an argument's content nodes
+/// ([`NodeRef::argument_content_nodes`]), a [`NodeSlice`], a segment of a
+/// [`SplitAtChars`], or a plain iterator.
+///
+/// An empty sequence gives `""`. Whitespace is returned as it stands — nothing is
+/// trimmed. The result borrows its input when the flattened text is one contiguous
+/// piece, which is the usual single-chars-node argument, and allocates only when
+/// several pieces have to be joined.
+///
+/// To cut a run into parts before flattening it, see [`split_at_chars`]; for
+/// `key=value` content, [`parse_keyval`].
+///
+/// This is pylatexenc's `get_content_as_chars()`.
+///
+/// # Errors
+///
+/// [`ExtractError::NonCharsContent`] if a callable node appears in the sequence, at
+/// any depth: there is no text it could contribute.
+///
+/// # Panics
+///
+/// Panics on a broken tree invariant, as
+/// [`NodeRef::chars`](crate::core::node::NodeRef::chars) does: a chars node's
+/// span-backed content must be a valid `char`-boundary range of that node's own
+/// source (module documentation).
 pub fn content_as_chars<'t, L: Lang, A: 't>(
     nodes: impl IntoIterator<Item = NodeRef<'t, L, A>>,
 ) -> Result<Cow<'t, str>, ExtractError> {
@@ -636,6 +696,13 @@ fn stage_segment_list<'t, L: Lang, A, B>(
 ///
 /// Errors: [`ExtractError::EmptySeparator`] for an empty `sep`;
 /// [`ExtractError::Build`] if result-tree construction fails.
+///
+/// # Panics
+///
+/// Panics on a broken tree invariant, as
+/// [`NodeRef::chars`](crate::core::node::NodeRef::chars) does: a node's span-backed
+/// content must be a valid `char`-boundary range of that node's own source (module
+/// documentation).
 pub fn split_at_chars<'t, L: Lang, A, B>(
     nodes: NodeSlice<'t, L, A>,
     sep: &str,
@@ -764,6 +831,13 @@ impl<L: Lang, B> fmt::Debug for SplitAtChars<L, B> {
 /// `annotate` mints every output node's annotation from its [`KeyValsPart`]
 /// facts (module docs); the shorthands are [`parse_keyval_drop_annotations`]
 /// and [`parse_keyval_keep_annotations`].
+///
+/// # Panics
+///
+/// Panics on a broken tree invariant, as
+/// [`NodeRef::chars`](crate::core::node::NodeRef::chars) does: a node's span-backed
+/// content must be a valid `char`-boundary range of that node's own source (module
+/// documentation).
 pub fn parse_keyval<'t, L: Lang, A, B>(
     nodes: NodeSlice<'t, L, A>,
     mut annotate: impl FnMut(&KeyValsPart<'t, L, A>) -> B,
@@ -879,6 +953,13 @@ fn is_run_noise<L: Lang, A>(node: &NodeRef<'_, L, A>) -> bool {
 /// facts (module docs); the shorthands are
 /// [`split_embellishments_drop_annotations`] and
 /// [`split_embellishments_keep_annotations`].
+///
+/// # Panics
+///
+/// Panics on a broken tree invariant, as
+/// [`NodeRef::chars`](crate::core::node::NodeRef::chars) does: a node's span-backed
+/// content must be a valid `char`-boundary range of that node's own source (module
+/// documentation).
 pub fn split_embellishments<'t, L: Lang, A, B>(
     nodes: NodeSlice<'t, L, A>,
     mut annotate: impl FnMut(&KeyValsPart<'t, L, A>) -> B,
@@ -950,6 +1031,13 @@ pub fn split_embellishments_keep_annotations<L: Lang, A: Clone + Default>(
 /// facts (module docs); the shorthands are
 /// [`split_tack_on_fields_drop_annotations`] and
 /// [`split_tack_on_fields_keep_annotations`].
+///
+/// # Panics
+///
+/// Panics on a broken tree invariant, as
+/// [`NodeRef::chars`](crate::core::node::NodeRef::chars) does: a node's span-backed
+/// content must be a valid `char`-boundary range of that node's own source (module
+/// documentation).
 pub fn split_tack_on_fields<'t, L: Lang, A, B>(
     nodes: NodeSlice<'t, L, A>,
     mut annotate: impl FnMut(&KeyValsPart<'t, L, A>) -> B,

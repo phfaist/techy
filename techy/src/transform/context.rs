@@ -1,5 +1,5 @@
-//! The restage driver: the [`TreeRestager`] entry point and the staging context
-//! ([`RestageContext`]) handed to visitors.
+//! The restage driver ([`TreeRestager`]) and the staging context
+//! ([`RestageContext`]) passed to every visitor call.
 
 use core::marker::PhantomData;
 
@@ -21,9 +21,12 @@ use crate::state::Lang;
 use super::bundles::ProvidedRegion;
 use super::{Restage, RestageError, RestageVisitor, RestagedArgument, RestagedSlot};
 
-/// The restage driver: holds the visitor and the run configuration, and
-/// [`restage`](TreeRestager::restage)s a tree — see
-/// [`RestageVisitor`](super::RestageVisitor) and the [module docs](super).
+/// Drives a [`RestageVisitor`](super::RestageVisitor) over an input tree and
+/// assembles the output tree.
+///
+/// This is the entry point of [`transform`](super): create one with
+/// [`new`](TreeRestager::new), configure it with the `with_*` methods, and run it
+/// with [`restage`](TreeRestager::restage), which returns the new tree.
 ///
 /// ```text
 /// let output = TreeRestager::new(&mut visitor).restage(&tree)?;
@@ -32,41 +35,52 @@ use super::{Restage, RestageError, RestageVisitor, RestagedArgument, RestagedSlo
 ///     .restage(&tree)?;
 /// ```
 ///
-/// The visitor is held by `&mut` borrow: its run-spanning state stays
-/// caller-owned and is read back after the run.
+/// The visitor is borrowed mutably, so whatever state it accumulated during the
+/// run stays owned by the caller and can be read back afterwards.
 pub struct TreeRestager<'v, V: ?Sized> {
     visitor: &'v mut V,
     descent_guard_init: StdDescentGuardInit,
 }
 
 impl<'v, V: ?Sized> TreeRestager<'v, V> {
-    /// A restager driving `visitor` — configure with the `with_*` methods, then
-    /// run with [`restage`](TreeRestager::restage).
+    /// Creates a restager that will drive `visitor`.
+    ///
+    /// Configure it with the `with_*` methods, then run it with
+    /// [`restage`](TreeRestager::restage).
     pub fn new(visitor: &'v mut V) -> TreeRestager<'v, V> {
         TreeRestager { visitor, descent_guard_init: StdDescentGuardInit::default() }
     }
 
-    /// Configure the run's descent guard
-    /// ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit): a stack
-    /// budget, a depth limit, or off; a traversal costs one descent per tree
-    /// nesting level — the re-entrant region ops included). Without this call
-    /// the run uses the guard's default — a deliberately tight stack budget
-    /// whose refusal names this method family. One caveat: a *single* op that
-    /// copies a subtree verbatim (the `_with_content` helpers' wrapper copies)
-    /// recurses over that subtree between two guard checks.
+    /// Sets how deeply the run may descend: a stack budget, a fixed depth limit,
+    /// or no limit ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit)).
+    ///
+    /// One descent is counted per level of tree nesting, the re-entrant region
+    /// operations of [`RestageContext`] included; exceeding the limit abandons the
+    /// run with [`DescentLimitExceeded`](RestageError::DescentLimitExceeded).
+    /// Without this call the run uses the guard's default, a deliberately tight
+    /// stack budget whose refusal message names this method.
+    ///
+    /// One operation escapes the per-level accounting: a single copy of a subtree
+    /// made unchanged (the wrapper copies inside the `_with_content` helpers)
+    /// recurses over that whole subtree between two checks of the guard.
     pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> TreeRestager<'v, V> {
         self.descent_guard_init = init;
         self
     }
 
-    /// Transform a tree by streaming restage: the visitor is invoked
-    /// **top-down** over the frozen `tree` (root included), staging the output
-    /// **bottom-up**; the finished tree is returned. See the
-    /// [module docs](super) for the callback contract, the annotation pathway,
-    /// and the edit policy.
+    /// Transforms `tree` into a new tree, calling the visitor once per node.
     ///
-    /// The root must restage to exactly one node —
-    /// [`RootNotSingular`](RestageError::RootNotSingular) otherwise.
+    /// The visitor is called over the frozen input from the root downward, the
+    /// root included, and the output nodes are staged from the leaves upward. See
+    /// the [module docs](super) for what the visitor may answer, where output
+    /// annotations come from, and which edits the driver refuses.
+    ///
+    /// # Errors
+    ///
+    /// [`RestageError`], which returns the visitor's own failure unchanged and
+    /// otherwise reports what the driver or the output builder rejected. Note that
+    /// the root must restage to exactly one node, or the run fails with
+    /// [`RootNotSingular`](RestageError::RootNotSingular).
     pub fn restage<L, A, B>(
         self,
         tree: &NodeTree<L, A>,
@@ -97,11 +111,11 @@ impl<V: ?Sized> core::fmt::Debug for TreeRestager<'_, V> {
     }
 }
 
-/// Restage one subtree through the visitor, guarded: ask the guard, ask the
-/// verdict for `node`, then either recurse over all children and restage the
-/// node over their results (`Descend`), or accept the callback's staged
-/// replacement (`Emit`). Records the node's replacement in the context's map
-/// either way. The guard's `exit` runs on the success and error paths alike;
+/// Restage one subtree through the visitor, under the descent guard: ask the
+/// guard, ask the visitor about `node`, then either recurse over all children and
+/// restage the node over their results (`Descend`), or accept the callback's
+/// staged replacement (`Emit`). Records the node's replacement in the context's
+/// map either way. The guard's `exit` runs on the success and error paths alike;
 /// a refused descent gets no `exit`.
 pub(super) fn drive<L, A, B, V>(
     cx: &mut RestageContext<'_, L, A, B>,
@@ -153,67 +167,81 @@ where
     }
 }
 
-/// How one input node was restaged (the content-parent translation oracle).
+/// How one input node was restaged — the record a content-parent designation is
+/// translated through.
 #[derive(Clone, Debug)]
 enum Replaced {
-    /// Driver-restaged over its children's replacements: the staged id plus the
-    /// replacement-length prefix sums over the old children — the table that
-    /// translates an [`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf)
-    /// content range through the parent's own restaging.
+    /// Restaged by the driver over its children's replacements: the staged id
+    /// plus the running sums of the replacement lengths of the old children, which
+    /// together translate an
+    /// [`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf) content
+    /// range through the parent's own restaging.
     Restaged { id: BuildId, prefix: Vec<u32> },
-    /// An `Emit` takeover with exactly one staged node: content ranges into it
-    /// are carried verbatim (the visitor chose the replacement's shape) and
-    /// re-validated at staging.
+    /// Replaced by an `Emit` with exactly one staged node: content ranges into it
+    /// are reproduced unchanged (the visitor chose the replacement's shape) and
+    /// checked again at staging.
     One(BuildId),
-    /// An `Emit` takeover with zero or several staged nodes (the count) — no
-    /// shape an `InChildrenOf` designation could re-anchor onto.
+    /// Replaced by an `Emit` with zero or several staged nodes (the count) —
+    /// nothing an `InChildrenOf` designation could be moved onto.
     Count(usize),
 }
 
-/// The staging side of a [`TreeRestager`] run, handed to every visitor call: the
-/// region-aware restaging ops and the raw output
-/// [`builder()`](RestageContext::builder) underneath them.
+/// The staging side of a [`TreeRestager`] run, passed to every visitor call.
 ///
-/// The ops accept nodes from **any** tree (the [module docs](super)' cross-tree
-/// contract), and driving the same node more than once is legal — each drive
-/// stages a fresh copy (the internal replacement map keeps the latest, which is
-/// what subsequent content-parent translations resolve against).
+/// Its surface is the region-aware restaging operations below — restage a whole
+/// subtree, a node's children, one argument, one slot, or a whole invocation —
+/// plus the raw output [`builder()`](RestageContext::builder) they are built on,
+/// for anything they do not cover.
+///
+/// The operations accept input nodes from **any** tree, not only the run's own
+/// input (see the [module docs](super)). Restaging the same input node more than
+/// once is legal, and each call stages a fresh copy; the context remembers only
+/// the most recent copy of a node, and that is the one a later content-parent
+/// translation resolves against.
 pub struct RestageContext<'t, L: Lang, A, B> {
     builder: NodeTreeBuilder<L, B>,
-    /// Input-node id → its staged replacement, recorded for every driven node;
-    /// the `content_parents` oracle for record translation (tree-tagged ids, so
-    /// entries from several input trees never collide).
+    /// Input-node id to its staged replacement, recorded for every driven node;
+    /// this is what answers the `content_parents` question when a record is
+    /// translated. Ids are tagged with their tree, so entries coming from several
+    /// input trees never collide.
     replaced: HashMap<NodeId, Replaced>,
     /// The run's descent guard, consulted by every [`drive`] — the re-entrant
     /// region ops included, since they drive through this same context.
     descent_guard: StdDescentGuard,
-    /// The run's frozen input tree, as a type/lifetime anchor: the context
-    /// itself stores no borrow of it (ops take their input nodes explicitly and
-    /// accept any tree's).
+    /// The run's frozen input tree, present only to anchor the type and lifetime
+    /// parameters: the context itself stores no borrow of it, since the operations
+    /// take their input nodes explicitly and accept nodes of any tree.
     _input: PhantomData<&'t NodeTree<L, A>>,
 }
 
 impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
-    /// The raw staging builder of the output tree — arbitrary programmatic
-    /// staging underneath the ready-made ops (they are conveniences, not the power
-    /// boundary). Newly synthesized nodes are minted with the explicit two-line
-    /// recipe: call
-    /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) (over
-    /// [`staged_children`](NodeTreeBuilder::staged_children)), then
-    /// [`add`](NodeTreeBuilder::add); restaged copies carry their old ext
-    /// verbatim.
+    /// Returns the output tree's builder, for staging the ready-made operations
+    /// do not cover.
+    ///
+    /// Those operations are conveniences over this builder, not a limit on what a
+    /// pass can stage. Building a brand-new node takes two calls: make its ext
+    /// with [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) (over
+    /// [`staged_children`](NodeTreeBuilder::staged_children)), then stage the node
+    /// with [`add`](NodeTreeBuilder::add). A restaged copy of an existing node
+    /// instead keeps that node's ext unchanged.
     pub fn builder(&mut self) -> &mut NodeTreeBuilder<L, B> {
         &mut self.builder
     }
 
     // --- region-aware restaging ops -----------------------------------------------------
 
-    /// Run the full visitor over `node`'s subtree, the node itself included —
-    /// exactly what the driver does for a `Descend`ed child. Returns the staged
-    /// ids replacing `node` (one for a `Descend` of `node` itself; whatever the
-    /// visitor emitted otherwise). The typical use is a takeover that still
-    /// wants parts restaged through the pass:
-    /// `Restage::Emit(cx.restage_subtree(other, self)?)`.
+    /// Runs the visitor over `node` and its whole subtree, exactly as the driver
+    /// does for a child it descended into, and returns the staged ids that replace
+    /// `node`.
+    ///
+    /// That is a single id when the visitor answered `Descend` for `node` itself,
+    /// and whatever it emitted otherwise. The usual use is inside a callback that
+    /// takes a node over but still wants parts of the tree restaged through the
+    /// pass: `Restage::Emit(cx.restage_subtree(other, self)?)`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the visitor run produces, including the descent guard's refusal.
     pub fn restage_subtree<V>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -225,10 +253,16 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         drive(self, node, visitor)
     }
 
-    /// Run the visitor over every child subtree of `node` (the node itself
-    /// excluded), returning the concatenated replacements — the unwrap move:
-    /// `Restage::Emit(cx.restage_children(group, self)?)` dissolves a wrapper
-    /// while its content still flows through the pass.
+    /// Runs the visitor over every child subtree of `node`, the node itself
+    /// excluded, and returns the replacements of all of them concatenated.
+    ///
+    /// This is how a pass removes a wrapper while its content still goes through
+    /// the pass: `Restage::Emit(cx.restage_children(group, self)?)` replaces a
+    /// group with its restaged children.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the visitor run produces, including the descent guard's refusal.
     pub fn restage_children<V>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -244,18 +278,25 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         Ok(ids)
     }
 
-    /// Restage argument `index` of callable `node` through the visitor,
-    /// returning its [`RestagedArgument`] bundle: the region's nodes are driven
-    /// like any `Descend`ed children, and the record's spec, presence, and
-    /// content designation are carried over in bundle-relative staging
-    /// coordinates. An absent argument yields
-    /// [`RestagedArgument::absent`] (presence transfers — no error).
+    /// Restages argument `index` of callable `node` through the visitor, and
+    /// returns the result as a [`RestagedArgument`] to hand to
+    /// [`restage_invocation`](RestageContext::restage_invocation).
     ///
-    /// Errors: [`NotACallable`](RestageError::NotACallable),
-    /// [`ArgumentIndexOutOfRange`](RestageError::ArgumentIndexOutOfRange),
-    /// [`ContentParentDropped`](RestageError::ContentParentDropped) (the
-    /// visitor dropped/multiplied the node anchoring the record's content),
-    /// plus anything the visitor run produces.
+    /// The nodes of the argument's region go through the visitor like the children
+    /// of a node the driver descended into, and the record's spec, presence, and
+    /// content designation are reproduced against the staged nodes. An argument
+    /// that was not provided in the input is returned as
+    /// [`RestagedArgument::absent`]; that is not an error, it is how presence is
+    /// preserved.
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RestageError::NotACallable) if `node` is not a callable,
+    /// [`ArgumentIndexOutOfRange`](RestageError::ArgumentIndexOutOfRange) for an
+    /// index the callable has no argument at,
+    /// [`ContentParentDropped`](RestageError::ContentParentDropped) if the visitor
+    /// dropped the node the record's content designation points into or replaced
+    /// it with several nodes, plus anything the visitor run produces.
     pub fn restage_argument<V>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -285,10 +326,16 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         }
     }
 
-    /// [`restage_argument`](RestageContext::restage_argument) by the argument's
-    /// spec name. A name matching none of the callable's argument specs is
-    /// [`UnknownArgumentName`](RestageError::UnknownArgumentName) — asking for
-    /// an argument the callable does not have is a caller bug, not an absence.
+    /// Restages the argument whose spec is named `name`, otherwise like
+    /// [`restage_argument`](RestageContext::restage_argument).
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownArgumentName`](RestageError::UnknownArgumentName) when no
+    /// argument spec of the callable carries that name — asking for an argument
+    /// the callable does not have is a mistake in calling code, not an absent
+    /// argument — plus every error of
+    /// [`restage_argument`](RestageContext::restage_argument).
     pub fn restage_argument_named<V>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -310,14 +357,20 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         self.restage_argument(node, index, visitor)
     }
 
-    /// Restage slot `index` of callable `node` through the visitor, returning
-    /// its [`RestagedSlot`] bundle (name, role, and ext carried over; region
-    /// nodes driven; content designation in bundle-relative coordinates).
+    /// Restages slot `index` of callable `node` through the visitor, and returns
+    /// the result as a [`RestagedSlot`] to hand to
+    /// [`restage_invocation`](RestageContext::restage_invocation).
     ///
-    /// Errors: [`NotACallable`](RestageError::NotACallable),
+    /// The nodes of the slot's region go through the visitor; the slot's name,
+    /// role, and ext are reproduced unchanged, and its content designation is
+    /// reproduced against the staged nodes.
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RestageError::NotACallable),
     /// [`SlotIndexOutOfRange`](RestageError::SlotIndexOutOfRange),
-    /// [`ContentParentDropped`](RestageError::ContentParentDropped), plus
-    /// anything the visitor run produces.
+    /// [`ContentParentDropped`](RestageError::ContentParentDropped), plus anything
+    /// the visitor run produces.
     pub fn restage_slot<V>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -338,24 +391,30 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         Ok(RestagedSlot { name, role, nodes, content, ext })
     }
 
-    /// Restage callable `node`'s invocation over the given bundles, **in the
-    /// order given**: the new node's children are the bundles' nodes
-    /// (arguments first, then slots), its argument/slot records are retiled
-    /// accordingly, and everything else — invocation form, name, spec,
-    /// invocation-syntax payload, span, state, ext — is carried over from
-    /// `node` verbatim. The annotation is the new node's (single-pathway rule).
+    /// Stages a copy of callable `node` whose arguments and slots are the given
+    /// bundles, **in the order given**, and returns the staged node's id.
     ///
-    /// Reordering bundles reorders whole records: the argument swap
-    /// `\a{1}{2}` → `\a{2}{1}` is two
-    /// [`restage_argument`](RestageContext::restage_argument) calls and one
-    /// reordered `restage_invocation` — each bundle keeps its own spec, so the
-    /// swapped record's names/specs travel with their content. Children of
-    /// `node` outside every bundle are simply not part of the replacement
-    /// (bundles define the new child list exhaustively).
+    /// The new node's children are the bundles' nodes, arguments first and then
+    /// slots, and its argument and slot records are laid out over them
+    /// accordingly. Everything else — invocation form, name, spec, the recorded
+    /// invocation syntax, span, parsing state, and ext — is copied from `node`
+    /// unchanged. `annotation` becomes the new node's annotation.
     ///
-    /// Errors: [`NotACallable`](RestageError::NotACallable) and staging
-    /// failures ([`Build`](RestageError::Build) — e.g. bundle nodes already
-    /// claimed, or designations that do not fit).
+    /// The bundles define the new child list exhaustively: children of `node` that
+    /// no bundle covers are not part of the replacement. Reordering the bundles
+    /// reorders whole records, and each bundle keeps its own spec, so names and
+    /// specs move together with their content — swapping the arguments of
+    /// `\a{1}{2}` into `\a{2}{1}` is two
+    /// [`restage_argument`](RestageContext::restage_argument) calls followed by one
+    /// `restage_invocation` with the two bundles exchanged.
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RestageError::NotACallable) if `node` is not a callable,
+    /// and [`Build`](RestageError::Build) if the output builder rejects the
+    /// result — for instance because a bundle's nodes were already used as
+    /// another node's children, or because a content designation does not fit the
+    /// nodes it points at.
     pub fn restage_invocation<E>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -424,32 +483,41 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
 
     // --- content-swap helpers -----------------------------------------------------------
 
-    /// Restage argument `index` of callable `node` with its **content swapped**
-    /// for the already-staged `content` nodes: the wrapper syntax and noise of
-    /// the argument's region are restaged **verbatim by contract** — they never
-    /// flow through a visitor — and the record's content designation is
-    /// re-anchored onto the swapped position. The record's spec and ext carry
-    /// over unchanged. `annotation` is cloned onto every verbatim-restaged
-    /// wrapper/noise node (the annotation single-pathway rule needs an explicit
-    /// channel here); the `content` nodes were staged by the caller and carry
-    /// the annotations they were staged with.
+    /// Restages argument `index` of callable `node` with its content replaced by
+    /// the already-staged `content` nodes, and returns the resulting
+    /// [`RestagedArgument`].
     ///
-    /// Changing the noise or wrapper too is not this helper's job: use
-    /// [`restage_argument`](RestageContext::restage_argument) (noise flows
-    /// through the visitor) or hand-build the bundle via
-    /// [`RestagedArgument::provided`] (the general take-both form).
+    /// The argument keeps its surroundings: the wrapper syntax and the
+    /// non-content nodes of the region (whitespace and comments before or inside
+    /// it) are copied unchanged and never go through a visitor, and the record's
+    /// content designation is moved onto the position the new content occupies.
+    /// The record's spec and ext are copied unchanged too.
     ///
-    /// The helper covers the standard wrapper shapes (groups/lists/chars on the
-    /// path to the content). A wrapper chain that contains a *callable* — whose
-    /// own records would need retiling around the swap — is outside its
-    /// contract and surfaces as a [`Build`](RestageError::Build) error; take
-    /// the visitor route for those.
+    /// `annotation` is cloned onto every node copied unchanged, since those nodes
+    /// never reach the visitor that would otherwise supply one. The `content`
+    /// nodes were staged by the caller and keep the annotations they were staged
+    /// with.
     ///
-    /// Errors: [`NotACallable`](RestageError::NotACallable),
+    /// To change the surroundings as well, use
+    /// [`restage_argument`](RestageContext::restage_argument), where they do go
+    /// through the visitor, or build the bundle yourself with
+    /// [`RestagedArgument::provided`].
+    ///
+    /// This helper handles the usual wrapper shapes — groups, lists, and chars
+    /// nodes on the path down to the content. A wrapper chain containing a
+    /// *callable*, whose own records would have to be laid out again around the
+    /// replacement, is outside its contract and is reported as a
+    /// [`Build`](RestageError::Build) error; restage those through the visitor
+    /// instead.
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RestageError::NotACallable),
     /// [`ArgumentIndexOutOfRange`](RestageError::ArgumentIndexOutOfRange),
-    /// [`ArgumentAbsent`](RestageError::ArgumentAbsent) (an absent argument has
-    /// no wrapper to put content into), and staging failures
-    /// ([`Build`](RestageError::Build)).
+    /// [`ArgumentAbsent`](RestageError::ArgumentAbsent) when the argument was not
+    /// provided and so has no wrapper to put content into, and
+    /// [`Build`](RestageError::Build) when the output builder rejects the
+    /// result.
     pub fn restage_argument_with_content<E>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -477,13 +545,21 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         Ok(RestagedArgument { spec, provided: Some(ProvidedRegion { nodes, content, ext }) })
     }
 
-    /// [`restage_argument_with_content`](RestageContext::restage_argument_with_content)
-    /// for slot `index`: wrapper and noise verbatim, content swapped,
-    /// designation re-anchored; the slot's name, role, and ext carry over.
+    /// Restages slot `index` of callable `node` with its content replaced by the
+    /// already-staged `content` nodes.
     ///
-    /// Errors: [`NotACallable`](RestageError::NotACallable),
-    /// [`SlotIndexOutOfRange`](RestageError::SlotIndexOutOfRange), and staging
-    /// failures ([`Build`](RestageError::Build)).
+    /// This is
+    /// [`restage_argument_with_content`](RestageContext::restage_argument_with_content)
+    /// for a slot: wrapper and non-content nodes copied unchanged, content
+    /// replaced, the content designation moved onto the new position, and the
+    /// slot's name, role, and ext copied unchanged.
+    ///
+    /// # Errors
+    ///
+    /// [`NotACallable`](RestageError::NotACallable),
+    /// [`SlotIndexOutOfRange`](RestageError::SlotIndexOutOfRange), and
+    /// [`Build`](RestageError::Build) when the output builder rejects the
+    /// result.
     pub fn restage_slot_with_content<E>(
         &mut self,
         node: NodeRef<'_, L, A>,
@@ -695,8 +771,8 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
     }
 
     /// Drive the visitor over one resolved region's nodes and translate the
-    /// region's content designation into bundle-relative staging coordinates —
-    /// the shared tail of the argument/slot ops.
+    /// region's content designation into coordinates relative to the bundle — the
+    /// shared tail of the argument and slot operations.
     fn restage_region<V>(
         &mut self,
         callable: NodeRef<'_, L, A>,
@@ -762,7 +838,7 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         Ok((nodes, designation))
     }
 
-    /// Record an `Emit` takeover's replacement for `old`.
+    /// Record the nodes an `Emit` staged in place of `old`.
     pub(super) fn record_emit(&mut self, old: NodeId, ids: &[BuildId]) {
         let entry = match ids {
             [one] => Replaced::One(*one),
@@ -771,12 +847,12 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         self.replaced.insert(old, entry);
     }
 
-    /// Stage `node` over its children's replacements (the level-0 restage
-    /// arithmetic with the run's replacement map as the content-parent oracle:
-    /// content ranges into driver-restaged parents are *translated* through the
-    /// parent's own replacements, ranges into single-node `Emit` replacements
-    /// carried verbatim), record the result, and upgrade an unmapped content
-    /// parent into the diagnosed
+    /// Stage `node` over its children's replacements, answering the builder's
+    /// content-parent question from the run's replacement map: a content range
+    /// into a parent the driver restaged is translated through that parent's own
+    /// replacements, a range into a single-node `Emit` replacement is reproduced
+    /// unchanged. Records the result, and turns an unmapped content parent into
+    /// the diagnosed
     /// [`ContentParentDropped`](RestageError::ContentParentDropped).
     pub(super) fn restage_over<AOld, E>(
         &mut self,

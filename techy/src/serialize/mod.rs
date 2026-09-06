@@ -1,18 +1,47 @@
-//! Serialization: converting the objects techy consumers handle — parsed node trees,
-//! parsing states, sources, callable specs and providers, diagnostics, and whole parse
-//! results — to and from a format-independent, in-memory value model, so that they
-//! can be stored (a cache of parses, a golden file of a test suite), transmitted (to
-//! another process or program), inspected, and rebuilt on the other side with their
-//! sharing and identity intact.
+//! Writing parse results and their parts to a format-independent value model, and
+//! reading them back.
 //!
-//! This page is the reference entry point of the module (the introductory guide
-//! chapter is [Serializing parses](crate::guide::serialize)). It defines the
-//! vocabulary, walks the write path and the read path with one example each, and
-//! describes the streams, the capability traits, the engine, the standard tables, the
-//! optional `serde` rendering, the errors, and the stability of the serialized form;
-//! the index at the end links every public item. The preset's own support — the impls that make
+//! What can be serialized: node trees, parsing states, sources, callable specs and the
+//! providers that define them, diagnostics, and whole parse results. Serialized data
+//! can be stored (a cache of parses, a golden file of a test suite), sent to another
+//! program, inspected as text, and rebuilt on the other side with its sharing and
+//! identity intact.
+//!
+//! The introductory chapter is [Serializing parses](crate::guide::serialize); this page
+//! is the reference. The preset's own support — the impls that make
 //! [`Latexlike`](crate::latexlike::Latexlike) serializable and the helper that prepares
-//! a reading session for latexlike data — is [`latexlike::serialize`](crate::latexlike::serialize).
+//! a reading session for latexlike data — is
+//! [`latexlike::serialize`](crate::latexlike::serialize).
+//!
+//! # What the module provides
+//!
+//! - **The value model.** Every serialization produces a [`SerialValue`] — a tree of
+//!   nulls, booleans, integers, strings, byte strings, lists, string-keyed maps, and
+//!   references into numbered tables — and every deserialization reads one. One
+//!   serialized object is a `SerialValue` together with the identifier naming what kind
+//!   of object it describes: a [`SerialEntry`].
+//! - **The capability traits, in two pairs.** [`SerializableObject`] and
+//!   [`DeserializableObject`] are for *objects*: things stored in a table and referred
+//!   to, from everywhere they are used, by their position in it — a source, a parsing
+//!   state, a spec, a tree. [`SerializableValue`] and [`DeserializableValue`] are for
+//!   *values*: data embedded in place inside an object's entry — a mode, a span, one of
+//!   the language's own extension values.
+//! - **The language's opt-in.** All four traits are usable only for a language that
+//!   implements [`SerializableLang`]. That trait has no items of its own; its bounds
+//!   require the two value traits of every type the language supplies to a parse, so
+//!   implementing it is what makes the language's own data convertible.
+//! - **The session.** A [`SerdeSession`] holds the tables, one per kind of object, and
+//!   writes each object into its table once. [`SerdeSession::new`] registers the seven
+//!   standard tables — sources, states, specs, providers, trees, diagnostics, and parse
+//!   results — and a session emits what is new in them as a [`Segment`] and absorbs the
+//!   segments another session wrote.
+//! - **Rendering is the only optional part.** Everything above is plain Rust with no
+//!   external dependency and no cargo feature. The optional `serde` cargo feature adds
+//!   a rendering layer on top: `Serialize`/`Deserialize` impls for [`SerialValue`] and
+//!   [`Segment`], so that a segment encodes through any serde format, plus the
+//!   `to_value` / `from_value` bridge for data that already implements serde's own
+//!   traits. Enabling the feature changes no trait surface and imposes no obligation on
+//!   any implementer of the traits above.
 //!
 //! # Vocabulary
 //!
@@ -41,11 +70,11 @@
 //!   [`serial_index!`] and satisfying [`SerialIndex`]) is a position together with its
 //!   table's id, as Rust code holds it — [`SourceIndex`], [`StateIndex`], and so on.
 //! - A table is **homogeneous** when it holds objects of one kind only (every entry
-//!   carries the same identifier, which the table then does not write out — sources,
+//!   has the same identifier, which the table then does not write out — sources,
 //!   states, diagnostics, parse results) and **heterogeneous** when it holds trait
-//!   objects of several concrete types, each entry carrying its own identifier
+//!   objects of several concrete types, each entry storing its own identifier
 //!   (specs, providers, and — by annotation type — trees).
-//! - Every serialized object carries an **identifier**: a deliberately chosen, stable
+//! - Every serialized object has an **identifier**: a deliberately chosen, stable
 //!   string naming what kind of object the value describes (`core.state`,
 //!   `latexlike.begin`) — never a Rust type name. A serialization call returns the
 //!   identifier together with the data as a [`SerialEntry`].
@@ -67,11 +96,11 @@
 //! - A **profile** is a caller-chosen string naming the configuration that reads a
 //!   stream fully (the packages, spec types, and readers that resolve everything in
 //!   it); a session that declares one writes it into every segment and refuses
-//!   segments carrying a different one ([`SerdeSession::set_profile`]).
+//!   segments that name a different one ([`SerdeSession::set_profile`]).
 //! - The **reading environment** is the set of live objects — providers above all —
 //!   that the deserializing program already holds and that serialized data refers to
-//!   by identity rather than describes in full; it is handed to a reading session as
-//!   its *user data* ([`SerdeSession::set_user_data`]). For the crate's own
+//!   by identity rather than describes in full; the program supplies it to a reading
+//!   session as its *user data* ([`SerdeSession::set_user_data`]). For the crate's own
 //!   providers the reading environment is a [`KnownProviders`] directory: the
 //!   providers the program holds, by name, plus **recipes** ([`ProviderRecipe`]) that
 //!   build the ones it does not hold. A reference to something the reading environment
@@ -82,7 +111,7 @@
 //!   through its **provenance stamp** ([`SpecProvenance`](crate::core::specs::SpecProvenance)):
 //!   a record of the provider that defined it and the key it was defined under, which
 //!   a package built with [`Package::new_shared`](crate::core::specs::Package::new_shared)
-//!   hands out.
+//!   issues for the specs it holds.
 //! - Everything read is **untrusted input**: a malformed segment, a reference out of
 //!   range or into the wrong table, a reference cycle, an unknown identifier, or a
 //!   value nesting deeper than the bound is an error naming what failed — never a
@@ -154,7 +183,7 @@
 //! the packages the parse used — the very instances, so that read data shares them —
 //! and recipes for the ones it does not hold), and the **segments of one stream, in
 //! order**. [`SerdeSession::push_segment`] validates a segment, appends its entries,
-//! rebuilds every object, and hands back the segment's main entry translated into the
+//! rebuilds every object, and returns the segment's main entry translated into the
 //! reading session's numbering; the objects are then read by position.
 //!
 //! ```
@@ -205,8 +234,8 @@
 //! side's `minilatex` package holds), and the diagnostics' identifiers, projections,
 //! messages, and spans. What does not: node ids and tree tags (a rebuilt tree is a
 //! new tree, with fresh ones — durable node identity travels in annotations), and the
-//! concrete condition types of diagnostics (a diagnostic read back carries a
-//! [`DeserializedCondition`]; consumers match on the identifier).
+//! concrete condition types of diagnostics (a diagnostic read back has a
+//! [`DeserializedCondition`] as its condition; consumers match on the identifier).
 //!
 //! # Streams
 //!
@@ -216,81 +245,95 @@
 //! resolved to) are then written once for the whole stream, while a live object the
 //! program creates anew (the parsing states of a fresh parse) is a new entry even when
 //! an equal object was absorbed earlier: sharing follows object identity, not
-//! equality. Two rules bind: the segments pushed into one session must all come from
-//! one stream, in order (the session checks that each segment continues its tables,
-//! but cannot recognize a foreign stream whose positions happen to line up), and a
-//! session absorbs before it appends — pushing a segment while entries are pending
-//! emission is an error ([`DeserializeError::UnemittedEntries`]).
+//! equality.
+//!
+//! Two rules bind. The segments pushed into one session must all come from one stream,
+//! in order — the session checks that each segment continues its tables, but cannot
+//! recognize a foreign stream whose positions happen to line up. And a session absorbs
+//! before it appends: pushing a segment while entries are pending emission is an error
+//! ([`DeserializeError::UnemittedEntries`]).
+//!
+//! Two segment-level conveniences serve streams. The **main entry**
+//! ([`SerdeSession::take_segment_with_main`]) is the one entry a segment is about;
+//! `push_segment` returns it in the reader's numbering, so a reader finds each
+//! segment's payload without knowing the tables' layout. The **profile**
+//! ([`SerdeSession::set_profile`], stored in every [`SegmentMeta`]) makes a reader
+//! configured for one setup refuse a stream written for another up front, instead of
+//! failing later on some unresolvable entry.
 //!
 //! **JSON Lines.** With the `serde` feature the canonical stream rendering is one
 //! segment per line: each segment encoded with `serde_json::to_string(&segment)` (its
 //! rendering contains no raw line break) and appended to the stream; a reader decodes
 //! each line with `serde_json::from_str::<Segment>(line)` and pushes the segments in
-//! order. Every line is an independently valid segment (each carries the version and
-//! the full table directory), so a stream can be appended to by appending lines,
-//! split into per-file or per-message pieces, or truncated with only its last,
-//! incomplete line lost; there is no end-of-stream marker — the stream ends where the
-//! input ends. The same conventions hold for any other serde format that frames its
-//! values (one segment per framed value, in order); the crate itself calls no
-//! encoder — the engine emits and absorbs `Segment` values only. Two segment-level
-//! conveniences serve streams: the **main entry** ([`SerdeSession::take_segment_with_main`];
-//! `push_segment` returns it in the reader's numbering, so a reader finds each
-//! segment's payload without knowing the tables' layout) and the **profile**
-//! ([`SerdeSession::set_profile`], carried in every [`SegmentMeta`]), so that a stream
-//! written for one configuration is refused up front by a reader configured for
-//! another instead of failing on some unresolvable entry.
+//! order. Every line is an independently valid segment — each includes the version and
+//! the full table directory — so a stream can be appended to by appending lines, split
+//! into per-file or per-message pieces, or truncated with only its last, incomplete
+//! line lost. There is no end-of-stream marker: the stream ends where the input ends.
+//!
+//! The same conventions hold for any other serde format that frames its values (one
+//! segment per framed value, in order). The crate itself calls no encoder — the engine
+//! emits and absorbs `Segment` values only.
 //!
 //! # The capability traits
 //!
-//! Two pairs of traits express the capability. For objects: [`SerializableObject`] —
-//! the write side, which every [`CallableSpec`](crate::core::specs::CallableSpec) and
-//! [`SpecsProvider`](crate::core::specs::SpecsProvider) carries as a supertrait, so
-//! that the method is callable through their trait objects; it is defaulted to
-//! "unsupported", so a type that does not participate writes a one-line empty impl —
-//! and [`DeserializableObject`], the opt-in read side implemented by concrete types
-//! only (its [`Output`](DeserializableObject::Output) is the type itself for a
-//! self-contained form, or an `Arc<dyn …>` for an object resolved in the reading
-//! environment). For values: [`SerializableValue`] and [`DeserializableValue`],
-//! implemented by the owner of each value type — the crate covers `()`, `bool`,
-//! `char`, the integers, `String`, `Option<T>`, `Vec<T>`, spans, and [`SerialValue`]
-//! itself; a language covers its own value and ext types, normally by deriving both
-//! traits ([`SerializableValue`](derive@SerializableValue) /
-//! [`DeserializableValue`](derive@DeserializableValue): every field and variant names
-//! its wire key, an absent `Option` field is an omitted key, reads are strict; the impl
-//! is for every language unless the type names one with `#[serial(lang = …)]`, which a
-//! span field needs) and by hand where a type's wire layout differs from its Rust
-//! layout (then through a derived mirror struct of the wire layout). All four are
-//! usable only for a language that declares
-//! itself serializable by implementing [`SerializableLang`] — a trait with no items,
-//! whose bounds require the two value traits of every type the language supplies to
-//! the parse — since the methods receive a [`SerializeContext`] or a
-//! [`DeserializeContext`], which exist only for such languages. A callable spec may
-//! also take part in the serialization of the arguments parsed with it, through the
-//! defaulted pair [`CallableSpec::serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
-//! and [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec)
-//! (the default: an argument's spec is one of the callable's declared ones, and only
-//! its index is written).
+//! **Objects.** [`SerializableObject`] is the write side. It is a supertrait of
+//! [`CallableSpec`](crate::core::specs::CallableSpec) and of
+//! [`SpecsProvider`](crate::core::specs::SpecsProvider), so that its method can be
+//! called through their trait objects, and the method is defaulted to "unsupported":
+//! a type that does not participate in serialization writes a one-line empty impl.
+//! [`DeserializableObject`] is the read side — opt-in, and implemented by concrete
+//! types only. Its [`Output`](DeserializableObject::Output) is the type itself when the
+//! entry describes the object in full, or an `Arc<dyn …>` when the entry only names an
+//! object the reading environment already holds.
+//!
+//! **Values.** [`SerializableValue`] and [`DeserializableValue`] are implemented by the
+//! owner of each value type. The crate implements them for `()`, `bool`, `char`, the
+//! integer types, `String`, `Option<T>`, `Vec<T>`, spans, and [`SerialValue`] itself; a
+//! language implements them for its own value and extension types.
+//!
+//! Those impls are normally derived ([`SerializableValue`](derive@SerializableValue) /
+//! [`DeserializableValue`](derive@DeserializableValue)): every field and variant names
+//! its own key in the serialized form, an `Option` field that is `None` is an omitted
+//! key, and reads are strict. The derived impl is for every language unless the type
+//! names one with `#[serial(lang = …)]`, which a type with a span field must do. Where
+//! a type's serialized layout differs from its Rust layout, the impl is written by
+//! hand, usually by deriving the traits for a mirror struct shaped like the serialized
+//! form.
+//!
+//! **The language gate.** All four traits are usable only for a language that declares
+//! itself serializable by implementing [`SerializableLang`]: their methods receive a
+//! [`SerializeContext`] or a [`DeserializeContext`], and those exist only for such a
+//! language.
+//!
+//! **Argument specs.** A callable spec may also take part in serializing the arguments
+//! parsed with it, through the defaulted pair
+//! [`CallableSpec::serialize_argument_spec`](crate::core::specs::CallableSpec::serialize_argument_spec)
+//! and [`deserialize_argument_spec`](crate::core::specs::CallableSpec::deserialize_argument_spec).
+//! By default an argument's spec is one of the callable's declared ones, and only its
+//! index is written.
 //!
 //! # The engine
 //!
 //! A [`SerdeSession`] holds the tables, each registered with its driver
-//! ([`SerdeSession::register_table`]) and addressed through its [`TableHandle`];
+//! ([`SerdeSession::register_table`]) and addressed through its [`TableHandle`]. It
 //! interns objects ([`SerdeSession::intern`], and [`SerializeContext::intern`] from
-//! inside a serialization call) and reads objects back from positions
-//! ([`SerdeSession::object`], [`DeserializeContext::object`]); emits and absorbs
+//! inside a serialization call), reads objects back from positions
+//! ([`SerdeSession::object`], [`DeserializeContext::object`]), emits and absorbs
 //! segments ([`SerdeSession::take_segment`], [`SerdeSession::take_segment_with_main`],
-//! [`SerdeSession::push_segment`]); carries the caller's user data
-//! ([`SerdeSession::set_user_data`], one value per type); and bounds nested calls with
+//! [`SerdeSession::push_segment`]), holds the caller's user data
+//! ([`SerdeSession::set_user_data`], one value per type), and bounds nested calls with
 //! the crate's descent guard ([`SerdeSession::with_descent_guard_init`]). Both
-//! directions share one session type: [`SerdeSession::new`] registers the standard
+//! directions use the same session type: [`SerdeSession::new`] registers the standard
 //! tables, [`SerdeSession::empty`] starts with none, for a session composed of other
-//! tables. A heterogeneous table uses the [`DispatchingSerdeDriver`]: writing calls
-//! each object's own `serialize_object`; reading dispatches on the entry's identifier
+//! tables.
+//!
+//! A heterogeneous table uses the [`DispatchingSerdeDriver`]: writing calls each
+//! object's own `serialize_object`; reading dispatches on the entry's identifier
 //! through the [`ObjectReader`]s registered on the table's handle
 //! ([`TableHandle::register_type`], [`TableHandle::register_reader`]) and, for
-//! identifiers no reader covers, the [`IdentifierResolver`]s registered for
-//! identifier prefixes ([`TableHandle::register_resolver`]) — a framework with an open
-//! set of types supplies readers on demand that way, under its own trust policy; an
+//! identifiers no reader covers, through the [`IdentifierResolver`]s registered for
+//! identifier prefixes ([`TableHandle::register_resolver`]) — that is how a framework
+//! with an open set of types supplies readers on demand, under its own trust policy. An
 //! identifier nothing recognizes is an error ([`DeserializeError::UnknownIdentifier`]),
 //! never a guess.
 //!
@@ -322,19 +365,19 @@
 //!   digest — the crate implements no hash function. Both are configured on the driver
 //!   ([`SerdeSession::with_source_driver`]). Every source is written once however
 //!   often it is referred to, and read back as one shared `Arc<Source>`.
-//! - **States.** A state's entry carries its token rules, mode, ext, and scope stack
+//! - **States.** A state's entry stores its token rules, mode, ext, and scope stack
 //!   (as provider positions); the derived caches are rebuilt on reading. States are
 //!   interned: written once, read back shared.
 //! - **Specs and providers.** Heterogeneous tables whose readers a language or
 //!   framework registers; see the next section.
-//! - **Trees.** A tree's entry carries its nodes in storage order — spans, states,
+//! - **Trees.** A tree's entry stores its nodes in storage order — spans, states,
 //!   specs, and exts referring to the other tables — and, for a non-unit annotation
 //!   type, one annotation value per node (annotation types are registered on the
 //!   table's handle with [`TableHandle::register_annotation`]; the unit annotation is
 //!   pre-registered under `core.tree`). The reader rebuilds the tree through the node
 //!   builder, minting a fresh layout tag and re-establishing every structural
 //!   invariant. A tree is a value: every `serialize_tree` call writes a new entry.
-//! - **Diagnostics.** A diagnostic's entry carries its severity, its condition's
+//! - **Diagnostics.** A diagnostic's entry stores its severity, its condition's
 //!   identifier and serialization projection, its rendered message, its span, and its
 //!   traceback frames; the reader rebuilds it with a [`DeserializedCondition`] as its
 //!   condition — the written identifier, projection, and message as values — so that
@@ -357,9 +400,9 @@
 //! [`minidefs::register_package_recipes`](crate::latexlike::minidefs::register_package_recipes)).
 //! A spec that holds parsers (a [`StdCallableSpec`](crate::core::specs::StdCallableSpec),
 //! the latexlike macro, environment, and specials specs) goes by identity too, through
-//! the [`SpecProvenance`](crate::core::specs::SpecProvenance) stamp a package built
-//! with [`Package::new_shared`](crate::core::specs::Package::new_shared) hands out
-//! ([`Package::provenance_for`](crate::core::specs::Package::provenance_for)) — a
+//! the [`SpecProvenance`](crate::core::specs::SpecProvenance) stamp that a package built
+//! with [`Package::new_shared`](crate::core::specs::Package::new_shared) issues for its
+//! specs ([`Package::provenance_for`](crate::core::specs::Package::provenance_for)) — a
 //! reference to the package's entry plus the definition key, resolved by looking the
 //! key up in the reading side's package of that name: the very instance that package
 //! holds, never a lookup re-run. A spec of such a type built outside a shared package
@@ -389,50 +432,60 @@
 //!
 //! Everything above is unconditional plain Rust with no external dependency
 //! (`no_std` + `alloc`): sessions produce and absorb in-memory segments without any
-//! feature. The optional `serde` cargo feature adds the rendering layer:
-//! `Serialize`/`Deserialize` impls for [`SerialValue`] and [`Segment`], which encode
-//! through any serde format — the canonical rendering, stated for JSON on
-//! [`SerialValue`]'s page (`Bytes` as `{"$bytes": "<base64>"}`, `Index` as
-//! `{"$index": [table, position]}`, keys beginning with `$` reserved), and a compact
-//! rendering for non-human-readable formats — plus the *bridge*, `to_value` /
-//! `from_value`, which converts any type implementing serde's traits to and from a
-//! `SerialValue`, enforcing the value model's rules ([`SerialValueError`]: no
-//! floating-point numbers, no integers outside `i64`, string map keys, no `$`-keys) —
-//! the route for a payload that is a serde type already (a language's own value types
-//! derive the capability traits instead, without the feature) —
-//! and the `serial_bytes` helper module, which marks a byte-string field of a serde
-//! type for it. Positions defined with [`serial_index!`] gain serde impls under the
-//! feature. Trees with a plain-data annotation type can be registered through the
-//! bridge (`TableHandle::register_serde_annotation`, available with the feature). The
-//! feature adds no obligation to any implementer of the traits here: enabling it
+//! cargo feature. The optional `serde` feature adds the layer that turns those
+//! in-memory values into bytes.
+//!
+//! It supplies `Serialize`/`Deserialize` impls for [`SerialValue`] and [`Segment`],
+//! which encode through any serde format. Human-readable formats use the canonical
+//! rendering, stated for JSON on [`SerialValue`]'s page (`Bytes` as
+//! `{"$bytes": "<base64>"}`, `Index` as `{"$index": [table, position]}`, keys beginning
+//! with `$` reserved); every other format uses a compact rendering. Positions defined
+//! with [`serial_index!`] gain serde impls under the feature as well.
+//!
+//! It also supplies the *bridge*, `to_value` / `from_value`, which converts any type
+//! implementing serde's own traits to and from a `SerialValue` and enforces the value
+//! model's rules along the way ([`SerialValueError`]: no floating-point numbers, no
+//! integers outside `i64`, string map keys, no `$`-keys). The bridge is the route for a
+//! payload that is a serde type already — a language's own value types derive the
+//! capability traits instead, which needs no feature — and the `serial_bytes` helper
+//! module marks a byte-string field of such a serde type. A tree whose annotation type
+//! is plain data can be registered through the bridge too
+//! (`TableHandle::register_serde_annotation`, available with the feature).
+//!
+//! The feature adds no obligation to any implementer of the traits here: enabling it
 //! changes no trait surface.
 //!
 //! # Errors and panics
 //!
-//! Four error types: [`SerializeError`] (the write side — a type's own failure,
-//! wrapped with the table and node it happened in; a reference cycle; a spec without a
-//! provenance stamp; an argument spec the default rule cannot serialize; a value
-//! nesting too deep), [`DeserializeError`] (the read side — every validation failure,
-//! naming what failed: a malformed value, an index out of range or into the wrong
-//! table, an unknown identifier, a version or profile mismatch, a segment out of order,
-//! a missing provider or definition, a span outside its source, a digest mismatch, …),
-//! [`RegistrationError`] (setting a session up: duplicate table names or identifiers,
-//! a handle of another session), and [`SerialValueError`] (converting plain data to or
-//! from a `SerialValue`: the bridge's policy errors and shape mismatches, the nesting
-//! bound). Every value read is bounded in nesting depth
-//! ([`SerialValue::MAX_NESTING_DEPTH`], checked before any value is walked) and every
-//! nested call in descent, so that no input — malformed or malicious — can exhaust the
-//! stack. No public item of this module panics on any wire input or on any object the
-//! parser or the node builder produced; the one panic reachable through it is the
+//! Four error types:
+//!
+//! - [`SerializeError`], the write side: a type's own failure, wrapped with the table
+//!   and node it happened in; a reference cycle; a spec without a provenance stamp; an
+//!   argument spec the default rule cannot serialize; a value nesting too deep.
+//! - [`DeserializeError`], the read side: every validation failure, naming what failed —
+//!   a malformed value, an index out of range or into the wrong table, an unknown
+//!   identifier, a version or profile mismatch, a segment out of order, a missing
+//!   provider or definition, a span outside its source, a digest mismatch, and so on.
+//! - [`RegistrationError`], setting a session up: duplicate table names or identifiers,
+//!   a handle of another session.
+//! - [`SerialValueError`], converting plain data to or from a `SerialValue`: the
+//!   bridge's policy errors and shape mismatches, and the nesting bound.
+//!
+//! Every value read is bounded in nesting depth ([`SerialValue::MAX_NESTING_DEPTH`],
+//! checked before any value is walked), and every nested call is bounded in descent, so
+//! that no input — malformed or malicious — can exhaust the stack.
+//!
+//! No public item of this module panics on serialized input, or on any object the
+//! parser or the node builder produced. The one panic reachable through it is the
 //! crate-wide [`TextContent::resolve`](crate::source::TextContent::resolve) invariant
-//! panic, reached by the tree writer on a consumer-built tree whose invocation-syntax
-//! text spans outside its node's source (see [`TreeSerdeDriver`]).
+//! panic, which the tree writer reaches on a consumer-built tree whose
+//! invocation-syntax text spans outside its node's source (see [`TreeSerdeDriver`]).
 //!
 //! # Stability of the serialized form
 //!
 //! The serialized form — the layouts, table names, identifiers, key names, and enum
 //! strings this module writes, and its canonical JSON rendering — is **not yet
-//! frozen**. Every segment carries the layout version ([`Segment::VERSION`], currently
+//! frozen**. Every segment states the layout version ([`Segment::VERSION`], currently
 //! 1), and a reader accepts exactly its own; until the layout is declared final, it
 //! may still change incompatibly, and streams written before such a change are not
 //! preserved. Once frozen, the abstract structure and the canonical JSON rendering

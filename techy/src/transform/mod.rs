@@ -1,13 +1,26 @@
-//! Tree→tree transformation: the **streaming restage** driver.
+//! Tree-to-tree transformation: produce a new node tree from an existing one.
 //!
-//! A transformation pass walks a frozen input
-//! [`NodeTree`](crate::core::node::NodeTree) **top-down** — the
-//! [`RestageVisitor`] decides about every node *before* its subtree is committed
-//! (a buried `\includegraphics` is seen before anything below it is staged) —
-//! while the driver stages the output **bottom-up** into a fresh
-//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder) (children before
-//! parents; the driver mediates the two orders). The entry point is
-//! [`TreeRestager`] (`TreeRestager::new(&mut visitor).restage(&tree)`):
+//! A parsed [`NodeTree`](crate::core::node::NodeTree) is frozen, so an edit is
+//! expressed as *restaging*: the driver reads the input tree and stages a copy of
+//! each node into a fresh
+//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), applying the changes
+//! the caller asked for along the way.
+//!
+//! The two items to know are a driver and a callback. You implement a
+//! [`RestageVisitor`] — a closure is one — and pass it to the driver
+//! [`TreeRestager`]: `TreeRestager::new(&mut visitor).restage(&tree)` calls the
+//! visitor once per input node, starting at the root and working downward, and
+//! returns the finished output tree. Between two visitor calls the driver stages
+//! the nodes the callback asked for, translating each callable's argument and slot
+//! records onto the new child layout; a node is staged only after all of its
+//! children are, so a decision about a node is always taken before anything below
+//! it exists in the output.
+//!
+//! This module is one of three tree consumers, which differ in what they produce:
+//! [`visit`](crate::visit) produces nothing (a read-only traversal),
+//! [`recompose`](crate::recompose) produces a single value such as a `String`, and
+//! this one produces a new tree. [Node trees](crate::guide::node_trees) compares
+//! the three on one page.
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -16,8 +29,9 @@
 //! use techy::latexlike::{Latexlike, LatexlikeDriver};
 //! use techy::transform::{Restage, RestageContext, RestageError, TreeRestager};
 //!
-//! // The origin-tracking convention: the consumer's own annotation type carries
-//! // the original node's id (ids are tree-tagged, so old ids stay unambiguous).
+//! // To record where an output node came from, the consumer's own annotation
+//! // type stores the input node's id (ids are tagged with the tree that minted
+//! // them, so an input id stays unambiguous inside an output annotation).
 //! #[derive(Clone, Debug)]
 //! struct Ann { original: NodeId }
 //!
@@ -42,50 +56,56 @@
 //! assert_eq!(output.root().annotation().original, input.root().id());
 //! ```
 //!
-//! # The callback contract
+//! # What the visitor answers
 //!
-//! Per node the visitor returns a [`Restage`]:
+//! For each node the visitor returns a [`Restage`] value:
 //!
-//! - [`Descend(b)`](Restage::Descend) — the driver restages this node over its
-//!   children's results with annotation `b`, and **the visitor continues through
-//!   every child subtree**. This is a safety invariant: the only way a child
-//!   subtree goes unvisited is an explicit `Emit` for one of its ancestors —
-//!   there is no shallow-keep to reach by accident.
-//! - [`Emit(nodes)`](Restage::Emit) — the callback staged the replacement itself
-//!   (through the [context](RestageContext)'s region ops or its raw
-//!   [`builder()`](RestageContext::builder)); an empty vector drops the node.
-//!   **No automatic descent**: whatever the callback wants restaged from the
-//!   subtree, it restages explicitly (e.g.
-//!   [`restage_children`](RestageContext::restage_children)).
+//! - [`Descend(annotation)`](Restage::Descend) — the driver stages a copy of this
+//!   node over the results of its children, with the given annotation, and visits
+//!   every child subtree. There is no variant that keeps a node without visiting
+//!   its children: the only way a subtree goes unvisited is an explicit `Emit` for
+//!   one of its ancestors.
+//! - [`Emit(nodes)`](Restage::Emit) — the callback has already staged the
+//!   replacement itself, through the [context](RestageContext)'s region operations
+//!   or its raw [`builder()`](RestageContext::builder); these are the staged nodes
+//!   that stand in for this node, and an empty vector drops it. The driver does not
+//!   descend afterwards, so a callback that still wants part of the subtree
+//!   restaged asks for it explicitly, for example with
+//!   [`restage_children`](RestageContext::restage_children).
 //!
-//! Descent is **structural, never role-conditional**: the driver walks into
-//! [`Attached`](crate::core::node::SlotRole::Attached) *and*
-//! [`Hidden`](crate::core::node::SlotRole::Hidden) slot children exactly like
-//! into any other child — protective verbatim treatment of attached content is
-//! one explicit visitor arm, not driver behavior.
+//! Descent is structural and never depends on the role a child plays in its
+//! parent: the driver visits children in
+//! [`Attached`](crate::core::node::SlotRole::Attached) and
+//! [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions exactly like any
+//! other child. Copying attached content unchanged is one explicit arm of your
+//! visitor, not something the driver does on its own.
 //!
-//! # Read frozen, write staged
+//! # The input is readable, the output is not
 //!
-//! Callbacks *inspect the frozen input* — the full read API and the
-//! [`techy::extract`](crate::extract) tools — and *produce* staged output; the
-//! staged side is write-only ([`BuildId`]s and
-//! bundles). A `Descend` parent never sees its children's results: decisions
-//! precede restaging (top-down), and whatever a callback stages it just made —
-//! facts carry in closure state or annotations. A framework that must inspect
-//! transform output finishes the tree and runs another pass; multi-stage
-//! pipelines are deliberately cheap (zero-copy
-//! [`annotate`](crate::core::node::NodeTree::annotate), `Arc`-shared payloads).
+//! A callback reads the frozen input node with the full node API and the
+//! [`extract`](crate::extract) helpers, and produces staged output it can only
+//! refer to by [`BuildId`] — a staged node cannot be read back. In particular a
+//! `Descend` parent never sees its children's results, since the decision is taken
+//! before they are staged; whatever a callback stages it produced itself, and any
+//! fact it needs later goes into its own closure state or into an annotation.
 //!
-//! # Annotations: one pathway
+//! A pass that has to inspect transformed output finishes the tree and runs a
+//! second pass over it. Chaining passes is cheap: annotations can be replaced
+//! without copying the tree
+//! ([`annotate`](crate::core::node::NodeTree::annotate)), and node payloads are
+//! shared through `Arc`.
 //!
-//! *Every* restaged node's annotation passes through the visitor — as
-//! `Descend(b)`, or as an explicit argument to the staging ops the callback
-//! invokes. The input and output annotation types are different type parameters,
-//! so "keep the annotation" is deliberately not expressible; the origin-id
-//! convention is the one-liner `Descend(Ann { original: node.id(), .. })` (see
-//! the example above — "original node" is the vocabulary; "provenance" and
-//! "origin" alone belong to the source model). To find the *new* node minted for
-//! an old id, walk the finished tree's annotations once — the O(n) inversion:
+//! # Annotations
+//!
+//! Every output node's annotation comes from the visitor — as the value in
+//! `Descend(annotation)`, or as an explicit argument to the staging operation the
+//! callback invokes. The input and output annotation types are separate type
+//! parameters, so "keep the input annotation" is deliberately not expressible.
+//!
+//! To record where an output node came from, store the input node's id in your own
+//! annotation type: `Descend(Ann { original: node.id(), .. })`, as in the example
+//! above. To find the new node made for an old id, invert the finished tree's
+//! annotations once, in time proportional to the number of nodes:
 //!
 //! ```text
 //! let new_of_old: HashMap<NodeId, NodeId> = output
@@ -94,31 +114,31 @@
 //!     .collect();
 //! ```
 //!
-//! # Region edits: no silent repair
+//! # Region edits are checked, never silently repaired
 //!
-//! The driver acts exactly like parse-time construction — legal shapes pass,
-//! broken designations are errors:
+//! The driver applies the same rules as construction during a parse: legal shapes
+//! pass, and an edit that would leave a callable's records meaningless is an error.
 //!
 //! - Dropping every node of an argument's region restages the argument as
-//!   **provided with an empty region** (absent ≠ empty is parser semantics;
-//!   true absence is the explicit
-//!   [`RestagedArgument::absent`]).
-//! - Dropping (or multiplying) a node that anchors a record's
+//!   **provided with an empty region**. An absent argument means something
+//!   different from an empty one, and true absence is the explicit
+//!   [`RestagedArgument::absent`].
+//! - Dropping the node that a record's
 //!   [`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf) content
-//!   designation is [`RestageError::ContentParentDropped`]: re-anchoring would
-//!   silently change what the record *means*, and a multi-node replacement makes
-//!   any auto-re-anchor ill-defined even in principle. The remedy is a takeover:
-//!   `Emit` the callable's replacement yourself (via
-//!   [`restage_invocation`](RestageContext::restage_invocation) or the raw
-//!   builder).
+//!   designation points into — or replacing it with several nodes — is
+//!   [`RestageError::ContentParentDropped`]. Re-anchoring the designation
+//!   somewhere else would change what the record means, and for a multi-node
+//!   replacement there is no defined place to re-anchor it to. The remedy is to
+//!   take the callable over: `Emit` its replacement yourself, staged with
+//!   [`restage_invocation`](RestageContext::restage_invocation) or the raw builder.
 //!
-//! # Cross-tree by contract
+//! # Input nodes may come from any tree
 //!
-//! The context ops (and the level-0
+//! The context operations — and the
 //! [`NodeTreeBuilder::restage_node`](crate::core::node::NodeTreeBuilder::restage_node)
-//! primitive underneath them) accept nodes from **any** tree, not just the run's
-//! input — cross-tree input is supported by contract, for assembling a new tree
-//! out of pieces of several others.
+//! primitive underneath them — accept nodes from **any** tree, not only from the
+//! run's own input. This is supported by contract, so that one pass can assemble an
+//! output tree out of pieces of several input trees.
 
 use core::fmt;
 
@@ -135,49 +155,57 @@ mod context;
 pub use bundles::{RestagedArgument, RestagedSlot};
 pub use context::{RestageContext, TreeRestager};
 
-/// The visitor's verdict about one input node (returned from
-/// [`RestageVisitor::restage`]).
+/// What a [`RestageVisitor`] asks the driver to do with one input node.
+///
+/// Returned from [`RestageVisitor::restage`]; the [module docs](self) describe how
+/// the driver acts on each variant.
 #[derive(Clone, Debug)]
 pub enum Restage<B> {
-    /// The driver restages this node over its children's results, with the given
-    /// annotation — and the visitor **always** continues through every child
-    /// subtree (the safety invariant: no shallow-keep exists; see the
-    /// [module docs](self)).
+    /// Keep this node: the driver stages a copy of it over the results of its
+    /// children, with the given annotation, and visits every child subtree.
+    ///
+    /// There is no variant that keeps a node without visiting its children.
     Descend(B),
-    /// The callback staged the replacement itself; these are the staged nodes
-    /// standing in for this node (empty = drop). No automatic descent happens.
+    /// Replace this node with nodes the callback has already staged itself; an
+    /// empty vector drops it.
+    ///
+    /// The driver does not visit the node's children afterwards.
     Emit(Vec<BuildId>),
 }
 
-/// A restage callback: invoked once per visited node, top-down, with the frozen
-/// input node in hand and the staging [`RestageContext`] to write through.
+/// The callback half of a [`TreeRestager`] run: implement this, and the driver
+/// calls it once per input node.
 ///
-/// This is a trait (not a bare closure parameter) because the region ops re-enter
-/// the visitor from *inside* a visitor call — `cx.restage_argument(node, 0, self)`
-/// — and a closure cannot pass itself. For non-reentrant passes, any
-/// `FnMut(NodeRef<'_, L, A>, &mut RestageContext<'_, L, A, B>) ->
-/// Result<Restage<B>, E>` closure is a visitor via the blanket impl. One
-/// inference note: an **inline closure must annotate its two parameter types**
-/// (`&mut |node: NodeRef<'_, L, A>, cx: &mut RestageContext<'_, L, A, B>| { … }`
-/// — the [module](self) doctest models the spelling; a fully unannotated
-/// `|node, cx|` does not infer against the generic visitor parameter), while a
-/// fn item needs no annotations.
+/// Each call receives a node of the frozen input tree and the
+/// [`RestageContext`] to stage output through, and answers a [`Restage`] value;
+/// the [module docs](self) describe the contract and what the driver does between
+/// two calls.
 ///
-/// Deliberately **no `Send`/`Sync` bounds** (here and on
-/// [`annotate`](crate::core::node::NodeTree::annotate) callbacks): the driver
-/// runs visitors synchronously on the calling thread, so such a bound would be a
-/// demand on callers buying nothing — and it would exclude single-threaded
-/// foreign-function (FFI)
-/// callbacks. Parallel variants, if ever wanted, are new entry points with their
-/// own bounds (the `&mut self` contract is inherently serial).
+/// Any `FnMut(NodeRef<'_, L, A>, &mut RestageContext<'_, L, A, B>) ->
+/// Result<Restage<B>, E>` closure is a visitor through the blanket
+/// implementation, which is all a pass that never re-enters itself needs. This is
+/// a trait rather than a plain closure parameter because the context's region
+/// operations re-enter the visitor from *inside* a visitor call —
+/// `cx.restage_argument(node, 0, self)` — and a closure cannot pass itself.
+///
+/// An inline closure must annotate both of its parameter types: `&mut |node:
+/// NodeRef<'_, L, A>, cx: &mut RestageContext<'_, L, A, B>| { … }`, as spelled in
+/// the [module](self) example. A fully unannotated `|node, cx|` does not infer
+/// against the generic visitor parameter, while a function item needs no
+/// annotations at all.
+///
+/// A visitor need not be `Send` or `Sync` (nor need an
+/// [`annotate`](crate::core::node::NodeTree::annotate) callback): the driver runs
+/// visitors synchronously on the calling thread, so such a bound would constrain
+/// callers without buying anything, and it would exclude single-threaded
+/// foreign-function callbacks.
 ///
 /// # Errors
 ///
-/// `Error` is the visitor's own failure type; it rides through
-/// [`TreeRestager::restage`] typed,
-/// as [`RestageError::Visitor`]. Context ops fail with
-/// [`RestageError`]`<Self::Error>` values; a visitor that wants to propagate
-/// them with `?` gives its error type a conversion, e.g.:
+/// `Error` is the visitor's own failure type. It is returned unchanged from
+/// [`TreeRestager::restage`], as [`RestageError::Visitor`]. Context operations
+/// fail with [`RestageError`]`<Self::Error>` values instead, so a visitor that
+/// wants to propagate those with `?` gives its own error type a conversion:
 ///
 /// ```text
 /// enum PassError {
@@ -187,27 +215,33 @@ pub enum Restage<B> {
 /// impl From<RestageError<PassError>> for PassError { … }
 /// ```
 pub trait RestageVisitor<L: Lang, A, B> {
-    /// The visitor's own error type (see the trait docs).
+    /// The visitor's own failure type (see the trait docs).
     type Error;
 
-    /// Decide this node's restaging (see [`Restage`] and the [module docs](self)).
+    /// Decides what becomes of `node` in the output tree.
+    ///
+    /// See [`Restage`] for the answers and the [module docs](self) for what the
+    /// driver does with each of them.
     fn restage(
         &mut self,
         node: NodeRef<'_, L, A>,
         cx: &mut RestageContext<'_, L, A, B>,
     ) -> Result<Restage<B>, Self::Error>;
 
-    /// Notification: the run's descent guard granted a descent with an early
-    /// warning (under the unconfigured default, at half the stack budget — see
-    /// [`StdDescentGuardInit`](crate::core::StdDescentGuardInit)). Run-spanning
-    /// consumer state lives in the visitor's own `&mut self`, so the warning is
-    /// delivered here. Defaults to ignoring it.
+    /// Reports that the run's descent guard allowed a descent but is nearing its
+    /// limit — under the unconfigured default, at half the stack budget (see
+    /// [`StdDescentGuardInit`](crate::core::StdDescentGuardInit)).
+    ///
+    /// The warning is delivered here, rather than through the context, because
+    /// state that spans a whole run belongs in the visitor's own `&mut self`
+    /// fields. The default implementation ignores it.
     fn observe_descent_warning(&mut self, warning: DescentWarning) {
         let _ = warning;
     }
 }
 
-/// Closures are visitors (non-reentrant passes; see [`RestageVisitor`]'s docs).
+/// Every suitable `FnMut` closure is a [`RestageVisitor`], which covers any pass
+/// that does not re-enter itself.
 impl<L: Lang, A, B, E, F> RestageVisitor<L, A, B> for F
 where
     F: FnMut(NodeRef<'_, L, A>, &mut RestageContext<'_, L, A, B>) -> Result<Restage<B>, E>,
@@ -223,31 +257,36 @@ where
     }
 }
 
-/// Error of a [`TreeRestager`] run — generic over the visitor's own error type `E`
-/// (the framework's error rides through typed; `Clone`/`PartialEq`/`Eq` are
-/// conditional on `E`, keeping the uniform-Clone principle).
+/// Why a [`TreeRestager`] run failed, generic over the visitor's own error type
+/// `E`.
 ///
-/// The variants beyond the visitor's own ([`Visitor`](RestageError::Visitor))
-/// report builder contract violations
-/// ([`Build`](RestageError::Build)), driver-detected unrepairable edits
-/// ([`ContentParentDropped`](RestageError::ContentParentDropped)), the descent
-/// guard's refusal
-/// ([`DescentLimitExceeded`](RestageError::DescentLimitExceeded)), or misuse of
-/// a context op (a documented-contract violation returns an `Err`, never
-/// panics).
+/// A failure of the visitor itself is returned unchanged as
+/// [`Visitor`](RestageError::Visitor). The other variants report a violation of
+/// the output builder's contract ([`Build`](RestageError::Build)), an edit the
+/// driver cannot apply
+/// ([`ContentParentDropped`](RestageError::ContentParentDropped)), a tree nested
+/// deeper than the run's descent guard allows
+/// ([`DescentLimitExceeded`](RestageError::DescentLimitExceeded)), or misuse of a
+/// [`RestageContext`] operation — violating a documented contract returns an
+/// `Err` here, it never panics.
+///
+/// `Clone`, `PartialEq`, and `Eq` are implemented when `E` implements them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RestageError<E> {
-    /// Staging into the output builder failed ([`NodeBuildError`] — the staged
-    /// input violated the builder's contract; the run is abandoned).
+    /// Staging a node into the output builder failed because the staged input
+    /// violated the builder's contract ([`NodeBuildError`]); the run is abandoned.
     Build(NodeBuildError),
-    /// A restaged callable's argument/slot record designates its content inside
-    /// a node ([`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf))
-    /// that the pass dropped or did not restage one-to-one — re-anchoring is
-    /// ill-defined, so the driver refuses instead of silently changing what the
-    /// record means. Take over the callable itself: `Emit` its replacement,
-    /// staged via [`restage_invocation`](RestageContext::restage_invocation) or
-    /// the raw [`builder()`](RestageContext::builder).
+    /// A restaged callable's argument or slot record designates its content
+    /// inside a node ([`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf))
+    /// that the pass dropped, or replaced with something other than exactly one
+    /// node.
+    ///
+    /// There is no defined node to re-anchor the designation onto, so the driver
+    /// refuses rather than silently change what the record means. Take the
+    /// callable over instead: `Emit` its replacement, staged with
+    /// [`restage_invocation`](RestageContext::restage_invocation) or the raw
+    /// [`builder()`](RestageContext::builder).
     ContentParentDropped {
         /// The callable whose record lost its anchor.
         callable: NodeId,
@@ -303,18 +342,19 @@ pub enum RestageError<E> {
         /// The absent argument's index.
         index: usize,
     },
-    /// The root's replacement was not exactly one staged node
-    /// ([`TreeRestager::restage`]
-    /// returns a tree, and a synthesized wrapper would need an annotation the
-    /// driver cannot invent — wrap the root yourself via `Emit`).
+    /// The root's replacement was not exactly one staged node.
+    ///
+    /// [`TreeRestager::restage`] returns a tree, and a wrapper node invented by
+    /// the driver would need an annotation only the visitor can supply, so wrap
+    /// the replacement in a node of your own and `Emit` that.
     RootNotSingular {
         /// How many staged nodes the visitor produced for the root.
         count: usize,
     },
-    /// The run's descent guard refused to go one level deeper (the input is
-    /// nested too deeply for the configured limit): the run is abandoned.
-    /// Configure the limit with
-    /// [`TreeRestager::with_descent_guard_init`].
+    /// The input tree is nested more deeply than the run's descent guard allows,
+    /// so the guard refused to go one level deeper and the run is abandoned.
+    ///
+    /// Configure the limit with [`TreeRestager::with_descent_guard_init`].
     DescentLimitExceeded {
         /// Which limit was hit and how to configure it.
         detail: String,

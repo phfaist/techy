@@ -23,8 +23,7 @@ use core::ops::Range;
 /// Every span satisfies `start <= end`. [`new`](Span::new) asserts it, and the only
 /// in-place mutation, [`extend_to`](Span::extend_to), can move the end forward but not
 /// backward. The `From<Range<usize>>` conversion goes through `new`, so
-/// `Span::from(7..3)` — and `7..3` passed to any argument taking an
-/// `impl Into<Span>` — panics on the same assert.
+/// `Span::from(7..3)` panics on the same assert.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// Byte offset of the first byte of the range.

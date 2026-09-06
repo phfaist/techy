@@ -1,6 +1,6 @@
-//! The wire-side value model: [`SerialValue`], [`SerialEntry`], [`TableId`], and the
-//! [`SerialIndex`] bound. Nothing here names a source, a state, or a spec — every
-//! object kind is written in these terms alike.
+//! The value model of the serialized form: [`SerialValue`], [`SerialEntry`],
+//! [`TableId`], and the [`SerialIndex`] bound. Nothing here names a source, a state, or
+//! a spec — every kind of object is written in these terms alike.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -9,22 +9,20 @@ use alloc::vec::Vec;
 /// A serialized value: the in-memory, format-independent form that every
 /// serialization produces and every deserialization reads.
 ///
-/// The variant set is deliberately small so that every value has exactly one JSON
-/// rendering (JSON is the format the public serialization contract is stated in),
-/// and the rendering is designed so that two values render identically exactly when
-/// they compare equal: there are no floating-point numbers and no sized-integer
-/// variants (every integer is an [`Int`](SerialValue::Int)); map keys are strings
-/// and never begin with `$`; a [`Map`](SerialValue::Map) is an ordered list of
-/// entries — equality is order-sensitive and the rendering preserves the order, so
-/// two maps with the same entries in different orders are different values that
-/// render differently; and the two variants without a native JSON form,
-/// [`Bytes`](SerialValue::Bytes) and [`Index`](SerialValue::Index), render as
-/// reserved object shapes (keys beginning with `$`) that no other value can produce.
+/// A value is produced by a [`SerializableValue`](crate::serialize::SerializableValue)
+/// implementation or by the driver of a table, and a whole serialized object is such a
+/// value together with the identifier of what it describes: a [`SerialEntry`].
 ///
-/// [`Index`](SerialValue::Index) is a reference to an object stored in a numbered
-/// table: `table` names the table, `index` the position within it. Shared objects
-/// are written into tables once and referred to by such indices, so identity and
-/// sharing survive a round trip.
+/// The variant set is deliberately small, so that every value has exactly one JSON
+/// rendering — JSON is the format the public serialization contract is stated in — and
+/// so that two values render identically exactly when they compare equal. That is why
+/// there are no floating-point numbers and no sized-integer variants (every integer is
+/// an [`Int`](SerialValue::Int)), why map keys are strings and never begin with `$`,
+/// and why the order of a [`Map`](SerialValue::Map)'s entries is part of the value.
+///
+/// The two variants without a native JSON form, [`Bytes`](SerialValue::Bytes) and
+/// [`Index`](SerialValue::Index), render as reserved one-entry objects whose key begins
+/// with `$`; no other value can produce such a key.
 ///
 /// # Nesting depth
 ///
@@ -39,26 +37,32 @@ use alloc::vec::Vec;
 /// # Rendering through serde
 ///
 /// With the `serde` cargo feature the type implements `Serialize` and `Deserialize`.
-/// Through a human-readable format (serde's `is_human_readable()`), the rendering is
-/// the canonical one — not yet frozen, see "Stability of the serialized form" in the
-/// [module documentation](crate::serialize) — stated here for JSON: `Null` → `null`,
-/// `Bool` → boolean, `Int` → number, `Str` → string,
-/// `List` → array, `Map` → object in entry order; `Bytes` → the one-entry object
-/// `{"$bytes": "<base64>"}` (standard alphabet, `=` padding, no line breaks); `Index`
-/// → the one-entry object `{"$index": [<table>, <index>]}` (two integers: the table's
-/// ordinal, then the position). Those two keys are the only keys beginning with `$`
-/// the rendering ever writes: a `Map` holding a key that begins with `$` is a
-/// rendering error (there is no escaping — the prefix is reserved), and on reading,
-/// an object key beginning with `$` that is not one of the two reserved forms is an
-/// error, as are floating-point numbers, integers outside `i64`, and malformed
-/// reserved objects. Through any other format the rendering is a compact one: the
-/// externally tagged form of this enum (the variant name, then its data), `Bytes`
-/// through the format's `serialize_bytes`/`deserialize_bytes` methods, `Index` as the
-/// two-integer pair, `Map` as a serde map. Both renderings read back to the identical
-/// value.
+/// The rendering depends on the format: a human-readable one (serde's
+/// `is_human_readable()`) gets the canonical rendering, every other format a compact
+/// one. Both read back to the identical value.
+///
+/// The canonical rendering — not yet frozen, see "Stability of the serialized form" in
+/// the [module documentation](crate::serialize) — stated for JSON: `Null` → `null`,
+/// `Bool` → boolean, `Int` → number, `Str` → string, `List` → array, `Map` → object in
+/// entry order; `Bytes` → the one-entry object `{"$bytes": "<base64>"}` (standard
+/// alphabet, `=` padding, no line breaks); `Index` → the one-entry object
+/// `{"$index": [<table>, <index>]}` (two integers: the table's ordinal, then the
+/// position).
+///
+/// Those two keys are the only keys beginning with `$` the rendering ever writes. A
+/// `Map` holding a key that begins with `$` is a rendering error — the prefix is
+/// reserved and there is no escaping — and on reading, an object key beginning with `$`
+/// that is not one of the two reserved forms is an error, as are floating-point
+/// numbers, integers outside `i64`, and malformed reserved objects.
+///
+/// The compact rendering is the externally tagged form of this enum (the variant name,
+/// then its data), with `Bytes` written through the format's
+/// `serialize_bytes`/`deserialize_bytes` methods, `Index` as the two-integer pair, and
+/// `Map` as a serde map.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SerialValue {
-    /// The absent value.
+    /// The absent value: what `()` serializes to, and what an `Option` that is `None`
+    /// becomes.
     Null,
     /// A boolean.
     Bool(bool),
@@ -66,21 +70,30 @@ pub enum SerialValue {
     /// as `i64` (a value that does not fit is a serialization error, never a silent
     /// truncation).
     Int(i64),
-    /// A string.
+    /// A string. Every text in the serialized form is one of these — a name, an
+    /// identifier, a piece of source text, and a `char` as a one-character string.
     Str(String),
-    /// A byte string (rendered as base64 text in JSON).
+    /// A byte string: data that is not text, such as a source's digest. Rendered as
+    /// base64 text in JSON.
     Bytes(Vec<u8>),
-    /// An ordered sequence of values.
+    /// An ordered sequence of values: what a `Vec<T>` becomes, and every repeated part
+    /// of an entry, such as the nodes of a tree.
     List(Vec<SerialValue>),
-    /// A string-keyed map: an ordered list of entries. The order is part of the
-    /// value — equality is order-sensitive and the rendering preserves the order —
-    /// so two maps with the same entries in different orders are different values
-    /// that render differently. Keys are expected to be unique and must not begin
-    /// with `$` (the prefix is reserved for the rendering's own objects; a key that
-    /// begins with it is a rendering or bridge error); the value model itself
+    /// A string-keyed map: an ordered list of entries. This is what a structure with
+    /// named fields becomes, each field under its own key.
+    ///
+    /// The order is part of the value — equality is order-sensitive and the rendering
+    /// preserves the order — so two maps with the same entries in different orders are
+    /// different values that render differently. Keys are expected to be unique and
+    /// must not begin with `$` (the prefix is reserved for the rendering's own objects;
+    /// a key that begins with it is a rendering or bridge error); the value model itself
     /// enforces neither at construction.
     Map(Vec<(String, SerialValue)>),
     /// A reference to the object at position `index` of the table `table`.
+    ///
+    /// This is what makes sharing survive a round trip: an object is written into its
+    /// table once, and everything that refers to it stores an `Index` instead of a copy.
+    /// Rust code holds the same two parts as a typed position — see [`SerialIndex`].
     Index {
         /// The table the referenced object is stored in.
         table: TableId,
