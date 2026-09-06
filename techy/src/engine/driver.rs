@@ -1032,11 +1032,14 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
     }
 }
 
-/// The result of [`ParseDriver::resolve_command`]: a resolution to dispatch, or an
-/// [`Unresolved`](CommandResolution::Unresolved) failure whose optional `detail` says
-/// *why* — surfaced verbatim on the unresolvable-command diagnostic. Any resolution
-/// layer may fill it in: the trait's default hook reports that command resolution is
-/// not implemented at all; a library-backed resolver might report where it searched
+/// The answer [`ParseDriver::resolve_command`] gives about one command token: it
+/// resolved, it did not resolve, or resolution broke.
+///
+/// [`Resolved`](CommandResolution::Resolved) carries the invocation to dispatch. The
+/// other two are failures, and each carries an optional `detail` string saying *why*,
+/// which appears verbatim on the resulting diagnostic. Any resolution layer may fill
+/// that in: the trait's default hook reports that command resolution is not
+/// implemented at all, while a library-backed resolver might report where it searched
 /// ("searched libraries x, y, z") or hint at a fix ("load the {amsmath} library for
 /// this command").
 #[non_exhaustive]

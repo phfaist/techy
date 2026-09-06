@@ -1,50 +1,65 @@
-//! [`CharsGroupArgumentParser`]: the node-staging chars-group parser
-//! (ParserLibraryParity.md N4; pylatexenc's `LatexCharsGroupParser`) — a `{…}` group
-//! whose **contents parse under a restricted state**, for `\label{…}`/`\cite{…}`-style
-//! chars-only arguments.
+//! A mandatory group argument whose contents are read as plain characters:
+//! [`CharsGroupArgumentParser`].
 //!
-//! Deliberately distinct from
-//! [`read_rigid_name_group`](super::read_rigid_name_group): the environment-name
-//! reader is value-returning *scaffolding* (reconstructed, never recorded) — this parser **stages nodes** like any argument parser,
-//! and the group's children are the argument's content (the braces are argument
-//! syntax, exactly as in [`GroupArgumentParser`](super::GroupArgumentParser)'s class
-//! form).
+//! It accepts a group of a configured class — `{…}` for the latexlike content class —
+//! and parses that group's contents under a restricted state in which commands and
+//! specials are off, so `\input{my_file.tex}` keeps its underscore and
+//! `\input{\jobname.tex}` yields the literal characters `\jobname.tex`. The group's
+//! children are the argument's content and the delimiters are argument syntax, exactly as
+//! in [`GroupArgumentParser`](super::GroupArgumentParser)'s class form. pylatexenc calls
+//! this parser `LatexCharsGroupParser`.
+//!
+//! No latexlike argument code selects it; attach it to an [`ArgumentSpec`] yourself. The
+//! preset uses it for the file-name argument of its `\input`-style macros.
+//!
+//! It is distinct from [`read_rigid_name_group`](super::read_rigid_name_group), which
+//! reads an environment name and returns it as a value without recording any node; this
+//! parser stages nodes like any other argument parser.
+//!
+//! # When the group is not there
+//!
+//! The argument is mandatory and has **no** single-expression fallback: where no group of
+//! the configured class opens,
+//! [`MissingMandatoryArgument`](super::MissingMandatoryArgument) is recorded under
+//! tolerant recovery, or the parse aborts under strict recovery, and the argument is
+//! reported absent with nothing consumed. `\input a` reports a missing mandatory
+//! argument rather than taking `a`.
+//!
+//! Whitespace and comments ahead of the `{` are scanned under the argument's own state,
+//! not the restricted one — the restriction covers the group's interior only. That is why
+//! this is a parser rather than a plain state delta on the argument: an
+//! [`ArgumentSpec::parsing_state_delta`] would cover the probe as well.
 //!
 //! # The restricted contents state
 //!
-//! Inside the group, commands and specials are **off** (a `\foo` or `~` reads as
-//! ordinary characters), comments are a knob
-//! ([`with_comments`](CharsGroupArgumentParser::with_comments), default on), and
-//! nested groups are a knob
-//! ([`with_nested_groups`](CharsGroupArgumentParser::with_nested_groups), default on)
-//! — pylatexenc's `enable_macros=False, enable_specials=False, enable_math=False`
-//! recipe, with one techy twist: there is no math *gate* in the core, so "math off"
-//! is **data-driven** — with nested groups on, the contents keep only the base
-//! state's group rules **of the entered class** (the latexlike `{…}` content class
-//! keeps `{}`; the math delimiter pairs, being another class, drop away and `$` reads
-//! as a plain character). With nested groups off, the groups gate is disabled
-//! entirely: interior `{`/`}` become plain characters — and the *outer* close still
-//! terminates the group, because the expected-close recognizer is ungated (the
-//! verbatim-recipe precedent) — so the first close ends the group, as in pylatexenc.
+//! Inside the group, commands and specials are off, so `\foo` and `~` read as ordinary
+//! characters. Two settings adjust the rest:
 //!
-//! **Descent policy**: by default a nested group's
-//! interior **restores the outer, unrestricted state** — the pylatexenc behavior,
-//! wanted for shapes like `\cite{manual:{… \emph{Title} …}}` where the first level is
-//! chars-only but braced values regain full parsing richness. The one-level-deep
-//! [`ChildStateSpec`] (whose module docs name exactly this chars-except-groups case)
-//! carries the revert; deeper levels inherit the outer state naturally.
-//! [`with_restricted_descent`](CharsGroupArgumentParser::with_restricted_descent)
-//! keeps the restriction at every depth instead (nested groups stay chars-only).
+//! - comments ([`with_comments`](CharsGroupArgumentParser::with_comments), default on);
+//! - nested groups ([`with_nested_groups`](CharsGroupArgumentParser::with_nested_groups),
+//!   default on).
 //!
-//! Leading noise (whitespace, comments ahead of the `{`) scans under the **outer**
-//! state per the noise-ownership doctrine — the restriction scopes the group's
-//! interior only, which is why this parser exists rather than a plain state delta on
-//! the whole argument ([`ArgumentSpec::parsing_state_delta`] covers the probe too).
+//! Together these are pylatexenc's `enable_macros=False, enable_specials=False,
+//! enable_math=False` recipe. The core has no math gate, so "math off" follows from the
+//! group rules instead: with nested groups on, the contents keep only those of the base
+//! state's group rules that belong to the class entered. The latexlike `{…}` content
+//! class therefore keeps `{}`, while the math delimiter pairs — another class — drop away
+//! and `$` reads as a plain character.
 //!
-//! The argument is mandatory with **no** expression fallback: where no group of the
-//! configured class opens, [`MissingMandatoryArgument`](super::MissingMandatoryArgument)
-//! is diagnosed (tolerant) or aborts (strict), the argument reported absent, nothing
-//! consumed.
+//! With nested groups off, the groups feature is disabled outright and interior `{` and
+//! `}` become plain characters. The *outer* close still ends the group, because the
+//! expected close delimiter is recognized whether or not groups are enabled, so the first
+//! close of the entered pairing ends the group, as in pylatexenc.
+//!
+//! # Nested groups and the descent policy
+//!
+//! By default a nested group's interior restores the outer, unrestricted state — the
+//! pylatexenc behavior, wanted for shapes like `\cite{manual:{… \emph{Title} …}}` where
+//! the first level is characters only but a braced value regains full parsing. The
+//! one-level-deep [`ChildStateSpec`] carries that revert, and deeper levels inherit the
+//! outer state.
+//! [`with_restricted_descent`](CharsGroupArgumentParser::with_restricted_descent) keeps
+//! the restriction at every depth instead, so nested groups stay characters only.
 
 use alloc::sync::Arc;
 use core::fmt;
@@ -63,16 +78,24 @@ use super::argument_parsers::{
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{ConstructParserResult, FromInvocation, ParseContext};
 
-/// The chars-group argument parser: a mandatory group of the configured class whose
-/// contents parse under a **restricted state** — commands and specials off (`\foo`
-/// and `~` read as ordinary characters), comments and nested groups per the
-/// settings below — for `\label{…}`/`\cite{…}`-style chars-only arguments. By
-/// default a nested group's interior restores the outer, unrestricted state
-/// ([`with_restricted_descent`](CharsGroupArgumentParser::with_restricted_descent)
-/// keeps the restriction at every depth). The argument is mandatory with **no**
-/// expression fallback: where no group of the configured class opens,
-/// [`MissingMandatoryArgument`](super::MissingMandatoryArgument) is diagnosed
-/// (tolerant) or aborts (strict), the argument reported absent, nothing consumed.
+/// A mandatory `{…}` argument whose contents are read as plain characters, as in
+/// `\label{sec:intro}` or `\input{my_file.tex}`.
+///
+/// The group must be of the class this parser was configured with. Its contents parse
+/// under a restricted state: commands and specials are off, so `\foo` and `~` read as
+/// ordinary characters, while comments and nested groups follow the settings below. The
+/// group's children are the argument's content.
+///
+/// By default a nested group's interior restores the outer, unrestricted state;
+/// [`with_restricted_descent`](CharsGroupArgumentParser::with_restricted_descent) keeps
+/// the restriction at every depth.
+///
+/// # When the group is not there
+///
+/// The argument is mandatory and has no single-expression fallback. Where no group of the
+/// configured class opens, [`MissingMandatoryArgument`](super::MissingMandatoryArgument)
+/// is recorded under tolerant recovery, or the parse aborts under strict recovery, and
+/// the argument is reported absent with nothing consumed.
 pub struct CharsGroupArgumentParser<L: Lang> {
     group_type: L::GroupTypeId,
     comments: bool,
@@ -81,9 +104,10 @@ pub struct CharsGroupArgumentParser<L: Lang> {
 }
 
 impl<L: Lang> CharsGroupArgumentParser<L> {
-    /// A chars-group argument delimited by any group rule of class `group_type`, with
-    /// the defaults: comments on, nested groups on, nested interiors restored to the
-    /// outer state.
+    /// A characters-only argument delimited by any group rule of class `group_type`.
+    ///
+    /// The defaults are comments on, nested groups on, and nested group interiors
+    /// restored to the outer, unrestricted state.
     pub fn new(group_type: L::GroupTypeId) -> CharsGroupArgumentParser<L> {
         CharsGroupArgumentParser {
             group_type,
@@ -93,26 +117,28 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
         }
     }
 
-    /// Set whether comments stay recognized inside the group (default: `true`;
-    /// pylatexenc's `enable_comments`).
+    /// Sets whether comments stay recognized inside the group; on by default
+    /// (pylatexenc's `enable_comments`).
     pub fn with_comments(mut self, comments: bool) -> Self {
         self.comments = comments;
         self
     }
 
-    /// Set whether nested groups of the entered class stay recognized inside the
-    /// group (default: `true`; pylatexenc's `enable_groups`). When `false`, interior
-    /// open/close delimiters read as plain characters while the outer close still
-    /// terminates the group — the expected-close recognizer stays active even with
-    /// groups disabled — so the first close of the entered pairing ends the group.
+    /// Sets whether nested groups of the entered class stay recognized inside the group;
+    /// on by default (pylatexenc's `enable_groups`).
+    ///
+    /// With `false`, interior open and close delimiters read as plain characters. The
+    /// outer close still ends the group — the expected close delimiter is recognized even
+    /// with groups disabled — so the first close of the entered pairing ends it.
     pub fn with_nested_groups(mut self, nested_groups: bool) -> Self {
         self.nested_groups = nested_groups;
         self
     }
 
-    /// Keep the restriction in force inside nested groups (default: `false` — nested
-    /// interiors restore the outer, unrestricted state, so braced values inside a
-    /// chars-only argument regain full parsing richness).
+    /// Keeps the restriction in force inside nested groups; off by default.
+    ///
+    /// With the default, a nested group's interior restores the outer, unrestricted
+    /// state, so a braced value inside a characters-only argument is parsed in full.
     pub fn with_restricted_descent(mut self, restricted_descent: bool) -> Self {
         self.restricted_descent = restricted_descent;
         self

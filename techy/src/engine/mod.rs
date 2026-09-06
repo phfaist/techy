@@ -213,7 +213,7 @@ impl<L: Lang> core::error::Error for SessionDeriveError<L> {
 /// [`finish`](ParserSession::finish), which freezes it into a [`ParseResult`]. It is
 /// the only mutable part of a parse — trees, states, and specs are all immutable —
 /// and construct parsers reach it as
-/// [`ParseContext::session`](crate::constructs::ParseContext).
+/// [`ParseContext::session`](crate::constructs::ParseContext::session).
 ///
 /// [`diagnostics`](ParserSession::diagnostics) and [`ext`](ParserSession::ext) are
 /// public fields, so a parser can record a diagnostic or update the language's own

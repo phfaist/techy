@@ -5,7 +5,7 @@
 //!
 //! | parser | accepts | when it is not there |
 //! |---|---|---|
-//! | [`GroupArgumentParser`] | a delimited group — `{…}`, or the pair it was configured with, say `(…)` — falling back by default to a single expression (`\frac12`) | reports a missing mandatory argument |
+//! | [`GroupArgumentParser`] | a delimited group — `{…}`, or the pair it was configured with, say `(…)` — with a single-expression fallback (`\frac12`) that is on for a group class and off for a configured pair | reports a missing mandatory argument |
 //! | [`OptionalGroupArgumentParser`] | a delimited group whose delimiter pair is minted for this argument, typically `[…]` | absent, silently |
 //! | [`MarkerArgumentParser`] | a literal marker, such as the `*` of `\section*` | absent, silently |
 //! | [`ExpressionParser`] | exactly one node: a group, a whole callable invocation, or a single character | reports that an expression was expected |

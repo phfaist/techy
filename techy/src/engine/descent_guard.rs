@@ -47,21 +47,22 @@
 use alloc::format;
 use alloc::string::String;
 
-/// The per-run limiter of recursion depth — asked before every descent whether
-/// the run may go one level deeper.
+/// Caps recursion depth: asked before every descent whether the run may go one level
+/// deeper.
 ///
-/// One guard value is created per run: a parse's lives on the
-/// [`ParserSession`](super::ParserSession) and is driven from the single
-/// descent entry point,
-/// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct);
-/// a traversal's is created by its driver
-/// ([`TreeWalker`](crate::visit::TreeWalker) and its transform/recompose
-/// siblings) and wraps the per-node recursion. Either way:
-/// [`try_enter`](DescentGuard::try_enter) before the descent runs,
-/// [`exit`](DescentGuard::exit) after it returns (on the success and error paths
-/// alike — errors are returned values, not unwinds). A refusal aborts the
-/// run — for a parse, under any recovery policy — and the refused descent never
-/// gets a matching `exit` call.
+/// One guard value is created per run. A parse's guard is stored on the
+/// [`ParserSession`](super::ParserSession) and driven from the single descent entry
+/// point,
+/// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct).
+/// A traversal's guard is created by its driver
+/// ([`TreeWalker`](crate::visit::TreeWalker) and its transform and recompose
+/// siblings) and wraps the per-node recursion.
+///
+/// Either way the protocol is the same: [`try_enter`](DescentGuard::try_enter) before
+/// the descent runs, [`exit`](DescentGuard::exit) after it returns, on the success and
+/// error paths alike — errors here are returned values, not unwinds. A refusal ends
+/// the run, for a parse under any recovery policy, and the refused descent never gets
+/// a matching `exit` call.
 ///
 /// Implementations are plain values — no `Send`/`Sync` requirement on the guard
 /// itself (it never leaves its run's thread); the configuration
