@@ -216,15 +216,20 @@ impl<L: Lang> fmt::Debug for ArgumentNoise<L> {
     }
 }
 
-/// Scan an argument's leading noise — whitespace and comments ahead of its syntax —
-/// staging each as an ordinary node under the context's current state (the argument's
-/// own state: noise policy is inseparable from argument syntax), and stop at the first non-noise token, peeked and left unconsumed.
+/// Scans the whitespace and comments that precede an argument, staging each as an
+/// ordinary node, and stops at the first token that is not one of them.
 ///
-/// The shared entry step of the standard argument parsers; custom [`ArgumentParser`]s
-/// with ordinary noise behavior use it the same way. Parsers whose syntax involves the
-/// whitespace or comment characters (verbatim-delimited arguments) skip it and read
-/// raw tokens instead — the scan is deliberately *not* run by the invocation parser on
-/// a parser's behalf.
+/// That stop token is peeked and left unconsumed. The nodes are staged under the
+/// context's current state, which is the argument's own state, so the argument's rules
+/// decide what counts as whitespace or a comment.
+///
+/// This is the first step of every standard argument parser, and custom
+/// [`ArgumentParser`] implementations with ordinary leading-whitespace behavior use it
+/// the same way. It is deliberately not run by the invocation parser on a parser's
+/// behalf: a parser whose own syntax uses the whitespace or comment characters — a
+/// delimited verbatim argument, for instance — skips it and reads raw tokens instead,
+/// and a parser that requires an adjacent argument calls [`peek_adjacent_argument`] in
+/// its place.
 pub fn scan_argument_noise<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
 ) -> ConstructParserResult<L, ArgumentNoise<L>> {

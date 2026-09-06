@@ -161,24 +161,81 @@ impl<L: Lang> Language<L> {
         &self.driver
     }
 
-    /// Parse `content` as an anonymous in-memory [`Source`] under this language's
-    /// defaults — the everyday shorthand for
-    /// `parse_setup(Source::new(content)).parse()` (see
-    /// [`parse_setup`](Language::parse_setup) for the configurable form and
-    /// [`ParseSetup::parse`] for what a parse does).
+    /// Parses `content` and returns the resulting node tree together with the
+    /// diagnostics recorded along the way.
+    ///
+    /// This is the everyday entry point of the crate. Everything the parse needs is
+    /// already on the `Language`: the [`initial_state`](Language::initial_state)
+    /// fixes the token rules, the starting mode, and the definitions in scope, and
+    /// the [`driver`](Language::driver) supplies the parse-time behavior, including
+    /// the [`Recovery`](crate::error::Recovery) policy. So there is nothing to pass
+    /// here but the text.
+    ///
+    /// `content` is wrapped in a fresh anonymous [`Source`], which makes this call
+    /// exactly `parse_setup(Source::new(content)).parse()`. Reach for
+    /// [`parse_setup`](Language::parse_setup) when the source needs an origin label
+    /// such as a file name, or when the same source handle must be shared across
+    /// parses.
+    ///
+    /// # What you get back
+    ///
+    /// [`ParseResult::tree`] is the parsed document: a
+    /// [`NodeTree`](crate::core::node::NodeTree) whose root is the list of top-level
+    /// nodes. [`ParseResult::diagnostics`] holds
+    /// every problem that was recorded rather than raised — empty for a clean parse,
+    /// so check
+    /// [`has_errors`](crate::error::Diagnostics::has_errors) before treating a
+    /// tolerant result as clean. The result owns its tree and borrows nothing from
+    /// the language.
     ///
     /// Each call mints a **fresh source identity** ([`Source::new`]), and
     /// [`SourceSpan`]/[`SourcePos`](crate::source::SourcePos) equality compares the
-    /// source by identity plus offsets — so spans from two `parse` calls never
-    /// compare equal, even over byte-identical text (the comparison answers
-    /// `false`, it does not fail). To correlate positions across parses
-    /// (re-parsing an edited document, diffing two attempts), hold one
-    /// `Arc<Source>` and pass the same handle to
-    /// [`parse_setup`](Language::parse_setup) each time.
+    /// source by identity as well as by offsets. Spans from two `parse` calls
+    /// therefore never compare equal, even over byte-identical text (the comparison
+    /// answers `false`; it does not fail). To correlate positions across parses —
+    /// re-parsing an edited document, diffing two attempts — hold one `Arc<Source>`
+    /// and pass the same handle to [`parse_setup`](Language::parse_setup) each time.
     ///
-    /// `Err` is the strict-mode abort (or an implementation-contract violation, which
-    /// aborts under any policy); `Ok` carries the tree plus any tolerantly recorded
-    /// diagnostics.
+    /// # Errors
+    ///
+    /// Returns the [`ParseError`] that ended the parse. Which problems end a parse
+    /// is the driver's recovery policy: under
+    /// [`Recovery::Strict`](crate::error::Recovery::Strict) the first problem in the
+    /// document aborts, while under
+    /// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) document problems are
+    /// recorded as diagnostics and parsing continues — see
+    /// [strict versus tolerant](crate::guide::parsing#strict-versus-tolerant). A
+    /// violation of a library contract by an extension (a hook or a custom parser
+    /// breaking its documented obligations) aborts under either policy. An aborted
+    /// parse returns no tree and no diagnostics: the error itself describes the
+    /// problem and the constructs that were open at the time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use techy::core::{Language, ParsingState};
+    /// use techy::error::Recovery;
+    /// use techy::latexlike::{Latexlike, LatexlikeDriver};
+    ///
+    /// // Define the language once; parse as many documents as you like with it.
+    /// let language: Language<Latexlike> = Language::new(
+    ///     LatexlikeDriver::new(Recovery::Tolerant),
+    ///     ParsingState::lang_initial().expect("seed state"),
+    /// );
+    ///
+    /// let result = language.parse("Hello {world}!").unwrap();
+    /// assert!(result.diagnostics.is_empty());
+    ///
+    /// // The root lists the top-level content: text, the group, more text.
+    /// let root = result.tree.root();
+    /// assert_eq!(root.child_count(), 3);
+    /// assert_eq!(root.child(1).unwrap().span_content(), "{world}");
+    ///
+    /// // Tolerant parsing records a problem instead of aborting: nothing defines
+    /// // `\nope`, so it is diagnosed and recovered as literal characters.
+    /// let recovered = language.parse(r"a \nope b").unwrap();
+    /// assert!(recovered.diagnostics.has_errors());
+    /// ```
     pub fn parse(
         &self,
         content: impl Into<String>,

@@ -125,11 +125,15 @@ impl fmt::Display for CommandResolutionFailed {
     }
 }
 
-/// Condition: a callable whose invocation requires content — a mandatory argument, a
-/// body ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content))
-/// — was used *bare* where a single expression was required (pylatexenc's
-/// requires-arguments diagnostic) — the expression position recovers by staging the
-/// bare single-token callable.
+/// Diagnostic condition: a callable that requires content was used bare where a single
+/// expression was expected.
+///
+/// A callable requires content when it declares a mandatory argument or a body, which
+/// [`CallableSpec::requires_content`](crate::core::specs::CallableSpec::requires_content)
+/// reports. In tolerant parsing the expression position recovers by staging the callable
+/// on its own, with every declared argument absent.
+///
+/// This is the counterpart of pylatexenc's requires-arguments diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -142,11 +146,13 @@ pub struct ExpressionCallableRequiresContent {
     pub callable: String,
 }
 
-/// Condition: a [`TokenRecovery`](crate::token::TokenRecovery) placeholder token of a
-/// kind the content loop cannot process as content (a `Specials` or `GroupOpen`
-/// placeholder). The placeholder stands in for a failed read — it has no real source
-/// bytes behind it — so it cannot be dispatched or parsed as a construct; the loop
-/// recovers with a chars fallback over the error's span.
+/// Diagnostic condition: a [`TokenRecovery`](crate::core::token::TokenRecovery)
+/// placeholder token arrived in a kind the content loop cannot process as content.
+///
+/// A placeholder stands in for a read that failed, so it has no source bytes behind it.
+/// A `Specials` or `GroupOpen` placeholder therefore cannot be dispatched or parsed as a
+/// construct, and [`NodesParser`] recovers by staging a `Chars` node over the token
+/// error's span. Placeholders of the other kinds are processed as ordinary content.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.recovery.unusable-recovery-token")]
@@ -161,11 +167,11 @@ pub struct UnusableRecoveryToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum UnusableRecoveryTokenKind {
-    /// A `Specials` placeholder (a recognized trigger cannot be invoked without real
-    /// bytes to consume).
+    /// A `Specials` placeholder: a recognized trigger cannot be invoked without real
+    /// bytes to consume.
     Specials,
-    /// A `GroupOpen` placeholder (a group cannot be parsed out of a delimiter with no
-    /// bytes behind it).
+    /// A `GroupOpen` placeholder: a group cannot be parsed out of a delimiter with no
+    /// bytes behind it.
     GroupOpen,
 }
 
