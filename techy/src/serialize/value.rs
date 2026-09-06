@@ -103,36 +103,41 @@ pub enum SerialValue {
 }
 
 impl SerialValue {
-    /// The greatest nesting depth a serialized value may have: the number of lists
-    /// and maps enclosing any part of the value, [`nesting_depth`](SerialValue::nesting_depth),
-    /// is at most this. The bound is enforced wherever a value crosses the
-    /// serialization boundary: reading a value through serde (the `Deserialize`
-    /// impls of `SerialValue` and of [`Segment`](crate::serialize::Segment), with the
-    /// `serde` cargo feature), converting a segment from its serialized form
+    /// The greatest nesting depth a serialized value may have: no value that crosses
+    /// the serialization boundary has a [`nesting_depth`](SerialValue::nesting_depth)
+    /// above this.
+    ///
+    /// The bound is checked at every such boundary — reading a value through serde (the
+    /// `Deserialize` impls of `SerialValue` and of [`Segment`](crate::serialize::Segment),
+    /// with the `serde` cargo feature), converting a segment from its serialized form
     /// ([`Segment::from_serial_value`](crate::serialize::Segment::from_serial_value)),
     /// absorbing a segment ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)),
-    /// and interning an object ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern)) —
-    /// a deeper value is a [`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
-    /// error there, so that a malicious input cannot exhaust the stack of a reader
-    /// that walks values recursively, and so that a writer learns at once when an
-    /// entry would be unreadable. A segment's serialized form counts as one value:
-    /// its own structure — the segment map, its table list, a table's map, its entry
-    /// list — takes four levels, so an entry's stored form may nest at most four
-    /// levels less than this (a table that stores identifiers with the data wraps
-    /// each entry in one more map).
+    /// and interning an object ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern)).
+    /// A deeper value is a
+    /// [`SerialValueError::NestingTooDeep`](crate::serialize::SerialValueError::NestingTooDeep)
+    /// error there, so that a malicious input cannot exhaust the stack of a reader that
+    /// walks values recursively, and so that a writer learns at once when an entry would
+    /// be unreadable.
     ///
-    /// The bound is well above what any serialized object of this crate needs (a
-    /// tree's entry nests about ten levels), and below the default recursion limit
-    /// of the `serde_json` reader (128), so that the same bound is in force whatever
-    /// the format.
+    /// A segment's serialized form counts as one value: its own structure — the segment
+    /// map, its table list, a table's map, its entry list — takes four levels, so an
+    /// entry's stored form may nest at most four levels less than this (a table that
+    /// stores identifiers with the data wraps each entry in one more map).
+    ///
+    /// The bound is well above what any serialized object of this crate needs (a tree's
+    /// entry nests about ten levels), and below the default recursion limit of the
+    /// `serde_json` reader (128), so that the same bound is in force whatever the
+    /// format.
     pub const MAX_NESTING_DEPTH: usize = 64;
 
     /// The value's nesting depth: the number of lists and maps that enclose its most
-    /// deeply nested part — `0` for a value that is not a list or a map, `1` for a
-    /// list or map holding no list or map, and so on (a list holding one list holding
-    /// one integer — `[[1]]` in JSON — has depth `2`). Computed
-    /// without recursion, so any value can be measured. Compare with
-    /// [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH).
+    /// deeply nested part.
+    ///
+    /// A value that is not a list or a map has depth `0`; a list or map holding no list
+    /// or map has depth `1`; a list holding one list holding one integer — `[[1]]` in
+    /// JSON — has depth `2`. The computation does not recurse, so a value of any depth
+    /// can be measured. The depth a value may have when it crosses the serialization
+    /// boundary is bounded by [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH).
     pub fn nesting_depth(&self) -> usize {
         let mut deepest = 0;
         let mut pending: Vec<(&SerialValue, usize)> = Vec::from([(self, 0)]);

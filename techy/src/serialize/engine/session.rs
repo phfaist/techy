@@ -1,6 +1,5 @@
-//! [`SerdeSession`]: the tables, their entries, both direction maps (object → position
-//! for writing, position → object for reading back), the registrations, and the
-//! segment exchange.
+//! The serialization session: [`SerdeSession`], its tables of objects, the
+//! registrations it keeps for them, and the segments it emits and absorbs.
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -23,51 +22,95 @@ use super::context::{DeserializeContext, SerializeContext};
 use super::driver::{ObjectSerdeDriver, TableHandle};
 use super::segment::{check_entry_nesting, Segment, SegmentMeta, SegmentTable, WireEntry};
 
-/// A serialization session: the tables of objects, read and write unified.
+/// A serialization session: the tables that objects are written into and read back from.
 ///
-/// A session holds a set of *tables*, one per kind of object, each registered with
-/// its [`ObjectSerdeDriver`] ([`register_table`](SerdeSession::register_table)) and
-/// numbered in registration order ([`TableId`]). *Interning* an object into a table
-/// ([`intern`](SerdeSession::intern), or [`SerializeContext::intern`] from inside a
-/// serialization call) serializes it once and appends its entry to the table,
-/// returning its typed position; interning the same object again — the same `Arc` —
-/// returns the existing position, so shared objects are written once and referred to
-/// by position, and sharing survives the round trip. Positions are stream-scoped and
-/// append-only: a table only ever grows.
+/// One session *writes*: objects are interned into its tables, and it emits them as
+/// [`Segment`]s to store or transmit. Another session *reads*: segments are pushed into
+/// it, and it returns the objects. Both directions use the same tables, so a session
+/// that has absorbed a stream can go on interning objects that refer back to what it
+/// absorbed. A session exists only for a [`SerializableLang`].
 ///
-/// A [`Segment`] is what a session emits and absorbs. [`take_segment`](SerdeSession::take_segment)
-/// packages every entry interned since the previous emission (and nothing older);
-/// [`push_segment`](SerdeSession::push_segment) absorbs a segment into the reading
-/// session's tables, validating it and rebuilding every entry's object through the
-/// table's driver. A *stream* is the sequence of segments one writing session emits;
-/// a reading session absorbs them in order and can then intern further objects and
-/// emit segments of its own that refer back to what it absorbed — reading then
-/// appending is the natural flow, and both directions share the same tables.
+/// The [module documentation](crate::serialize) defines the vocabulary and walks both
+/// paths in full; [Serializing parses](crate::guide::serialize) is the introductory
+/// guide chapter.
 ///
-/// The session also carries the caller's *user data*
-/// ([`set_user_data`](SerdeSession::set_user_data); one value per type) — the
-/// reading environment's entry point: an implementation's `deserialize_object` reads
-/// it through the context to find the live objects that serialized data refers to by
-/// identity — and the readers and resolvers registered on heterogeneous tables (see
+/// # Tables, identity, and sharing
+///
+/// A session holds a set of *tables*, one per kind of object, each registered with its
+/// [`ObjectSerdeDriver`] ([`register_table`](SerdeSession::register_table)) and numbered
+/// in registration order ([`TableId`]).
+///
+/// Objects are kept in tables so that identity and sharing survive the round trip.
+/// *Interning* an object into a table ([`intern`](SerdeSession::intern), or
+/// [`SerializeContext::intern`] from inside a serialization call) serializes it once,
+/// appends its entry to the table, and returns the entry's typed position. Interning the
+/// same object again — the same `Arc`, compared by pointer — returns that position
+/// instead of writing a second entry. So a parsing state a thousand nodes refer to is
+/// written once and referred to by position, and reading the entries back yields one
+/// shared object per entry rather than a thousand equal copies.
+///
+/// Positions are scoped to the stream, and tables are append-only: a table only ever
+/// grows.
+///
+/// # Writing
+///
+/// [`new`](SerdeSession::new) creates a session with the crate's standard tables —
+/// sources, states, specs, providers, trees, diagnostics, and parse results, whose
+/// handles are [`StandardTables`](crate::serialize::StandardTables);
+/// [`empty`](SerdeSession::empty) creates one with no tables, for a session composed of
+/// other tables. Writing needs no registration beyond the tables themselves: every
+/// object serializes itself.
+///
+/// Intern the objects — with [`intern`](SerdeSession::intern), or with a by-kind method
+/// such as
+/// [`serialize_parse_result`](crate::serialize::ParseResultSerialization::serialize_parse_result)
+/// — then call [`take_segment`](SerdeSession::take_segment), which packages every entry
+/// interned since the previous emission and nothing older, or
+/// [`take_segment_with_main`](SerdeSession::take_segment_with_main), which additionally
+/// records the position of the one entry the segment is about.
+///
+/// A segment is a value, not bytes. With the `serde` cargo feature [`Segment`]
+/// implements `Serialize` and `Deserialize`, so a segment encodes through any serde
+/// format; without the feature, [`Segment::to_serial_value`] converts it to the value
+/// model and the caller encodes that.
+///
+/// # Reading
+///
+/// Give the reading session the same tables, then register what the read side needs: the
+/// readers for the identifiers the stream uses
+/// ([`register_core_readers`](crate::serialize::register_core_readers), or a language's
+/// own helper), and the *reading environment* as user data
+/// ([`set_user_data`](SerdeSession::set_user_data), one value per type). The reading
+/// environment is how an implementation's `deserialize_object` reaches, through its
+/// context, the live objects that serialized data refers to by identity instead of
+/// describing them in full — for the crate's own providers, a
+/// [`KnownProviders`](crate::serialize::KnownProviders) directory. The session also
+/// holds the readers and resolvers registered on heterogeneous tables (see
 /// [`DispatchingSerdeDriver`](crate::serialize::DispatchingSerdeDriver)).
 ///
+/// Then push the segments. [`push_segment`](SerdeSession::push_segment) validates a
+/// segment, appends its entries to the session's tables, and rebuilds every entry's
+/// object through the table's driver; it returns the segment's main entry, translated
+/// into this session's numbering. [`object`](SerdeSession::object), or a by-kind method
+/// such as [`parse_result`](crate::serialize::ParseResultSerialization::parse_result),
+/// reads an object back at its position.
+///
+/// A *stream* is the sequence of segments one writing session emits. A reading session
+/// absorbs the segments of one stream, in order; it can then intern further objects and
+/// emit segments of its own that refer back to what it absorbed.
+///
+/// # Nesting and cycles
+///
 /// Nested calls — an object's serialization interning the objects it refers to, an
-/// entry's deserialization reading the objects it refers to — are bounded by the
-/// crate's descent guard ([`with_descent_guard_init`](SerdeSession::with_descent_guard_init));
-/// reference cycles are detected on both sides and reported as errors, never
-/// followed.
+/// entry's deserialization reading the objects it refers to — are bounded by the crate's
+/// descent guard ([`with_descent_guard_init`](SerdeSession::with_descent_guard_init)).
+/// Reference cycles are detected on both sides and reported as errors, never followed.
 ///
-/// A session exists only for a [`SerializableLang`]. [`new`](SerdeSession::new)
-/// registers the crate's standard tables (sources, states, specs, providers, trees,
-/// diagnostics, parse results — see [`StandardTables`](crate::serialize::StandardTables));
-/// [`empty`](SerdeSession::empty) starts with no tables, for a session composed of
-/// other tables.
+/// # Examples
 ///
-/// # Example
-///
-/// A table of one kind of object, written by one session and read by another (an
-/// [`empty`](SerdeSession::empty) session with a custom table, so that the example is
-/// self-contained; the crate's own object kinds go through the standard tables):
+/// A table of one kind of object, written by one session and read by another. The
+/// example uses an [`empty`](SerdeSession::empty) session with a custom table so that it
+/// is self-contained; the crate's own object kinds go through the standard tables.
 ///
 /// ```
 /// use std::sync::Arc;

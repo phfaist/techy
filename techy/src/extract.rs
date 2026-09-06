@@ -467,8 +467,8 @@ fn covering<O: crate::source::SourceOrigin>(
 
 // --- part contexts (the annotation-mint callback's facts) -------------------------------
 
-/// The shared facts behind the per-producer part contexts (internal currency;
-/// the public wrappers stay opaque per-op types).
+/// The facts shared by the per-helper part contexts; the public wrappers around it
+/// stay separate opaque types, one per helper.
 struct PartFacts<'t, L: Lang, A> {
     /// The input node this output node derives from; `None` for synthesized
     /// nodes (segment/value `List` wrappers and the root).
@@ -481,37 +481,43 @@ struct PartFacts<'t, L: Lang, A> {
     index: Option<usize>,
 }
 
-/// What [`split_at_chars`]'s annotation callback is told about one staged
-/// output node — only what the callback cannot recover itself. Opaque and
-/// accessor-based; one value per staged node (copies, boundary partials, and
-/// the synthesized segment `List`s and root).
+/// What [`split_at_chars`]'s annotation callback is told about one output node.
+///
+/// The callback is given one of these for every node placed into the result: each
+/// copied node, each piece cut at a separator, each synthesized segment `List`, and
+/// the root `List`. It reports only what the callback could not work out for itself
+/// — see [`original`](Self::original), [`is_partial`](Self::is_partial),
+/// [`partial_text`](Self::partial_text) and
+/// [`segment_index`](Self::segment_index).
 pub struct SplitAtCharsPart<'t, L: Lang, A = ()> {
     facts: PartFacts<'t, L, A>,
 }
 
 impl<'t, L: Lang, A> SplitAtCharsPart<'t, L, A> {
-    /// The input node this output node derives from — a copied node's source,
-    /// or the chars node a partial was cut out of. `None` exactly for the
-    /// synthesized nodes: the per-segment `List` wrappers and the root `List`.
+    /// The input node this output node came from — the node that was copied, or
+    /// the chars node a piece was cut out of.
+    ///
+    /// `None` exactly for the nodes [`split_at_chars`] synthesizes: the one `List`
+    /// per segment, and the root `List`.
     pub fn original(&self) -> Option<NodeRef<'t, L, A>> {
         self.facts.original
     }
 
-    /// Whether the output node is a boundary **partial** — a fresh chars node
-    /// cut out of [`original()`](SplitAtCharsPart::original) by a separator
-    /// occurrence (partials are cut, not copied).
+    /// Whether the output node is a piece cut out of
+    /// [`original`](Self::original) at a separator occurrence, rather than a copy
+    /// of it.
     pub fn is_partial(&self) -> bool {
         self.facts.partial.is_some()
     }
 
-    /// The partial's text ([`is_partial()`](SplitAtCharsPart::is_partial)
-    /// distinguishes `None` = not a partial).
+    /// The text of the cut piece, or `None` when the output node is not one
+    /// ([`is_partial`](Self::is_partial) answers the same question as a `bool`).
     pub fn partial_text(&self) -> Option<&'t str> {
         self.facts.partial
     }
 
-    /// Which segment the output node belongs to (source order); `None` exactly
-    /// for the root `List`.
+    /// Which segment the output node belongs to, counting from `0` in source
+    /// order; `None` exactly for the root `List`.
     pub fn segment_index(&self) -> Option<usize> {
         self.facts.index
     }
@@ -527,35 +533,41 @@ impl<L: Lang, A> fmt::Debug for SplitAtCharsPart<'_, L, A> {
     }
 }
 
-/// What the annotation callbacks of the [`KeyVals`]-producing helpers
-/// ([`parse_keyval`], [`split_embellishments`], [`split_tack_on_fields`]) are
-/// told about one staged output node — the [`SplitAtCharsPart`] facts with the
-/// entry index as the discriminant (keys are plain strings, not nodes, so no
-/// key-side parts arise).
+/// What the annotation callback of a [`KeyVals`]-producing helper
+/// ([`parse_keyval`], [`split_embellishments`], [`split_tack_on_fields`]) is told
+/// about one output node.
+///
+/// The same facts as [`SplitAtCharsPart`], except that the index counts entries
+/// rather than segments. Keys are plain strings rather than nodes, so no output
+/// node ever comes from the key side of an entry.
 pub struct KeyValsPart<'t, L: Lang, A = ()> {
     facts: PartFacts<'t, L, A>,
 }
 
 impl<'t, L: Lang, A> KeyValsPart<'t, L, A> {
-    /// The input node this output node derives from; `None` exactly for the
-    /// synthesized nodes: the per-value `List` wrappers and the root `List`.
+    /// The input node this output node came from.
+    ///
+    /// `None` exactly for the synthesized nodes: the one `List` per entry value,
+    /// and the root `List`.
     pub fn original(&self) -> Option<NodeRef<'t, L, A>> {
         self.facts.original
     }
 
-    /// Whether the output node is a boundary partial (cut at a `,`/`=` by
-    /// [`parse_keyval`]; the run readers never cut).
+    /// Whether the output node is a piece cut out of [`original`](Self::original)
+    /// rather than a copy of it. Only [`parse_keyval`] cuts, at a `,` or the first
+    /// `=`; [`split_embellishments`] and [`split_tack_on_fields`] always copy.
     pub fn is_partial(&self) -> bool {
         self.facts.partial.is_some()
     }
 
-    /// The partial's text (`None` = not a partial).
+    /// The text of the cut piece, or `None` when the output node is not one.
     pub fn partial_text(&self) -> Option<&'t str> {
         self.facts.partial
     }
 
-    /// Which entry (source order, duplicates counted) the output node belongs
-    /// to; `None` exactly for the root `List`.
+    /// Which entry the output node belongs to, counting from `0` in source order
+    /// with duplicate keys counted separately; `None` exactly for the root
+    /// `List`.
     pub fn entry_index(&self) -> Option<usize> {
         self.facts.index
     }
@@ -571,8 +583,8 @@ impl<L: Lang, A> fmt::Debug for KeyValsPart<'_, L, A> {
     }
 }
 
-/// The producers' internal mint shape: facts in, annotation out (the public
-/// callbacks are adapted onto this via the per-op wrapper types).
+/// The shape the helpers call internally: facts in, annotation out. The public
+/// callbacks are adapted onto it through the per-helper wrapper types.
 type Mint<'m, 't, L, A, B> = &'m mut dyn FnMut(PartFacts<'t, L, A>) -> B;
 
 fn stage_piece<'t, L: Lang, A, B>(
