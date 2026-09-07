@@ -1,11 +1,11 @@
-//! Shared `#[cfg(test)]` helpers for the latexlike preset's test modules ([`mod.rs`],
-//! [`node_ref.rs`], and later `environments.rs`): one `Language`/shape/package
-//! vocabulary so each sibling test file doesn't re-derive its own (7.5 review — #13/#14).
+//! Shared `#[cfg(test)]` helpers for the latexlike preset's test modules: one
+//! `Language`, shape and package vocabulary, so that sibling test files need not each
+//! re-derive their own.
 //!
-//! Shrunk in 7.9: the genuinely multi-purpose pieces were promoted to public API —
-//! the compact node description is [`NodeRef::summary`], and pushing packages onto
-//! a language's seed is [`ParsingState::lang_initial_with_packages`]. What remains
-//! here is thin test-only wiring.
+//! The generally useful pieces are public API instead — the compact node description is
+//! `NodeRef::summary`, and pushing packages onto a language's seed is
+//! `ParsingState::lang_initial_with_packages` — so what remains here is thin test-only
+//! wiring.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -60,7 +60,7 @@ pub(super) fn with_packages(
     )
 }
 
-/// The root list's child summaries ([`NodeRef::summary`]).
+/// The root list's child summaries (`NodeRef::summary`).
 pub(super) fn root_shapes(result: &ParseResult<Latexlike>) -> Vec<String> {
     result.tree.root().children().iter().map(|node| node.summary()).collect()
 }
@@ -75,8 +75,8 @@ pub(super) fn parse_shapes(input: &str) -> Vec<String> {
 }
 
 /// A shared package named `pkg_name` defining `macro_name` as a zero-argument
-/// [`Macro`](CallableType::Macro) (stamped, so it serializes), optionally restricted
-/// (package-level) to `visible_modes`.
+/// [`Macro`](CallableType::Macro) — stamped, so that it serializes — optionally
+/// restricted, at package level, to `visible_modes`.
 pub(super) fn macro_package(
     pkg_name: &str,
     macro_name: &str,
@@ -94,10 +94,10 @@ pub(super) fn macro_package(
     })
 }
 
-/// A member of the latexlike family whose parse trees are **not** span-tiled: the
-/// preset's vocabularies and behavior, only the declaration differs. The preset's
-/// parsers are generic over the family, so they serve it unchanged — which is what
-/// makes the recovery node below the site under test.
+/// A member of the latexlike family whose parse trees are **not** span-tiled
+/// (`Lang::OBEYS_SPAN_TILING` = false): the preset's vocabularies and behavior, only the
+/// declaration differs. The preset's parsers are generic over the family, so they serve
+/// this language unchanged.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RelaxedLatexlike;
 
@@ -118,7 +118,7 @@ impl Lang for RelaxedLatexlike {
         crate::latexlike::InvocationSyntaxData<crate::latexlike::StdEnvironmentSyntax<Self>>;
     type Driver = LatexlikeDriver<Self>;
 
-    /// The preset's own seed, for this language's vocabularies.
+    // The preset's own seed, for this language's vocabularies.
     fn initial_state_data() -> Result<crate::state::StateData<Self>, crate::state::FinalizeError>
     {
         let mut scopes = crate::scopes::ScopeStack::new();
@@ -158,11 +158,10 @@ impl Lang for RelaxedLatexlike {
 
 impl LatexlikeLang for RelaxedLatexlike {}
 
-/// A member of the latexlike family that reads its tokens from the scripted
-/// multi-source reader ([`ScriptedTokenization`](crate::token::ScriptedTokenization))
-/// and therefore declares that its parse trees are **not** span-tiled
-/// ([`Lang::OBEYS_SPAN_TILING`] `= false`) — the sibling of [`RelaxedLatexlike`], from
-/// which it differs in the tokenization alone.
+/// A member of the latexlike family that reads its tokens from the scripted multi-source
+/// reader (`ScriptedTokenization`) and therefore declares that its parse trees are **not**
+/// span-tiled (`Lang::OBEYS_SPAN_TILING` = false) — the sibling of [`RelaxedLatexlike`],
+/// from which it differs in the tokenization alone.
 ///
 /// Everything else is the preset's own: the vocabularies, the seed, the driver, the
 /// node-ext and invocation-syntax types. That the preset's generic parsers serve it
@@ -187,7 +186,7 @@ impl Lang for RelaxedScriptedLatexlike {
         crate::latexlike::InvocationSyntaxData<crate::latexlike::StdEnvironmentSyntax<Self>>;
     type Driver = LatexlikeDriver<Self>;
 
-    /// The preset's own seed, for this language's vocabularies.
+    // The preset's own seed, for this language's vocabularies.
     fn initial_state_data() -> Result<crate::state::StateData<Self>, crate::state::FinalizeError>
     {
         let mut scopes = crate::scopes::ScopeStack::new();

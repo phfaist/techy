@@ -1,12 +1,18 @@
-//! [`MacroSpec`] and [`SpecialsSpec`]: the preset's declarative callable specs.
+//! The preset's declarative callable specs: [`MacroSpec`] and [`SpecialsSpec`].
 //!
-//! Both are [`StdCallableSpec`](crate::spec::StdCallableSpec)-shaped — an argument
-//! list as plain data — as concrete preset types (decided at the 7.6 checkpoint):
-//! parse tracebacks speak the preset's vocabulary ("macro ‘\frac’", "specials ‘~’"
-//! instead of the core's "callable ‘…’"), and each type is a stable downcast target
-//! for preset `make_node_ext`-style minting. The environment counterpart is
-//! [`EnvironmentSpec`](super::EnvironmentSpec), which carries body behavior and lives
-//! with the `\begin` composition.
+//! Both hold an argument list as plain data and nothing else, so defining a macro or a
+//! specials trigger comes down to declaring its arguments — usually with the
+//! [argument codes](super::argument_specs). They are preset types rather than the
+//! generic [`StdCallableSpec`](crate::core::specs::StdCallableSpec) for two reasons:
+//! parse tracebacks then speak the preset's vocabulary ("macro ‘\frac’", "specials
+//! ‘~’" instead of "callable ‘…’"), and each type is a stable target for code that
+//! recognizes a spec by downcasting it. The environment counterpart,
+//! [`EnvironmentSpec`](super::EnvironmentSpec), also holds the body behavior and is
+//! defined with the `\begin` composition.
+//!
+//! The one-line definition methods on a latexlike [`Package`] are defined here too:
+//! [`define_macro`](Package::define_macro) and
+//! [`define_environment`](Package::define_environment).
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -40,34 +46,50 @@ pub(crate) fn frame_title(kind: &str, role: FrameRole, name: &str) -> String {
     }
 }
 
-/// The preset's declarative macro spec: the argument structure of a
-/// [`Macro`](super::CallableType::Macro) callable as plain data, with the preset's
-/// traceback vocabulary ("macro ‘\frac’").
+/// A macro definition: its argument structure as plain data.
 ///
-/// Registered under [`CallableType::Macro`](super::CallableType::Macro) in a
-/// [`Package`](crate::scopes::Package) or [`Scope`](crate::scopes::Scope); the
-/// [`LatexlikeDriver`](super::LatexlikeDriver) resolves every command token through
-/// the scope stack. Any [`CallableSpec`] works there — beyond the vocabulary, this
-/// type adds only the optional after-effect
-/// ([`with_after_effect`](MacroSpec::with_after_effect)), and generic specs
-/// ([`StdCallableSpec`](crate::spec::StdCallableSpec),
-/// custom takeovers) remain first-class.
+/// Register one under [`CallableType::Macro`](super::CallableType::Macro) in a
+/// [`Package`] or a [`Scope`](crate::core::specs::Scope), and the
+/// [`LatexlikeDriver`](super::LatexlikeDriver) resolves every command token against
+/// the scope stack in force. [`Package::define_macro`] spells the definition and the
+/// registration in one line.
 ///
-/// Constructed through [`new`](MacroSpec::new), [`Default`], or
-/// [`with_after_effect`](MacroSpec::with_after_effect) — the after-effect field is
-/// private, so there is no struct-literal form; the public `arguments` field stays
-/// readable and assignable on an owned value.
+/// Any [`CallableSpec`] implementation can be registered under that role, including
+/// one that takes over parsing of its invocation entirely. What this type adds is the
+/// preset traceback vocabulary and one optional behavior: the after-effect of
+/// [`with_after_effect`](MacroSpec::with_after_effect).
 ///
-/// **Serialization.** The argument structure holds parsers, which have no
-/// serialized form, so a macro spec is serialized by *identity* — a reference to the
-/// provider that defined it plus its key — which needs the [`SpecProvenance`] stamp
-/// a shared package hands out ([`with_provenance`](MacroSpec::with_provenance);
-/// [`Package::define_macro`] stamps automatically in a shared package). An
-/// unstamped macro spec cannot be serialized (the error names the type).
+/// Build one with [`new`](MacroSpec::new), [`Default`], or
+/// [`with_after_effect`](MacroSpec::with_after_effect). The after-effect field is
+/// private, so there is no struct-literal form; the public `arguments` field can be
+/// read and assigned on a value you own.
 ///
-/// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
-/// [`Latexlike`]) — a family member registers the same declarative macro shape
-/// under its own marker type.
+/// The type is generic over the language family (`LLL`, [`LatexlikeLang`], by default
+/// [`Latexlike`]), so a family member registers the same declarative shape under its
+/// own marker type.
+///
+/// # Examples
+///
+/// ```
+/// use techy::core::specs::Package;
+/// use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
+///
+/// let mut package: Package<Latexlike> = Package::new("mydefs");
+/// package.insert(
+///     CallableType::Macro,
+///     "cite",
+///     MacroSpec::new(argument_specs(["o", "m"]).unwrap()),
+/// );
+/// ```
+///
+/// # Serialization
+///
+/// The argument structure holds parsers, which have no serialized form, so a macro
+/// spec is serialized by *identity*: a reference to the provider that defined it plus
+/// its key. That requires the [`SpecProvenance`] stamp a shared package issues
+/// ([`with_provenance`](MacroSpec::with_provenance)), which
+/// [`Package::define_macro`] applies for you in a shared package. Serializing an
+/// unstamped macro spec is an error naming this type.
 pub struct MacroSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure, in invocation order.
     pub arguments: Vec<Arc<ArgumentSpec<LLL>>>,
@@ -80,34 +102,45 @@ pub struct MacroSpec<LLL: LatexlikeLang = Latexlike> {
 }
 
 impl<LLL: LatexlikeLang> MacroSpec<LLL> {
-    /// A macro with the given argument structure.
+    /// A macro taking the given arguments, in invocation order.
+    ///
+    /// The argument specs usually come from the argument codes
+    /// ([`argument_specs`](super::argument_specs), or
+    /// [`argument_specs_named`](super::argument_specs_named) to name them); an empty
+    /// list declares a macro with no arguments, as [`Default`] does.
     pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> MacroSpec<LLL> {
         MacroSpec { arguments, after_effect: None, provenance: None }
     }
 
-    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
-    /// package hands out ([`Package::provenance_for`]) — so that the spec can be
-    /// serialized by identity. Replaces a previous stamp.
+    /// Records where this spec is defined, so that it can be serialized by identity.
+    ///
+    /// `provenance` is the stamp a shared package issues
+    /// ([`Package::provenance_for`]); a stamp set earlier is replaced.
+    /// [`Package::define_macro`] applies it for you in a shared package.
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> MacroSpec<LLL> {
         self.provenance = Some(provenance);
         self
     }
 
-    /// Give the macro an **after-effect**: a parsing-state change every invocation
-    /// leaves behind for the content that *follows* it — its later siblings, to the
-    /// end of the enclosing group or document — the way a definition macro
-    /// (`\newcommand`-style) makes a name usable for the rest of the group.
+    /// Gives the macro an after-effect: a parsing-state change every invocation
+    /// leaves behind for the content that follows it.
+    ///
+    /// The change reaches the invocation's later siblings, to the end of the enclosing
+    /// group or of the document — the way a definition macro (`\newcommand`-style)
+    /// makes a name usable for the rest of the group.
     ///
     /// `delta` is applied to the surrounding state after the invocation's node is
-    /// staged; it never affects the invocation's own arguments. Invocations'
-    /// after-effects accumulate in document order: each later sibling parses under
-    /// every delta left before it. The effect is scoped like all parsing state —
-    /// content outside the enclosing group is not affected. For `\input`-like
-    /// inclusion, whether after-effects arising *inside* the included content
-    /// persist past the inclusion is that construct's own choice
-    /// ([`input_macro_spec`](super::input_macro_spec)'s `persist_state` parameter).
+    /// staged, so it never affects the invocation's own arguments. After-effects
+    /// accumulate in document order: each later sibling parses under every delta left
+    /// before it. Like all parsing state, the effect is scoped — content outside the
+    /// enclosing group is unaffected.
     ///
-    /// Calling this a second time replaces the previously set delta.
+    /// For `\input`-like inclusion, whether after-effects arising *inside* the
+    /// included content persist past the inclusion is that construct's own choice
+    /// (the `persist_state` parameter of
+    /// [`input_macro_spec`](super::input_macro_spec)).
+    ///
+    /// Calling this a second time replaces the delta set before.
     pub fn with_after_effect(mut self, delta: ParsingStateDelta<LLL>) -> MacroSpec<LLL> {
         self.after_effect = Some(delta);
         self
@@ -126,8 +159,7 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
         self.provenance.as_ref()
     }
 
-    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
-    /// `Result`.
+    /// Never fails: this implementation only wraps the parser it builds in `Ok`.
     fn make_invocation_parser<'a>(
         &'a self,
         invocation: Invocation<'a, LLL>,
@@ -148,9 +180,9 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
     }
 }
 
-/// The invocation parser of a [`MacroSpec`] carrying an after-effect: the standard
-/// declarative parse, then the spec's delta as the invocation's after-effect for
-/// the following siblings.
+/// The invocation parser of a [`MacroSpec`] with an after-effect: the standard
+/// declarative parse, followed by the spec's delta as the invocation's after-effect
+/// for the following siblings.
 struct AfterEffectInvocationParser<'a, LLL: LatexlikeLang> {
     inner: StdInvocationParser<'a, LLL>,
     delta: &'a ParsingStateDelta<LLL>,
@@ -199,24 +231,32 @@ impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
     }
 }
 
-/// The preset's declarative specials spec: the argument structure of a
-/// specials-form callable ([`CallableType::Specials`](super::CallableType::Specials))
-/// as plain data, with the preset's traceback vocabulary ("specials ‘~’").
+/// A specials definition: the argument structure of a specials-form callable as plain
+/// data.
 ///
-/// Registered via [`Package::insert_specials`](crate::scopes::Package::insert_specials);
-/// the trigger sequence is the registration key, not spec data (specs are de-keyed —
-/// the [`minilatex_package`](super::minidefs::minilatex_package) registers one shared
-/// argument-less instance for all its typography triggers).
+/// The counterpart of [`MacroSpec`] for triggers that are not commands — `~`, `---`,
+/// `$` — registered with
+/// [`Package::insert_specials`](crate::core::specs::Package::insert_specials) under
+/// [`CallableType::Specials`](super::CallableType::Specials). Most specials take no
+/// arguments at all, which is what [`Default`] builds; parse tracebacks speak of
+/// "specials ‘~’".
 ///
-/// **Serialization.** Like [`MacroSpec`]: by identity through a [`SpecProvenance`]
-/// stamp ([`with_provenance`](SpecialsSpec::with_provenance); the stamp of a specials
-/// definition is [`Package::provenance_for_specials`]) — an unstamped specials spec
+/// The trigger sequence is the registration key rather than part of the spec, so one
+/// spec can serve several triggers: the
+/// [`minilatex_package`](super::minidefs::minilatex_package) registers a single
+/// argument-less instance for all of its typography triggers.
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`], by default
+/// [`Latexlike`]), like [`MacroSpec`]. Paragraph-break nodes are not specified by this
+/// type: the driver stamps them with the canonical
+/// [`ParagraphBreakSpec`](super::ParagraphBreakSpec).
+///
+/// # Serialization
+///
+/// As for [`MacroSpec`]: by identity, through the [`SpecProvenance`] stamp of
+/// [`with_provenance`](SpecialsSpec::with_provenance) — the stamp of a specials
+/// definition is [`Package::provenance_for_specials`]. An unstamped specials spec
 /// cannot be serialized.
-///
-/// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
-/// [`Latexlike`]) — it is also what the paragraph-break behavior function
-/// ([`make_paragraph_break_node`](super::make_paragraph_break_node)) stamps on
-/// `Specials`-style break nodes for any family member.
 pub struct SpecialsSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure, in invocation order.
     pub arguments: Vec<Arc<ArgumentSpec<LLL>>>,
@@ -225,14 +265,19 @@ pub struct SpecialsSpec<LLL: LatexlikeLang = Latexlike> {
 }
 
 impl<LLL: LatexlikeLang> SpecialsSpec<LLL> {
-    /// A specials callable with the given argument structure.
+    /// A specials callable taking the given arguments, in invocation order.
+    ///
+    /// The argument specs usually come from the argument codes
+    /// ([`argument_specs`](super::argument_specs)); an empty list declares a specials
+    /// trigger with no arguments, the shape most of them have.
     pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> SpecialsSpec<LLL> {
         SpecialsSpec { arguments, provenance: None }
     }
 
-    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
-    /// package hands out ([`Package::provenance_for_specials`]) — so that the spec
-    /// can be serialized by identity. Replaces a previous stamp.
+    /// Records where this spec is defined, so that it can be serialized by identity.
+    ///
+    /// `provenance` is the stamp a shared package issues for a specials definition
+    /// ([`Package::provenance_for_specials`]); a stamp set earlier is replaced.
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> SpecialsSpec<LLL> {
         self.provenance = Some(provenance);
         self
@@ -282,15 +327,15 @@ impl<LLL: LatexlikeLang> Default for SpecialsSpec<LLL> {
 
 // --- the preset one-liners on Package ------------------------------------------------
 
-/// The preset **definition one-liners** — inherent methods on latexlike-shaped
-/// [`Package`]s, written in the preset module (the
-/// in-crate mechanism behind the `NodeRef` sugar as well): each pairs the callable
-/// type and spec type correctly *by construction* and parses its argument codes
-/// eagerly. A shorter spelling of the same [`insert`](Package::insert) operation —
-/// deliberately not a second registration model.
+/// The preset's one-line definition methods on a latexlike [`Package`]: each pairs
+/// the callable type with the matching spec type by construction and resolves its
+/// argument codes on the spot. They are a shorter spelling of the same
+/// [`insert`](Package::insert) operation, not a second registration model.
 impl<LLL: LatexlikeLang> Package<LLL> {
-    /// Define the macro `name` with the given argument codes — one line for the
-    /// full `insert(macro_callable(), name, MacroSpec::new(argument_specs(…)?))`
+    /// Defines the macro `name` with the given argument codes.
+    ///
+    /// One line for the whole
+    /// `insert(macro_callable(), name, MacroSpec::new(argument_specs(codes)?))`
     /// ceremony:
     ///
     /// ```
@@ -300,19 +345,24 @@ impl<LLL: LatexlikeLang> Package<LLL> {
     /// package.define_macro("includegraphics", ["o", "m"]).unwrap();
     /// ```
     ///
-    /// `codes` is [`argument_specs`](super::argument_specs)'s list form (word codes
-    /// included); a malformed code is the eager
-    /// [`Err`](super::ArgumentCodeError). On success, returns the spec previously
-    /// defined under the key, like [`insert`](Package::insert). The name follows
-    /// [`insert`](Package::insert)'s normalized-spelling contract (no escape
-    /// character), and — deliberately — **no escape-char validation happens here
-    /// either** (escape characters can change mid-parse, and a leading
-    /// escape-character-like char can be intended).
+    /// `codes` is [`argument_specs`](super::argument_specs)'s list form, word codes
+    /// included. On success this returns the spec previously defined under the key,
+    /// like [`insert`](Package::insert).
     ///
-    /// In a package built shared ([`Package::new_shared`]) the spec is stamped with
-    /// its provenance ([`MacroSpec::with_provenance`]), so that it can be serialized
-    /// by identity; in a package built with [`Package::new`] it is not (nothing to
-    /// stamp with).
+    /// `name` follows [`insert`](Package::insert)'s normalized-spelling contract and
+    /// carries no escape character. No escape-character validation happens here
+    /// either, deliberately: escape characters can change during a parse, and a name
+    /// beginning with what looks like one can be intended.
+    ///
+    /// In a package built with [`Package::new_shared`] the spec is stamped with its
+    /// provenance ([`MacroSpec::with_provenance`]) so that it can be serialized by
+    /// identity; in one built with [`Package::new`] there is nothing to stamp it
+    /// with, and it is not.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ArgumentCodeError`] of a malformed code. The definition is then
+    /// not inserted, and the package is unchanged.
     pub fn define_macro<I>(
         &mut self,
         name: impl Into<Box<str>>,
@@ -332,13 +382,30 @@ impl<LLL: LatexlikeLang> Package<LLL> {
         Ok(self.insert(callable_type, name, spec))
     }
 
-    /// Define the environment `name` with the given argument codes — the
-    /// [`define_macro`](Package::define_macro) sibling over
-    /// [`EnvironmentSpec`](super::EnvironmentSpec) under the environment role
-    /// (default body handling; for body deltas or custom behavior, build the
+    /// Defines the environment `name` with the given argument codes.
+    ///
+    /// The [`define_macro`](Package::define_macro) sibling for the environment role:
+    /// it builds an [`EnvironmentSpec`](super::EnvironmentSpec) with the default body
+    /// handling. For a body-scoped state change or a custom body behavior, build the
     /// [`EnvironmentSpec`](super::EnvironmentSpec) yourself and
-    /// [`insert`](Package::insert) it). Stamps the spec with its provenance in a
-    /// shared package, like [`define_macro`](Package::define_macro).
+    /// [`insert`](Package::insert) it.
+    ///
+    /// ```
+    /// # use techy::core::specs::Package;
+    /// # use techy::latexlike::Latexlike;
+    /// let mut package: Package<Latexlike> = Package::new("mydefs");
+    /// package.define_environment("figure", ["o"]).unwrap();
+    /// ```
+    ///
+    /// The arguments are the ones parsed after `\begin{name}`. In a shared package
+    /// the spec is stamped with its provenance, as in
+    /// [`define_macro`](Package::define_macro), and the spec previously defined under
+    /// the key is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ArgumentCodeError`] of a malformed code. The definition is then
+    /// not inserted, and the package is unchanged.
     pub fn define_environment<I>(
         &mut self,
         name: impl Into<Box<str>>,

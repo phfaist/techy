@@ -80,12 +80,16 @@ the non-panicking companion:
   [`TextContent::materialized`](crate::source::TextContent::materialized),
   [`NodeRef::chars`](crate::core::node::NodeRef::chars),
   [`NodeRef::group_delimiters`](crate::core::node::NodeRef::group_delimiters),
+  [`NodeRef::post_space`](crate::core::node::NodeRef::post_space),
   [`NodeRef::summary`](crate::core::node::NodeRef::summary),
   [`NodeTree::materialize`](crate::core::node::NodeTree::materialize),
   [`display_tree`](crate::core::node::display_tree), the content-reading helpers of
   [`extract`](crate::extract),
   [`core_source_instruction`](crate::recompose::core_source_instruction), the preset's
-  source recomposer, and the tree serialization of [`serialize`](crate::serialize) —
+  source recomposer and its environment-syntax writers
+  ([`EnvironmentSyntax::write_begin`](crate::latexlike::EnvironmentSyntax::write_begin)
+  and [`write_end`](crate::latexlike::EnvironmentSyntax::write_end)), and the tree
+  serialization of [`serialize`](crate::serialize) —
   reaches this panic on a consumer-built tree that breaks the invariant, and on no other
   input; [`validate_tree`](crate::core::node::validate_tree) is the check for it);
 - [`ChildRegion::children`](crate::core::node::ChildRegion::children),

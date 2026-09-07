@@ -1,18 +1,29 @@
-//! [`LatexlikeDriver`] and the preset's **behavior functions** — the driver's whole
-//! behavior as public `LLL`-generic free functions
-//! ([`math_group_interior_delta`], [`exit_math_context_delta`],
-//! [`make_paragraph_break_node`]), with the driver as the ready-made assembly whose
-//! hook bodies are precisely the one-line delegations to them.
+//! The preset's parse-time behavior: [`LatexlikeDriver`] and the functions it is
+//! assembled from.
 //!
-//! The layering is deliberate (the same whole-type-plus-behavior-functions layering
-//! as [`LatexlikeLang`] itself): a struct cannot be partially overridden, so a
-//! framework wanting preset-behavior-plus-one-custom-hook writes its own
-//! [`ParseDriver`] whose other hooks are the same one-line delegations — the
-//! struct contains no behavior the functions don't. The behavior functions also
-//! serve **post-parse processing**: a transform synthesizing nodes that emulate "enter
-//! math" / "exit math" derives coherent recorded states by feeding them the same
-//! inputs the driver feeds ([`ParsingStateStack::from_node_ancestors`] supplies
-//! the stack with no session anywhere).
+//! A driver is the object a parse consults for decisions the language data does not
+//! settle by itself. [`LatexlikeDriver`] is the ready-made one: pass it to
+//! [`Language::new`](crate::core::Language::new) with a seed parsing state and you
+//! have a working LaTeX-like parser. Its own settings are few — the recovery policy,
+//! the shape of paragraph-break nodes ([`ParagraphBreakStyle`]), and an optional
+//! source resolver for `\input`-like references.
+//!
+//! Each decision it makes is also available on its own, as a public function generic
+//! over the language family:
+//!
+//! - [`math_group_interior_delta`] — the state change that puts a math group's
+//!   interior into math mode;
+//! - [`exit_math_context_delta`] — the state change that restores the enclosing
+//!   non-math context, as `\text{…}` needs;
+//! - [`make_paragraph_break_node`] — the node a blank line becomes.
+//!
+//! Two uses follow. A driver of your own can keep the preset's behavior for the hooks
+//! it does not care about by calling these, since a struct cannot be partially
+//! overridden. And code working on an already-parsed tree can reproduce the states
+//! the parse recorded — for instance when a transformation inserts nodes that enter
+//! or leave math — by calling them with the same inputs; the enclosing states they
+//! need come from [`ParsingStateStack::from_node_ancestors`], with no parsing session
+//! involved.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -38,55 +49,65 @@ use super::{
     LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang, LatexlikeMode,
 };
 
-/// How [`LatexlikeDriver`] emits the node for a paragraph-break token (a whitespace
-/// run containing two or more newlines,
-/// [`ParagraphRules::enabled`](crate::token::ParagraphRules::enabled)).
+/// What shape of node a paragraph break becomes.
 ///
-/// This is a **driver emission policy**, deliberately not scope-stack data: the
-/// tokenizer detects paragraph breaks within
-/// leading whitespace, *before* the specials scan ever runs, so a package-registered
-/// `"\n\n"` specials entry could never fire — correlating the node shape with package
-/// contents would be dead configuration. The flag is driver-global; per-scope
-/// suppression stays orthogonal (a state delta clearing the paragraphs gate, as
-/// verbatim's features-disabled state does).
+/// A paragraph break is a run of whitespace containing two or more newlines, which
+/// the tokenizer reports as one token while
+/// [`ParagraphRules::enabled`](crate::core::token::ParagraphRules::enabled) holds.
+/// The two variants are the two conventions in use: plain whitespace text, or a
+/// distinct callable node. Set it with
+/// [`LatexlikeDriver::with_paragraph_break_style`]; the default is
+/// [`Chars`](ParagraphBreakStyle::Chars).
+///
+/// The choice belongs to the driver rather than to a package, because the tokenizer
+/// finds paragraph breaks while it skips leading whitespace, before any registered
+/// specials entry could match a `"\n\n"` trigger. Turning paragraph breaks off for
+/// part of a document is a separate matter: a state change disables the paragraph
+/// rules there, as a verbatim region's state does.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ParagraphBreakStyle {
-    /// A whitespace-only `Chars` node over the break's extent — the core default
-    /// shape (and pylatexenc-legacy's), friendly to text extraction
-    /// ([`content_as_chars`](crate::extract::content_as_chars) folds it into
-    /// text).
+    /// A whitespace-only `Chars` node covering the break.
+    ///
+    /// This is the default, and the shape text extraction handles most simply:
+    /// [`content_as_chars`](crate::extract::content_as_chars) folds it into the
+    /// surrounding text like any other whitespace.
     #[default]
     Chars,
-    /// A [`Specials`](super::CallableType::Specials)-formed `Callable` node —
-    /// pylatexenc-modern's paragraph-break shape. The node's *name* is the **actual
-    /// whitespace run as written** (`"\n \t\n"` stays `"\n \t\n"`) — the specials
-    /// name-as-written rule of the invocation-syntax payload
-    /// ([`InvocationSyntaxData::Specials`](super::InvocationSyntaxData::Specials)); the
-    /// node's *span* covers the same run. Identify paragraph-break nodes by **spec
-    /// identity** — the stamped spec is the canonical [`ParagraphBreakSpec`],
-    /// recognized by `Any`-downcast — never by a name spelling. The token level is
-    /// unchanged (still
-    /// [`ParagraphBreak`](crate::token::TokenKind::ParagraphBreak)), and the spec
-    /// lives on no provider, so paragraph breaks do **not** appear in
-    /// [`iter_symbols`](crate::scopes::ScopeStack::iter_symbols) enumerations.
-    /// Extraction helpers treat the node as the non-text material it now is
-    /// (`content_as_chars` reports it instead of folding it into text).
+    /// A `Callable` node in the [`Specials`](super::CallableType::Specials)
+    /// invocation form, covering the break.
+    ///
+    /// The node's name is the whitespace run exactly as written — `"\n \t\n"` stays
+    /// `"\n \t\n"`, following the name-as-written rule for specials
+    /// ([`InvocationSyntaxData::Specials`](super::InvocationSyntaxData::Specials)) —
+    /// and its span covers that same run.
+    ///
+    /// Recognize these nodes by their spec, which is always
+    /// [`ParagraphBreakSpec`], and never by matching the name against a spelling.
+    ///
+    /// Choosing this style changes nothing at the token level: the token is still a
+    /// [`ParagraphBreak`](crate::core::token::TokenKind::ParagraphBreak). The spec is
+    /// not registered on any provider, so paragraph breaks do not appear in a
+    /// [`ScopeStack::iter_symbols`](crate::core::specs::ScopeStack::iter_symbols)
+    /// listing. Extraction treats the node as non-text material:
+    /// `content_as_chars` reports it rather than folding it into text.
     Specials,
 }
 
-/// The canonical paragraph-break spec: the **definite, identifiable spec object**
-/// stamped on every [`ParagraphBreakStyle::Specials`] break node, for every family
-/// member (`impl<LLL: LatexlikeLang> CallableSpec<LLL>`). A consumer identifies
-/// paragraph-break nodes by **spec identity**, which for this ZST is *type*
-/// identity — `Any`-downcast the node's [`spec`](crate::node::CallableData::spec)
-/// to `ParagraphBreakSpec` — never by a name spelling (the node's `name` is the
-/// actual whitespace run, [`ParagraphBreakStyle::Specials`]). The paragraph-break
-/// behavior function never mints an anonymous per-break spec.
+/// The spec stamped on every paragraph-break node emitted under
+/// [`ParagraphBreakStyle::Specials`].
 ///
-/// Argument-less and content-less (the trait defaults); frame titles speak the
-/// preset's specials vocabulary. It lives on no provider — paragraph breaks are a
-/// driver emission policy ([`ParagraphBreakStyle`]), not scope-stack data.
+/// It exists so that paragraph breaks are identifiable. The type is a
+/// zero-sized unit, so identity by spec is identity by type: downcast the node's
+/// [`spec`](crate::core::node::CallableData::spec) with `Any` to this type. Do not
+/// test the node's name instead — that name is the whitespace run as it was written.
+/// Every break node carries this spec; the parse never invents a separate spec per
+/// break.
+///
+/// It implements [`CallableSpec`] for every language of the family, takes no
+/// arguments and parses no content, and is registered on no provider, since the
+/// choice to emit these nodes is the driver's ([`ParagraphBreakStyle`]) and not part
+/// of any package.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParagraphBreakSpec;
 
@@ -101,40 +122,43 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
 
 // --- the pillar functions ------------------------------------------------------------
 
-/// The **math-interior** behavior function: the state delta a math-class group
-/// descent applies to its interior — the interior parses in the language's
-/// [`math_mode`](LatexlikeMode::math_mode), and, since LaTeX-like languages forbid
-/// nested math, the math delimiters stop being *openers* inside it. `None` for
-/// non-math rules ([`is_math`](LatexlikeGroupType::is_math) decides — form-blind:
-/// inline and display share this one arm).
+/// The state change a math group applies to its interior, or `None` if `rule` does
+/// not open a math group.
 ///
-/// Derived from the **outer** `base` state (not the seed): the interior's group
-/// rules are `base`'s minus its math-class rules (content groups, temporary
-/// groups, commands, … stay exactly as the outer state has them), and the
-/// forbidden characters derived from those *removed* rules
-/// ([`LatexlikeLang::math_interior_forbidden_chars`] — no `'$'` literal anywhere)
-/// are **merged into** `base`'s existing
-/// [`forbidden_chars`](crate::token::ForbiddenCharsRules::chars), so an
-/// embedder's own forbidden set survives into math and a stray `$` becomes a
-/// diagnostic rather than the opener of an unclosed nested group.
+/// The interior parses in the language's
+/// [`math_mode`](LatexlikeMode::math_mode), and the math delimiters stop opening
+/// groups there, because LaTeX-like languages do not nest math. Whether a rule
+/// counts as math is [`is_math`](LatexlikeGroupType::is_math); inline and display
+/// math take the same change.
 ///
-/// # The math interior takes two components
+/// The change is computed from `base`, the state in force just outside the group, and
+/// not from the seed state. The interior keeps everything `base` had — content group
+/// rules, temporary groups, command rules — minus the math rules. The characters the
+/// interior forbids are derived from exactly the rules that were removed
+/// ([`LatexlikeLang::math_interior_forbidden_chars`]) and are *added to* the
+/// characters `base` already forbade
+/// ([`ForbiddenCharsRules::chars`](crate::core::token::ForbiddenCharsRules::chars)),
+/// so a program's own forbidden characters survive into math and a stray `$` inside
+/// math is diagnosed instead of opening a group that never closes.
 ///
-/// This delta is **one half** of a math interior's state. The engine's group
-/// descent adds the other: the descent invariant installs
-/// [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) for
-/// the entered rule (via
-/// [`ParserSession::group_interior_state`](crate::engine::ParserSession::group_interior_state),
-/// where this function's delta merges in through the driver hook), which is what
-/// keeps the group's own close delimiter recognizable after its opener class was
-/// removed. Post-parse synthesis reproducing a math interior must apply **both**:
-/// this delta *plus* a groups-block
-/// [`expecting_close`](crate::state::GroupOverrides::expecting_close) override
-/// naming the entered rule.
+/// The result is a function of `(base, rule)` alone, which is what
+/// [`group_interior_delta`](ParseDriver::group_interior_delta) allows the engine to
+/// cache.
 ///
-/// Pure in `(base, rule)` — the
-/// [`group_interior_delta`](ParseDriver::group_interior_delta) memoization
-/// contract.
+/// # This is half of a math interior's state
+///
+/// The other half comes from the engine's group descent, which records that the
+/// entered rule's closing delimiter is expected
+/// ([`TokenRules::expecting_group_close`](crate::core::token::TokenRules::expecting_group_close),
+/// installed by
+/// [`ParserSession::group_interior_state`](crate::core::ParserSession::group_interior_state),
+/// where this change is merged in through the driver hook). That is what keeps `$`
+/// recognizable as the group's own close after its opener rule was removed.
+///
+/// Code reconstructing a math interior's state outside a parse must therefore apply
+/// both: this change, plus a
+/// [`GroupOverrides::expecting_close`](crate::core::token::GroupOverrides::expecting_close)
+/// override naming the entered rule.
 pub fn math_group_interior_delta<LLL: LatexlikeLang>(
     base: &ParsingState<LLL>,
     rule: &Arc<GroupRule<LLL>>,
@@ -170,39 +194,39 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
     )
 }
 
-/// The **exit-math** behavior function: the state delta lowering the exit-math-context event
-/// ([`LatexlikeEvent::exit_math_context`], the preset's
-/// [`Event::ExitMathContext`](super::Event::ExitMathContext)) — scan `stack`
-/// (innermost-first) for the **first non-math enclosing state**
-/// ([`LatexlikeMode::is_math`] on the state's mode) and restore that context:
-/// its [`TokenRules`](crate::token::TokenRules) **minus the transient gates**
-/// (below) plus its mode.
+/// The state change that leaves the math context: restore the innermost enclosing
+/// non-math state's mode and token rules.
 ///
-/// The delta is defined by *exiting the math context*, deliberately **never** by
-/// seeking or constructing a "text mode": the restore target is whatever the
-/// enclosing context actually is — mode value included — so embedder rule
-/// customizations in force where math was entered (extra group rules, forbidden
-/// characters, disabled features) come back exactly, where any static reset would
-/// clobber them. When *every* enclosing state is math, the fallback target is the
-/// **outermost** (seed-side) entry; on an empty stack there is nothing to restore
-/// and the returned delta is empty (a no-op).
+/// This is what the [`Event::ExitMathContext`](super::Event::ExitMathContext) event
+/// asks for, and how `\text{…}` gets its argument parsed as text however deep inside
+/// math it appears. `stack` is the enclosing states, innermost first; the target is
+/// the first entry whose mode is not math ([`LatexlikeMode::is_math`]).
 ///
-/// **Excluded from the restore** (never `Some` in the returned overrides):
-/// [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) and
-/// [`temporary_group_rules`](crate::token::TokenRules::temporary_group_rules) — they
-/// describe *in-flight structural expectations* of the abandoned context (which
-/// close the found state's own group descent was waiting for; which
-/// scoped-lifecycle delimiters were live there), not lexical context; restoring
-/// them would plant another scope's expectations into the new one. The derived
-/// state inherits both from its base as usual, and a following group descent
-/// installs its own expectation through the descent invariant.
+/// The target is an enclosing context that really exists, so nothing here invents a
+/// "text mode" or resets the rules to a fixed set: extra group rules, forbidden
+/// characters, and disabled features a program had customized where the math was
+/// entered all come back exactly as they were.
 ///
-/// In-parse this is [`LatexlikeDriver`]'s
-/// [`resolve_state_event`](ParseDriver::resolve_state_event) lowering, fed the
-/// session's live stack; post-parse synthesis feeds a stack recovered from a
-/// parsed node ([`ParsingStateStack::from_node_ancestors`]) — same signature, no
-/// session. Scan semantics per [`ParsingStateStack`]: `Arc`-equal duplicate
-/// entries cannot change the answer.
+/// If every enclosing state is math, the outermost entry is used instead. If the
+/// stack is empty there is nothing to restore, and the returned change is empty.
+///
+/// Two fields of [`TokenRules`](crate::core::token::TokenRules) are deliberately left
+/// untouched — they are never `Some` in the returned overrides:
+/// [`expecting_group_close`](crate::core::token::TokenRules::expecting_group_close)
+/// and
+/// [`temporary_group_rules`](crate::core::token::TokenRules::temporary_group_rules).
+/// Both describe what the *target* state was in the middle of expecting — which
+/// closing delimiter its own group descent was waiting for, which scoped delimiters
+/// were live in it — rather than its lexical context, and copying them here would
+/// plant one region's expectations in another. A state derived from this change
+/// inherits both from its own base as usual, and the next group descent installs its
+/// own expectation.
+///
+/// During a parse, [`LatexlikeDriver`] calls this from
+/// [`resolve_state_event`](ParseDriver::resolve_state_event) with the session's live
+/// stack. Outside a parse, pass a stack recovered from a parsed node with
+/// [`ParsingStateStack::from_node_ancestors`]. Duplicate `Arc`-equal entries in the
+/// stack cannot change the answer.
 pub fn exit_math_context_delta<LLL: LatexlikeLang>(
     stack: &ParsingStateStack<LLL>,
 ) -> ParsingStateDelta<LLL> {
@@ -246,18 +270,20 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
     })
 }
 
-/// The **paragraph-break** behavior function: the node kind for a paragraph-break token in
-/// the given [`ParagraphBreakStyle`] — the core default whitespace `Chars` shape,
-/// or a `Specials`-formed `Callable` named by the actual whitespace run (see
-/// [`ParagraphBreakStyle::Specials`] for the exact contract; the stamped spec is
-/// the canonical [`ParagraphBreakSpec`]). `break_span` is the break token's span, as
-/// the reader answers it — its text is what the `Specials` shape records its
-/// name-as-written from.
+/// Builds the node a paragraph break becomes, in the given
+/// [`ParagraphBreakStyle`].
 ///
-/// **Parse-side only**: the returned kind is built around a live break span (the
-/// span-backed `Chars` shape resolves against the break's own source; the node is
-/// staged childless by the core). Post-parse synthesis of paragraph-break-like
-/// material stages `Chars` nodes directly.
+/// `break_span` is the break token's span as the token reader reported it. Under
+/// [`Chars`](ParagraphBreakStyle::Chars) the result is a whitespace `Chars` node over
+/// that span; under [`Specials`](ParagraphBreakStyle::Specials) it is a `Callable`
+/// node named by the whitespace run the span covers and carrying a
+/// [`ParagraphBreakSpec`]. `state` is the parsing state in force and is not consulted
+/// by this implementation.
+///
+/// The node is returned childless, for the parser to stage. Both shapes refer to the
+/// break's own source, so this is for use during a parse; a transformation adding
+/// paragraph-break-like material to a finished tree builds its `Chars` nodes
+/// directly.
 pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
     style: ParagraphBreakStyle,
     state: &ParsingState<LLL>,
@@ -292,64 +318,91 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
 
 // --- the canned assembly -------------------------------------------------------------
 
-/// The preset's parse-behavior object ([`Lang::Driver`](crate::state::Lang::Driver)),
-/// generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
-/// [`Latexlike`]): carries the tolerant-parsing policy, resolves command tokens
-/// through the state's scope stack (under the language's
-/// [macro role](LatexlikeCallableType::macro_callable) — `\begin`/`\end` resolve
-/// like any other command to the [`builtin_package`](super::builtin_package)'s dispatch
-/// entries), plugs math-class group interiors into math mode through the
-/// descent-delta channel, lowers the exit-math-context event over the
-/// enclosing-state stack, emits paragraph-break nodes per its
-/// [`ParagraphBreakStyle`], and exposes an optional [`SourceResolver`] for
-/// `\input`-like external references
-/// ([`with_source_resolver`](LatexlikeDriver::with_source_resolver); the default is
-/// none — the driver resolves nothing).
+/// The ready-made LaTeX-like parse driver: the second half of a working parser,
+/// paired with a seed parsing state.
 ///
-/// **The ready-made assembly of the preset's behavior functions**: every
-/// behavior-carrying hook body is precisely a one-line delegation to the matching
-/// public behavior function
-/// ([`math_group_interior_delta`], [`exit_math_context_delta`],
-/// [`make_paragraph_break_node`];
-/// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes) + the
-/// macro role for resolution) — the struct contains no behavior those functions
-/// don't. A framework wanting different behavior for one hook writes its own
-/// [`ParseDriver`] composing the same functions; the three settings here
-/// ([`recovery`](LatexlikeDriver::recovery),
-/// [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style), the source
-/// resolver) are orthogonal *configuration*, deliberately not behavior overrides.
+/// Build one with [`new`](LatexlikeDriver::new), which takes the one setting that has
+/// no sensible default — whether the parse is strict or tolerant
+/// ([`Recovery`]) — and hand it to [`Language::new`](crate::core::Language::new):
 ///
-/// The recovery policy is the driver's one mandatory setting — strict vs. tolerant must
-/// be an explicit [`new`](LatexlikeDriver::new) argument (there is deliberately no
-/// `Default`).
+/// ```
+/// use techy::core::{Language, ParsingState};
+/// use techy::error::Recovery;
+/// use techy::latexlike::{Latexlike, LatexlikeDriver};
 ///
-/// Construct-provision and the remaining hooks keep their trait defaults; preset
-/// helper methods (e.g. package loading by name) arrive with the standard spec
-/// database.
+/// let language: Language<Latexlike> = Language::new(
+///     LatexlikeDriver::new(Recovery::Tolerant),
+///     ParsingState::lang_initial().expect("seed state"),
+/// );
+/// let result = language.parse(r"a $x$ b").unwrap();
+/// assert!(result.tree.root().child(1).unwrap().is_math_group());
+/// ```
+///
+/// The type is generic over the language family ([`LatexlikeLang`]) and defaults to
+/// [`Latexlike`], so a language of your own can use this driver unchanged.
+///
+/// # What it decides
+///
+/// - **Recovery.** Whether the parse stops at the first problem or records a
+///   diagnostic and continues ([`recovery`](LatexlikeDriver::recovery)).
+/// - **Commands.** A command token is looked up in the state's scope stack under the
+///   language's [macro form](LatexlikeCallableType::macro_callable). `\begin` and
+///   `\end` are ordinary entries of the [`builtin_package`](super::builtin_package)
+///   and resolve the same way.
+/// - **Math groups.** Entering a math group puts its interior into math mode
+///   ([`math_group_interior_delta`]), and the exit-math-context event restores the
+///   surrounding context ([`exit_math_context_delta`]).
+/// - **Paragraph breaks.** A blank line becomes a node in the driver's
+///   [`ParagraphBreakStyle`]
+///   ([`with_paragraph_break_style`](LatexlikeDriver::with_paragraph_break_style)).
+/// - **External sources.** `\input`-like references are resolved by the driver's
+///   [`SourceResolver`], if one was set with
+///   [`with_source_resolver`](LatexlikeDriver::with_source_resolver). Without one,
+///   the driver resolves nothing.
+///
+/// # Adjusting it
+///
+/// Those four settings are the whole of this type's configuration; it holds no other
+/// behavior. Each decision above is also a public function of this module, and each
+/// hook here is a one-line call to one of them. So a parser that needs one decision
+/// changed writes its own [`ParseDriver`] and calls the same functions for the rest,
+/// rather than trying to subclass this one. Behavior that belongs to a whole
+/// language, rather than to one parse, is set on [`LatexlikeLang`] instead — the
+/// math-delimiter table, for example.
+///
+/// The remaining [`ParseDriver`] hooks keep their trait defaults.
 pub struct LatexlikeDriver<LLL: LatexlikeLang = Latexlike> {
-    /// The tolerant-parsing policy to drive under.
+    /// Whether a parse under this driver stops at the first problem or records a
+    /// diagnostic and continues.
     pub recovery: Recovery,
-    /// How paragraph-break tokens become nodes (default:
-    /// [`ParagraphBreakStyle::Chars`]).
+    /// What shape of node a paragraph break becomes. Defaults to
+    /// [`ParagraphBreakStyle::Chars`].
     pub paragraph_break_style: ParagraphBreakStyle,
-    /// The [`SourceResolver`] behind
-    /// [`ParseDriver::source_resolver`] (`None` — the default — resolves nothing);
-    /// set via [`with_source_resolver`](LatexlikeDriver::with_source_resolver).
-    /// Private (the two policy settings above stay `pub`); value-level `dyn`
-    /// deliberately (an embedding-environment capability consumed on the cold
-    /// path) — see the asymmetry note on
-    /// [`StdParseDriver`](crate::engine::StdParseDriver).
+    /// The resolver for `\input`-like external source references, returned by
+    /// [`ParseDriver::source_resolver`]. `None` by default, meaning nothing is
+    /// resolved; set it with
+    /// [`with_source_resolver`](LatexlikeDriver::with_source_resolver).
+    // Private, unlike the two settings above: a resolver is set through the builder
+    // method so the `IntoSourceResolver` conversion applies. Value-level `dyn` — an
+    // embedding-environment capability consumed on the cold path; cf. the asymmetry
+    // note on `StdParseDriver`.
     source_resolver: Option<Arc<dyn SourceResolver<LLL::SourceOrigin>>>,
-    /// The family member this driver drives (a driver carries no per-language
-    /// data — the parameter exists so the hook signatures speak `LLL`; the
-    /// `fn() -> LLL` spelling keeps the driver `Send + Sync` independent of the
-    /// marker type).
+    // The family member this driver drives. A driver carries no per-language data;
+    // the parameter exists so the hook signatures speak `LLL`, and the `fn() -> LLL`
+    // spelling keeps the driver `Send + Sync` whatever the marker type is.
     lang: PhantomData<fn() -> LLL>,
 }
 
 impl<LLL: LatexlikeLang> LatexlikeDriver<LLL> {
-    /// A driver with the given recovery policy (and the default
-    /// [`ParagraphBreakStyle::Chars`], no source resolver).
+    /// Creates a driver with the given recovery policy.
+    ///
+    /// Paragraph breaks come out as [`Chars`](ParagraphBreakStyle::Chars) nodes and
+    /// no source resolver is set; change either with
+    /// [`with_paragraph_break_style`](LatexlikeDriver::with_paragraph_break_style)
+    /// and [`with_source_resolver`](LatexlikeDriver::with_source_resolver).
+    ///
+    /// There is no `Default` implementation, because whether a parse is strict or
+    /// tolerant is a decision the calling program has to make.
     pub fn new(recovery: Recovery) -> LatexlikeDriver<LLL> {
         LatexlikeDriver {
             recovery,
@@ -359,7 +412,8 @@ impl<LLL: LatexlikeLang> LatexlikeDriver<LLL> {
         }
     }
 
-    /// Emit paragraph-break nodes in the given style.
+    /// Emits paragraph-break nodes in the given style, replacing the driver's
+    /// current [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style).
     pub fn with_paragraph_break_style(
         mut self,
         style: ParagraphBreakStyle,
@@ -368,9 +422,15 @@ impl<LLL: LatexlikeLang> LatexlikeDriver<LLL> {
         self
     }
 
-    /// Use `resolver` for `\input`-like external source references — exposed through
-    /// [`ParseDriver::source_resolver`]. Takes a resolver by value (shared internally)
-    /// or an already-shared `Arc` (passed through, no double-wrap).
+    /// Uses `resolver` for `\input`-like external source references.
+    ///
+    /// Without this, the driver resolves nothing and a source reference fails. The
+    /// resolver is what [`ParseDriver::source_resolver`] returns, and what
+    /// [`input_macro_spec`](super::input_macro_spec) needs in order to parse a
+    /// referenced source into the same tree.
+    ///
+    /// Accepts a resolver by value, which is shared internally, or an `Arc` that is
+    /// already shared, which is used as it is.
     pub fn with_source_resolver<M>(
         mut self,
         resolver: impl IntoSourceResolver<LLL::SourceOrigin, M>,
@@ -413,10 +473,10 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         self.source_resolver.as_deref()
     }
 
-    /// One-line delegation to the language's
-    /// [`check_parse_start`](LatexlikeLang::check_parse_start) behavior default —
-    /// the parse-initialization checks (for [`Latexlike`](super::Latexlike): the
-    /// all-escape-shadowed provider warning).
+    /// Runs the language's start-of-parse checks,
+    /// [`LatexlikeLang::check_parse_start`]. For [`Latexlike`](super::Latexlike),
+    /// that is the warning about a provider whose commands no escape character in
+    /// force can reach.
     fn observe_parse_start(
         &self,
         source: &Arc<Source<LLL::SourceOrigin>>,
@@ -426,15 +486,15 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         LLL::check_parse_start(source, initial_state, diagnostics);
     }
 
-    /// Resolve a command token under the language's
-    /// [macro role](LatexlikeCallableType::macro_callable) through the state's
-    /// scope stack, via the standard
-    /// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes): a hit
-    /// dispatches; a clean miss reports the searched providers as the
-    /// unresolvable-command detail; an operational provider failure is a distinct
-    /// [`Failed`](CommandResolution::Failed) resolution. Every outcome is a
-    /// resolution value — this implementation never answers the abort channel
-    /// (`Ok(...)` wrapping is its whole use of the `Result`).
+    /// Looks the command token up in the state's scope stack under the language's
+    /// [macro form](LatexlikeCallableType::macro_callable), using the standard
+    /// [`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes).
+    ///
+    /// A hit dispatches to the definition found. A clean miss names the providers
+    /// that were searched, as the detail of the unresolvable-command report. A
+    /// provider that failed operationally is reported separately, as
+    /// [`Failed`](CommandResolution::Failed). All three are resolution values: this
+    /// implementation never returns `Err`.
     fn resolve_command(
         &self,
         state: &ParsingState<LLL>,
@@ -449,8 +509,8 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         ))
     }
 
-    /// One-line delegation to the [`make_paragraph_break_node`] behavior function
-    /// with the driver's [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style).
+    /// Calls [`make_paragraph_break_node`] with the driver's
+    /// [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style).
     fn make_paragraph_break_node(
         &self,
         state: &ParsingState<LLL>,
@@ -459,10 +519,10 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         make_paragraph_break_node(self.paragraph_break_style, state, break_span)
     }
 
-    /// One-line delegation to the [`math_group_interior_delta`] behavior function
-    /// (`None` for non-math classes — verbatim rules never reach a tokenizer
-    /// descent at all, see
-    /// [`GroupType::Verbatim`](super::GroupType::Verbatim)).
+    /// Calls [`math_group_interior_delta`], which answers `None` for every group
+    /// class that is not math. Verbatim regions never reach this hook at all: their
+    /// content is read as raw text rather than tokenized, see
+    /// [`GroupType::Verbatim`](super::GroupType::Verbatim).
     fn group_interior_delta(
         &self,
         base: &ParsingState<LLL>,
@@ -471,13 +531,13 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         math_group_interior_delta(base, rule)
     }
 
-    /// One-line delegation to the [`exit_math_context_delta`] behavior function for the
-    /// exit-math-context event
-    /// ([`is_exit_math_context`](LatexlikeEvent::is_exit_math_context)); every
-    /// other event is context-free (`Ok(None)`) and stays for
-    /// [`finalize_transition`](crate::state::Lang::finalize_transition). This
-    /// implementation never answers the abort channel (`Ok(...)` wrapping is its
-    /// whole use of the `Result`).
+    /// Calls [`exit_math_context_delta`] for the exit-math-context event
+    /// ([`is_exit_math_context`](LatexlikeEvent::is_exit_math_context)).
+    ///
+    /// Every other event answers `Ok(None)`: its effect does not depend on the
+    /// enclosing states, and it is handled by
+    /// [`Lang::finalize_transition`](crate::core::Lang::finalize_transition) instead.
+    /// This implementation never returns `Err`.
     fn resolve_state_event(
         &self,
         event: &LLL::Event,
@@ -490,93 +550,97 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
 
 // --- the preset's driver extension ----------------------------------------------------
 
-/// The preset's **driver extension**: the parse-time behavior hooks that speak
-/// *latexlike* vocabulary. It is a preset trait rather than [`ParseDriver`] methods
-/// on purpose — "environment" is a preset concept (the `\begin{name} … \end{name}`
-/// composition of [`BeginSpec`](super::BeginSpec)), and the core driver must not
-/// privilege it.
+/// The driver hooks that speak the preset's own vocabulary, on top of
+/// [`ParseDriver`].
 ///
-/// Every family member's [`Driver`](crate::state::Lang::Driver) implements this trait
-/// — [`LatexlikeLang`] demands it in its bounds — so the preset's compositions reach
-/// these hooks on the concretely typed
-/// [`ParseContext::driver`](crate::constructs::ParseContext::driver), with no downcast
-/// and no per-invocation installation. Every method is defaulted to the behavior every
-/// existing driver already has, so opting a custom driver in is one line:
+/// The core driver trait knows nothing about environments, since an environment is a
+/// preset concept — the `\begin{name} … \end{name}` composition that
+/// [`BeginSpec`](super::BeginSpec) puts together. The hooks that need to talk about
+/// one live here instead.
+///
+/// [`LatexlikeLang`] requires this trait of a language's driver, so the preset's
+/// parsers reach these hooks directly on
+/// [`ParseContext::driver`](crate::core::constructs::ParseContext::driver), with no
+/// downcast. Every method has a default that reproduces the behavior the preset's own
+/// driver has, so opting a custom driver in is one line:
 ///
 /// ```ignore
 /// impl LatexlikeParseDriver<MyLang> for MyDriver {}
 /// ```
 pub trait LatexlikeParseDriver<LLL: LatexlikeLang>: ParseDriver<LLL> {
-    /// The hook by which an **environment leaks an after-effect** to its caller: it
-    /// maps the body's interior content run's merged after-effect record to the delta
-    /// the environment invocation returns as its own after-effect (the `\gdef` shape).
-    /// The environment sibling of the core's group-level
-    /// [`GroupAfterEffectsFn`](crate::constructs::GroupAfterEffectsFn), whose contract
-    /// this one mirrors; the notes there on what a merged record can express apply
-    /// verbatim.
+    /// Decides which state changes made inside an environment's body survive the
+    /// environment, and reach the content around it.
+    ///
+    /// A body's state changes are ordinarily confined to the body: `\def` inside a
+    /// `center` is gone at `\end{center}`. This hook is how a language lets some of
+    /// them out — the `\gdef` shape. It is the environment counterpart of the core's
+    /// group-level [`GroupAfterEffectsFn`](crate::core::constructs::GroupAfterEffectsFn),
+    /// and mirrors its contract.
     ///
     /// The arguments, in order:
     ///
-    /// 1. The **invocation facts** ([`EnvironmentInvocation`]) and, next, the resolved
-    ///    **spec** — jointly what a policy keys on (the environment's name, its
-    ///    spelling pieces, its definition's identity), in place of the group hook's
-    ///    matched [`GroupRule`]: a language may let `\gdef` escape a `center` but
+    /// 1. The invocation ([`EnvironmentInvocation`]) and, next, the resolved spec.
+    ///    Together they are what a policy keys on — the environment's name, how it was
+    ///    spelled, which definition it resolved to — where the group hook keys on a
+    ///    matched [`GroupRule`]. A language may let `\gdef` escape a `center` but
     ///    nothing escape an `equation`.
-    /// 2. The body's **initial state** — what the body parsed under before any sibling
-    ///    after-effect evolved it: the invocation's base with the behavior's
-    ///    [`body_state_delta`](super::EnvironmentBehavior::body_state_delta) stacked on
-    ///    it.
-    /// 3. The body's **exit state**
-    ///    ([`EnvironmentBody::exit_state`](crate::constructs::EnvironmentBody::exit_state))
-    ///    — the state the body run actually reached, and the only place the definitions
-    ///    the record made are inspectable (`state.scopes().retrieve_spec(…)`). It is
-    ///    discarded with the invocation; this hook is the last reader.
-    /// 4. The body's **merged record**
-    ///    ([`EnvironmentBody::after_effects`](crate::constructs::EnvironmentBody::after_effects)),
-    ///    passed **by value** so a hook may filter it in place and hand the same box
-    ///    back rather than cloning.
+    /// 2. The state the body started in: the invocation's own state with the
+    ///    behavior's
+    ///    [`body_state_delta`](super::EnvironmentBehavior::body_state_delta) applied,
+    ///    before anything in the body changed it.
+    /// 3. The state the body ended in
+    ///    ([`EnvironmentBody::exit_state`](crate::core::constructs::EnvironmentBody::exit_state)).
+    ///    This is the only place the definitions the body made can be inspected
+    ///    (`state.scopes().retrieve_spec(…)`); it is discarded once the invocation
+    ///    finishes, and this hook is its last reader.
+    /// 4. The body's accumulated changes
+    ///    ([`EnvironmentBody::after_effects`](crate::core::constructs::EnvironmentBody::after_effects)),
+    ///    passed by value so a hook can filter it in place and return the same box
+    ///    rather than cloning.
     ///
-    /// The return is the environment invocation's after-effect for the enclosing
-    /// content run. `Ok(None)` — the default — is the ordinary "nothing escapes"
-    /// answer, and is what every driver that does not override this method reports for
-    /// every environment.
+    /// The return value is what the environment contributes to the content around it.
+    /// `Ok(None)`, the default, means nothing escapes, which is what every driver that
+    /// does not override this method reports for every environment.
     ///
-    /// The composition calls this **unconditionally**, an empty record included (like
-    /// the group hook): a hook that keys on the invocation alone still runs, and
-    /// "the body generated nothing" is a fact worth being told.
+    /// The hook is called for every environment, including one whose body accumulated
+    /// nothing: a policy that keys on the invocation alone still gets to run, and
+    /// "the body changed nothing" is itself worth reporting.
     ///
-    /// # What a hook can discriminate
+    /// What escapes composes outward exactly as a group's does. The enclosing content
+    /// applies the returned change to its own state *and* adds it to its own
+    /// accumulated changes, so the next environment or group out sees it as argument
+    /// 4 and may let it escape again.
     ///
-    /// The record is **one merged delta** — rules overrides last-writer-wins, scope ops
-    /// and events concatenated in application order — and carries no provenance: it
-    /// cannot say which construct inside the body contributed what. A `\gdef`-vs-`\def`
-    /// split is therefore expressed **structurally**, by the language tagging its own
-    /// ops — `\gdef` emitting a [`ScopeOp::Define`](crate::scopes::ScopeOp) against a
-    /// globally-named scope, `\def` a local one — after which the hook keeps the
-    /// globally-targeted ops and drops the rest. The rules, mode and ext overrides
-    /// carry no such tag and merge last-writer-wins, so for those the only honest
-    /// answers are all or nothing. [`GroupAfterEffectsFn`](crate::constructs::GroupAfterEffectsFn)
-    /// documents the mechanics in full.
+    /// # What a hook can tell apart
     ///
-    /// Escapes **compose outward** exactly as a group's do: the enclosing content loop
-    /// applies the returned delta to its own state *and* merges it into its own record,
-    /// so the next group or environment out sees it in argument 4 and may let it escape
-    /// again.
+    /// Argument 4 is a single merged change — token-rule overrides resolved
+    /// last-writer-wins, scope operations and events concatenated in the order they
+    /// were applied — and it records no provenance, so it cannot say which construct
+    /// in the body contributed what.
+    ///
+    /// A `\gdef`-versus-`\def` distinction is therefore made structurally, by the
+    /// language tagging its own operations: `\gdef` emits a
+    /// [`ScopeOp::Define`](crate::core::specs::ScopeOp) against a globally named
+    /// scope and `\def` against a local one, and the hook keeps the globally targeted
+    /// operations and drops the rest. Rule, mode and extension overrides carry no such
+    /// tag and were already merged, so for those the only honest answers are all or
+    /// nothing. [`GroupAfterEffectsFn`](crate::core::constructs::GroupAfterEffectsFn)
+    /// describes the mechanics in full.
+    ///
+    /// A hook must be deterministic and free of side effects, like the core's
+    /// descent-state and group-after-effect callbacks: an answer that depends on the
+    /// order the hook happens to be called in would be fragile.
     ///
     /// # Errors
     ///
-    /// `Err` **aborts the parse** under any recovery policy, propagated exactly like a
-    /// construct parser's own `Err`, with the live traceback attached at the call site
-    /// — a driver hook has no session access. Carry
+    /// `Err` aborts the parse under any recovery policy. It propagates exactly like a
+    /// construct parser's own `Err`, and the traceback is attached at the call site,
+    /// since a driver hook has no access to the session. Carry
     /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
-    /// hook's own code,
-    /// [`ImplementationError`](crate::constructs::ImplementationError) for a violated
-    /// library contract. An infallible hook wraps its answer in `Ok(…)` and that is the
-    /// only change.
-    ///
-    /// Deterministic and side-effect free, like the core's descent-state and
-    /// group-after-effect callbacks: a hook whose answer depends on call order would be
-    /// fragile.
+    /// hook's own code, and
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) for a
+    /// violated library contract. A hook that cannot fail simply wraps its answer in
+    /// `Ok(…)`.
     fn environment_after_effects(
         &self,
         invocation: &EnvironmentInvocation<'_, LLL>,
@@ -593,8 +657,8 @@ pub trait LatexlikeParseDriver<LLL: LatexlikeLang>: ParseDriver<LLL> {
     }
 }
 
-/// The canned assembly opts in with the trait defaults: no environment leaks an
-/// after-effect (the scoped-descent behavior the preset has always had).
+/// The preset's driver takes the trait defaults: under it, nothing an environment's
+/// body defines or changes escapes the environment.
 impl<LLL: LatexlikeLang> LatexlikeParseDriver<LLL> for LatexlikeDriver<LLL> {}
 
 #[cfg(test)]

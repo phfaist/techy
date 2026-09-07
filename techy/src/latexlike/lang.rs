@@ -1,32 +1,44 @@
-//! The preset's generalization layer: the per-vocabulary **role traits** and the
-//! [`LatexlikeLang`] umbrella.
+//! The traits that let a language of your own reuse the preset's behavior.
 //!
-//! The latexlike preset's components are generic over a *family* of languages
-//! (conventional parameter `LLL`), not hard-wired to [`Latexlike`]: a framework
-//! language with its own node exts, state ext, or extended vocabularies reuses the
-//! preset's driver, rules, and specs without forking them. The mechanism is
-//! role-based: each closed vocabulary the preset needs is described by a **role
-//! trait** implemented *by the vocabulary type itself* — the preset asks a foreign
-//! `GroupTypeId` "give me your math class" instead of demanding the preset's enum.
-//! techy implements the role traits for the preset's own enums ([`GroupType`],
-//! [`CallableType`], [`Mode`], [`Event`]), so a language adopting those enums as its
-//! associated types satisfies every bound with zero code, while a language with
-//! extended vocabularies implements them itself — which *guarantees* the
-//! preset-required values exist and leaves the enum open for its own additions.
+//! Nothing in the preset is written for [`Latexlike`] alone. Its token rules, its
+//! specs, its construct parsers and its driver hooks are all generic over a *family*
+//! of languages, so a language that wants LaTeX-like syntax but its own vocabularies,
+//! node data, or state extension gets them without copying anything. The bound
+//! naming that family is [`LatexlikeLang`] — conventionally written as the type
+//! parameter `LLL` — and joining it is one line, `impl LatexlikeLang for MyLang {}`.
 //!
-//! [`LatexlikeLang`] bundles the vocabulary bounds and carries the preset's
-//! language-level behavior defaults (the math-delimiter data, the math-interior
-//! forbidden-character derivation) as **defaulted, overridable methods**. There is
-//! deliberately **no blanket impl** — coherence would make the defaults
-//! un-overridable; opting a language into the family is one line:
-//! `impl LatexlikeLang for MyLang {}`.
+//! To be admitted, a language's vocabularies must be able to supply the values the
+//! preset's machinery needs: a math group class, a macro invocation form, a math
+//! mode, and so on. Each vocabulary answers for itself, through one trait implemented
+//! on the vocabulary type:
 //!
-//! Evolution posture: the required role surface freezes at stabilization; future
-//! roles and behaviors arrive as defaulted methods delegating to existing ones
-//! (non-breaking), and a fallback-less new role is a conscious breaking change.
-//! [`ClosedVocabulary`](crate::state::ClosedVocabulary) is deliberately **not** a
-//! supertrait of any role trait ("provide, don't require"): enumeration-driven
-//! tooling states that bound where it is used.
+//! - [`LatexlikeGroupType`] on [`Lang::GroupTypeId`] — content, math, and verbatim
+//!   group classes;
+//! - [`LatexlikeCallableType`] on [`Lang::CallableTypeId`] — the macro, environment,
+//!   and specials invocation forms;
+//! - [`LatexlikeMode`] on [`Lang::ModeId`] — the mode math interiors parse in;
+//! - [`LatexlikeEvent`] on [`Lang::Event`] — the "leave the math context" event;
+//! - [`LatexlikeInvocationSyntax`] on [`Lang::InvocationSyntax`] — the record of how
+//!   an invocation was spelled.
+//!
+//! techy implements all five for the preset's own types ([`GroupType`],
+//! [`CallableType`], [`Mode`], [`Event`], and
+//! [`InvocationSyntaxData`](super::InvocationSyntaxData)), so a language that adopts
+//! those as its associated types satisfies every bound with no code of its own. A
+//! language that extends one of them with variants of its own implements the trait
+//! instead, which is what guarantees the values the preset needs still exist.
+//!
+//! [`LatexlikeLang`] also carries the preset's language-level settings as methods
+//! with defaults: the math-delimiter table ([`math_group_rules`](LatexlikeLang::math_group_rules)),
+//! the characters a math interior forbids
+//! ([`math_interior_forbidden_chars`](LatexlikeLang::math_interior_forbidden_chars)),
+//! and the checks a parse runs at start-up
+//! ([`check_parse_start`](LatexlikeLang::check_parse_start)). Overriding one changes
+//! it for the whole family member, with no need to fork
+//! [`default_token_rules`](super::default_token_rules).
+//!
+//! [Writing your own language](crate::guide::custom_lang) covers the [`Lang`] trait
+//! these build on.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -42,25 +54,35 @@ use super::driver::LatexlikeParseDriver;
 use super::invocation_syntax::EnvironmentSyntax;
 use super::{CallableType, Event, GroupType, MathGroupForm, Mode};
 
-/// Role trait for a latexlike **group-class vocabulary**
-/// ([`Lang::GroupTypeId`]): the three classes the preset's machinery needs —
-/// content, math (with its [`MathGroupForm`] payload), verbatim — as constructors on
-/// the host's own type, plus the math classifier/predicate pair.
+/// What the preset requires of a language's group-class vocabulary
+/// ([`Lang::GroupTypeId`]).
+///
+/// Three classes have to exist for the preset's rules and parsers to work: the plain
+/// content group `{…}`, the math group in a given [`MathGroupForm`], and the verbatim
+/// region. This trait asks the vocabulary type for them, rather than demanding the
+/// preset's own [`GroupType`], so a language that adds classes of its own still fits.
+/// [`GroupType`] implements it, so adopting that enum costs no code.
 ///
 /// # Coherence contracts
 ///
 /// - `Self::math_group(f).math_form() == Some(f)` for every form `f`;
 /// - `content_group().math_form()` and `verbatim_group().math_form()` are `None`;
-/// - [`is_math`](LatexlikeGroupType::is_math) is `true` for every value the
-///   language wants parsed as a math interior (the driver's math-interior delta keys on it).
+/// - [`is_math`](LatexlikeGroupType::is_math) is `true` for every class whose
+///   interior should parse as math.
 ///
 /// # The `is_math` / `math_form` split
 ///
-/// The split is deliberate: the preset's math-interior behavior function keys on **`is_math`**
-/// (parse behavior — enter math mode, drop the math openers), while readers key on
-/// **`math_form`** (presentation). An extending language with a math-*like* class
-/// that has no inline/display presentation overrides `is_math` to answer `true` for
-/// it while `math_form` stays `None` — decoupling the two.
+/// The two math queries are separate on purpose.
+/// [`is_math`](LatexlikeGroupType::is_math) decides *parse behavior*: for a class
+/// that answers `true`, the interior parses in math mode and the math delimiters stop
+/// being openers there ([`math_group_interior_delta`](super::math_group_interior_delta)).
+/// [`math_form`](LatexlikeGroupType::math_form) reports *presentation*, and is what a
+/// reader of a finished tree calls
+/// ([`NodeRef::math_form`](crate::core::node::NodeRef::math_form)).
+///
+/// A language with a math-like class that has no inline/display presentation
+/// therefore overrides `is_math` to answer `true` for it while `math_form` stays
+/// `None`.
 pub trait LatexlikeGroupType: Copy {
     /// The plain content-group class (the preset's `{…}`).
     fn content_group() -> Self;
@@ -71,24 +93,30 @@ pub trait LatexlikeGroupType: Copy {
     /// The verbatim (raw-text region) class.
     fn verbatim_group() -> Self;
 
-    /// The math classifier: the declared form of a math class, `None` otherwise.
+    /// The form this class appears in, when it is a math class; `None` otherwise.
     fn math_form(self) -> Option<MathGroupForm>;
 
-    /// The math predicate — what the preset's parse wiring keys on. Defaults to
-    /// "carries a math form"; override to decouple parse behavior from
-    /// presentation (see the trait docs).
+    /// Whether interiors of this class parse as math.
+    ///
+    /// Defaults to "carries a math form". Override it to answer `true` for a
+    /// math-like class with no inline/display presentation — see the trait
+    /// documentation.
     fn is_math(self) -> bool {
         self.math_form().is_some()
     }
 }
 
-/// Role trait for a latexlike **callable-type vocabulary**
-/// ([`Lang::CallableTypeId`]): the macro/environment/specials trichotomy as
-/// constructors on the host's own type, with matching predicates.
+/// What the preset requires of a language's callable-type vocabulary
+/// ([`Lang::CallableTypeId`]).
 ///
-/// The accessor names carry the role *and* the vocabulary noun
-/// (`macro_callable()`, not `macro()` — which is not even spellable: `macro` is a
-/// Rust keyword); predicates are the bare role.
+/// The three invocation forms — macro, environment, specials — have to exist, as
+/// values of the language's own type. [`CallableType`] implements this, so adopting
+/// that enum costs no code; a language that adds forms of its own implements it
+/// instead.
+///
+/// The constructors are named for the role and the noun together
+/// (`macro_callable()`, not `macro()`, which is not spellable in Rust); the
+/// predicates are named for the role alone.
 ///
 /// # Coherence contracts
 ///
@@ -124,17 +152,17 @@ pub trait LatexlikeCallableType: Copy + PartialEq {
     }
 }
 
-/// Role trait for a latexlike **mode vocabulary** ([`Lang::ModeId`]): the math
-/// mode as a constructor on the host's own type, with its predicate — deliberately
-/// nothing more.
+/// What the preset requires of a language's mode vocabulary ([`Lang::ModeId`]): the
+/// math mode, and a way to recognize it.
 ///
-/// There is **no text-mode constructor and no `is_text`**: the preset never
-/// *invents* a non-math mode — leaving math restores an actual enclosing context
-/// (its mode value included) found on the enclosing-state stack
-/// ([`exit_math_context_delta`](super::exit_math_context_delta)), so the only
-/// required vocabulary is "which mode do math interiors parse in" and "is this
-/// state's mode math". This keeps the required surface on foreign mode vocabularies
-/// minimal.
+/// [`Mode`] implements this, so adopting that enum costs no code.
+///
+/// There is deliberately no text-mode constructor and no `is_text`. The preset never
+/// invents a non-math mode: leaving math restores an enclosing context that actually
+/// exists, mode value included, found on the stack of enclosing states
+/// ([`exit_math_context_delta`](super::exit_math_context_delta)). The only two things
+/// the preset has to ask a mode vocabulary are which mode math interiors parse in,
+/// and whether a given mode is math.
 ///
 /// # Coherence contract
 ///
@@ -151,47 +179,49 @@ pub trait LatexlikeMode: Copy + PartialEq {
     }
 }
 
-/// Role trait for a latexlike **event vocabulary** ([`Lang::Event`]): the
-/// exit-math-context transition event as a constructor on the host's own event
-/// type, with its recognizer.
+/// What the preset requires of a language's event vocabulary ([`Lang::Event`]): the
+/// "leave the math context" event, and a way to recognize it.
 ///
-/// The preset's text-restore is an *event* by design ([`Event::ExitMathContext`]):
-/// the restoring delta depends on the enclosing-state stack at use time, so the
-/// `LLL`-generic argument recipe must mint the event **in the host's own event
-/// type** and the driver must recognize it back
-/// ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event)
-/// → [`exit_math_context_delta`](super::exit_math_context_delta)). A preset-side
-/// wrapper event would violate vocabulary-stays-the-host's-own; an event-less
-/// design cannot exist (the patch has no meaning without the context).
+/// [`Event`] implements this, so adopting that enum costs no code.
+///
+/// Leaving math is an *event* rather than a fixed state change because the change it
+/// stands for depends on what encloses the point of use — see
+/// [`Event::ExitMathContext`]. An argument recipe written for the whole family
+/// (`\text{…}` and its relatives) creates the event in the language's own event type
+/// here, and the driver recognizes it again when it resolves the event into a state
+/// change
+/// ([`ParseDriver::resolve_state_event`](crate::core::ParseDriver::resolve_state_event),
+/// which delegates to [`exit_math_context_delta`](super::exit_math_context_delta)).
 ///
 /// # Coherence contract
 ///
 /// `Self::exit_math_context().is_exit_math_context() == true`, and the recognizer
 /// answers `true` for exactly the events meaning "exit the math context". The
-/// recognizer is a required method (events carry no equality bound); future preset
-/// events arrive as defaulted methods where a coherent default exists.
+/// recognizer is a required method because events carry no equality bound.
 pub trait LatexlikeEvent {
-    /// The exit-math-context event: restore the innermost enclosing non-math
-    /// context (consumed by the preset driver's event lowering).
+    /// The event asking to restore the innermost enclosing non-math context.
     fn exit_math_context() -> Self;
 
     /// Whether this event is the exit-math-context event.
     fn is_exit_math_context(&self) -> bool;
 }
 
-/// Role trait for a latexlike **invocation-syntax payload**
-/// ([`Lang::InvocationSyntax`]): the macro / environment / specials invocation
-/// forms as constructors on the host's own payload type, with the matching
-/// accessors — the fifth member of the role-trait roster, so the preset's staging
-/// sites (the invocation and specials sites, the environment composition) and its
-/// source recomposer work over any family member's payload type.
+/// What the preset requires of a language's invocation-syntax payload
+/// ([`Lang::InvocationSyntax`]): a way to record, and read back, which of the three
+/// invocation forms a callable node was written in.
 ///
-/// The associated [`Env`](LatexlikeInvocationSyntax::Env) names the
-/// environment-side record ([`EnvironmentSyntax`]) — the single customization
-/// entry for environment-syntax recording: a language picks its record by picking
-/// its payload type (the preset enum
-/// [`InvocationSyntaxData<Env>`](super::InvocationSyntaxData) implements this
-/// trait for any `Env`).
+/// The payload is what a `Callable` node stores about its own spelling — the escape
+/// character a macro was triggered by, the whitespace that ended its name, the pieces
+/// of an environment's `\begin` and `\end`. Requiring this trait is what lets the
+/// preset's parsers and its source recomposer
+/// ([`source_recomposer`](super::source_recomposer)) work with any family member's
+/// payload type. [`InvocationSyntaxData`](super::InvocationSyntaxData) implements it
+/// for any environment record `Env`.
+///
+/// The associated [`Env`](LatexlikeInvocationSyntax::Env) type is the environment
+/// side of that record ([`EnvironmentSyntax`]), and is the one place to customize
+/// what gets recorded for an environment: a language chooses its record by choosing
+/// its payload type.
 ///
 /// # Coherence contracts
 ///
@@ -223,35 +253,40 @@ pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
     fn is_specials(&self) -> bool;
 }
 
-/// The latexlike **language-family** trait: a [`Lang`] whose vocabularies implement
-/// the latexlike role traits ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
-/// [`LatexlikeMode`], [`LatexlikeEvent`], and — on the invocation-syntax
-/// payload — [`LatexlikeInvocationSyntax`] +
-/// [`FromInvocation`](crate::constructs::FromInvocation)) and whose driver
-/// implements the preset's driver extension ([`LatexlikeParseDriver`]) — the bound
-/// every generic preset component takes (conventional parameter `LLL`), plus the
-/// preset's language-level behavior defaults as **overridable defaulted
-/// methods**.
+/// A language that can use the latexlike preset: the bound every generic preset
+/// component takes.
 ///
-/// Opting in is explicit and one line — `impl LatexlikeLang for MyLang {}` — and
-/// [`Latexlike`](super::Latexlike) itself opts in exactly that way. There is
-/// deliberately **no blanket impl** over the vocabulary bounds: coherence would
-/// make the defaulted methods un-overridable (a blanket impl's defaults cannot be
-/// specialized per language).
+/// A [`Lang`] qualifies when its vocabularies play the preset's roles
+/// ([`LatexlikeGroupType`], [`LatexlikeCallableType`], [`LatexlikeMode`],
+/// [`LatexlikeEvent`], and on the invocation-syntax payload
+/// [`LatexlikeInvocationSyntax`] together with
+/// [`FromInvocation`](crate::core::constructs::FromInvocation)) and its driver
+/// implements [`LatexlikeParseDriver`]. Every generic item of the preset takes this
+/// bound, conventionally under the parameter name `LLL`.
 ///
-/// The driver bound mirrors the core's own `Driver: `[`ParseDriver`](crate::engine::ParseDriver)
-/// clause ([`Lang::Driver`]) one layer up: a custom driver for a latexlike language
-/// opts in with its own one-liner — `impl LatexlikeParseDriver<MyLang> for MyDriver
-/// {}` — since every hook of [`LatexlikeParseDriver`] is defaulted.
+/// Opting in is explicit and one line — `impl LatexlikeLang for MyLang {}` — which is
+/// exactly how [`Latexlike`](super::Latexlike) itself joins. There is no blanket
+/// implementation over the vocabulary bounds, because a blanket implementation would
+/// fix the defaulted methods below and leave no way to override them per language.
 ///
-/// [`ClosedVocabulary`](crate::state::ClosedVocabulary) is *not* a supertrait —
-/// it stays the opt-in tooling bound, stated where enumeration is actually used.
+/// A custom driver joins the same way, `impl LatexlikeParseDriver<MyLang> for
+/// MyDriver {}`, since every hook of [`LatexlikeParseDriver`] has a default.
 ///
-/// Every latexlike language has **every parsing feature**: the bound pins
+/// The trait deliberately does *not* require
+/// [`ClosedVocabulary`](crate::core::ClosedVocabulary) of the vocabularies. That
+/// bound is stated at the places that actually enumerate a vocabulary, so a language
+/// whose vocabularies are open still fits here.
+///
+/// Every latexlike language has every parsing feature: the bound fixes
 /// [`Features`](Lang::Features) to
-/// [`AllLangFeatures`](crate::state::AllLangFeatures), so the preset's rules data
-/// is stored plainly and none of the per-feature storage machinery is visible
-/// anywhere in the family.
+/// [`AllLangFeatures`](crate::core::AllLangFeatures), so token rules are stored
+/// plainly and no per-feature gating shows up anywhere in the family.
+///
+/// # Language-level settings
+///
+/// The methods below have defaults that reproduce the preset's own behavior.
+/// Override one to change it for a whole language, rather than forking
+/// [`default_token_rules`](super::default_token_rules) or the driver.
 pub trait LatexlikeLang:
     Lang<
         Features = crate::state::AllLangFeatures,
@@ -264,15 +299,14 @@ pub trait LatexlikeLang:
                               + crate::constructs::FromInvocation<Self>,
     >
 {
-    /// The math-delimiter group rules of this language's canonical token rules —
-    /// the data behind [`default_token_rules`](super::default_token_rules).
+    /// The language's math-delimiter pairs — the group rules
+    /// [`default_token_rules`](super::default_token_rules) puts in its seed state.
     ///
-    /// The default is the preset's four pairs, each declaring its
+    /// The default is the four familiar pairs, each declaring its
     /// [`MathGroupForm`] through the language's own
     /// [`math_group`](LatexlikeGroupType::math_group) constructor: `$…$` (inline),
-    /// `$$…$$` (display), `\(…\)` (inline), `\[…\]` (display). Override to change
-    /// the family's delimiter table (fewer pairs, different spellings, extra
-    /// pairs) without forking `default_token_rules`.
+    /// `$$…$$` (display), `\(…\)` (inline), `\[…\]` (display). Override to give the
+    /// language fewer pairs, extra pairs, or different spellings.
     fn math_group_rules() -> Vec<Arc<GroupRule<Self>>> {
         fn rule<L: Lang>(
             group_type: L::GroupTypeId,
@@ -289,21 +323,24 @@ pub trait LatexlikeLang:
         ]
     }
 
-    /// The characters to forbid inside a math-group interior, **derived from the
-    /// math-class rules removed at entry** — the generalization of the preset's
-    /// "merge `$` into the forbidden set" behavior, consumed by
-    /// [`math_group_interior_delta`](super::math_group_interior_delta) (which
-    /// merges the result into the outer state's existing forbidden set).
+    /// The characters a math interior forbids, given the math-delimiter rules that
+    /// were removed on entering it.
     ///
-    /// The default returns every **single-character** open or close spelling among
-    /// `removed` (deduplicated) — under the canonical rules that is exactly `$`,
-    /// with no literal `$` written anywhere: LaTeX forbids nested math, so a stray
-    /// single-character math delimiter inside math must become a diagnostic rather
-    /// than silent content. Multi-character spellings need no entry: with the
-    /// rules removed they cannot open anyway, their single-character prefixes are
-    /// covered here (`$$` by `$`), and escape-led spellings (`\(`) fall through to
-    /// the command path. A language whose math delimiters are exclusively
-    /// multi-character overrides this to name the characters it wants diagnosed.
+    /// LaTeX-like languages do not nest math, so entering a math group removes the
+    /// math delimiters from the group rules in force. A stray `$` inside math would
+    /// then be silent content; forbidding the character instead turns it into a
+    /// diagnostic. [`math_group_interior_delta`](super::math_group_interior_delta)
+    /// calls this with the rules it removed and merges the answer into the forbidden
+    /// characters the surrounding state already had.
+    ///
+    /// The default returns every single-character open or close spelling among
+    /// `removed`, deduplicated — for the four standard pairs that is exactly `$`,
+    /// derived rather than written as a literal. Multi-character spellings need no
+    /// entry: with their rules removed they cannot open a group anyway, a leading
+    /// character they share is already covered (`$$` by `$`), and an escape-led
+    /// spelling such as `\(` is read as a command instead. Override this in a
+    /// language whose math delimiters are all multi-character and that still wants
+    /// some character diagnosed.
     fn math_interior_forbidden_chars(removed: &[Arc<GroupRule<Self>>]) -> String {
         let mut chars = String::new();
         for rule in removed {
@@ -320,22 +357,24 @@ pub trait LatexlikeLang:
         chars
     }
 
-    /// The language's **parse-initialization checks**, fired once per root parse
-    /// by [`LatexlikeDriver`](super::LatexlikeDriver)'s
-    /// [`observe_parse_start`](crate::engine::ParseDriver::observe_parse_start)
-    /// hook — registration-sanity diagnostics at the layering-correct moment (the
-    /// sink is live, the seed's escape characters are known). The default checks
+    /// Checks the language runs once at the start of each root parse, reporting
+    /// through `diagnostics`.
+    ///
+    /// [`LatexlikeDriver`](super::LatexlikeDriver) calls this from
+    /// [`observe_parse_start`](crate::core::ParseDriver::observe_parse_start), at the
+    /// first moment where both the seed state and the diagnostic sink are available.
+    /// It is the place for warnings about how a document's definitions were
+    /// registered, as opposed to anything in the document itself. The default checks
     /// nothing.
     ///
-    /// [`Latexlike`](super::Latexlike) overrides this with the all-escape-shadowed
-    /// provider check
-    /// ([`check_provider_commands_shadowed_by_escape`](crate::scopes::check_provider_commands_shadowed_by_escape)) —
-    /// legal there because the concrete preset vocabularies implement
-    /// [`ClosedVocabulary`](crate::state::ClosedVocabulary). A family member whose
-    /// vocabularies are enumerable opts in with the same one-line override (the
-    /// bound holds monomorphically at that call site — "provide, don't require":
-    /// the trait itself never demands enumeration); one whose vocabularies are not
-    /// enumerable simply keeps the default, and the check is gracefully absent.
+    /// [`Latexlike`](super::Latexlike) overrides it to warn about a provider whose
+    /// commands can never be reached because no escape character in force triggers
+    /// them
+    /// ([`check_provider_commands_shadowed_by_escape`](crate::core::specs::check_provider_commands_shadowed_by_escape)).
+    /// That check enumerates the vocabularies, so a language can adopt it with the
+    /// same one-line override as long as its own vocabularies implement
+    /// [`ClosedVocabulary`](crate::core::ClosedVocabulary); a language whose
+    /// vocabularies are open keeps the default and simply goes without the check.
     fn check_parse_start(
         source: &Arc<Source<Self::SourceOrigin>>,
         seed: &Arc<ParsingState<Self>>,

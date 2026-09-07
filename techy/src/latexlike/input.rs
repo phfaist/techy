@@ -1,48 +1,11 @@
-//! [`InputMacroSpec`] / [`input_macro_spec`]: the preset's opt-in `\input`-shaped
-//! macro — resolve a referenced source and attach its parsed content to the
-//! invocation.
+//! The preset's `\input`-shaped macro: [`InputMacroSpec`] and its constructor
+//! [`input_macro_spec`].
 //!
-//! **Never preloaded**: the spec is not part of [`builtin_package`](super::builtin_package)
-//! — an always-on `\input` under a resolver-less driver would just diagnose every
-//! use. Embedders that want it insert it into their own package, under their own
-//! macro callable type and any command name — choosing **consciously**, through the
-//! two mandatory constructor parameters, whether included state changes persist
-//! past the `\input` (`persist_state`) and what slot-ext value the attached slot
-//! carries (for the preset, [`BodyMarker::not_body`](super::BodyMarker::not_body)
-//! unless the framework wants the attached content findable as the node's *body*):
-//!
-//! ```
-//! use techy::core::{Language, ParsingState};
-//! use techy::core::specs::Package;
-//! use techy::error::Recovery;
-//! use techy::latexlike::{
-//!     input_macro_spec, BodyMarker, CallableType, Latexlike, LatexlikeDriver,
-//! };
-//! use techy::source::MapResolver;
-//!
-//! let mut resolver = MapResolver::new();
-//! resolver.insert("chapter.tex", "included {content}");
-//! let mut package: Package<Latexlike> = Package::new("mydefs");
-//! package.insert(
-//!     CallableType::Macro,
-//!     "input",
-//!     input_macro_spec(false, BodyMarker::not_body()),
-//! );
-//!
-//! let language = Language::new(
-//!     LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver),
-//!     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
-//! );
-//! let result = language.parse(r"a \input{chapter.tex} b").unwrap();
-//! let input = result.tree.root().child(1).unwrap();
-//! // The invocation's own span lives in the includer; the attached content —
-//! // parsed out of the resolved source — is retrieved by its slot name.
-//! assert_eq!(input.span_content(), r"\input{chapter.tex}");
-//! assert_eq!(
-//!     input.slot_content_nodes_named("attached").unwrap().source_text().unwrap(),
-//!     "included {content}",
-//! );
-//! ```
+//! An invocation resolves the reference its argument names through the driver's
+//! [`SourceResolver`](crate::source::SourceResolver) and parses the resolved content
+//! into the same tree, at the point of invocation.
+
+// This module is private; the public story lives on the items' own docs.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -71,100 +34,164 @@ use super::lang::LatexlikeGroupType;
 use super::spec::frame_title;
 use super::{Latexlike, LatexlikeLang};
 
-/// The preset's opt-in `\input`-shaped macro spec: one mandatory `{…}` argument
-/// naming an external source reference; the invocation resolves it through the
-/// driver's [`SourceResolver`](crate::source::SourceResolver) and parses the
-/// content **at the invocation point, into the same tree** — recorded as an
-/// [`Attached`](SlotRole::Attached) slot (named `"attached"`) of the staged
-/// callable. Constructed by [`input_macro_spec`], **never preloaded**: inclusion is
-/// an explicit embedder choice — an always-on `\input` under a driver with no
-/// source resolver would only diagnose every use.
+/// An `\input`-shaped macro definition: it resolves the source its argument names and
+/// parses that content into the same tree, at the point of invocation.
 ///
-/// The node's own span is its invocation in the *includer's* source (`\input{…}`);
-/// only the attached slot's children live in the resolved source — a multi-source
-/// tree is first-class, and recomposition per source emits the invocation text,
-/// not the content.
+/// Create one with [`input_macro_spec`] and register it in a package of your own, under
+/// any command name and the macro callable type. The spec is **never preloaded** — it is
+/// no part of [`builtin_package`](super::builtin_package), because an always-on `\input`
+/// under a driver with no source resolver would only diagnose every use.
 ///
-/// # The attached slot's ext is the embedder's
+/// # What the embedder supplies
 ///
-/// The slot's [`SlotExt`] value is supplied at construction and cloned into every
-/// invocation's slot record — the spec does not decide what the ext means. In
-/// particular the preset's `\input` does **not** overload the environment-body
-/// marker: the recipe passes [`BodyMarker::not_body`](super::BodyMarker::not_body),
-/// so [`NodeRef::body`](crate::node::NodeRef::body) (ext-axis selection) does not
-/// select the attached content — retrieval is by slot name,
-/// [`slot_content_nodes_named("attached")`](crate::node::NodeRef::slot_content_nodes_named).
-/// A framework that *wants* the attached content to be the node's body passes a
-/// body-marked ext instead ([`BodySlotExt::make_body`](crate::node::BodySlotExt::make_body)),
-/// and `body()` finds it — the ext axis is selected alone, with no hidden
-/// role conjunction, precisely so that choice cannot become silently unfindable.
+/// **The lookup.** techy performs no input/output of its own: reading the referenced
+/// content is the embedding program's work, plugged in through the
+/// [`SourceResolver`](crate::source::SourceResolver) trait and configured on the driver
+/// with [`with_source_resolver`](super::LatexlikeDriver::with_source_resolver). The
+/// resolver is called with the reference string exactly as the document wrote it, plus
+/// the span of the invocation that asked for it, and returns either the content
+/// ([`ResolvedContent`](crate::source::ResolvedContent)) or a
+/// [`ResolveError`](crate::source::ResolveError). A driver with no resolver looks nothing
+/// up. [`MapResolver`](crate::source::MapResolver) is the ready-made in-memory
+/// implementation for tests and preloaded setups, and the guide chapter
+/// [Defining macros, environments, and specials](crate::guide::specs#resolving-external-sources-input-like-inclusion)
+/// gives a file-system recipe.
+///
+/// **The two constructor choices** of [`input_macro_spec`]: whether state changes made
+/// inside the included content continue past the `\input`, and what [`SlotExt`] value the
+/// attached slot records. Both have their own section below.
+///
+/// # The node an invocation stages
+///
+/// One callable node, whose own span is the invocation in the *including* source
+/// (`\input{…}`). The content parsed out of the resolved source becomes an
+/// [`Attached`](SlotRole::Attached) slot named `"attached"`, read back with
+/// [`slot_content_nodes_named("attached")`](crate::core::node::NodeRef::slot_content_nodes_named).
+/// Its nodes carry spans into the resolved source, so one tree names several sources and
+/// each source is accounted for on its own: re-emitting the including source writes the
+/// `\input{…}` invocation, not the included text.
 ///
 /// # The reference argument carries plain text
 ///
-/// The argument is a chars-group
-/// ([`CharsGroupArgumentParser`](crate::constructs::CharsGroupArgumentParser),
-/// pylatexenc's chars-name argument): a mandatory `{…}` group whose contents read as
-/// plain characters. Commands and specials are off inside the braces — a file name is
-/// a name, not markup — so `\input{my_file.tex}` keeps its underscore and
-/// `\input{\jobname.tex}` asks the resolver for the literal `"\jobname.tex"`.
-/// Comments and nested groups stay recognized (pylatexenc's defaults). There is no
-/// single-token fallback: `\input a` reports a missing mandatory argument.
+/// The one declared argument, named `"reference"`, is a mandatory `{…}` group whose
+/// contents read as plain characters — a chars-group
+/// ([`CharsGroupArgumentParser`](crate::core::constructs::CharsGroupArgumentParser),
+/// pylatexenc's chars-name argument). Commands and specials are off inside the braces,
+/// because a file name is a name and not markup: `\input{my_file.tex}` keeps its
+/// underscore, and `\input{\jobname.tex}` asks the resolver for the literal
+/// `"\jobname.tex"`. Comments and nested groups stay recognized (pylatexenc's defaults).
+/// There is no single-token fallback: `\input a` reports a missing mandatory argument.
 ///
-/// The reference is read off the staged argument's own node data — the character
-/// payloads of its content nodes, concatenated as read — and that text is what drives
-/// resolution. Content that is anything else carries no such text: a protective group
+/// The reference is the character payloads of the argument's content nodes, concatenated
+/// in order and read off the nodes themselves. Characters are taken as written, with no
+/// trimming: whitespace inside the braces is part of the reference (`\input{ chap.tex }`
+/// resolves `" chap.tex "`), so tolerating padding is the resolver's choice.
+///
+/// Content that is anything else carries no such text: a protective group
 /// (`\input{{chap.tex}}`) or a comment inside the braces raises
-/// [`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument)
-/// at the argument's span, and nothing is resolved or attached. Characters are taken as
-/// written, with no trimming: whitespace inside the braces is part of the reference
-/// (`\input{ chap.tex }` resolves `" chap.tex "`), so tolerating padding is the
-/// resolver's choice.
-///
-/// What counts is the staged *nodes*, not the source text: a driver configured with
+/// [`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument)
+/// at the argument's span, and nothing is resolved or attached. What counts is the staged
+/// *nodes*, not the source text: a driver configured with
 /// [`ParagraphBreakStyle::Specials`](super::ParagraphBreakStyle::Specials) stages a
 /// paragraph break as a callable node, so a blank line inside the argument raises the
 /// condition, where the default whitespace-characters shape would not.
 ///
-/// Reading the reference from node data needs no assumption about where the tokens came
-/// from, so the rule is the same under every language — including one declaring
-/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`, whose
-/// argument may be read from several sources.
+/// Reading the reference from node data assumes nothing about where the tokens came from,
+/// so the rule is the same under every language — including one declaring
+/// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`, whose argument
+/// may be read from several sources.
 ///
-/// # Failure conditions
+/// # When inclusion fails
 ///
-/// Resolution failures are diagnosed at the invocation span through the single
-/// raising site ([`ParseContext::attach_source_reference`]):
-/// [`NoSourceResolver`](crate::constructs::NoSourceResolver) when the driver has
-/// no resolver, [`UnresolvableSourceReference`](crate::constructs::UnresolvableSourceReference)
-/// when the resolver fails; the reference-argument condition above is diagnosed at the
-/// argument instead, before any resolution is attempted. Tolerant parses record the
-/// condition and stage the callable *without* an attached slot; strict parses abort.
+/// Three conditions, all raised through the parse's recovery entry point: under
+/// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) each is recorded as a
+/// diagnostic and the callable is staged **without** an attached slot, and the rest of the
+/// document parses on; under [`Recovery::Strict`](crate::error::Recovery::Strict) the
+/// parse aborts with it.
 ///
-/// # State handling — `persist_state` decides
+/// - [`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument)
+///   — the argument's content is not plain characters (above). Raised at the argument's
+///   span, before any resolution is attempted.
+/// - [`NoSourceResolver`](crate::core::constructs::NoSourceResolver) — no resolver is
+///   configured on the driver. Raised at the invocation span.
+/// - [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
+///   — the resolver returned an error: no such file, reading it failed, the reference is
+///   malformed, the resolver's own include policy refused it. The condition carries the
+///   [`ResolveError`](crate::source::ResolveError) itself, cause chain included. Raised at
+///   the invocation span.
 ///
-/// The attached content always parses under the parsing state at the `\input`
-/// point (definitions in force there apply inside the included content). What
-/// happens to the included content's **own** after-effects — a
-/// `\newcommand`-style definition made *inside* the included file — is the
-/// mandatory `persist_state` constructor choice:
+/// The last two are raised at one site,
+/// [`ParseContext::attach_source_reference`](crate::core::constructs::ParseContext::attach_source_reference),
+/// which every `\input`-variant spec shares. An argument that is missing altogether is a
+/// fourth case, reported by the argument parser as a missing mandatory argument; nothing
+/// is resolved then either.
 ///
-/// - **`persist_state: false` — transparent**: the included run's after-effects
-///   end with the file; the rest of the including document is unaffected.
-/// - **`persist_state: true` — persisting**: the included run's applied
-///   after-effect deltas, merged into one record
-///   ([`AttachedSourceOutcome::after_effects`](crate::constructs::AttachedSourceOutcome::after_effects)),
-///   are returned as the `\input` invocation's own after-effect through the
-///   ordinary sibling channel — the paradigm case is a preamble file whose
-///   definitions must hold for the rest of the document. Nested inclusions
-///   compose: an inner file's persisted effects join the outer file's record.
+/// # Include chains, cycles, and depth
+///
+/// Every inclusion mints a fresh [`Source`](crate::source::Source) for the resolved
+/// content, stamped with the invocation's span as its
+/// [`triggered_at`](crate::source::SourceProvenance::triggered_at). A file included twice
+/// therefore gets one source per inclusion site, and a diagnostic raised inside an
+/// inclusion is reported with the chain of inclusions that led to it; the chain is
+/// walkable from any source with
+/// [`including_sources`](crate::source::Source::including_sources).
+///
+/// The parser never interprets a reference — no path semantics, no canonicalization, and
+/// **no cycle check**: self-inclusion is legitimate in `.dtx`-style self-documenting
+/// files, so the policy belongs to the resolver.
+/// [`check_include_chain`](crate::source::check_include_chain) is the ready-made
+/// cycle-and-depth check to call inside `resolve`, and a reference it refuses reaches the
+/// document as an ordinary `UnresolvableSourceReference` diagnostic at the inner `\input`.
+///
+/// A resolver that enforces no policy of its own still cannot cause unbounded recursion:
+/// the included content parses on the same session, and therefore under the same descent
+/// guard, as the including document, so an inclusion cycle ends the parse with
+/// [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded) at the
+/// configured limit — an error under every recovery policy, never a crash. The limit is
+/// configured with
+/// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init).
+///
+/// # Whether included state changes persist
+///
+/// The included content always parses under the parsing state at the `\input` point, so
+/// definitions in force there apply inside it. What happens to the included content's
+/// **own** after-effects — a `\newcommand`-style definition made *inside* the included
+/// file — is the mandatory `persist_state` constructor choice:
+///
+/// - **`false` — transparent**: the included run's after-effects end with the file, and
+///   the rest of the including document is unaffected.
+/// - **`true` — persisting**: the after-effect deltas the included run applied, merged
+///   into one record
+///   ([`AttachedSourceOutcome::after_effects`](crate::core::constructs::AttachedSourceOutcome::after_effects)),
+///   are returned as the `\input` invocation's own after-effect through the ordinary
+///   sibling channel — the paradigm case is a preamble file whose definitions must hold
+///   for the rest of the document. Nested inclusions compose: an inner file's persisted
+///   effects join the outer file's record.
+///
+/// Either way the included content sees its own definitions as it parses: transparent
+/// means the after-effects end with the file, not that they never applied.
+///
+/// # The attached slot's ext value
+///
+/// The attached slot's [`SlotExt`] value is supplied at construction and cloned into every
+/// invocation's slot record; the spec does not decide what the value means. The preset's
+/// recipe passes [`BodyMarker::not_body`](super::BodyMarker::not_body), so
+/// [`NodeRef::body`](crate::core::node::NodeRef::body) does **not** select the attached
+/// content and retrieval is by slot name — the preset's `\input` does not reuse the
+/// environment-body marker. A framework that *wants* the attached content to be the node's
+/// body passes a body-marked value instead
+/// ([`BodySlotExt::make_body`](crate::core::node::BodySlotExt::make_body)), and `body()`
+/// then finds it: `body()` selects on the ext value alone, with no additional condition on
+/// the slot's role, precisely so that this choice cannot become silently unfindable.
 ///
 /// # Variants are custom-spec work
 ///
-/// The form-specific parts stay in the spec: `\input[options]{file}` or
-/// `\input*{f1,f2,f3}` variants parse their own argument shapes and reuse the
-/// same two helpers (argument text →
-/// [`attach_source_reference`](ParseContext::attach_source_reference) → an
-/// `Attached` slot) — the brief form below is the template.
+/// A different invocation shape — `\input[options]{file}`, `\input*{f1,f2,f3}` — is a spec
+/// of your own: it parses its own argument shapes and then reuses the same two steps, the
+/// argument's text and
+/// [`attach_source_reference`](crate::core::constructs::ParseContext::attach_source_reference),
+/// staging the returned nodes as an [`Attached`](SlotRole::Attached) slot. This spec is
+/// the short template for that.
 pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure: one mandatory `{…}` argument named `"reference"`.
     arguments: Vec<Arc<ArgumentSpec<LLL>>>,
@@ -179,63 +206,101 @@ pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
 }
 
 impl<LLL: LatexlikeLang> InputMacroSpec<LLL> {
-    /// Whether the included run's merged after-effects continue past the `\input`
-    /// (the `persist_state` choice of [`input_macro_spec`]).
+    /// Whether state changes made inside the included content continue past the
+    /// `\input` — the `persist_state` choice made at construction
+    /// ([`input_macro_spec`]).
     pub fn persist_state(&self) -> bool {
         self.persist_state
     }
 
-    /// The ext value recorded on every invocation's attached slot (the
-    /// `attached_slot_ext` choice of [`input_macro_spec`]).
+    /// Returns the ext value recorded on every invocation's attached slot — the
+    /// `attached_slot_ext` choice made at construction ([`input_macro_spec`]).
     pub fn attached_slot_ext(&self) -> &SlotExt<LLL> {
         &self.attached_slot_ext
     }
 
-    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
-    /// package hands out — so that the spec is serialized by identity rather than in
-    /// its self-contained form (`persist_state` plus the slot ext). Replaces a
-    /// previous stamp.
+    /// Records where this spec is defined, so that it serializes by identity rather
+    /// than in its self-contained form (`persist_state` plus the slot ext).
+    ///
+    /// The stamp is the [`SpecProvenance`] value a shared package provides for the
+    /// name it defines. A stamp already recorded is replaced.
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> InputMacroSpec<LLL> {
         self.provenance = Some(provenance);
         self
     }
 }
 
-/// Create the preset's opt-in `\input` spec ([`InputMacroSpec`] — never preloaded:
-/// inclusion is an explicit embedder choice; the type's documentation carries the
-/// full contract).
+/// Creates the preset's opt-in `\input` spec: a macro that resolves the source its
+/// argument names and parses that content into the same tree, at the point of invocation.
+///
+/// Register the returned [`InputMacroSpec`] in a package of your own — it is never
+/// preloaded — and configure a [`SourceResolver`](crate::source::SourceResolver) on the
+/// driver. The type's documentation carries the full contract: the parsed shape, the rule
+/// on the reference argument, and what a failed resolution does.
+///
+/// ```
+/// use techy::core::{Language, ParsingState};
+/// use techy::core::specs::Package;
+/// use techy::error::Recovery;
+/// use techy::latexlike::{
+///     input_macro_spec, BodyMarker, CallableType, Latexlike, LatexlikeDriver,
+/// };
+/// use techy::source::MapResolver;
+///
+/// // A real embedder implements `SourceResolver` to read files; this one is in memory.
+/// let mut resolver = MapResolver::new();
+/// resolver.insert("chapter.tex", "included {content}");
+///
+/// let mut package: Package<Latexlike> = Package::new("mydefs");
+/// package.insert(
+///     CallableType::Macro,
+///     "input",
+///     input_macro_spec(false, BodyMarker::not_body()),
+/// );
+///
+/// let language = Language::new(
+///     LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver),
+///     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
+/// );
+/// let result = language.parse(r"a \input{chapter.tex} b").unwrap();
+/// let input = result.tree.root().child(1).unwrap();
+/// // The invocation's own span is in the including source; the attached content —
+/// // parsed out of the resolved source — is retrieved by its slot name.
+/// assert_eq!(input.span_content(), r"\input{chapter.tex}");
+/// assert_eq!(
+///     input.slot_content_nodes_named("attached").unwrap().source_text().unwrap(),
+///     "included {content}",
+/// );
+/// ```
 ///
 /// # The two mandatory choices
 ///
 /// Both parameters are deliberate embedder decisions with **no defaults**:
 ///
-/// - `persist_state` — whether state changes made inside the included file
-///   (after-effect deltas of its constructs) continue past the `\input` into the
-///   rest of the including document. See the type's
-///   [state-handling section](InputMacroSpec#state-handling--persist_state-decides).
-/// - `attached_slot_ext` — the [`SlotExt`] value recorded on the `"attached"`
-///   slot (cloned per invocation). The preset recipe passes
-///   [`BodyMarker::not_body`](super::BodyMarker::not_body); a body-marked value
-///   makes the attached content the node's
-///   [`body()`](crate::node::NodeRef::body) — the framework's choice, never the
-///   shipped default. See the type's
-///   [ext section](InputMacroSpec#the-attached-slots-ext-is-the-embedders).
+/// - `persist_state` — whether state changes made inside the included file (the
+///   after-effects of its constructs) continue past the `\input` into the rest of the
+///   including document. See
+///   [Whether included state changes persist](InputMacroSpec#whether-included-state-changes-persist).
+/// - `attached_slot_ext` — the [`SlotExt`] value recorded on the `"attached"` slot, cloned
+///   per invocation. The preset's recipe passes
+///   [`BodyMarker::not_body`](super::BodyMarker::not_body); a body-marked value makes the
+///   attached content the node's [`body()`](crate::core::node::NodeRef::body) — the
+///   framework's choice, never a shipped default. See
+///   [The attached slot's ext value](InputMacroSpec#the-attached-slots-ext-value).
 ///
-/// # No input caching
+/// # Included content is read at parse time
 ///
-/// The included file is read **on the spot, at parse time** — deliberately: the
-/// parsing state at the `\input` point governs how the content tokenizes, and an
-/// `\input`-style construct may feed state back into the including document —
-/// with `persist_state: true` this very spec does, which makes the rationale
-/// stronger still: a parse-without-attachment cache is unsound for any document
-/// whose included files carry definitions. techy therefore neither implements
-/// nor recommends input caching; resolvers may freely cache *content* (the
-/// [`SourceResolver`](crate::source::SourceResolver) contract), which is the
-/// part that costs input/output. A separate-parse-then-splice arrangement (caching
-/// parsed trees of included files) is sound only when the inclusion is known
-/// state-transparent — `persist_state: false` **and** no out-of-band state
-/// coupling — and is an embedder-level optimization, not something techy
-/// provides.
+/// The referenced content is resolved and parsed where the `\input` stands, and techy
+/// caches nothing: the parsing state at that point governs how the content tokenizes, and
+/// with `persist_state: true` the included content feeds state back into the including
+/// document, so a cache of trees parsed without attachment would be unsound for any
+/// document whose included files carry definitions. Caching the *content* is a different
+/// matter and is the resolver's to do (the
+/// [`SourceResolver`](crate::source::SourceResolver) contract allows it) — that is the
+/// part that costs input/output. Caching parsed trees and splicing them in is sound only
+/// when the inclusion is known to be state-transparent — `persist_state: false` **and** no
+/// out-of-band state coupling — and is then an embedder-level optimization, not something
+/// techy provides.
 pub fn input_macro_spec<LLL>(
     persist_state: bool,
     attached_slot_ext: SlotExt<LLL>,
@@ -464,7 +529,7 @@ where
 /// argument's own node (delimiters included), or the extent of the nodes a bare
 /// argument staged. `None` when the argument has no single span to point at — it was
 /// not provided, it staged no node, or its nodes lie in more than one source (which a
-/// language with [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`
+/// language with [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`
 /// allows); the caller then points at the invocation instead.
 fn argument_span<LLL: LatexlikeLang>(
     cx: &ParseContext<'_, '_, LLL>,
@@ -491,7 +556,7 @@ fn argument_span<LLL: LatexlikeLang>(
 enum ArgumentTextError {
     /// The argument's content is not plain characters — the document's mistake, which
     /// the caller diagnoses as
-    /// [`InvalidSourceReferenceArgument`](crate::constructs::InvalidSourceReferenceArgument).
+    /// [`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument).
     NotPlainCharacters,
     /// A staged record did not resolve: the region, its offsets, or a node it names.
     /// None of this depends on the document — the caller reports it as an
@@ -506,14 +571,14 @@ enum ArgumentTextError {
 /// Node data is what a reference may be read from under every language. A chars node
 /// carries the text the reader answered for it; a span covering several nodes is only a
 /// description of the stretch they were read from — exact for a language that obeys
-/// span tiling ([`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), and no
+/// span tiling ([`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), and no
 /// more than a description for one that does not.
 ///
 /// [`NotPlainCharacters`](ArgumentTextError::NotPlainCharacters) for content holding a
 /// group, a callable or a comment node: such node data carries no single text.
 /// [`Malformed`](ArgumentTextError::Malformed) for a staged record that does not
 /// resolve — the caller must have checked
-/// [`is_provided`](crate::node::ParsedArgument::is_provided) first.
+/// [`is_provided`](crate::core::node::ParsedArgument::is_provided) first.
 fn argument_text<LLL: LatexlikeLang>(
     cx: &ParseContext<'_, '_, LLL>,
     argument: &ParsedArgument<LLL>,
@@ -587,9 +652,9 @@ mod tests {
     };
     use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
 
-    /// The **shipped registration recipe**: `\input` state-transparent, the attached
-    /// slot carrying the preset's not-body marker (Ruling A: the preset never
-    /// overloads the environment-body marker).
+    // The shipped registration recipe: `\input` state-transparent, the attached slot
+    // recording the preset's not-body marker (Ruling A: the preset never overloads the
+    // environment-body marker).
     fn input_package() -> Package<Latexlike> {
         input_package_with(false, BodyMarker::not_body())
     }

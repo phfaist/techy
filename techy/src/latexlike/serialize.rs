@@ -1,44 +1,63 @@
-//! The preset's serialization support (see [`techy::serialize`](crate::serialize)):
-//! [`Latexlike`] is a [`SerializableLang`]; the preset's own value types
-//! ([`CallableType`](super::CallableType), [`GroupType`](super::GroupType),
-//! [`MathGroupForm`](super::MathGroupForm), [`Mode`](super::Mode),
-//! [`Event`](super::Event)) derive
-//! their conversions to and from serialized values ([`SerializableValue`] /
-//! [`DeserializableValue`]) on their definitions, each wire name written beside the
-//! variant it names; its slot ext ([`BodyMarker`]) and its invocation-syntax payload
-//! ([`InvocationSyntaxData`], [`StdEnvironmentSyntax`], [`StdEnvironmentSideSyntax`])
-//! convert through hand-written impls over structs of the serialized layout (below).
-//! Every conversion is implemented for every language, so a family member
-//! ([`LatexlikeLang`]) reusing the types gets it. The preset's callable spec types
-//! serialize as objects, and [`register`] prepares a reading session.
+//! Serialization support for the latexlike preset: [`Latexlike`] is a
+//! [`SerializableLang`], and [`register`] prepares a session for reading latexlike data.
 //!
-//! **How the spec types serialize.** A spec whose data has no serialized form (its
-//! argument parsers, its body behavior) — [`MacroSpec`], [`SpecialsSpec`],
-//! [`EnvironmentSpec`] — serializes by *identity*: a reference to the provider that
-//! defined it plus its key, through the [`SpecProvenance`](crate::core::specs::SpecProvenance)
-//! stamp a shared package
-//! hands out ([`Package::new_shared`](crate::scopes::Package::new_shared);
-//! [`Package::define_macro`](crate::scopes::Package::define_macro) and
-//! [`define_environment`](crate::scopes::Package::define_environment) stamp
-//! automatically; [`builtin_package`] and the [`minidefs`](super::minidefs) packages
-//! are built that way). An unstamped spec of these types cannot be serialized
-//! ([`SerializeError::MissingProvenance`] names the type). A spec whose data is
-//! plain — [`BeginSpec`] (the terminator command's name), [`InputMacroSpec`] (its
-//! two constructor choices), and the stateless [`EndSpec`] and
-//! [`ParagraphBreakSpec`] — has a *self-contained* form the reading side rebuilds
-//! an equivalent spec from; when a `BeginSpec` or an `InputMacroSpec` carries a
-//! stamp it serializes by identity instead, so that reading yields the very instance
-//! the reading side's package holds. Reading a stamped spec resolves it in the
-//! reading environment's package of that name ([`KnownProviders`]) — the instance
-//! the parse got, never a lookup re-run.
+//! Opting in means every type the preset supplies to a parse converts to and from techy's
+//! format-independent value model, so parses made with the preset can be written out and
+//! read back through [`techy::serialize`](crate::serialize) — node trees, parsing states,
+//! sources, specs, diagnostics, whole parse results. The introductory chapter is
+//! [Serializing parses](crate::guide::serialize).
 //!
-//! **Preparing a reading session.** [`register`] registers, on the session's specs
-//! and providers tables, the readers of the crate's own types (through
-//! [`register_core_readers`]) and of the preset's self-contained spec forms;
-//! [`register_package_recipes`] adds the recipe of the [`builtin_package`] to a
-//! [`KnownProviders`] (the [`minidefs`](super::minidefs) packages have their own,
-//! [`minidefs::register_package_recipes`](super::minidefs::register_package_recipes)).
-//! Writing needs no preparation.
+//! # What opting in consists of
+//!
+//! [`Latexlike`] implements [`SerializableLang`], the marker that declares its types
+//! convertible. The preset's own value types ([`CallableType`](super::CallableType),
+//! [`GroupType`](super::GroupType), [`MathGroupForm`](super::MathGroupForm),
+//! [`Mode`](super::Mode), [`Event`](super::Event)) derive their conversions
+//! ([`SerializableValue`] / [`DeserializableValue`]) on their definitions, each wire name
+//! written beside the variant it names; the slot ext ([`BodyMarker`]) and the
+//! invocation-syntax payload ([`InvocationSyntaxData`], [`StdEnvironmentSyntax`],
+//! [`StdEnvironmentSideSyntax`]) convert through hand-written impls in this module.
+//!
+//! Every one of those conversions is written for every language, so a member of the
+//! family ([`LatexlikeLang`]) that reuses the preset's types inherits them and opts in by
+//! implementing [`SerializableLang`] for itself.
+//!
+//! # How the spec types serialize
+//!
+//! A spec whose data has no serialized form — its argument parsers, its body behavior —
+//! serializes **by identity**: a reference to the provider that defined it, plus its key.
+//! That covers [`MacroSpec`], [`SpecialsSpec`] and [`EnvironmentSpec`]. The reference
+//! comes from the [`SpecProvenance`](crate::core::specs::SpecProvenance) stamp a shared
+//! package records ([`Package::new_shared`](crate::core::specs::Package::new_shared);
+//! [`Package::define_macro`](crate::core::specs::Package::define_macro) and
+//! [`define_environment`](crate::core::specs::Package::define_environment) stamp
+//! automatically, and [`builtin_package`] and the [`minidefs`](super::minidefs) packages
+//! are built that way). An unstamped spec of these types cannot be written:
+//! [`SerializeError::MissingProvenance`] names the type.
+//!
+//! A spec whose data is plain has a **self-contained** form instead, which the reading
+//! side rebuilds an equivalent spec from: [`BeginSpec`] (the terminator command's name),
+//! [`InputMacroSpec`] (its two constructor choices), and the stateless [`EndSpec`] and
+//! [`ParagraphBreakSpec`]. A `BeginSpec` or an `InputMacroSpec` that does carry a stamp
+//! serializes by identity after all, so that reading yields the very instance the reading
+//! side's package holds.
+//!
+//! Reading a spec written by identity resolves it in the reading environment's package of
+//! that name ([`KnownProviders`]): the result is the instance that package holds, not a
+//! spec rebuilt from the data.
+//!
+//! # Preparing a reading session
+//!
+//! Writing needs no preparation. A reading session needs two calls, once each:
+//!
+//! - [`register`], after [`SerdeSession::new`] — registers on the session's specs and
+//!   providers tables the readers of the crate's own types (through
+//!   [`register_core_readers`]) and of the preset's self-contained spec forms.
+//! - [`register_package_recipes`] — adds the recipe of [`builtin_package`] to a
+//!   [`KnownProviders`], which the session then holds as its user data, so that a
+//!   reference to the `_builtin` package resolves. The [`minidefs`](super::minidefs)
+//!   packages have their own,
+//!   [`minidefs::register_package_recipes`](super::minidefs::register_package_recipes).
 //!
 //! ```
 //! use std::sync::Arc;
@@ -83,17 +102,19 @@
 //! assert!(Arc::ptr_eq(emph.spec().unwrap(), defs.get(latexlike::CallableType::Macro, "emph").unwrap()));
 //! ```
 //!
-//! The preset's wire names (not yet frozen — see "Stability of the serialized form"
-//! in the [`techy::serialize`](crate::serialize) documentation): callable types
-//! `macro` / `environment` / `specials`; group
-//! types `content` / `{math: inline | display}` / `verbatim`; modes `text` / `math`;
-//! the event `exit-math-context`; the slot ext `{body: bool}`; the invocation
-//! syntax `{macro: {escape_char, post_space}}` / `{environment: {begin, end?}}` /
-//! `specials`, an environment side `{escape_char, command_word, post_space,
-//! name_group_rule: {group_type, open, close}}`; the spec identifiers
-//! `latexlike.begin` (`{end_command_name}`), `latexlike.end` (`{}`),
-//! `latexlike.paragraph-break` (`{}`), `latexlike.input` (`{persist_state,
-//! attached_slot_ext}`).
+//! # The preset's wire names
+//!
+//! Not yet frozen — see
+//! [Stability of the serialized form](crate::serialize#stability-of-the-serialized-form).
+//!
+//! Callable types `macro` / `environment` / `specials`; group types `content` /
+//! `{math: inline | display}` / `verbatim`; modes `text` / `math`; the event
+//! `exit-math-context`; the slot ext `{body: bool}`; the invocation syntax
+//! `{macro: {escape_char, post_space}}` / `{environment: {begin, end?}}` / `specials`,
+//! an environment side `{escape_char, command_word, post_space, name_group_rule:
+//! {group_type, open, close}}`; the spec identifiers `latexlike.begin`
+//! (`{end_command_name}`), `latexlike.end` (`{}`), `latexlike.paragraph-break` (`{}`),
+//! `latexlike.input` (`{persist_state, attached_slot_ext}`).
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -122,9 +143,9 @@ use super::{
 
 // --- the language opts in --------------------------------------------------------------
 
-/// The preset supports serialization: every type it supplies to the parse has its
-/// value conversions — derived on the preset's own value types, written by hand below
-/// for the slot ext and the invocation syntax, and the crate's for `()` and
+/// The preset supports serialization: every type it supplies to a parse converts to and
+/// from the value model — derived on the preset's own value types, written by hand below
+/// for the slot ext and the invocation syntax, and the crate's own for `()` and
 /// `Option<String>`.
 impl SerializableLang for Latexlike {}
 
@@ -490,20 +511,22 @@ where
 
 // --- registration -----------------------------------------------------------------------
 
-/// Prepare a reading session for latexlike data: register, on the session's specs
-/// and providers tables, the readers of the crate's own spec and provider types
-/// ([`register_core_readers`] — the identity form of stamped specs, packages, scopes,
-/// fallback providers, the error spec) and of the preset's self-contained spec forms
-/// (`latexlike.begin`, `latexlike.end`, `latexlike.paragraph-break`,
-/// `latexlike.input`). Call it once per reading session, after
-/// [`SerdeSession::new`]; a writing session needs nothing. The reading environment's
-/// providers are a separate matter — a [`KnownProviders`] set as the session's user
-/// data (see [`register_package_recipes`]).
+/// Prepares a session for reading latexlike data.
 ///
-/// Generic over the language family (`LLL`, [`LatexlikeLang`]) — a family member
-/// that opted into serialization prepares its sessions the same way; the bounds are
-/// those of the preset's spec types' `CallableSpec` impls (`BeginSpec` marks body
-/// slots, `InputMacroSpec` builds argument specs).
+/// It registers, on the session's specs and providers tables, the readers of the crate's
+/// own spec and provider types (through [`register_core_readers`]: the identity form of
+/// stamped specs, packages, scopes, fallback providers, the error spec) and of the
+/// preset's self-contained spec forms (`latexlike.begin`, `latexlike.end`,
+/// `latexlike.paragraph-break`, `latexlike.input`).
+///
+/// Call it once per reading session, after [`SerdeSession::new`]; a writing session needs
+/// no preparation. Which providers the reading environment offers is a separate matter: a
+/// [`KnownProviders`] set as the session's user data (see [`register_package_recipes`]).
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]), so a family member that
+/// opted into serialization prepares its sessions the same way. The bounds are those of
+/// the preset's spec types' [`CallableSpec`] impls: `BeginSpec` marks body slots, and
+/// `InputMacroSpec` builds argument specs.
 ///
 /// # Errors
 ///
@@ -534,17 +557,19 @@ where
     Ok(())
 }
 
-/// Register the recipe of the preset's seed package on `known`: a serialized
-/// reference to `_builtin` then resolves to a package built by [`builtin_package`]
-/// (once per reading session and serialized entry) — unless a provider of that name
-/// was inserted, which takes precedence. A reading program whose own parses use a
-/// seed state can insert that state's builtin package instead, so that read data
-/// shares the very instances its parses use. The [`minidefs`](super::minidefs)
-/// packages have their own [`minidefs::register_package_recipes`](super::minidefs::register_package_recipes).
+/// Registers the recipe of the preset's seed package on `known`, so that a reference to
+/// `_builtin` resolves to a package built by [`builtin_package`].
 ///
-/// The name `_builtin` (like `minilatex` and `minilatex.item`) is part of the
-/// preset's serialized vocabulary and is kept stable like an identifier: a serialized
-/// package refers to its package by name.
+/// The recipe is used once per reading session and serialized entry, and only as a
+/// fallback: a provider inserted under that name takes precedence. A reading program
+/// whose own parses use a seed state can insert that state's builtin package instead, so
+/// that the data read back shares the instances its parses use. The
+/// [`minidefs`](super::minidefs) packages have their own
+/// [`minidefs::register_package_recipes`](super::minidefs::register_package_recipes).
+///
+/// The name `_builtin` (like `minilatex` and `minilatex.item`) is part of the preset's
+/// serialized vocabulary and is kept stable like an identifier: serialized data refers to
+/// its package by name.
 pub fn register_package_recipes<LLL>(known: &mut KnownProviders<LLL>)
 where
     LLL: LatexlikeLang,

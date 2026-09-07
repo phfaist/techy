@@ -1,13 +1,21 @@
-//! [`argument_specs`]: the argument-code factory — pylatexenc's xparse-like argument shorthands (`LatexStandardArgumentParser`'s
-//! codes) resolved **eagerly** into configured core [`ArgumentParser`]s. Plain
-//! constructor functions, not a parser type: parser choice depends only on the code,
-//! never on parse-time facts, and a malformed code is embedder input — an
-//! [`Err`](ArgumentCodeError), not a panic and not a diagnostic.
+//! Argument codes: the short strings, such as `"o"` and `"m"`, that declare which
+//! arguments a callable takes.
 //!
-//! Two entry points, one code grammar: [`argument_specs`] (primary) takes one code
-//! string per argument (`["o", "{"]`); [`argument_specs_from_str`] takes the compact
-//! whole-spec strings pylatexenc's default spec database (a later phase's porting
-//! target) and FLM's feature definitions are written in (`"o{"`), verbatim.
+//! [`argument_specs`] is the entry point most definitions use: it takes one code per
+//! argument (`["o", "m"]`) and returns the configured [`ArgumentSpec`]s that a spec
+//! type stores — what [`MacroSpec::new`](super::MacroSpec::new) and its siblings take.
+//! [`argument_specs_named`] builds the same specs from `(code, name)` pairs, so the
+//! arguments can be read back by name, and [`argument_specs_from_str`] reads a whole
+//! argument structure from one compact string (`"om"`) — the form pylatexenc's
+//! definitions are written in.
+//!
+//! The complete code table is on [`argument_specs`]; the guide introduces the codes
+//! under [argument codes](crate::guide::specs#argument-codes).
+//!
+//! Which parser a code selects depends on the code alone and never on anything a parse
+//! discovers, so the codes are resolved once, when the spec is built: a code that is
+//! not one of the known ones is an [`ArgumentCodeError`] returned right there, never a
+//! parse-time diagnostic and never a silent fallback.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -25,13 +33,16 @@ use crate::token::GroupRule;
 
 use super::{LatexlikeGroupType, LatexlikeLang};
 
-/// A malformed argument code ([`argument_specs`] / [`argument_specs_from_str`]):
-/// embedder input, reported eagerly at spec-construction time.
+/// A malformed argument code, returned when the argument specs are built.
 ///
-/// Errors locate themselves with two coordinates: `index` is the offending element
-/// of [`argument_specs`]'s list (`None` when the codes came through
-/// [`argument_specs_from_str`]'s single string), and `offset` is a byte offset into
-/// that particular string — the element at `index`, or the whole compact string.
+/// [`argument_specs`], [`argument_specs_named`] and [`argument_specs_from_str`] all
+/// return this. An unusable code is a mistake in a definition, so it is reported
+/// before any document is parsed rather than diagnosed during a parse.
+///
+/// Every error locates itself with two coordinates. `index` is the position of the
+/// offending element in the list the codes came in, and is `None` when they came
+/// through [`argument_specs_from_str`]'s single string. `offset` is a byte offset
+/// into that particular string — the element at `index`, or the whole compact string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ArgumentCodeError {
@@ -105,56 +116,119 @@ impl fmt::Display for ArgumentCodeError {
 
 impl core::error::Error for ArgumentCodeError {}
 
-/// Build the argument structure described by xparse-like argument codes, one code
-/// string per argument — one [`ArgumentSpec`] per element, in order (`["o", "{"]` =
-/// an optional `[…]` then a mandatory argument), ready for
-/// [`MacroSpec::new`](super::MacroSpec::new) and friends. Each element holds exactly
-/// one code together with its parameter characters (the `t`/`r`/`d`/`v` forms:
-/// `["t!", "r()", "v||"]`); surrounding whitespace is tolerated, anything more is a
-/// loud [`TrailingCode`](ArgumentCodeError::TrailingCode). For the compact whole-spec
-/// strings pylatexenc's spec database is written in, use [`argument_specs_from_str`].
+/// Builds the argument structure of a callable from one argument code per argument.
 ///
-/// | code | argument |
+/// `argument_specs(["o", "m"])` declares an optional `[…]` argument followed by a
+/// mandatory one and returns one [`ArgumentSpec`] per code, in invocation order —
+/// ready for [`MacroSpec::new`](super::MacroSpec::new),
+/// [`SpecialsSpec::new`](super::SpecialsSpec::new) or
+/// [`EnvironmentSpec::new`](super::EnvironmentSpec::new).
+/// [`Package::define_macro`](crate::core::specs::Package::define_macro) spells the
+/// definition and its registration in a single line.
+///
+/// Every element holds exactly one code, together with its parameter characters where
+/// the code takes them (`["t!", "r()", "v||"]`). Whitespace around an element is
+/// ignored; anything else after the code is a
+/// [`TrailingCode`](ArgumentCodeError::TrailingCode) error. To write all the codes in
+/// one string instead, use [`argument_specs_from_str`]; to name the arguments, use
+/// [`argument_specs_named`].
+///
+/// # The codes
+///
+/// The example column spells one invocation of a macro `\m` declared with that code
+/// alone. "Absent" and the diagnosed cases are explained under [When an argument is
+/// not there](#when-an-argument-is-not-there).
+///
+/// | code | argument | example | when it is not there | parser |
+/// |---|---|---|---|---|
+/// | `m` or `{` | a group of the content class — `{…}` in LaTeX — or, failing that, a single expression | `\m{arg}`, `\m1` | missing mandatory argument | [`GroupArgumentParser`] |
+/// | `o` or `[` | an optional `[…]` group | `\m[arg]` | absent, silently | [`OptionalGroupArgumentParser`] |
+/// | `s` or `*` | an optional `*` marker | `\m*` | absent, silently | [`MarkerArgumentParser`] |
+/// | `t<c>` | an optional marker made of the single character `<c>` | `t!` matches `\m!` | absent, silently | [`MarkerArgumentParser`] |
+/// | `r<c1><c2>` | a mandatory group delimited by `<c1>`…`<c2>`, with no expression fallback | `r()` matches `\m(arg)` | missing mandatory argument | [`GroupArgumentParser::with_rule`] |
+/// | `d<c1><c2>` | an optional group delimited by `<c1>`…`<c2>` | `d<>` matches `\m<arg>` | absent, silently | [`OptionalGroupArgumentParser`] |
+/// | `v` | verbatim text between two delimiter characters, the opening one being whichever character comes next | `\m+raw %text+` | expected verbatim delimiter | [`VerbatimArgumentParser`] |
+/// | `v<c1><c2>` | verbatim text between the prescribed delimiters | `v+-` matches `\m+raw %text-` | expected verbatim delimiter | [`VerbatimArgumentParser`] |
+/// | `e{<chars>}` | embellishments: each character between the braces is a marker that may be followed by one expression, in any order, each marker at most once | `e{^_}` matches `\m^{a}_{b}` | absent, silently | [`EmbellishmentsArgumentParser`] |
+/// | `AnyDelimited` | a mandatory group delimited by any of `{}`, `[]`, `()`, `<>` | `\m<arg>` | missing mandatory argument | [`GroupArgumentParser::any_of`] |
+/// | `AnyDelimitedOptional` | the same pairs, optional | `\m(arg)` | absent, silently | [`OptionalGroupArgumentParser::any_of`] |
+/// | `BracedOnly` | a mandatory group of the content class, with no expression fallback | `\m{arg}` | missing mandatory argument | [`GroupArgumentParser::with_expression_fallback`]`(false)` |
+///
+/// The last three are **word codes**: each one is a whole list element, so they are
+/// available in this function and in [`argument_specs_named`], but not in a compact
+/// string, where `AnyDelimited` reads as the unknown code `A`.
+///
+/// A group class is not a fixed delimiter spelling: `m` and `BracedOnly` accept
+/// whatever the parsing state declares as content-group delimiters, so with `<`…`>`
+/// declared there, `\m<arg>` satisfies them too. The pairs of `r`, `d` and the
+/// `AnyDelimited` codes are the opposite: those delimiters are created for that one
+/// argument and are recognized nowhere else, so `(` remains an ordinary character
+/// outside it.
+///
+/// # When an argument is not there
+///
+/// A mandatory code that finds nothing it accepts reports a
+/// [`MissingMandatoryArgument`](crate::core::constructs::MissingMandatoryArgument),
+/// and the `v` codes report an
+/// [`ExpectedVerbatimDelimiter`](crate::core::constructs::ExpectedVerbatimDelimiter)
+/// — for a bare `v` only at the end of the input, since any character serves as its
+/// opening delimiter. Both follow the parse's recovery setting: a tolerant parse
+/// records the diagnostic, reports the argument absent and consumes nothing, while a
+/// strict parse stops with an error.
+///
+/// An optional code that finds nothing simply reports the argument absent: no
+/// diagnostic, nothing consumed, and the source that follows is parsed as ordinary
+/// content. Absent arguments still occupy their position in the invocation's
+/// [`ParsedArguments`](crate::core::node::ParsedArguments), so argument numbering
+/// never shifts; ask
+/// [`ParsedArgument::is_provided`](crate::core::node::ParsedArgument::is_provided)
+/// which ones were there.
+///
+/// # Writing the parameterized codes
+///
+/// The parameter characters follow their code letter immediately, in the same
+/// element, and whitespace is never one of them: `t<c>` takes the marker character,
+/// `r<c1><c2>` and `d<c1><c2>` take the opening and the closing delimiter in that
+/// order, `v<c1><c2>` the two verbatim delimiters, and `e{<chars>}` takes a brace pair
+/// enclosing at least one marker character.
+///
+/// | write | to declare |
 /// |---|---|
-/// | `m` or `{` | mandatory: a `{…}` content group, or the single-expression fallback (`\frac12`) — [`GroupArgumentParser`] |
-/// | `o` or `[` | optional `[…]` group (delimiters minted per use; a lone inner `{…}` group protects and unwraps) — [`OptionalGroupArgumentParser`] |
-/// | `s` or `*` | optional `*` marker — [`MarkerArgumentParser`] |
-/// | `t<c>` | optional single-character marker `<c>` — [`MarkerArgumentParser`] |
-/// | `r<c1><c2>` | required group delimited by `<c1>`…`<c2>` (minted per use, no expression fallback) — [`GroupArgumentParser::with_rule`] |
-/// | `d<c1><c2>` | optional group delimited by `<c1>`…`<c2>` — [`OptionalGroupArgumentParser`] |
-/// | `v` | delimited verbatim, auto-matched delimiter (`\verb`-style) — [`VerbatimArgumentParser`] |
-/// | `v<c1><c2>` | delimited verbatim with the prescribed delimiters — [`VerbatimArgumentParser`] |
-/// | `e{<chars>}` | embellishments: one marker per character, each followed immediately by an expression, any order, each at most once — [`EmbellishmentsArgumentParser`] |
-/// | `AnyDelimited` | mandatory group delimited by any of `{}` `[]` `()` `<>` (minted per use; contents keep only the matched pair) — [`GroupArgumentParser::any_of`] |
-/// | `AnyDelimitedOptional` | the optional flavor (lone inner `{…}` protects and unwraps, like `o`) — [`OptionalGroupArgumentParser::any_of`] |
-/// | `BracedOnly` | mandatory content-class group with **no** expression fallback — [`GroupArgumentParser::with_expression_fallback`]`(false)` |
+/// | `["t*"]` | an optional `*` marker (the same as `["s"]`) |
+/// | `["r()"]` | a mandatory `(…)` argument |
+/// | `["d<>"]` | an optional `<…>` argument |
+/// | `["v\|\|"]` | verbatim text between two `\|` characters |
+/// | `["e{^_'}"]` | embellishments over the three markers `^`, `_` and `'` |
 ///
-/// **`m` keeps TeX's single-expression fallback — deliberately.** `\frac12` reads
-/// two one-token arguments; a missing group is *not* diagnosed as long as any
-/// expression follows, which silently consumes sibling content when the argument
-/// was meant to be group-only. Where that trap matters (config-like payloads,
-/// machine-written arguments), use the word code **`BracedOnly`**: the same
-/// mandatory *content-class* group with the fallback off. "Braced" names the
-/// class's delimiters, not literal `{}` — with `<`/`>` declared as the
-/// content-group delimiters in the parsing state, `<arg>` is accepted.
+/// A missing parameter character is a
+/// [`TruncatedCode`](ArgumentCodeError::TruncatedCode) error, so `["r("]`,
+/// `["t"]` and `["e{}"]` all fail. Only single-character markers can be written this
+/// way: for a multi-character one, build the
+/// [`MarkerArgumentParser`] or [`EmbellishmentsArgumentParser`] directly.
 ///
-/// In list form the two `v` shapes need no disambiguation: `["v"]` is the
-/// auto-matched-delimiter form, `["v||"]` the prescribed one (the whitespace rule of
-/// the compact grammar lives with [`argument_specs_from_str`]). The word codes
-/// `AnyDelimited`/`AnyDelimitedOptional`/`BracedOnly` are **list-form only** — each
-/// is a whole element (pylatexenc uses word codes as whole `arg_spec` strings the
-/// same way); in a compact string they would read as an unknown code `A`/`B`.
+/// In this list form the two `v` shapes need no disambiguation — `["v"]` is the
+/// auto-matched form and `["v||"]` the prescribed one — whereas the compact string
+/// has a rule for it, documented on [`argument_specs_from_str`].
 ///
-/// The argument specs carry no names and no per-argument state deltas — attach those
-/// via [`ArgumentSpec`]'s builders where needed (the factory is convenience, never a
-/// requirement; any hand-built parser remains first-class).
+/// # The single-expression fallback of `m`
 ///
-/// Generic over the language family (`LLL`, [`LatexlikeLang`]): the mandatory/verbatim
-/// group classes come from the family's role constructors
-/// ([`content_group`](LatexlikeGroupType::content_group) /
-/// [`verbatim_group`](LatexlikeGroupType::verbatim_group)); the minted
-/// optional-group rules keep their delimiter spellings. `LLL` is ordinarily inferred
-/// from the receiving spec (e.g. the [`MacroSpec`](super::MacroSpec) below).
+/// `m` keeps TeX's fallback deliberately: when no group opens, the argument is the
+/// next single expression, so `\frac12` reads as two one-character arguments. The
+/// trap is that a *missing* group is then not diagnosed either — the argument
+/// silently takes whatever sibling content follows. Where that matters, such as for
+/// machine-written or configuration-like arguments, use the word code `BracedOnly`:
+/// the same mandatory group with the fallback off, which accepts a real group or
+/// nothing.
+///
+/// # Errors
+///
+/// Returns an [`ArgumentCodeError`] naming the offending element and the byte offset
+/// within it: an unknown code character, a code whose parameter characters are
+/// missing, a second code in the same element, or an empty element. Nothing is built
+/// when any code fails, and no code has a silent fallback — a definition either
+/// declares exactly what it says or it fails here.
+///
+/// # Examples
 ///
 /// ```
 /// use techy::core::{Language, ParsingState};
@@ -181,6 +255,19 @@ impl core::error::Error for ArgumentCodeError {}
 ///     Some("fig.png"),
 /// );
 /// ```
+///
+/// The specs this function builds carry no argument names and no per-argument
+/// parsing-state changes; [`argument_specs_named`] adds the names, and
+/// [`ArgumentSpec`]'s own builders add a state change (a `\text`-style argument that
+/// leaves math mode, for instance). Building an [`ArgumentSpec`] around a parser
+/// value directly is always available — the codes are a convenience, not a
+/// requirement.
+///
+/// The function is generic over the language family (`LLL`, [`LatexlikeLang`]), which
+/// is ordinarily inferred from the spec that receives the result: the mandatory and
+/// verbatim group classes come from that family's role constructors
+/// ([`content_group`](LatexlikeGroupType::content_group),
+/// [`verbatim_group`](LatexlikeGroupType::verbatim_group)).
 pub fn argument_specs<LLL, I>(
     codes: I,
 ) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
@@ -200,13 +287,17 @@ where
         .collect()
 }
 
-/// [`argument_specs`] with **names**: one `(code, name)` pair per argument —
-/// `argument_specs_named([("o", "greeting"), ("m", "name")])` builds the same
-/// configured parsers with each spec named ([`ArgumentSpec::new`]), ready for the
-/// by-name access family
-/// ([`argument_nodes_named`](crate::node::NodeRef::argument_nodes_named) & co. —
-/// the robust access path the API recommends). Same code grammar and errors as
-/// [`argument_specs`] (`index` = the pair's position; word codes included).
+/// Builds the argument structure from `(code, name)` pairs, naming every argument.
+///
+/// `argument_specs_named([("o", "greeting"), ("m", "name")])` builds exactly what
+/// [`argument_specs`] builds from `["o", "m"]`, with each [`ArgumentSpec`] carrying a
+/// name ([`ArgumentSpec::new`]). The arguments can then be read back by name
+/// ([`argument_content_nodes_named`](crate::core::node::NodeRef::argument_content_nodes_named)
+/// and its siblings), which is the more robust access path: its error contract
+/// distinguishes a misspelled name from an argument that was merely absent.
+///
+/// The codes, the word codes and the error cases are [`argument_specs`]'s; the
+/// `index` of an [`ArgumentCodeError`] is the position of the offending pair.
 pub fn argument_specs_named<LLL, I, C, N>(
     codes: I,
 ) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
@@ -280,16 +371,33 @@ fn any_delimited_rules<LLL: LatexlikeLang>() -> Vec<Arc<GroupRule<LLL>>> {
         .collect()
 }
 
-/// [`argument_specs`] from the compact form: all codes concatenated in one string
-/// (`"o{"`, `"mo s t! r() d<> v"`) — pylatexenc's default spec database (a planned
-/// porting target) and FLM's feature definitions are written in these
-/// strings, worth accepting verbatim. Codes may be separated by whitespace;
-/// parameters (the `t`/`r`/`d`/`v` characters) must follow their code immediately.
+/// Builds the argument structure from one compact string holding every code (`"om"`).
 ///
-/// **The `v` disambiguation rule:** `v` immediately followed by a non-whitespace
-/// character reads that and the next character as its prescribed delimiters (`"v||"`);
-/// a bare auto-delimiter `v` must therefore stand last or be separated from the next
-/// code by whitespace (`"v {"` — whereas `"v{"` is a truncated `v{…?`).
+/// This is the form pylatexenc's definitions are written in, accepted verbatim so
+/// that such a definition can be ported without rewriting its argument string;
+/// [`argument_specs`], one code per argument, is the form to prefer for new
+/// definitions. The codes are the same ones, minus the word codes `AnyDelimited`,
+/// `AnyDelimitedOptional` and `BracedOnly`: those are whole list elements, and here
+/// their first character reads as an unknown code. The code table is on
+/// [`argument_specs`].
+///
+/// Codes may be separated by whitespace (`"mo s t! r() d<> v"`), but the parameter
+/// characters of `t`, `r`, `d`, `v` and `e` must follow their code immediately.
+///
+/// **The `v` rule.** A `v` followed directly by a non-whitespace character reads that
+/// character and the one after it as its prescribed delimiters (`"v||"`), so a bare
+/// auto-delimited `v` must stand last or be separated from the next code by
+/// whitespace: `"v {"` is a verbatim argument followed by a mandatory one, whereas
+/// `"v{"` is a `v` whose second delimiter character is missing.
+///
+/// # Errors
+///
+/// Returns an [`ArgumentCodeError`] with `index` set to `None` and `offset` a byte
+/// offset into the whole string: [`UnknownCode`](ArgumentCodeError::UnknownCode) for
+/// a character that begins no code, [`TruncatedCode`](ArgumentCodeError::TruncatedCode)
+/// for missing parameter characters. The two remaining cases belong to the list form
+/// and cannot arise here. An empty or whitespace-only string is not an error: it
+/// declares no arguments.
 pub fn argument_specs_from_str<LLL: LatexlikeLang>(
     codes: &str,
 ) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>

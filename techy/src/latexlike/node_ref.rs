@@ -1,12 +1,31 @@
-//! `NodeRef` accessor sugar for latexlike trees.
+//! Accessors that read the preset's vocabulary off a parsed node.
 //!
-//! These are **inherent methods** on `NodeRef` for any language of the latexlike
-//! family (`LLL: LatexlikeLang`, annotated trees included) — the preset shares the
-//! crate with `node`, so consumers need no extra import (decided at the 7.5
-//! checkpoint), and the accessors read the vocabulary through the role traits, so a
-//! family member with its own enums gets the same sugar. The fuller
-//! extraction/view API lives with the node-tree helpers; this is the minimal
-//! preset-vocabulary layer.
+//! These are inherent methods on [`NodeRef`], so they are available on every node of
+//! a parsed tree with no import beyond the node reference itself. There is one per
+//! question a reader of a latexlike tree asks first:
+//!
+//! - [`macro_name`](NodeRef::macro_name),
+//!   [`environment_name`](NodeRef::environment_name) and
+//!   [`specials_name`](NodeRef::specials_name) — the invocation spelling of a
+//!   `Callable` node, one accessor per invocation form
+//!   ([`CallableType`](super::CallableType));
+//! - [`is_math_group`](NodeRef::is_math_group) and
+//!   [`math_form`](NodeRef::math_form) — whether a `Group` node is math, and whether
+//!   it is inline or display;
+//! - [`post_space`](NodeRef::post_space) — the whitespace a macro's trigger token
+//!   consumed after the macro name.
+//!
+//! Every one of them answers `None` for a node it does not apply to, so they compose
+//! as filters over [`children`](NodeRef::children) without a preceding kind test.
+//!
+//! The accessors are defined for every language of the latexlike family
+//! ([`LatexlikeLang`], annotated trees included) and read the vocabulary through the
+//! role traits, so a language with vocabulary enums of its own gets the same set.
+//! The kind-generic accessors underneath them — [`name`](NodeRef::name),
+//! [`group_type`](NodeRef::group_type), [`callable_type`](NodeRef::callable_type),
+//! [`arguments`](NodeRef::arguments) — are documented with
+//! [`NodeRef`] itself, and [Node trees](crate::guide::node_trees) covers reading a
+//! tree in general.
 
 use crate::node::NodeRef;
 
@@ -15,27 +34,53 @@ use super::{
     MathGroupForm,
 };
 
-/// Latexlike accessor sugar (preset vocabulary over the generic accessors), for
-/// every language of the latexlike family.
+/// The preset's accessors, defined for every language of the latexlike family.
 impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
-    /// Whether this node is a math group (a group class answering
-    /// [`is_math`](LatexlikeGroupType::is_math), any form).
+    /// Whether this node is a math group, in either form.
+    ///
+    /// `false` for a node that is not a group at all, and for a content or verbatim
+    /// group. Both math forms answer `true`; use
+    /// [`math_form`](NodeRef::math_form) to tell inline from display.
+    ///
+    /// The question asked is the group class's
+    /// [`is_math`](LatexlikeGroupType::is_math), which is also what the parser keys
+    /// on when it puts the group's interior into
+    /// [`Mode::Math`](super::Mode::Math).
     pub fn is_math_group(&self) -> bool {
         self.group_type().is_some_and(|group_type| group_type.is_math())
     }
 
-    /// A math group's [`MathGroupForm`] — the typed class payload the delimiter rule
-    /// declared at registration
-    /// ([`GroupType::Math`](super::GroupType::Math)): no delimiter table, no string
-    /// matching, no state lookup, correct for embedder-registered and
-    /// mid-parse-minted delimiters alike. `None` for non-math nodes (and for
-    /// math-like classes without a presentation form — the
-    /// [`is_math`/`math_form` split](LatexlikeGroupType)).
+    /// Whether this math group is inline or display math.
+    ///
+    /// `Some(MathGroupForm::Inline)` for `$…$` and `\(…\)`,
+    /// `Some(MathGroupForm::Display)` for `$$…$$` and `\[…\]`. `None` for every other
+    /// node: a node that is not a group, a content or verbatim group, and a
+    /// math-like class an extending language declared without a presentation form
+    /// (see the [`is_math`/`math_form` split](LatexlikeGroupType)). A `None` here is
+    /// therefore not by itself proof that the node is not math —
+    /// [`is_math_group`](NodeRef::is_math_group) answers that question.
+    ///
+    /// The form is not deduced from the delimiters. It is the payload of the node's
+    /// group class ([`GroupType::Math`](super::GroupType::Math)), stated once where
+    /// the delimiter pair was registered, so this answers correctly for a pair an
+    /// embedder registered or a definition introduced part-way through a document.
+    /// The delimiters as written are available separately, from
+    /// [`group_delimiters`](NodeRef::group_delimiters).
+    ///
+    /// Both forms parse identically, so nothing in the tree below a math group
+    /// depends on which one this is.
     pub fn math_form(&self) -> Option<MathGroupForm> {
         self.group_type()?.math_form()
     }
 
     /// The macro name, when this node is a macro invocation (`\emph` → `"emph"`).
+    ///
+    /// The name is the spelling as written, without the escape character. `None` for
+    /// every node that is not a macro-formed `Callable` — including environment and
+    /// specials invocations, whose names are
+    /// [`environment_name`](NodeRef::environment_name) and
+    /// [`specials_name`](NodeRef::specials_name). Use [`name`](NodeRef::name) to read
+    /// the spelling of a `Callable` node whatever its form.
     pub fn macro_name(&self) -> Option<&'t str> {
         if self.callable_type().is_some_and(|callable_type| callable_type.is_macro()) {
             self.name()
@@ -45,7 +90,14 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
     }
 
     /// The environment name, when this node is an environment invocation
-    /// (`\begin{itemize}…` → `"itemize"`).
+    /// (`\begin{itemize}…\end{itemize}` → `"itemize"`).
+    ///
+    /// One node stands for the whole environment, so this is the name of the node
+    /// itself, not of a `\begin` child. `None` for every node that is not an
+    /// environment-formed `Callable` — including the macro invocations
+    /// [`macro_name`](NodeRef::macro_name) answers for, and specials
+    /// ([`specials_name`](NodeRef::specials_name)). The environment's content is its
+    /// body slot, [`body`](NodeRef::body).
     pub fn environment_name(&self) -> Option<&'t str> {
         if self
             .callable_type()
@@ -57,7 +109,14 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
         }
     }
 
-    /// The specials spelling, when this node is a specials invocation (`~`, `---`).
+    /// The trigger spelling, when this node is a specials invocation (`~`, `---`).
+    ///
+    /// The spelling is the one that actually appeared in the source, not the
+    /// canonical spelling under which the specials entry was registered. `None` for
+    /// every node that is not a specials-formed `Callable` — see
+    /// [`macro_name`](NodeRef::macro_name) and
+    /// [`environment_name`](NodeRef::environment_name) for the other two invocation
+    /// forms.
     pub fn specials_name(&self) -> Option<&'t str> {
         if self.callable_type().is_some_and(|callable_type| callable_type.is_specials()) {
             self.name()
@@ -66,17 +125,34 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
         }
     }
 
-    /// A `Callable` node's recorded post-space, as logical text — read off the
-    /// invocation-syntax payload
-    /// ([`macro_syntax`](LatexlikeInvocationSyntax::macro_syntax)): a macro-formed
-    /// invocation answers **exactly its trigger token's syntactic post-space**
-    /// (the name-terminating whitespace of a multi-character command; nothing
-    /// beyond the token's own post-space is ever recorded — whitespace after a
-    /// single-character command or a final argument is sibling/region content);
-    /// environment- and specials-formed invocations answer `Some("")` (the
-    /// whitespace of an environment's begin/end syntax is recorded per side in its
-    /// [`environment_syntax`](LatexlikeInvocationSyntax::environment_syntax)
-    /// record, and specials record no post-space). `None` for non-callables.
+    /// The whitespace that ended a macro's name, as text (`\emph  {x}` → `"  "`).
+    ///
+    /// This is the post-space of the invocation's trigger token, and nothing else:
+    /// the whitespace a multi-character command name needs in order to end. Space
+    /// after a single-character command such as `\\`, and space after a final
+    /// argument, belongs to the surrounding content and is a sibling node, not part
+    /// of the invocation. `\emph{x}` therefore answers `Some("")`.
+    ///
+    /// `None` for a node that is not a `Callable` at all. Environment and specials
+    /// invocations are callables and answer `Some("")`: specials record no
+    /// post-space, and an environment's whitespace is recorded per side in its own
+    /// syntax record
+    /// ([`environment_syntax`](LatexlikeInvocationSyntax::environment_syntax)).
+    ///
+    /// The value is read off the node's invocation-syntax payload
+    /// ([`macro_syntax`](LatexlikeInvocationSyntax::macro_syntax)), which is what the
+    /// source recomposer re-emits, so what this returns is what writing the tree back
+    /// out will write.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the payload records the post-space as a span that is not a valid
+    /// `char`-boundary range of the node's own source — the same broken invariant
+    /// [`chars`](NodeRef::chars) and [`group_delimiters`](NodeRef::group_delimiters)
+    /// panic on, and one no parsed input can produce. Note that
+    /// [`validate_tree`](crate::core::node::validate_tree) does *not* cover it: the
+    /// invocation-syntax payload belongs to the language, so a program that builds
+    /// callable nodes itself is responsible for the spans it records there.
     pub fn post_space(&self) -> Option<&'t str> {
         let syntax = self.invocation_syntax()?;
         Some(match syntax.macro_syntax() {

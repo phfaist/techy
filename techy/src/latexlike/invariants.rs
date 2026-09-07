@@ -1,20 +1,20 @@
-//! The latexlike span-tiling checker (test builds only): the core span-tiling law
-//! plus the preset's **invocation-syntax payload pins** — the byte checks that
-//! pin the recorded trigger spellings ([`InvocationSyntaxData`]) against the
-//! node's own bytes.
+//! The tree checker for latexlike parses (test builds only).
 //!
-//! Core's [`check_tree_invariants`] is deliberately **payload-blind**: the
-//! invocation-syntax payload is Lang-owned, and core cannot pin facts it cannot
-//! read (the D-plan-12 Option B ruling — the pins live with the preset that owns
-//! the payload types). One call to [`check_latexlike_tree_invariants`] runs both:
-//! the core span-tiling law, then the payload pins for every callable whose payload is
-//! the family enum over the family's standard environment record
-//! ([`InvocationSyntaxData<StdEnvironmentSyntax<LLL>>`]); a custom `Env` type is
-//! its language's own recording discipline and is skipped.
+//! [`check_latexlike_tree_invariants`] is what the crate's own tests assert on every
+//! tree a latexlike parse produces. A passing check means two things hold: the core
+//! span-tiling law ([`check_tree_invariants`]), and, on top of it, that each callable
+//! node's recorded invocation syntax ([`InvocationSyntaxData`]) agrees byte for byte
+//! with what the node's span actually spells.
 //!
-//! Mechanism mirror of the core checker: `pub(crate)` + `#[cfg(test)]` — an
-//! in-crate test oracle, not builder law (integration tests use the public
-//! [`validate_tree`](crate::node::validate_tree), which never carried the pins).
+//! Core cannot make the second check itself. The invocation-syntax payload type
+//! belongs to the language, so core has no way to read it; the checks for the
+//! preset's own payload therefore live here, with the preset that defines it.
+//!
+//! This is an in-crate test oracle, not something a finished tree is required to
+//! satisfy in general. The public check, and the one integration tests use, is
+//! [`validate_tree`](crate::node::validate_tree), which never covered the payload.
+// Mechanism mirror of the core checker: `pub(crate)` + `#[cfg(test)]`
+// (cf. D-plan-12 Option B).
 
 use alloc::string::String;
 
@@ -28,19 +28,23 @@ use super::invocation_syntax::{
 };
 use super::lang::LatexlikeLang;
 
-/// Check a finished latexlike-family tree against the **span-tiling law plus the
-/// payload pins**: the core [`check_tree_invariants`] (all-trees law + byte
-/// accounting), then the invocation-syntax payload pins below. Panics with a
-/// description of the first violation — the in-crate test oracle for every tree a
-/// latexlike-family parse produces.
+/// Checks a finished latexlike-family tree, panicking with a description of the first
+/// violation found.
 ///
-/// The payload pins are byte accounting like the core law's, so they are checked for
-/// the trees of a language that obeys span tiling
-/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)) only; for a
-/// language with `OBEYS_SPAN_TILING = false` this is exactly
-/// [`check_tree_invariants`], which there checks the all-trees law alone (a recorded
-/// spelling may be owned text, and the node's span need not contain the trigger's
-/// bytes at all).
+/// A passing check means the tree satisfies the core span-tiling law
+/// ([`check_tree_invariants`]: the all-trees structural law plus byte accounting)
+/// *and* that every callable node's recorded invocation syntax matches the bytes its
+/// span covers — see [`check_invocation_syntax_payload`] for the checks, per
+/// invocation form.
+///
+/// Use it in a test on any tree a latexlike-family parse produced.
+///
+/// The payload checks are byte accounting, so they apply only to a language that
+/// obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)). For a
+/// language declaring `false` this is exactly [`check_tree_invariants`], which there
+/// checks the all-trees law alone: a recorded spelling may be owned text, and the
+/// node's span need not contain the trigger's bytes at all.
 pub(crate) fn check_latexlike_tree_invariants<LLL: LatexlikeLang, A>(
     tree: &NodeTree<LLL, A>,
 ) {
@@ -55,26 +59,29 @@ pub(crate) fn check_latexlike_tree_invariants<LLL: LatexlikeLang, A>(
     }
 }
 
-/// The invocation-syntax payload pins (the payload arm of
-/// [`check_latexlike_tree_invariants`]): reads the family payload — the
-/// [`InvocationSyntaxData`] enum over the family's standard environment record —
-/// via `Any` downcast, and checks the recorded spellings against the node's
-/// bytes. A payload of any other type (a custom `Env`, a foreign record) is its
-/// language's own recording discipline and is skipped.
+/// Checks one callable node's recorded invocation syntax against the bytes its span
+/// covers (the payload half of [`check_latexlike_tree_invariants`]).
 ///
-/// The pins, per arm:
+/// Only the preset's own payload is checked: the [`InvocationSyntaxData`] enum over
+/// the standard environment record, reached by `Any` downcast. A payload of any other
+/// type — a custom `Env`, a record belonging to another language — follows that
+/// language's own recording rules and is skipped.
 ///
-/// - **Macro** — the spelling fact: the node's bytes begin with the recorded
-///   escape character followed by the name as written; a `Spanned` post-space
-///   starts right after that spelling and ends where the first child begins — or
-///   at most at the span's end for a childless callable (`==` cannot be pinned
-///   there: a takeover's `stage_invocation(.., end: Some(&position))` legitimately
-///   claims consumed extent past the trigger, T5-B / D-plan-17).
-/// - **Specials** — name-as-written: the name is a byte prefix of the node's
-///   span (for paragraph-break `Specials` nodes the name is the whole span).
-/// - **Environment** — `write_begin` is a byte prefix of the node's span slice;
-///   when the end side is recorded, `write_end` is its byte suffix (the accuracy
-///   doctrine made mechanical: what the record reemits is what was parsed).
+/// What each invocation form must satisfy:
+///
+/// - **Macro** — the node's bytes begin with the recorded escape character followed
+///   by the name as written. A `Spanned` post-space starts immediately after that
+///   spelling, and ends where the first child begins; for a childless callable it
+///   must merely end no later than the node's span does.
+/// - **Specials** — the name is a byte prefix of the node's span, since specials
+///   record the name as written. For a paragraph-break node the name is the whole
+///   span.
+/// - **Environment** — the begin side re-emitted by `write_begin` is a byte prefix
+///   of the node's span, and, when the end side was recorded, `write_end` is its byte
+///   suffix. What the record re-emits is what was parsed.
+// The childless-macro case cannot pin `==`: a takeover's
+// `stage_invocation(.., end: Some(&position))` legitimately claims consumed extent
+// past the trigger (T5-B / D-plan-17).
 fn check_invocation_syntax_payload<LLL: LatexlikeLang, A>(
     tree: &NodeTree<LLL, A>,
     i: usize,

@@ -1,25 +1,26 @@
-//! [`minilatex_package`]: a toy definitions package — deliberately **not** a
-//! definitions database.
+//! A toy package of familiar LaTeX definitions, for demonstrations and prototyping —
+//! deliberately not a definitions database.
 //!
-//! One package, `"minilatex"`, mirroring only the handful of LaTeX commands one
-//! reaches for automatically: `\emph`, `\textbf`, `\textit`, `itemize`,
-//! `enumerate` (with `\item` available *inside* the two list environments), plus
-//! the typography specials (`~` and the `` `` ``/`''`/`--`/`---` ligatures) that
-//! moved here from the seed package. It exists for debugging and prototyping —
-//! just enough to exercise the machinery without setup overhead on a first run.
+//! [`minilatex_package`] builds the package, `"minilatex"`. It defines the handful of
+//! commands one reaches for automatically and nothing more: `\emph`, `\textbf`,
+//! `\textit`, the `itemize` and `enumerate` list environments, and the typography
+//! specials — the tie `~` and the ligatures ``` `` ```, `''`, `--`, `---`. `\item` comes
+//! with the list environments, in the nested package [`minilatex_item_package`] builds,
+//! which they push for their bodies. That is enough to exercise the machinery without
+//! setup, which is why the examples throughout this documentation load it.
 //!
-//! The latexlike preset configures a parser so that it can parse *latexlike
-//! content*, not LaTeX documents: anything techy shipped would fall short of a
-//! package-structured database capable of realistic documents, while frameworks
-//! built on techy roll exactly the package structure they want. So this module
-//! stays a toy by design; the standard-definitions port belongs to the layers
-//! above.
+//! **Where real definitions come from.** The preset configures a parser for latexlike
+//! *syntax*, not for LaTeX documents: a realistic document needs a package-structured
+//! database of definitions, which techy does not ship. Registering what a document needs
+//! is the program's own work — the guide chapter
+//! [Defining macros, environments, and specials](crate::guide::specs) walks through it —
+//! and frameworks built on techy supply the package structure they want.
 //!
-//! **Never preloaded**: activation is always explicit
-//! ([`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages)),
-//! and no other latexlike module references this one, so builds that never import
-//! it dead-strip it entirely (its serialization recipes are registered from here
-//! too: [`register_package_recipes`]).
+//! **Never preloaded**: loading is always explicit
+//! ([`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)),
+//! and no other latexlike module refers to this one, so a build that never imports it
+//! leaves it out entirely. The packages' serialization recipes are registered from here
+//! too ([`register_package_recipes`]).
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -32,38 +33,32 @@ use crate::state::ParsingStateDelta;
 
 use super::{EnvironmentSpec, LatexlikeCallableType, LatexlikeLang, SpecialsSpec};
 
-/// The `"minilatex"` package: `\emph`/`\textbf`/`\textit` (one mandatory `"m"`
-/// argument each, expression fallback on), the `itemize`/`enumerate` list
-/// environments, and the typography specials — the non-breaking tie `~` (every
-/// mode) and the ligatures ``` `` ```, `''`, `--`, `---`.
+/// Creates the `"minilatex"` package: a toy set of familiar LaTeX definitions, for
+/// demonstrations and prototyping.
+///
+/// It defines `\emph`, `\textbf` and `\textit` (one mandatory `"m"` argument each,
+/// expression fallback on), the `itemize` and `enumerate` list environments, and the
+/// typography specials — the non-breaking tie `~` (visible in every mode) and the
+/// ligatures ``` `` ```, `''`, `--`, `---`.
 ///
 /// `\item` (one optional `"o"` argument) is defined **only inside the two list
-/// environments**: their body state delta pushes an inner package
-/// `"minilatex.item"` onto the scope stack, so `\item` resolves in a list body
-/// and nowhere else — the in-tree exemplar of body-scoped definitions.
+/// environments**: their body state delta pushes an inner package `"minilatex.item"` onto
+/// the scope stack, so `\item` resolves in a list body and nowhere else. It is this
+/// crate's worked example of body-scoped definitions.
 ///
-/// The ligatures are visible only in the language's *seed mode* (the
-/// document-base mode a parse starts in — [`Mode::Text`](super::Mode::Text) for
-/// [`Latexlike`](super::Latexlike)): they carry no math meaning, so inside
-/// `$…$` they stay plain characters. The tie `~` stays visible in every mode.
-/// The multi-character triggers ride the scope-stack scan's longest-match rule
-/// (`---` beats `--`). A language whose seed state data cannot be built
-/// ([`Lang::initial_state_data`](crate::state::Lang::initial_state_data)
-/// answers `Err`) still gets the package: the ligature restriction then uses
-/// the mode type's default value — the same mode
-/// [`StateData::empty`](crate::state::StateData::empty) seeds, and
-/// [`Mode::Text`](super::Mode::Text) for the shipped preset — while the
-/// seeding call site reports the seed failure itself.
+/// The ligatures are visible only in the language's *seed mode* — the document-base mode
+/// a parse starts in, [`Mode::Text`](super::Mode::Text) for
+/// [`Latexlike`](super::Latexlike) — because they carry no math meaning: inside `$…$` they
+/// stay plain characters. The tie `~` stays visible in every mode. Among the
+/// multi-character triggers the longest match wins, so `---` beats `--`.
 ///
-/// Returns a shared [`Package`] (built with [`Package::new_shared`], its specs
-/// stamped with their provenance so that they serialize by identity) — load it
-/// explicitly, e.g. `ParsingState::lang_initial_with_packages([minilatex_package()])`;
-/// it is never part of the seed. The nested item package is built by
-/// [`minilatex_item_package`] (a fresh one per call, nested by this function; a
-/// reading environment resolving a serialized `minilatex.item` builds its own — see
-/// [`register_package_recipes`]). Generic over the language family (`LLL`,
-/// [`LatexlikeLang`]); the bound on the argument ext is the argument-code
-/// factory's ([`argument_specs`](super::argument_specs)).
+/// Load the returned package explicitly, for instance
+/// `ParsingState::lang_initial_with_packages([minilatex_package()])`; it is never part of
+/// the seed state. It is a shared [`Package`] (built with [`Package::new_shared`], its
+/// specs stamped with their provenance so that they serialize by identity), and the nested
+/// item package comes from [`minilatex_item_package`] — a fresh one per call, which this
+/// function nests; a reading environment resolving a serialized `minilatex.item` builds
+/// its own (see [`register_package_recipes`]).
 ///
 /// ```
 /// use techy::core::{Language, ParsingState};
@@ -78,6 +73,13 @@ use super::{EnvironmentSpec, LatexlikeCallableType, LatexlikeLang, SpecialsSpec}
 /// let result = language.parse(r"\emph{try} it --- now").unwrap();
 /// assert_eq!(result.tree.root().child(0).unwrap().macro_name(), Some("emph"));
 /// ```
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]); the bound on the argument
+/// ext is the argument-code factory's ([`argument_specs`](super::argument_specs)). A
+/// language whose seed state data cannot be built
+/// ([`Lang::initial_state_data`](crate::core::Lang::initial_state_data) answers `Err`)
+/// still gets the package: the ligature restriction then uses the mode type's default
+/// value, and the seeding call site reports the seed failure itself.
 pub fn minilatex_package<LLL: LatexlikeLang>() -> Arc<Package<LLL>>
 where
     ArgumentExt<LLL>: Default,
@@ -128,10 +130,11 @@ where
     })
 }
 
-/// The `"minilatex.item"` package: `\item` (one optional `"o"` argument), the
-/// definition the two list environments of [`minilatex_package`] push onto the
-/// scope stack for their bodies. Shared and stamped like its parent; every call
-/// builds a fresh package — [`minilatex_package`] nests one of its own.
+/// Creates the `"minilatex.item"` package: `\item` (one optional `"o"` argument).
+///
+/// This is the definition the two list environments of [`minilatex_package`] push onto
+/// the scope stack for their bodies. Shared and stamped like its parent; every call builds
+/// a fresh package, and [`minilatex_package`] nests one of its own.
 pub fn minilatex_item_package<LLL: LatexlikeLang>() -> Arc<Package<LLL>>
 where
     ArgumentExt<LLL>: Default,
@@ -141,18 +144,19 @@ where
     })
 }
 
-/// Register the recipes of this module's packages — `minilatex` and
-/// `minilatex.item` — on `known`, so that a reading session resolves serialized
-/// references to them by building them ([`KnownProviders`]'s recipe fallback: a
-/// provider inserted under the name takes precedence). The counterpart of
-/// [`serialize::register_package_recipes`](super::serialize::register_package_recipes)
-/// for the toy package, kept here so that builds that never import this module
-/// keep dead-stripping it.
+/// Registers the recipes of this module's packages — `minilatex` and `minilatex.item` —
+/// on `known`, so that a reading session resolves serialized references to them by
+/// building them.
+///
+/// A recipe is [`KnownProviders`]'s fallback: a provider inserted under the same name
+/// takes precedence. This is the counterpart of
+/// [`serialize::register_package_recipes`](super::serialize::register_package_recipes) for
+/// the toy packages, and it lives here so that a build that never imports this module can
+/// still leave the module out.
 ///
 /// The two package names are part of the preset's serialized vocabulary and are kept
-/// stable like identifiers: a serialized package refers to its package by name, so
-/// `minilatex` and `minilatex.item` are kept as they are (like the seed package's
-/// `_builtin`).
+/// stable like identifiers: serialized data refers to its package by name, so `minilatex`
+/// and `minilatex.item` stay as they are (like the seed package's `_builtin`).
 pub fn register_package_recipes<LLL: LatexlikeLang>(known: &mut KnownProviders<LLL>)
 where
     ArgumentExt<LLL>: Default,

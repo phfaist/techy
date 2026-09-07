@@ -1,17 +1,24 @@
-//! The preset's invocation-syntax payload ([`Lang::InvocationSyntax`]): the
-//! [`InvocationSyntaxData`] enum recording how a callable was invoked —
-//! macro-formed, environment-formed, or specials-formed — plus the
-//! environment-side machinery: the [`EnvironmentSyntax`] record contract and its
-//! standard implementation [`StdEnvironmentSyntax`] over the per-side record
-//! [`StdEnvironmentSideSyntax`].
+//! How an invocation was spelled: the record the preset stores on every callable
+//! node.
 //!
-//! The payload is what makes the preset's **recomposition accuracy** a recorded
-//! fact rather than a reconstruction: a macro records its escape character and the
-//! trigger token's syntactic post-space; an environment records the begin/end
-//! scaffolding facts per side; a specials invocation records nothing beyond what
-//! [`CallableData`](crate::node::CallableData) already carries — its `name` *is*
-//! the invocation spelling as written. Recomposition reads raw node payload only,
-//! so reemitting the exact input bytes needs exactly these recordings.
+//! [`InvocationSyntaxData`] is the latexlike value of `Lang::InvocationSyntax`, and a
+//! parse stores one on every callable node it stages. Its three variants follow the
+//! three invocation forms: a macro records the escape character and the whitespace
+//! that ended the command name, an environment records its `\begin` and `\end`
+//! spellings, and a specials invocation records nothing at all, because the node's own
+//! [`name`](crate::core::node::CallableData::name) is already the spelling as written.
+//!
+//! The environment side is a small family of its own: [`EnvironmentSyntax`] is the
+//! contract such a record fulfills, [`StdEnvironmentSyntax`] is the standard
+//! implementation, and [`StdEnvironmentSideSyntax`] holds one of its two sides.
+//!
+//! These records are what lets the preset reproduce the input byte for byte: source
+//! recomposition ([`SourceRecomposer`](super::SourceRecomposer)) reads node payload
+//! and nothing else, so whatever it re-emits has to be recorded here while parsing.
+//! Read a record back with
+//! [`NodeRef::invocation_syntax`](crate::core::node::NodeRef::invocation_syntax), or
+//! read the macro post-space alone with
+//! [`NodeRef::post_space`](crate::core::node::NodeRef::post_space).
 
 use alloc::format;
 use alloc::string::String;
@@ -29,47 +36,53 @@ use crate::token::{GroupRule, TokenEdge, TokenKind, TokenReader};
 use super::lang::{LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
 
-/// The latexlike invocation-syntax payload ([`Lang::InvocationSyntax`]): the
-/// recorded trigger-spelling facts (the *data*, hence the name — the
-/// `CallableData`/`NodeData` family) of one callable invocation, by invocation
-/// form.
+/// How one callable invocation was spelled, as recorded while parsing.
 ///
-/// - [`Macro`](InvocationSyntaxData::Macro) — a command-triggered invocation: the
-///   escape character as written and the trigger token's own **syntactic
-///   post-space** (the name-terminating whitespace of a multi-character command,
-///   pylatexenc's `macro_post_space`; nothing beyond the token's own post-space is
-///   ever claimed — whitespace after a single-character command or after a final
-///   argument is ordinary sibling/region content, as in TeX). A `Spanned`
-///   post-space is a sub-range of the node's span: trailing for zero-argument
-///   callables, between the name and the first argument region otherwise.
-///   Source recomposition ([`SourceRecomposer`](super::SourceRecomposer))
-///   re-emits the recorded post-space **verbatim** — any smarter spacing policy
-///   (normalizing, collapsing, or dropping the whitespace) belongs to a
-///   converter built on techy, not to techy.
+/// This is the latexlike value of [`Lang::InvocationSyntax`]: every callable node a
+/// preset parse stages holds one, and the variant says which invocation form was
+/// used. Read it with
+/// [`NodeRef::invocation_syntax`](crate::core::node::NodeRef::invocation_syntax), or
+/// through the readers of
+/// [`LatexlikeInvocationSyntax`](super::LatexlikeInvocationSyntax), which answer the
+/// individual facts without matching on the variant.
+///
+/// - [`Macro`](InvocationSyntaxData::Macro) — a command trigger such as `\frac`: the
+///   escape character as written, and the trigger token's own syntactic post-space,
+///   which is the whitespace that ended a multi-character command name (pylatexenc's
+///   `macro_post_space`). Nothing beyond that token's own post-space is ever
+///   recorded: whitespace after a single-character command, or after the last
+///   argument, is ordinary content of the surrounding node, as in TeX.
 /// - [`Environment`](InvocationSyntaxData::Environment) — an environment-shaped
-///   invocation: the begin/end syntax facts, in the `Env` record (default
+///   invocation: the spelling of its two sides, in the `Env` record type (by default
 ///   [`StdEnvironmentSyntax`]).
-/// - [`Specials`](InvocationSyntaxData::Specials) — a specials-formed invocation:
-///   a **unit variant**, deliberately. The node's
-///   [`name`](crate::node::CallableData::name) is the invocation spelling **as
-///   written**, matching the macro rule (`\foo` and `\fooooo` both record the name
-///   as written even when spec-resolved by prefix) — paragraph-break `Specials`
-///   nodes record the actual whitespace run as `name`, and identification is by
-///   **spec identity** (the canonical
-///   [`ParagraphBreakSpec`](super::ParagraphBreakSpec) object), never by a
-///   canonical name spelling.
+/// - [`Specials`](InvocationSyntaxData::Specials) — a specials trigger such as `~` or
+///   `---`: a variant with no fields, because the node's
+///   [`name`](crate::core::node::CallableData::name) is already the spelling as
+///   written. That is the same rule the macro arm follows (`\foo` records `foo` even
+///   where the spec was resolved by prefix), and a paragraph-break node records the
+///   whole whitespace run as its name. Which specials a node is, is therefore decided
+///   by the identity of its spec — the canonical
+///   [`ParagraphBreakSpec`](super::ParagraphBreakSpec) value for a paragraph break —
+///   and never by comparing the name against a canonical spelling.
 ///
-/// The `Env` parameter is the single customization entry for environment-syntax
-/// recording: a language family member picks its record type by choosing its
-/// [`Lang::InvocationSyntax`] (e.g.
-/// `InvocationSyntaxData<StdEnvironmentSyntax<Flm>>`); the default anchors at the
-/// preset lang ([`Latexlike`]). Scanning **tolerance** is a *parser* concern, not
-/// a record concern: a family member wanting looser begin/end syntax swaps the
-/// invocation/body parser through the parser-factory override
-/// ([`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser))
-/// — the record only records what its parser consumed.
+/// Source recomposition ([`SourceRecomposer`](super::SourceRecomposer)) re-emits a
+/// recorded post-space exactly as it stands. Normalizing, collapsing or dropping that
+/// whitespace is a converter's decision, not techy's.
 ///
-/// [`Lang::InvocationSyntax`]: crate::state::Lang::InvocationSyntax
+/// # The `Env` parameter
+///
+/// `Env` is where a language family chooses what it records for an environment: a
+/// family member names its own [`Lang::InvocationSyntax`], for instance
+/// `InvocationSyntaxData<StdEnvironmentSyntax<Flm>>`, and the default is the record
+/// of the preset language [`Latexlike`].
+///
+/// How *tolerantly* the begin and end syntax is scanned is not part of the record but
+/// of the parser: a family member that wants looser syntax replaces the invocation or
+/// body parser through
+/// [`make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser),
+/// and the record then records whatever that parser consumed.
+///
+/// [`Lang::InvocationSyntax`]: crate::core::Lang::InvocationSyntax
 #[derive(Clone, Debug)]
 pub enum InvocationSyntaxData<Env = StdEnvironmentSyntax<Latexlike>> {
     /// A command-triggered (macro-formed) invocation's spelling facts.
@@ -77,12 +90,15 @@ pub enum InvocationSyntaxData<Env = StdEnvironmentSyntax<Latexlike>> {
         /// The escape character as written (`\` in `\frac`; a language with
         /// several command rules records whichever fired).
         escape_char: char,
-        /// The trigger token's own syntactic post-space (see the enum docs) —
-        /// span-backed when parsed, owned after
-        /// [`materialize`](crate::node::NodeTree::materialize). Span-backed
-        /// content resolves against the carrying node's own source,
-        /// `node.span().source()`
-        /// ([`TextContent::resolve`]'s contract).
+        /// The whitespace that ended the command name, as written; empty when what
+        /// followed the name came directly after it.
+        ///
+        /// Span-backed while the tree still refers to its source, and owned after
+        /// [`materialize`](crate::core::node::NodeTree::materialize); a span-backed
+        /// value resolves against the carrying node's own source,
+        /// `node.span().source()` ([`TextContent::resolve`]). Where it is span-backed
+        /// it lies inside the node's own span: at the end of it for a callable with
+        /// no arguments, between the name and the first argument region otherwise.
         post_space: TextContent,
     },
     /// An environment-shaped invocation's begin/end syntax facts.
@@ -109,19 +125,22 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
     }
 }
 
-/// The standard-site constructor ([`FromInvocation`]): a
-/// [`Command`](TokenKind::Command) trigger records its
-/// [`Macro`](InvocationSyntaxData::Macro) spelling from the reader's answers — what the
-/// trigger is, and its syntactic post-space: as a span of the node's source for a
-/// language that obeys span tiling
-/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)), as the text
-/// itself for a language with `OBEYS_SPAN_TILING = false`, where the node's span is
-/// not known to contain the trigger's own source at all. Every
-/// other trigger (a specials token, a paragraph-break token at the preset's
-/// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
-/// [`Environment`](InvocationSyntaxData::Environment) arm is never minted here —
-/// environment-shaped composition stages through
-/// [`stage_node`](crate::constructs::ParseContext::stage_node) itself with
+/// Builds the record from the trigger token, at the standard staging site.
+///
+/// A [`Command`](TokenKind::Command) trigger produces the
+/// [`Macro`](InvocationSyntaxData::Macro) variant: the escape character the reader
+/// reports, and the trigger token's own syntactic post-space — kept as a span of the
+/// node's source for a language that obeys span tiling
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), and as the
+/// text itself for a language that does not, where the node's span is not known to
+/// contain the trigger's bytes at all.
+///
+/// Every other trigger — a specials token, and the paragraph-break token the preset
+/// stages at its specials site — produces
+/// [`Specials`](InvocationSyntaxData::Specials). The
+/// [`Environment`](InvocationSyntaxData::Environment) variant is never built here:
+/// the `\begin` composition stages its node itself
+/// ([`stage_node`](crate::core::constructs::ParseContext::stage_node)) with
 /// [`environment_form`](LatexlikeInvocationSyntax::environment_form).
 impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
     fn from_invocation(
@@ -193,42 +212,43 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
     }
 }
 
-/// One side of the **standard** environment record's begin/end syntax
-/// ([`StdEnvironmentSyntax`]'s component type) — the spelling of a
-/// `\begin{name}`-shaped or `\end{name}`-shaped command-plus-name-group, as
-/// written:
-/// The escape character, the command word (`begin`/`end` as written), the command
-/// token's own syntactic post-space (`\begin {itemize}`'s tolerated inline
-/// whitespace — recorded, no longer normalized away), and the **name-group rule**
-/// — the [`GroupRule`] `Arc` cloned from the matched token, whose `open`/`close`
-/// strings are the exact delimiter bytes as written (a malformed begin takes the
-/// chars-recovery path, so a recorded name group never exists in
-/// delimiter-diverged form) *and* which records the group's class, which byte
-/// recording would lose. The rule `Arc` is source-independent, hence exempt from
-/// materialization. The environment's *name* is not here — it is the node's
-/// [`name`](crate::node::CallableData::name).
-/// 
-/// In Latexlike, the end terminator is always of the form `\end{environmentname}`,
-/// even though the core construct parsers offer more general terminator syntax for
-/// some environment-type-helper parsers like
-/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser).
-/// NOTE: `StdEnvironmentSideSyntax` is **not capable** of storing the terminoator
-/// syntax of such more general parsers.  If your custom
-/// [`EnvironmentBehavior::make_body_parser()`](crate::latexlike::EnvironmentBehavior::make_body_parser())
-/// reports a terminator syntax based on
-/// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal),
-/// then the recorded syntax will be incomplete, and
-/// [source recomposition](techy::recompose) will fail.
+/// One side of a [`StdEnvironmentSyntax`] record: a `\begin{name}`- or
+/// `\end{name}`-shaped command with its name group, as written.
+///
+/// The four fields are the escape character, the command word (`begin` or `end`) as
+/// written, that command token's own syntactic post-space — the whitespace tolerated
+/// in `\begin {itemize}`, recorded rather than normalized away — and the [`GroupRule`]
+/// of the name group, cloned from the matched token. The rule holds the exact
+/// delimiter characters as written and, unlike a byte-level recording, also the
+/// group's class; it refers to no source, so materialization leaves it alone.
+///
+/// The environment's *name* is not stored here: it is the node's
+/// [`name`](crate::core::node::CallableData::name), and the record's writers take it
+/// as an argument.
+///
+/// # Only `\end{name}`-shaped terminators fit
+///
+/// A latexlike environment ends with `\end{name}`, and that is the only end syntax
+/// this record can hold — the core construct parsers allow more general terminators,
+/// such as the literal string a
+/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) can be given.
+/// A custom
+/// [`EnvironmentBehavior::make_body_parser`](super::EnvironmentBehavior::make_body_parser)
+/// that reports its terminator as
+/// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
+/// therefore records an end side that cannot reproduce the input; see
+/// [`StdEnvironmentSyntax::from_parsed`](EnvironmentSyntax::from_parsed) for what is
+/// stored in that case.
 pub struct StdEnvironmentSideSyntax<L: Lang> {
     /// The escape character as written.
     pub escape_char: char,
-    /// The command word as written (`begin`, `end`), sans escape character.
+    /// The command word as written (`begin` or `end`), without the escape character.
     pub command_word: TextContent,
-    /// The command token's own syntactic post-space (between the command word and
-    /// the name group; empty when the name group follows immediately).
+    /// The whitespace between the command word and the name group, as written; empty
+    /// when the name group follows the command word directly.
     pub post_space: TextContent,
-    /// The name group's rule — the `Arc` off the matched token (exact delimiter
-    /// bytes + group class; source-independent).
+    /// The rule of the name group, cloned from the matched token: the delimiter
+    /// characters exactly as written, together with the group's class.
     pub name_group_rule: Arc<GroupRule<L>>,
 }
 
@@ -282,93 +302,116 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
     }
 }
 
-/// The environment-syntax **record contract** of an `Env` payload type (the
-/// [`Environment`](InvocationSyntaxData::Environment) arm): a constructor from
-/// the parsed facts, plus the type's own re-emission.
+/// What an environment-syntax record must provide: a constructor from the parsed
+/// facts, and a writer per side.
 ///
-/// The record does **no scanning**: the driving composition (the preset's
-/// `\begin` invocation parser) owns all scanning — the begin trigger, the rigid
-/// name group, arguments, and the body whose parser consumes the terminator —
-/// and hands the collected facts to [`from_parsed`] exactly once, at staging
-/// time. (A record that scanned its own sides — a mutate-in-place accumulator —
-/// would not work: the body parser is the terminator consumer, so end-side scanning
-/// delegation would be illusory, and the accumulator shape would lock custom
-/// `Env` types into the standard flow's shape.) Scanning **tolerance** is
-/// likewise a parser concern: swap the invocation/body parser through the
-/// parser-factory override
-/// ([`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser));
-/// the record records what its parser consumed.
+/// The [`Environment`](InvocationSyntaxData::Environment) variant stores a value of a
+/// type implementing this trait. [`StdEnvironmentSyntax`] is the standard
+/// implementation; a language family that wants to record something else supplies its
+/// own type and names it in its `Lang::InvocationSyntax`.
 ///
-/// Re-emission stays a **writer pair** ([`write_begin`]/[`write_end`]) — the
-/// recompose stage's `Concat` head/tail and the span-tiling checker's
-/// prefix/suffix pins each need the two sides separately — and is the accuracy
-/// rule made concrete: what `from_parsed` recorded is exactly what the
-/// writers emit.
+/// A record scans nothing itself. The preset's `\begin` invocation parser does all
+/// the scanning — the begin trigger, the name group, the arguments, and the body,
+/// whose own parser consumes the terminator — and passes the collected facts to
+/// [`from_parsed`] once, when the node is staged. How tolerant that scanning is, is
+/// equally the parser's business: replace the invocation or body parser through
+/// [`make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser),
+/// and the record records what the new parser consumed.
 ///
-/// The data bounds and materialization come from the core
-/// [`InvocationSyntax`] supertrait (the name-group rule `Arc` is
-/// source-independent and exempt).
+/// Re-emission is a pair of writers, [`write_begin`] and [`write_end`], because the
+/// two sides are needed separately: source recomposition writes the begin side, then
+/// the node's children, then the end side. What [`from_parsed`] recorded is exactly
+/// what the writers emit.
+///
+/// The data bounds and the materialization step come from the [`InvocationSyntax`]
+/// supertrait.
 ///
 /// [`from_parsed`]: EnvironmentSyntax::from_parsed
 /// [`write_begin`]: EnvironmentSyntax::write_begin
 /// [`write_end`]: EnvironmentSyntax::write_end
 pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
-    /// Build the record from the parsed facts: the begin side's
-    /// [`EnvironmentBeginSyntaxData`] (validated command trigger + matched rigid
-    /// name group) and the terminator facts the body parser reported back —
-    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a terminator whose
-    /// command-plus-name-group pieces are known (a tokenized one, and a raw body's
-    /// too when it was given the pieces),
-    /// [`Literal`](EnvironmentTerminatorSyntaxData::Literal) for a raw body given
-    /// nothing but a terminator string, `None` when the body
-    /// closed without consuming one (mismatch, malformed terminator, end of
-    /// input) — the end side then stays empty.
+    /// Builds the record from the facts the parse collected.
     ///
-    /// The parsed spellings are source-qualified spans, as the reader answered them;
-    /// `node_span` is the extent of the node being staged, against which each span
-    /// the record keeps is checked (a span from another source — only
-    /// reachable under a reader serving one parse from several sources — is recorded
-    /// as text, or not at all).
+    /// `begin` is the begin side: the validated command trigger and the name group
+    /// that matched. `terminator` is what the body parser reported back —
+    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) when the terminator's
+    /// command and name group are known separately (a tokenized terminator, and a raw
+    /// body's too when it was given those pieces),
+    /// [`Literal`](EnvironmentTerminatorSyntaxData::Literal) when a raw body was given
+    /// nothing but a terminator string, and `None` when the body closed without
+    /// consuming a terminator at all: a name mismatch, a malformed terminator, or the
+    /// end of the input. On `None` the end side stays empty.
+    ///
+    /// The spellings arrive as source-qualified spans, as the reader answered them.
+    /// `node_span` is the extent of the node being staged, and every span the record
+    /// keeps is checked against it: a span from another source — reachable only under
+    /// a reader serving one parse from several sources — is recorded as text instead,
+    /// or not at all.
     fn from_parsed(
         begin: EnvironmentBeginSyntaxData<L>,
         terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
         node_span: &SourceSpan<L::SourceOrigin>,
     ) -> Self;
 
-    /// The begin-side spelling as recorded, resolved around `name` (the
-    /// environment's name as written); `source` (the carrying node's own source,
-    /// `node.span().source()`) resolves span-backed fields. What a source
-    /// recomposer emits for the begin syntax.
+    /// The begin-side spelling as recorded, written around `name` — the environment's
+    /// name as written, which the record does not store itself.
+    ///
+    /// This is what source recomposition emits ahead of the node's children.
+    /// `source` resolves the span-backed fields and must be the carrying node's own
+    /// source, `node.span().source()`; a materialized record ignores it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a span-backed field names a range that is not within `source`'s
+    /// content, or does not fall on character boundaries — the panic condition of
+    /// [`TextContent::resolve`]. Passing a source other than the carrying node's own
+    /// is the way to reach it; a record built by a parse and resolved against its own
+    /// source never does.
     fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 
-    /// The end-side spelling as recorded — the empty string when the end side is
-    /// empty (the body closed without consuming a terminator: reemitting nothing
-    /// reproduces the recovered input).
+    /// The end-side spelling as recorded, written around `name`; the empty string
+    /// when the end side is empty.
+    ///
+    /// An empty end side means the body closed without consuming a terminator, and
+    /// emitting nothing is then what reproduces the recovered input.
+    ///
+    /// # Panics
+    ///
+    /// The same condition as [`write_begin`](EnvironmentSyntax::write_begin): a
+    /// span-backed field that is not valid for `source`.
     fn write_end(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 }
 
-/// The standard environment-syntax record: per-side facts in
-/// [`StdEnvironmentSideSyntax`] — begin always present, end filled from the
-/// terminator facts at construction
-/// ([`from_parsed`](EnvironmentSyntax::from_parsed)), or left empty on the
-/// recovery paths (mismatch, malformed terminator, end of input).
-/// 
-/// In Latexlike, the end terminator is always of the form `\end{environmentname}`,
-/// even though the core construct parsers offer more general terminator syntax for
-/// some environment-type-helper parsers like
-/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser).
-/// NOTE: `StdEnvironmentSyntax` is **not capable** of storing the terminoator
-/// syntax of such more general parsers.  If your custom
-/// [`EnvironmentBehavior::make_body_parser()`](crate::latexlike::EnvironmentBehavior::make_body_parser())
-/// reports a terminator syntax based on
-/// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal),
-/// then the recorded syntax will be incomplete, and
-/// [source recomposition](techy::recompose) will fail.
+/// The standard environment-syntax record: the `\begin` and `\end` spellings, one
+/// [`StdEnvironmentSideSyntax`] per side.
+///
+/// This is the `Env` type of the preset's own [`InvocationSyntaxData`], so it is what
+/// an ordinary latexlike parse records for an environment. The begin side is always
+/// present; the end side is filled from the terminator facts at construction
+/// ([`from_parsed`](EnvironmentSyntax::from_parsed)) and stays `None` when the body
+/// closed without consuming a terminator — a name mismatch, a malformed terminator,
+/// or the end of the input.
+///
+/// # Only `\end{name}`-shaped terminators fit
+///
+/// A latexlike environment ends with `\end{name}`, and that is the only end syntax
+/// this record can hold, although the core construct parsers allow more general
+/// terminators — a
+/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) can be given a
+/// literal terminator string, for one. A custom
+/// [`EnvironmentBehavior::make_body_parser`](super::EnvironmentBehavior::make_body_parser)
+/// that reports its terminator as
+/// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
+/// leaves this record with no spelling to keep, and
+/// [`from_parsed`](EnvironmentSyntax::from_parsed) then stores a placeholder end side
+/// that re-emits visibly wrong text: [source recomposition](crate::recompose) still
+/// runs, but its output no longer reproduces the input. The preset's own verbatim
+/// environments do not take that path.
 pub struct StdEnvironmentSyntax<L: Lang> {
-    /// The `\begin{name}` side's facts.
+    /// The `\begin{name}` side, always recorded.
     pub begin: StdEnvironmentSideSyntax<L>,
-    /// The `\end{name}` side's facts; `None` until the terminator is consumed —
-    /// and permanently for a body that closed without one.
+    /// The `\end{name}` side; `None` when the body closed without consuming a
+    /// terminator.
     pub end: Option<StdEnvironmentSideSyntax<L>>,
 }
 
@@ -385,18 +428,17 @@ impl<L: Lang> InvocationSyntax<L> for StdEnvironmentSyntax<L> {
 }
 
 impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
-    /// Transcription per terminator arm:
+    /// What each terminator case records:
     ///
-    /// - the begin side transcribes the begin facts verbatim (spans stay
-    ///   span-backed);
-    /// - a [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) terminator
-    ///   transcribes the end side the same way;
+    /// - the begin side is recorded as parsed, spans staying spans;
+    /// - a [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) terminator records
+    ///   the end side the same way;
     /// - a [`Literal`](EnvironmentTerminatorSyntaxData::Literal) terminator has no
-    ///   command-plus-name-group spelling to transcribe, and this record has
-    ///   nowhere to keep the literal instead (the type docs): the end side is
-    ///   filled with a placeholder command word that re-emits visibly wrong, so a
-    ///   record built this way is never mistaken for an accurate one. The preset's
-    ///   own verbatim environments do not take this path — they hand
+    ///   command and name group to record, and this record has nowhere to keep the
+    ///   literal string instead, so the end side is filled with the placeholder
+    ///   command word `??END_SYNTAX_NOT_AVAILABLE??`. Re-emitting it is then visibly
+    ///   wrong rather than quietly plausible. The preset's own verbatim environments
+    ///   do not take this path: they give
     ///   [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) a
     ///   [`StopEnvironmentCommand`](crate::core::constructs::VerbatimBodyTerminator::StopEnvironmentCommand)
     ///   terminator, which reports `Scanned` facts;
