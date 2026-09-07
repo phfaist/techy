@@ -127,7 +127,7 @@
 //! [`recompose_node`](Recomposer::recompose_node) yourself, through
 //! [`recompose_children`](RecomposeContext::recompose_children) or another
 //! [operation of the context](RecomposeContext). Those reach the children of any
-//! node, but each of them asks the recomposer *you hand it*, so a recomposer that
+//! node, but each of them asks the recomposer *you pass it*, so a recomposer that
 //! passes `self` bypasses whatever wraps it for exactly those children. Do that
 //! deliberately; otherwise post-process with `map`.
 //!

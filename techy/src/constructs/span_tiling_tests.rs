@@ -13,7 +13,7 @@
 //!   could (the node-data rule);
 //! - the spans exactly as the parsers recorded them (the reader's *describing* span for
 //!   a node covering several tokens);
-//! - the all-trees law ([`validate_tree`](crate::node::validate_tree)) and the
+//! - the all-trees law ([`validate_tree`](crate::core::node::validate_tree)) and the
 //!   test-only span-tiling oracle
 //!   ([`check_tree_invariants`](crate::node::check_tree_invariants), which holds such a
 //!   tree to the all-trees law only) — both run by [`run_nodes`] for every tree here.
@@ -23,7 +23,7 @@
 //! the enforcement that makes the declaration meaningful.
 //!
 //! The preset-side counterparts (an environment spanning seams, the macro post-space
-//! payload) live in `latexlike::span_tiling_tests`.
+//! payload) are in `latexlike::span_tiling_tests`.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -167,7 +167,7 @@ impl<L: Lang> Parsed<L> {
 }
 
 /// The languages the helpers here drive: a scripted-reader language whose driver is the
-/// ready-made one (no command resolution — the tests that need callables live in the
+/// ready-made one (no command resolution — the tests that need callables are in the
 /// preset module).
 trait ScriptedTestLang:
     Lang<
@@ -294,7 +294,7 @@ fn assert_spanned_chars<L: Lang>(node: &NodeRef<'_, L>, text: &str) {
     assert_eq!(node.chars(), Some(text));
 }
 
-/// A minimal source recomposer over the core-complete kinds — the fold used to check
+/// A minimal source recomposer over the core-complete kinds, used to check
 /// that a tree re-emits **as stored** (tests T4/T12).
 struct CoreSource;
 

@@ -1,8 +1,8 @@
 //! [`StdInvocationParser`]: the default declarative invocation parser, returned by
-//! [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+//! [`CallableSpec::make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser)
 //! (pylatexenc's `LatexMacroCallParser`-family, behind one factory).
 //! The full invocation-parsing contract — what every parser returned by that factory
-//! runs under — lives on [`StdInvocationParser`]'s own documentation.
+//! runs under — is documented on [`StdInvocationParser`] itself.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -93,7 +93,7 @@ pub fn parse_declared_arguments<L: Lang>(
 /// the resulting `Callable` node.
 ///
 /// This is what
-/// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+/// [`CallableSpec::make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser)
 /// returns unless a spec overrides it, so the engine reaches for it for every
 /// callable that does not take over its own parsing: the content loop resolves a
 /// trigger token, consumes it, and runs the parser the spec's factory returned. It is
@@ -114,7 +114,7 @@ pub fn parse_declared_arguments<L: Lang>(
 /// since no invocation parser can forget to consume its trigger). The token's pre-space
 /// is likewise the caller's (housed as sibling content). A takeover parser that needs
 /// the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader
-/// itself, at the trigger's own [`End`](crate::token::TokenEdge) edge —
+/// itself, at the trigger's own [`End`](crate::core::token::TokenEdge) edge —
 /// `move_to(token, TokenEdge::End)`, where the token proper ends and its
 /// post-space begins.
 ///
@@ -124,14 +124,14 @@ pub fn parse_declared_arguments<L: Lang>(
 ///
 /// # Arguments
 ///
-/// The parser iterates the spec's [`ArgumentSpec`](crate::spec::ArgumentSpec)s in
+/// The parser iterates the spec's [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s in
 /// invocation order, running each argument's
-/// [`ArgumentParser`](crate::spec::ArgumentParser) under the argument's
+/// [`ArgumentParser`](crate::core::constructs::ArgumentParser) under the argument's
 /// own state — the spec's `parsing_state_delta` stacked on the invocation's base
 /// (session-mediated, so the transition is observed), reverted structurally after; the
 /// argument's whole extent, noise scan included, runs under it. Each provided argument
 /// contributes its region's nodes to the child list and a staged
-/// [`ChildRegion`](crate::node::ChildRegion) to the [`ParsedArguments`] record; an
+/// [`ChildRegion`](crate::core::node::ChildRegion) to the [`ParsedArguments`] record; an
 /// absent argument keeps its entry (spec included — the record is self-describing) and
 /// contributes nothing. Missing-mandatory recovery is the argument parser's own
 /// detection-site business: by the time `parse_argument` reports absent, any
@@ -150,7 +150,7 @@ pub fn parse_declared_arguments<L: Lang>(
 ///
 /// # Invocation syntax
 ///
-/// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)
+/// [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)
 /// records the language's trigger-spelling
 /// facts, minted from the [`Invocation`] via the standard constructor
 /// ([`FromInvocation`](super::FromInvocation)) inside
@@ -172,11 +172,11 @@ pub fn parse_declared_arguments<L: Lang>(
 /// parser wouldn't parse): body content is inseparable from terminator syntax and from
 /// invocation facts like the `\end{name}` back-reference, so a body-bearing spec
 /// overrides
-/// [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) with a
+/// [`make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser) with a
 /// composition that drives [`EnvironmentBodyParser`](super::EnvironmentBodyParser) and
-/// mints its own [`ParsedSlot`](crate::node::ParsedSlot) records (the
+/// mints its own [`ParsedSlot`](crate::core::node::ParsedSlot) records (the
 /// argument half is shared as [`parse_declared_arguments`]) — and says "I take
-/// material" via [`requires_content`](crate::spec::CallableSpec::requires_content), the
+/// material" via [`requires_content`](crate::core::specs::CallableSpec::requires_content), the
 /// expression-position guard's channel.
 pub struct StdInvocationParser<'a, L: Lang> {
     invocation: Invocation<'a, L>,
@@ -184,7 +184,7 @@ pub struct StdInvocationParser<'a, L: Lang> {
 
 impl<'a, L: Lang> StdInvocationParser<'a, L> {
     /// A parser for the given resolved invocation (the default body of
-    /// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)).
+    /// [`CallableSpec::make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser)).
     pub fn new(invocation: Invocation<'a, L>) -> StdInvocationParser<'a, L> {
         StdInvocationParser { invocation }
     }

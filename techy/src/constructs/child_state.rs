@@ -11,7 +11,7 @@
 //! bracket-balancing policy, since detached: its keep-or-revert semantics are
 //! per-level by design — decided semantics 3 below — and are now carried by the
 //! state-scoped temporary-group-rules
-//! ([`GroupRules::temporary`](crate::token::GroupRules::temporary)) lifecycle,
+//! ([`GroupRules::temporary`](crate::core::token::GroupRules::temporary)) lifecycle,
 //! which reaches every depth. The mechanism here remains for descent policies that are
 //! genuinely per-use and per-level, like the chars-except-groups motivating case.)
 //!
@@ -54,7 +54,7 @@ pub enum GroupChildState<'p, L: Lang> {
     /// Compute the base from the loop's current state and the **opening token**,
     /// with a shared, call-scoped reference to the **reader that produced it**: the
     /// callback asks whatever it needs about the token —
-    /// [`token_kind`](crate::token::TokenReader::token_kind) reports `delim` and the
+    /// [`token_kind`](crate::core::token::TokenReader::token_kind) reports `delim` and the
     /// resolved `Arc<GroupRule>`, so a policy can key on the group's class — and
     /// cannot move the stream. Deterministic, no side effects: return one of the
     /// inputs or a precomputed state where possible — passing an input through
@@ -66,7 +66,7 @@ pub enum GroupChildState<'p, L: Lang> {
     /// carry: [`HookFailed`](crate::error::HookFailed) for an operational failure
     /// in the callback's own code — a body that computes its state via
     /// [`ParsingState::derived`] lifts the failure this way, with the
-    /// [`DeriveError`](crate::state::DeriveError) (an
+    /// [`DeriveError`](crate::core::DeriveError) (an
     /// [`Error`](core::error::Error) type) as the `cause`:
     /// `ParseError::new(HookFailed::new(error.to_string(), None).with_cause(error), span)`;
     /// [`ImplementationError`](super::ImplementationError) for a violated library
@@ -99,7 +99,7 @@ pub enum InvocationChildState<'p, L: Lang> {
     /// the same contract as [`GroupChildState::Compute`] — `Err` aborts the parse
     /// under any recovery policy ([`HookFailed`](crate::error::HookFailed) for the
     /// callback's own operational failures, the documented
-    /// [`DeriveError`](crate::state::DeriveError) lift included;
+    /// [`DeriveError`](crate::core::DeriveError) lift included;
     /// [`ImplementationError`](super::ImplementationError) for contract
     /// violations); an infallible policy wraps its state in `Ok(...)`.
     #[allow(clippy::type_complexity)]

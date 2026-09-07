@@ -438,9 +438,10 @@ fn a_language_tied_type_passes_the_context_to_its_spans() {
 // --- the serde bridge ---------------------------------------------------------------------
 
 /// The shapes are the ones the serde bridge produces for the corresponding serde
-/// shapes (identical rendering across mechanisms — the canonical-form discipline,
-/// [§dd-dr:serial-value-model]): the enum alone, and the whole struct, including a
-/// `Some(None)` written as `null` and a verbatim `SerialValue` field.
+/// shapes (identical rendering across mechanisms — the canonical-form discipline):
+/// the enum alone, and the whole struct, including a `Some(None)` written as `null`
+/// and a verbatim `SerialValue` field.
+// Canonical-form discipline: cf. [§dd-dr:serial-value-model].
 #[cfg(feature = "serde")]
 #[test]
 fn shapes_agree_with_the_bridge() {

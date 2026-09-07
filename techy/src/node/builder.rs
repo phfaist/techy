@@ -490,7 +490,7 @@ impl<'b, L: Lang> StagedNodeView<'b, L> {
         &self.staged.kind
     }
 
-    /// The uniform (tier-1) ext data.
+    /// The language's extension data for this node.
     pub fn ext(&self) -> &'b NodeExt<L> {
         &self.staged.ext
     }

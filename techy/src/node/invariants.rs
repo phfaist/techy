@@ -595,8 +595,7 @@ impl core::error::Error for TreeViolation {}
 ///    the node's span; group delimiters are prefix/suffix), the exact position is
 ///    checked. The **invocation-syntax payload is deliberately not read here**:
 ///    it is Lang-owned opaque data to core — the latexlike preset layers its
-///    payload pins in its own checker (`check_latexlike_tree_invariants`, the
-///    D-plan-12 Option B split).
+///    payload pins in its own checker (`check_latexlike_tree_invariants`).
 /// 4. **Children share the parent's source** (byte comparisons presuppose it).
 #[cfg(test)]
 pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {

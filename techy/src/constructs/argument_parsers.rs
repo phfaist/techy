@@ -341,7 +341,7 @@ pub(super) fn stage<L: Lang>(
 /// only. Two rules apply:
 ///
 /// - A callable whose invocation **requires content**
-///   ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content):
+///   ([`CallableSpec::requires_content`](crate::core::specs::CallableSpec::requires_content):
 ///   some declared argument cannot match empty, or a body-bearing takeover spec
 ///   overrides it) cannot be *used* bare as a single-token expression (pylatexenc's
 ///   requires-arguments diagnostic). Tolerant recovery stages the **bare single-token

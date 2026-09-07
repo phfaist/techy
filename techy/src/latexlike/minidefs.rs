@@ -151,8 +151,8 @@ where
 /// A recipe is [`KnownProviders`]'s fallback: a provider inserted under the same name
 /// takes precedence. This is the counterpart of
 /// [`serialize::register_package_recipes`](super::serialize::register_package_recipes) for
-/// the toy packages, and it lives here so that a build that never imports this module can
-/// still leave the module out.
+/// the toy packages. It is defined in this module so that a build which never uses
+/// `minidefs` does not pull the toy packages in.
 ///
 /// The two package names are part of the preset's serialized vocabulary and are kept
 /// stable like identifiers: serialized data refers to its package by name, so `minilatex`

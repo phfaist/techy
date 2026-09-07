@@ -2,7 +2,7 @@
 //! that run one.
 //!
 //! A `Language` holds what outlives any one parse — the frozen initial
-//! [`ParsingState`] and the [`ParseDriver`](crate::engine::ParseDriver) instance —
+//! [`ParsingState`] and the [`ParseDriver`](crate::core::ParseDriver) instance —
 //! and nothing else, so one value parses many documents. Everything one parse
 //! accumulates belongs to the transient [`ParserSession`], and the finished
 //! [`ParseResult`] owns its tree and diagnostics outright: it borrows nothing from
@@ -36,7 +36,7 @@ use super::{ParseResult, ParserSession};
 /// # Building one
 ///
 /// [`new`](Language::new) takes the two mandatory inputs: the
-/// [`ParseDriver`](crate::engine::ParseDriver) instance — which carries the recovery
+/// [`ParseDriver`](crate::core::ParseDriver) instance — which carries the recovery
 /// policy — and the initial [`ParsingState`]. That state normally comes from one of
 /// two seed constructors: [`ParsingState::lang_initial`] for the language's own
 /// canonical seed, and [`ParsingState::lang_initial_with_packages`] for that seed
@@ -46,7 +46,7 @@ use super::{ParseResult, ParserSession};
 /// to the seed *before* construction, through the one derivation path:
 /// `Language::new(driver, ParsingState::lang_initial()?.derived(&delta)?)`. Deriving
 /// is what lets the language check its own invariants
-/// ([`Lang::finalize_transition`](crate::state::Lang::finalize_transition)) over
+/// ([`Lang::finalize_transition`](crate::core::Lang::finalize_transition)) over
 /// every customized seed.
 ///
 /// # Running a parse
@@ -153,9 +153,9 @@ impl<L: Lang> Language<L> {
         &self.initial_state
     }
 
-    /// The language's [`ParseDriver`](crate::engine::ParseDriver) instance —
+    /// The language's [`ParseDriver`](crate::core::ParseDriver) instance —
     /// concretely typed, so preset helper methods (and driver-configured capabilities
-    /// like [`source_resolver`](crate::engine::ParseDriver::source_resolver)) are
+    /// like [`source_resolver`](crate::core::ParseDriver::source_resolver)) are
     /// directly reachable.
     pub fn driver(&self) -> &L::Driver {
         &self.driver
@@ -258,7 +258,7 @@ impl<L: Lang> Language<L> {
     ///
     /// The returned [`ParseSetup`] starts from this language's defaults — the
     /// [`initial_state`](Language::initial_state) and the driver's root parser
-    /// ([`ParseDriver::make_root_parser`](crate::engine::ParseDriver::make_root_parser))
+    /// ([`ParseDriver::make_root_parser`](crate::core::ParseDriver::make_root_parser))
     /// — which its `with_*` methods replace for this one parse.
     /// [`ParseSetup::parse`] then runs it and returns the same
     /// [`ParseResult`]-or-[`ParseError`] answer as [`parse`](Language::parse):
@@ -384,7 +384,7 @@ impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
     /// afterwards, so a root parser may collect data for you to read back once the
     /// parse returns. Its contract — it runs at the top rather than as a descent,
     /// and its output becomes the tree's root — is documented on
-    /// [`RootNodesParser`](crate::constructs::RootNodesParser).
+    /// [`RootNodesParser`](crate::core::constructs::RootNodesParser).
     pub fn with_root_parser<'q>(
         self,
         parser: &'q mut dyn ConstructParser<L, Output = BuildId>,
@@ -412,14 +412,14 @@ impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
     ///    with the state this parse starts from, before any token is read.
     /// 4. The root parser runs over a [`ParseContext`] at that state — directly at
     ///    the top, not as a descent (see
-    ///    [`RootNodesParser`](crate::constructs::RootNodesParser)) — and the session
+    ///    [`RootNodesParser`](crate::core::constructs::RootNodesParser)) — and the session
     ///    is frozen around the root node it returns into a [`ParseResult`].
     ///
     /// Under the standard root parser, a group close with no matching open at the
     /// root is diagnosed as
-    /// [`StrayGroupClose`](crate::constructs::StrayGroupClose): a tolerant parse
+    /// [`StrayGroupClose`](crate::core::constructs::StrayGroupClose): a tolerant parse
     /// consumes it, stages it as a `Chars` node, and continues, while a strict parse
-    /// aborts. [`RootNodesParser`](crate::constructs::RootNodesParser) documents the
+    /// aborts. [`RootNodesParser`](crate::core::constructs::RootNodesParser) documents the
     /// rest of that behavior.
     ///
     /// # Errors

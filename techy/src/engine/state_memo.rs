@@ -39,7 +39,7 @@ pub(super) type StateMemo<L> = hashbrown::HashMap<StateMemoKey<L>, Arc<ParsingSt
 ///
 /// Deliberately separate from [`StateMemo`]. A group-interior derivation is the
 /// canonical `expecting_group_close` override *plus* the driver's
-/// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta), which
+/// [`group_interior_delta`](crate::core::ParseDriver::group_interior_delta), which
 /// runs on a memo miss only; sharing [`StateMemo`] would let a hand-built
 /// expecting-close-only delta and a driver-augmented descent collide under one key
 /// while deriving different states.

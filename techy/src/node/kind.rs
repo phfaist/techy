@@ -195,8 +195,9 @@ pub struct CallableData<L: Lang> {
     /// The invocation spelling. Identity-bearing, therefore always owned (provider
     /// keys hold the *normalized* name; this is the name as written).
     pub name: Box<str>,
-    /// The behavior spec — shared, de-keyed, and never absent (unknown callables resolve
-    /// to per-type fallback singletons).
+    /// The behavior spec, shared through an `Arc` and never absent: an unknown callable
+    /// resolves to the fallback spec of its callable type. The spec holds no lookup key
+    /// of its own — the name it was found under is the `name` field above.
     pub spec: Arc<dyn CallableSpec<L>>,
     /// The parsed arguments: which are provided, where their region/content nodes are,
     /// and which [`ArgumentSpec`](crate::core::specs::ArgumentSpec) each was parsed against.

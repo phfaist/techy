@@ -24,7 +24,7 @@
 //! Working with a finished tree beyond direct reads: read-only structural
 //! traversal is [`visit`](crate::visit)
 //! ([`TreeWalker`](crate::visit::TreeWalker)),
-//! extraction helpers live in [`extract`](crate::extract), tree→tree
+//! extraction helpers are in [`extract`](crate::extract), tree→tree
 //! transformation is [`transform`](crate::transform)
 //! ([`TreeRestager`](crate::transform::TreeRestager)), and tree→value
 //! recomposition is [`recompose`](crate::recompose)

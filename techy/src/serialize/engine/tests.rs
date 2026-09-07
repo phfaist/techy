@@ -1921,7 +1921,7 @@ mod serde_rendering {
     /// `SerialValue` therefore renders as `{"$index":[…]}` in JSON (as in a segment).
     /// Serialized directly by a serde format (not through the bridge), a position is
     /// its underlying newtype pair — that path is never how positions reach the wire
-    /// in this crate, since they always ride inside a `SerialValue`.
+    /// in this crate, since they are always nested inside a `SerialValue`.
     #[test]
     fn a_typed_position_converts_to_an_index() {
         use crate::serialize::{from_value, to_value, SerialIndex, SerialValue, TableId};

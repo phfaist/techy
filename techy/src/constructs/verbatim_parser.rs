@@ -172,7 +172,7 @@ struct RawContentEnd<L: Lang> {
     content_end: StreamPosition<L>,
     /// The raw content's text as the reader answered it, token by token: `Some`
     /// exactly when the language does not obey span tiling
-    /// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`),
+    /// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`),
     /// where the tokens it was read from need not form one contiguous stretch of one
     /// source and a span could not describe their text. Covers exactly the stretch from
     /// where the loop started to [`content_end`](RawContentEnd::content_end).
@@ -189,7 +189,7 @@ struct RawContentEnd<L: Lang> {
 /// when there is no content to stage (techy stages no empty chars node).
 ///
 /// The text the loop accumulated where it accumulated one (a language with
-/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`), the exact
+/// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`), the exact
 /// span slice otherwise — and *emptiness is decided the same way*: for such a language
 /// the span is only what the reader described for the stretch the content was read
 /// from, so whether there is content is the accumulated text's answer, not the span's.
@@ -216,7 +216,7 @@ where
 /// consumed. Diagnosing the terminator-less endings is the caller's business.
 ///
 /// For a language with
-/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` the loop also
+/// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false` the loop also
 /// accumulates the content's text from what the reader says about each token it
 /// consumes — the pre-space, the spelling (a character, or a delimiter read as
 /// content), and the syntactic post-space — plus the pre-space of the token that ends

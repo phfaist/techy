@@ -1,6 +1,6 @@
 //! [`ParseDriver`]: a language's parse-time behavior, as methods on a value.
 //!
-//! [`Lang`](crate::state::Lang) stays the compile-time bundle: its hooks belong to
+//! [`Lang`](crate::core::Lang) stays the compile-time bundle: its hooks belong to
 //! layers callable outside a running parse (state transitions, tokenizer specials,
 //! node finalization). Everything that only runs *while a parse is running* is on the
 //! driver instead, as `&self` methods on a value, so the behavior can carry
@@ -26,13 +26,13 @@
 //!   [`group_interior_delta`](ParseDriver::group_interior_delta), through which a
 //!   group class changes the parsing state of its interior (a math group entering
 //!   math mode is one line: a delta with a
-//!   [`mode`](crate::state::ParsingStateDelta::mode) override);
+//!   [`mode`](crate::core::ParsingStateDelta::mode) override);
 //! - **construct provision** — [`make_root_parser`](ParseDriver::make_root_parser),
 //!   [`make_nodes_parser`](ParseDriver::make_nodes_parser),
 //!   [`make_group_parser`](ParseDriver::make_group_parser),
 //!   [`make_invocation_parser`](ParseDriver::make_invocation_parser). Every descent
-//!   site goes through the [`ParseContext`](crate::constructs::ParseContext) wrappers
-//!   ([`parse_nodes`](crate::constructs::ParseContext::parse_nodes)/[`parse_group`](crate::constructs::ParseContext::parse_group)),
+//!   site goes through the [`ParseContext`](crate::core::constructs::ParseContext) wrappers
+//!   ([`parse_nodes`](crate::core::constructs::ParseContext::parse_nodes)/[`parse_group`](crate::core::constructs::ParseContext::parse_group)),
 //!   so one override applies uniformly to the whole parse; the root parser is what
 //!   the parse entry point ([`ParseSetup::parse`](super::ParseSetup::parse)) runs
 //!   directly.
@@ -43,7 +43,7 @@
 //! [`ParserSession::group_interior_state`] use), and per-language *data* belongs to
 //! the parsing state. [`StdParseDriver`] is the one ready-made implementation — the
 //! recovery setting, a pluggable [`CommandResolver`] strategy, an optional source
-//! resolver — and the [`TrivialLang`](crate::state::TrivialLang) default.
+//! resolver — and the [`TrivialLang`](crate::core::TrivialLang) default.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -74,9 +74,9 @@ use super::ParserSession;
 /// the parse or is recorded and tolerated, and which parsers run at each step.
 ///
 /// The engine consults the driver at fixed points of every parse. A language names
-/// its driver type as [`Lang::Driver`](crate::state::Lang::Driver), an instance is
+/// its driver type as [`Lang::Driver`](crate::core::Lang::Driver), an instance is
 /// stored on the [`Language`](super::Language), and construct parsers reach it as
-/// [`ParseContext::driver`](crate::constructs::ParseContext::driver) — concretely
+/// [`ParseContext::driver`](crate::core::constructs::ParseContext::driver) — concretely
 /// typed through `L`, so a preset's own parsers can call inherent methods on the
 /// driver type without downcasting, while generic code sees only this trait.
 /// [Defining a language](crate::guide::custom_lang#the-driver) walks through writing
@@ -92,7 +92,7 @@ use super::ParserSession;
 /// already a complete driver — one that resolves no commands, aborts at the first
 /// problem, and uses the standard parsers everywhere. Tokenization is covered too:
 /// [`make_token_reader`](ParseDriver::make_token_reader) takes the reader from the
-/// language's [`Lang::Tokenization`](crate::state::Lang::Tokenization) by default.
+/// language's [`Lang::Tokenization`](crate::core::Lang::Tokenization) by default.
 ///
 /// What a real language usually overrides, and when the engine calls it:
 ///
@@ -196,7 +196,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// continue, or end the parse.
     ///
     /// Called once per detected problem, from the parsers' recovery entry point
-    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover).
+    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover).
     ///
     /// The default applies [`refine_diagnostic`](ParseDriver::refine_diagnostic)
     /// exactly once, then follows the policy
@@ -232,20 +232,20 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// This is where a driver installs a reader of its own. Both
     /// reader-construction sites go through it:
     /// [`ParseSetup::parse`](super::ParseSetup::parse) for the root parse and
-    /// [`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)
+    /// [`ParseContext::parse_attached_source`](crate::core::constructs::ParseContext::parse_attached_source)
     /// for an attached (included) source. A driver that returns its own reader thereby
     /// tokenizes the whole parse its way, while the *types* involved stay fixed by the
-    /// language ([`Token<L>`](crate::token::Token) and
-    /// [`StreamPosition<L>`](crate::token::StreamPosition), both declared by
-    /// [`Lang::Tokenization`](crate::state::Lang::Tokenization)).
+    /// language ([`Token<L>`](crate::core::token::Token) and
+    /// [`StreamPosition<L>`](crate::core::token::StreamPosition), both declared by
+    /// [`Lang::Tokenization`](crate::core::Lang::Tokenization)).
     ///
     /// The default builds the reader the language's own
-    /// [`Tokenization`](crate::token::Tokenization) names —
+    /// [`Tokenization`](crate::core::token::Tokenization) names —
     /// `L::Tokenization::make_token_reader(source)`, which for
-    /// [`StdTokenization`](crate::token::StdTokenization) is a
-    /// [`StdTokenReader`](crate::token::StdTokenReader) over `source`. Override it when
+    /// [`StdTokenization`](crate::core::token::StdTokenization) is a
+    /// [`StdTokenReader`](crate::core::token::StdTokenReader) over `source`. Override it when
     /// the reader needs data the driver *instance* holds: the returned reader borrows
-    /// both `self` and `source` for the parse's extent, so a driver may hand it
+    /// both `self` and `source` for the parse's extent, so a driver may pass it
     /// configuration of its own. A reader needing no per-instance data is better
     /// installed by the language, as its `Tokenization`.
     fn make_token_reader<'s>(
@@ -260,7 +260,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///
     /// This is the peek an argument parser uses to find out whether an optional
     /// argument is present, reached through
-    /// [`ParseContext::probe_token`](crate::constructs::ParseContext::probe_token).
+    /// [`ParseContext::probe_token`](crate::core::constructs::ParseContext::probe_token).
     /// The default reads the policy through
     /// `self.`[`recovery()`](ParseDriver::recovery): strict mode aborts with the
     /// token error, as the content loop would; tolerant mode reports `None` **without
@@ -305,15 +305,15 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///
     /// `Specials` tokens need no such hook: recognizing one already resolves it, and
     /// the token carries its spec. Specials are resolved while tokenizing, by
-    /// [`Lang::scan_specials`](crate::state::Lang::scan_specials); commands are
+    /// [`Lang::scan_specials`](crate::core::Lang::scan_specials); commands are
     /// resolved while parsing, here.
     ///
     /// The hook receives the triggering **token** and a shared, call-scoped reference
     /// to the **reader that produced it**, so a language may take over resolution by
     /// inspecting any detail of the token it needs:
-    /// [`tokens.token_kind(token)`](crate::token::TokenReader::token_kind) for what it
-    /// is, [`source_span_of`](crate::token::TokenReader::source_span_of) or
-    /// [`position_at`](crate::token::TokenReader::position_at) for where it is. The
+    /// [`tokens.token_kind(token)`](crate::core::token::TokenReader::token_kind) for what it
+    /// is, [`source_span_of`](crate::core::token::TokenReader::source_span_of) or
+    /// [`position_at`](crate::core::token::TokenReader::position_at) for where it is. The
     /// reference is shared, so the resolver cannot move the stream. Anything other
     /// than a `Command` token is a caller-contract violation; answer
     /// [`Unresolved`](CommandResolution::Unresolved).
@@ -341,13 +341,13 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// - [`Failed`](CommandResolution::Failed) (an `Ok` value) is the **recoverable**
     ///   channel: the resolver failed operationally at this document position, the
     ///   parse diagnoses it
-    ///   ([`CommandResolutionFailed`](crate::constructs::CommandResolutionFailed))
+    ///   ([`CommandResolutionFailed`](crate::core::constructs::CommandResolutionFailed))
     ///   and continues with the span-backed chars recovery.
     /// - `Err` is the **abort** channel: carry
     ///   [`HookFailed`](crate::error::HookFailed) for an operational failure the
     ///   parse must not continue past (a resolver backend that is down for the whole
     ///   parse, a runtime failure in an embedding),
-    ///   [`ImplementationError`](crate::constructs::ImplementationError) for a
+    ///   [`ImplementationError`](crate::core::constructs::ImplementationError) for a
     ///   violated library contract, or a document condition only for a diagnosis
     ///   made deliberately (aborting is strict-mode behavior; recoverable document
     ///   problems belong on the `Ok` channels).
@@ -377,7 +377,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// **Constraint:** the kind is staged with *no children*, so a callable-shaped
     /// kind must carry no argument regions and no slots — the builder's region-tiling
     /// check rejects any such kind, and the staging site aborts with an
-    /// [`ImplementationError`](crate::constructs::ImplementationError).
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError).
     /// (Structurally intrinsic: this hook has no
     /// session/builder and cannot stage children.)
     ///
@@ -433,11 +433,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// Called by the session's derivation helpers
     /// ([`ParserSession::derived_state`], [`ParserSession::group_interior_state`]) on
     /// **every** transition — memoized ones included, which is what
-    /// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition)
+    /// [`Lang::finalize_transition`](crate::core::Lang::finalize_transition)
     /// structurally cannot see (it runs once per unique *derivation*, not once per
     /// transition). Parse-history accumulation ("how many times did the parse enter
     /// math mode") belongs here, in the session's
-    /// [`SessionExt`](crate::state::Lang::SessionExt) — never in
+    /// [`SessionExt`](crate::core::Lang::SessionExt) — never in
     /// `finalize_transition`, where structural scope reverts and memoization would
     /// make counts wrong twice over. The accumulated value is handed out on
     /// [`ParseResult::session_ext`](super::ParseResult::session_ext) when the
@@ -465,7 +465,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///   truly problematic state the parse must not continue past (an observer
     ///   backend that is gone, a violated invariant in the embedding). Carry
     ///   [`HookFailed`](crate::error::HookFailed) for an operational failure,
-    ///   [`ImplementationError`](crate::constructs::ImplementationError) for a
+    ///   [`ImplementationError`](crate::core::constructs::ImplementationError) for a
     ///   violated library contract; the derivation seam attaches the live
     ///   traceback when the error carries no frames of its own.
     ///
@@ -503,10 +503,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// The latexlike driver delegates to
     /// [`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
     /// which for the shipped preset runs the all-escape-shadowed provider check
-    /// ([`check_provider_commands_shadowed_by_escape`](crate::scopes::check_provider_commands_shadowed_by_escape)).
+    /// ([`check_provider_commands_shadowed_by_escape`](crate::core::specs::check_provider_commands_shadowed_by_escape)).
     ///
     /// Attached-source sub-parses
-    /// ([`parse_attached_source`](crate::constructs::ParseContext::parse_attached_source))
+    /// ([`parse_attached_source`](crate::core::constructs::ParseContext::parse_attached_source))
     /// deliberately do **not** re-fire this hook: it observes *parse
     /// initialization* (the seeded providers), not every descent.
     fn observe_parse_start(
@@ -523,9 +523,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///
     /// Events come in two classes ([`Lang::Event`]); this method handles the class
     /// whose meaning depends on the surrounding context. It is consulted by
-    /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
+    /// [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state)
     /// once per event before the delta reaches the derivation point
-    /// ([`ParsingState::derived`](crate::state::ParsingState::derived)).
+    /// ([`ParsingState::derived`](crate::core::ParsingState::derived)).
     ///
     /// - Return `Some(patch)` to **lower** the event: the patch is merged into the
     ///   delta and the event is removed — it never reaches
@@ -549,7 +549,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// recognized-but-unusable event would drop it without a trace). Carry
     /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
     /// lowering code itself,
-    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) for a
     /// violated library contract, or a document condition for a document diagnosis
     /// made deliberately (aborting is strict-mode behavior — there is no recovery
     /// channel at this seam). An infallible implementation wraps its answer in
@@ -605,7 +605,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// identities; the hook runs on memo **miss** only, so a call-count-dependent
     /// implementation would be observably wrong). The returned delta is merged with
     /// the descent invariant: the interior's
-    /// [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) is
+    /// [`expecting_group_close`](crate::core::token::TokenRules::expecting_group_close) is
     /// always the entered rule — a returned override of that field is discarded.
     fn group_interior_delta(
         &self,
@@ -657,7 +657,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// body, or the top level.
     ///
     /// Called once per such descent, through
-    /// [`ParseContext::parse_nodes`](crate::constructs::ParseContext::parse_nodes).
+    /// [`ParseContext::parse_nodes`](crate::core::constructs::ParseContext::parse_nodes).
     /// Every descent site goes through that wrapper, so one override applies to the
     /// whole parse; this is the supported way to install a dispatch loop of your own.
     /// Ownership of the parser moves to the caller.
@@ -675,11 +675,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// descent site attaches the live traceback when the error carries no frames
     /// of its own. Refusing to parse *deeper* is deliberately not this channel's
     /// business: nesting depth belongs to the descent guard, which refuses with
-    /// [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded) inside
-    /// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct),
+    /// [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded) inside
+    /// [`ParseContext::parse_construct`](crate::core::constructs::ParseContext::parse_construct),
     /// before any factory-built parser runs. Carry
     /// [`HookFailed`](crate::error::HookFailed) for an operational failure,
-    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) for a
     /// violated library contract. An infallible implementation wraps its parser
     /// in `Ok(...)` and that is the only change.
     // The boxed-parser-or-abort pair is the decided factory signature; an alias
@@ -703,10 +703,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// and the rule it matched.
     ///
     /// Called once per group descent, through
-    /// [`ParseContext::parse_group`](crate::constructs::ParseContext::parse_group).
+    /// [`ParseContext::parse_group`](crate::core::constructs::ParseContext::parse_group).
     ///
     /// The default is the standard [`GroupParser`], which derives the interior state
-    /// through [`ParseContext::group_interior_state`](crate::constructs::ParseContext::group_interior_state) (where
+    /// through [`ParseContext::group_interior_state`](crate::core::constructs::ParseContext::group_interior_state) (where
     /// [`group_interior_delta`](ParseDriver::group_interior_delta) merges in) — prefer
     /// the delta channel for state-shaped customization; override this factory only
     /// for structurally different group parses.
@@ -717,7 +717,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// descent. Installing it here rather than per descent site is what gives the
     /// language the hook at every group, which is what lets an escape compose outward
     /// through nested groups — see
-    /// [`GroupAfterEffectsFn`](crate::constructs::GroupAfterEffectsFn).
+    /// [`GroupAfterEffectsFn`](crate::core::constructs::GroupAfterEffectsFn).
     ///
     /// # Errors
     ///
@@ -756,7 +756,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// language — which no per-spec override could provide.
     ///
     /// The caller has already consumed the trigger token whole; see
-    /// [`StdInvocationParser`](crate::constructs::StdInvocationParser)'s
+    /// [`StdInvocationParser`](crate::core::constructs::StdInvocationParser)'s
     /// documentation for the invocation-parser contract an implementation must
     /// uphold.
     ///
@@ -884,11 +884,11 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
 /// [`CommandResolver`] strategy, and an optional [`SourceResolver`] — everything else
 /// keeps the trait defaults. It implements the trait for **every** language whose
 /// [`SourceOrigin`](Lang::SourceOrigin) is `O` and whose commands `R` can resolve —
-/// the [`TrivialLang`](crate::state::TrivialLang) default driver (`type Driver =
+/// the [`TrivialLang`](crate::core::TrivialLang) default driver (`type Driver =
 /// StdParseDriver`, all parameters defaulted).
 ///
 /// **Which command resolver to reach for:** `()` resolves nothing — the
-/// [`TrivialLang`](crate::state::TrivialLang)-style test-language pairing
+/// [`TrivialLang`](crate::core::TrivialLang)-style test-language pairing
 /// (`StdParseDriver::new(Recovery::Strict, ())`), and right for languages without
 /// command syntax; [`ScopesCommandResolver`]
 /// resolves every command through the state's scope stack under one fixed callable
@@ -1005,7 +1005,7 @@ impl<R: fmt::Debug, O: SourceOrigin> fmt::Debug for StdParseDriver<R, O> {
 /// A successful command resolution (the payload of [`CommandResolution::Resolved`]):
 /// which invocation form the command resolved to, and the behavior spec to drive its
 /// parse — exactly what the dispatch loop needs to build an
-/// [`Invocation`](crate::constructs::Invocation) (the core cannot know a preset's type
+/// [`Invocation`](crate::core::constructs::Invocation) (the core cannot know a preset's type
 /// ids).
 pub struct ResolvedCallable<L: Lang> {
     /// The invocation form (latexlike: macro / environment / …).
@@ -1058,7 +1058,7 @@ pub enum CommandResolution<L: Lang> {
     /// Resolution failed *operationally* — a definition provider errored while
     /// answering the query (a broken or unavailable source), as opposed to a clean
     /// miss. Diagnosed as a distinct condition
-    /// ([`CommandResolutionFailed`](crate::constructs::CommandResolutionFailed)) so
+    /// ([`CommandResolutionFailed`](crate::core::constructs::CommandResolutionFailed)) so
     /// tooling can tell "command unknown" from "resolver broken"; recovery is the same
     /// span-backed chars fallback.
     Failed {
@@ -1072,14 +1072,14 @@ pub enum CommandResolution<L: Lang> {
 /// `callable_type` — the single home for every driver's
 /// [`resolve_command`](ParseDriver::resolve_command) that dispatches to the state's
 /// scope stack (the latexlike preset and the test langs), so query construction and
-/// the miss/failure detail policy live in one place rather than drifting per copy.
+/// the miss/failure detail policy are written once rather than duplicated per driver.
 /// [`ScopesCommandResolver`] is its one-line packaging as the [`CommandResolver`]
 /// strategy for [`StdParseDriver`].
 ///
 /// Builds a [`CallableQuery`] with
-/// [`CallableSyntax::Command`](crate::scopes::CallableSyntax::Command) (the token's
+/// [`CallableSyntax::Command`](crate::core::specs::CallableSyntax::Command) (the token's
 /// fired escape character), consults
-/// [`ScopeStack::retrieve_spec`](crate::scopes::ScopeStack::retrieve_spec), and maps
+/// [`ScopeStack::retrieve_spec`](crate::core::specs::ScopeStack::retrieve_spec), and maps
 /// the outcome: a hit is [`Resolved`](CommandResolution::Resolved); a clean miss is
 /// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers —
 /// and, where the scopes advertise their symbols, a **did-you-mean** hint — as
@@ -1089,11 +1089,11 @@ pub enum CommandResolution<L: Lang> {
 /// caller-contract violation — yields `Unresolved { detail: None }`.
 ///
 /// **The did-you-mean detail** scans the providers' advertised definitions
-/// ([`SpecsProvider::iter_symbols`](crate::scopes::SpecsProvider::iter_symbols),
+/// ([`SpecsProvider::iter_symbols`](crate::core::specs::SpecsProvider::iter_symbols),
 /// under the queried callable type and the state's current mode) for near-misses
 /// of the unresolved name: a definition registered *with* its escape character
 /// (`\greet` instead of `greet` — the registration trap
-/// [`Package::insert`](crate::scopes::Package::insert)'s contract warns about) is
+/// [`Package::insert`](crate::core::specs::Package::insert)'s contract warns about) is
 /// called out explicitly, and small-edit-distance names are suggested. Providers
 /// that cannot enumerate are skipped, and an in-stack fallback provider makes
 /// resolution *succeed*, so the miss path — hints included — never runs there

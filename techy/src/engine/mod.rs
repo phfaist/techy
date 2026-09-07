@@ -60,9 +60,9 @@ pub use language::{Language, ParseSetup};
 /// The stack is what lets a reported problem say which group, argument, or
 /// environment the parser was inside. Frames are pushed and popped at every descent
 /// by
-/// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame), and
+/// [`ParseContext::with_frame`](crate::core::constructs::ParseContext::with_frame), and
 /// [`ParserSession::snapshot_frames`] copies the live stack into
-/// [`TraceFrame`]s — which no longer mention the language type `L` — whenever a
+/// [`TraceFrame`]s — which are not generic over the language type `L` — whenever a
 /// condition is recorded.
 ///
 /// Building a frame allocates nothing (only `Arc` reference counts change), because a
@@ -213,20 +213,20 @@ impl<L: Lang> core::error::Error for SessionDeriveError<L> {
 /// [`finish`](ParserSession::finish), which freezes it into a [`ParseResult`]. It is
 /// the only mutable part of a parse — trees, states, and specs are all immutable —
 /// and construct parsers reach it as
-/// [`ParseContext::session`](crate::constructs::ParseContext::session).
+/// [`ParseContext::session`](crate::core::constructs::ParseContext::session).
 ///
 /// [`diagnostics`](ParserSession::diagnostics) and [`ext`](ParserSession::ext) are
 /// public fields, so a parser can record a diagnostic or update the language's own
 /// per-parse data directly. The node builder is deliberately private: nodes are
 /// staged only through
-/// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node), which
+/// [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node), which
 /// creates the node extension as it goes, so no parser can stage a node with its
 /// extension left unpopulated. Read staged nodes back with
-/// [`ParseContext::staged_nodes`](crate::constructs::ParseContext::staged_nodes).
+/// [`ParseContext::staged_nodes`](crate::core::constructs::ParseContext::staged_nodes).
 ///
 /// Most programs never touch a session: [`Language::parse`] creates and finishes one.
 /// Construct it directly when driving construct parsers yourself, over a
-/// [`ParseContext`](crate::constructs::ParseContext) you built.
+/// [`ParseContext`](crate::core::constructs::ParseContext) you built.
 pub struct ParserSession<L: Lang> {
     /// The staging node builder (crate-internal; see the type docs).
     pub(crate) builder: NodeTreeBuilder<L>,
@@ -253,7 +253,7 @@ pub struct ParserSession<L: Lang> {
     group_interior_memo: GroupInteriorMemo<L>,
     /// The live parse-frame stack, outermost first:
     /// maintained exclusively by
-    /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame)
+    /// [`ParseContext::with_frame`](crate::core::constructs::ParseContext::with_frame)
     /// (closure-scoped push/pop) and snapshotted — innermost first — into every
     /// condition the recover funnel records. Private: the push/pop balance is an
     /// invariant.
@@ -261,17 +261,17 @@ pub struct ParserSession<L: Lang> {
     /// The live **enclosing-state stack** ([`ParsingStateStack`]): the states the
     /// parse descended through, pushed/popped at the same descent points as the
     /// frame stack — maintained exclusively by
-    /// [`ParseContext::with_parsing_state`](crate::constructs::ParseContext::with_parsing_state)
+    /// [`ParseContext::with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state)
     /// (closure-scoped push/pop) and lent by reference to the driver's
     /// event-lowering hook ([`ParseDriver::resolve_state_event`]) inside
-    /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state).
+    /// [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state).
     /// The engine retains exactly these states implicitly anyway (leaving a scope
     /// structurally restores the outer `Arc`) — the stack only materializes them,
     /// and it is dropped with the session: no ancestry data survives into parsed
     /// material. Private: the push/pop balance is an invariant.
     state_stack: ParsingStateStack<L>,
     /// The per-parse [`StdDescentGuard`] instance, consulted by
-    /// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct)
+    /// [`ParseContext::parse_construct`](crate::core::constructs::ParseContext::parse_construct)
     /// before every descent. [`ParseSetup::parse`] installs it eagerly at
     /// parse entry (through
     /// [`install_descent_guard`](ParserSession::install_descent_guard)); a
@@ -302,7 +302,7 @@ impl<L: Lang> ParserSession<L> {
     /// Installs the guard that caps how deeply this parse may nest.
     ///
     /// [`ParseSetup::parse`] does this for you. Call it yourself when driving
-    /// construct parsers over a [`ParseContext`](crate::constructs::ParseContext) you
+    /// construct parsers over a [`ParseContext`](crate::core::constructs::ParseContext) you
     /// built: create the guard with [`DescentGuard::init`] on the thread that will
     /// parse, and install it before parsing starts.
     ///
@@ -315,7 +315,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Ask the parse's guard whether one more descent may start —
-    /// [`parse_construct`](crate::constructs::ParseContext::parse_construct)'s
+    /// [`parse_construct`](crate::core::constructs::ParseContext::parse_construct)'s
     /// pre-descent hook, creating the default-configured guard lazily when none
     /// was installed.
     pub(crate) fn enter_descent(
@@ -335,9 +335,9 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Push onto the live enclosing-state stack — called only by
-    /// [`ParseContext::with_parsing_state`](crate::constructs::ParseContext::with_parsing_state)
+    /// [`ParseContext::with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state)
     /// (and the event-lowering lend in
-    /// [`derive_state`](crate::constructs::ParseContext::derive_state)), whose
+    /// [`derive_state`](crate::core::constructs::ParseContext::derive_state)), whose
     /// closure scoping guarantees the matching pop.
     pub(crate) fn push_state(&mut self, state: Arc<ParsingState<L>>) {
         self.state_stack.push(state);
@@ -355,7 +355,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Push a live traceback frame — called only by
-    /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame), whose
+    /// [`ParseContext::with_frame`](crate::core::constructs::ParseContext::with_frame), whose
     /// closure scoping guarantees the matching [`pop_frame`](ParserSession::pop_frame).
     pub(crate) fn push_frame(&mut self, frame: Frame<L>) {
         self.frames.push(frame);
@@ -375,7 +375,7 @@ impl<L: Lang> ParserSession<L> {
     /// [`ParseError::with_frames`](crate::error::ParseError::with_frames).
     ///
     /// The live stack itself changes only through
-    /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame).
+    /// [`ParseContext::with_frame`](crate::core::constructs::ParseContext::with_frame).
     pub fn snapshot_frames(&self) -> Vec<TraceFrame<L::SourceOrigin>> {
         self.frames.iter().rev().map(Frame::render).collect()
     }
@@ -395,7 +395,7 @@ impl<L: Lang> ParserSession<L> {
     /// method: it supplies the driver and, first, turns context-dependent events into
     /// ordinary patches. This method performs no such event lowering.
     ///
-    /// [`ParseContext::derive_state`]: crate::constructs::ParseContext::derive_state
+    /// [`ParseContext::derive_state`]: crate::core::constructs::ParseContext::derive_state
     ///
     /// # Memoization
     ///
@@ -429,9 +429,9 @@ impl<L: Lang> ParserSession<L> {
     /// On either error no transition is committed and nothing is memoized. On the
     /// `Derive` arm [`observe_transition`](ParseDriver::observe_transition) has **not**
     /// run, so a caller that tolerates the failure and continues under
-    /// [`DeriveError::recovered`](crate::state::DeriveError) is responsible for
+    /// [`DeriveError::recovered`](crate::core::DeriveError) is responsible for
     /// reporting that transition itself — which the
-    /// [`ParseContext`](crate::constructs::ParseContext) convenience method does on
+    /// [`ParseContext`](crate::core::constructs::ParseContext) convenience method does on
     /// its recovery path.
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived_state(
@@ -519,7 +519,7 @@ impl<L: Lang> ParserSession<L> {
     ///
     /// On either error nothing is memoized, and on the `Derive` arm no transition was
     /// reported — as in [`derived_state`](ParserSession::derived_state). The
-    /// derivation error's [`recovered`](crate::state::DeriveError::recovered) state
+    /// derivation error's [`recovered`](crate::core::DeriveError::recovered) state
     /// still has the interior invariant applied, because the forced
     /// `expecting_group_close` is an override rather than an operation, so a caller
     /// that tolerates the failure can safely parse the interior under it.
@@ -581,7 +581,7 @@ impl<L: Lang> ParserSession<L> {
     /// open — the parse traceback.
     ///
     /// Construct parsers call
-    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead.
+    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover) instead.
     /// That entry point boxes the condition and passes it to [`ParseDriver::recover`],
     /// which applies [`refine_diagnostic`](ParseDriver::refine_diagnostic) — needing
     /// the context's state — and its recovery policy before reaching this method.
@@ -825,7 +825,7 @@ mod tests {
         assert_error::<ParseError>();
     }
 
-    /// A toy tier-2 construct parser: reads one `Char` token via the context, stages a
+    /// A toy construct parser: reads one `Char` token via the context, stages a
     /// `Chars` node, returns no delta. Exercises the full 6.1 plumbing —
     /// `ParseContext` over a `TokenListReader`, staging through the session's builder,
     /// `finish` into a `ParseResult`.
@@ -1147,7 +1147,7 @@ mod tests {
         }
     }
 
-    /// ObserverLang's driver: counts every transition observation (the hook lives on the driver, not on `Lang`).
+    /// ObserverLang's driver: counts every transition observation (the hook is on the driver, not on `Lang`).
     #[derive(Debug, Clone, Copy, Default)]
     struct ObserverDriver;
     impl ParseDriver<ObserverLang> for ObserverDriver {

@@ -417,7 +417,7 @@ impl<L: Lang, A> NodeTree<L, A> {
     /// - the root (index 0) has no siblings, so a range containing it answers `Some`
     ///   only as `0..1`;
     /// - an **empty** in-bounds range answers `Some` — empty runs are real values
-    ///   (the accessors hand them out for childless nodes and empty regions);
+    ///   (the accessors return them for childless nodes and empty regions);
     /// - everything else answers `None`: out-of-bounds or inverted ranges, and
     ///   in-bounds ranges that cross from one parent's children into another's.
     ///

@@ -1157,7 +1157,7 @@ mod tests {
     /// must handle — selected by the character at the scanned position, so that one
     /// language serves all the cases: `~`, `~~`, `---` and `&` match; `-` alone is a
     /// filter character the hook then declines; `!` answers a zero-width match, which
-    /// the [`SpecialsMatch::end`](crate::token::SpecialsMatch::end) documentation rules
+    /// the [`SpecialsMatch::end`](crate::core::token::SpecialsMatch::end) documentation rules
     /// out; `?` reports a condition at a span inside the content; `;` and `:` report one
     /// at a span the content does not have.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

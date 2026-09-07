@@ -8,11 +8,12 @@
 //!
 //! Core cannot make the second check itself. The invocation-syntax payload type
 //! belongs to the language, so core has no way to read it; the checks for the
-//! preset's own payload therefore live here, with the preset that defines it.
+//! preset's own payload are therefore checked in this module, next to the preset that
+//! defines it.
 //!
 //! This is an in-crate test oracle, not something a finished tree is required to
 //! satisfy in general. The public check, and the one integration tests use, is
-//! [`validate_tree`](crate::node::validate_tree), which never covered the payload.
+//! [`validate_tree`](crate::core::node::validate_tree), which never covered the payload.
 // Mechanism mirror of the core checker: `pub(crate)` + `#[cfg(test)]`
 // (cf. D-plan-12 Option B).
 
@@ -41,7 +42,7 @@ use super::lang::LatexlikeLang;
 ///
 /// The payload checks are byte accounting, so they apply only to a language that
 /// obeys span tiling
-/// ([`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING)). For a
+/// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)). For a
 /// language declaring `false` this is exactly [`check_tree_invariants`], which there
 /// checks the all-trees law alone: a recorded spelling may be owned text, and the
 /// node's span need not contain the trigger's bytes at all.

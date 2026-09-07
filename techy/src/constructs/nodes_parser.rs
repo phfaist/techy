@@ -387,7 +387,7 @@ pub enum StopCause<L: Lang> {
         span: SourceSpan<L::SourceOrigin>,
         /// The stream position just past the matched token (its post-space
         /// included) — where a caller that wants the token skipped repositions the
-        /// reader ([`move_to_position`](crate::token::TokenReader::move_to_position)),
+        /// reader ([`move_to_position`](crate::core::token::TokenReader::move_to_position)),
         /// whether or not the condition consumed it.
         after: StreamPosition<L>,
     },
@@ -1675,7 +1675,7 @@ mod tests {
     }
 
     /// Test lang resolving `Command` tokens against the state's libraries under the
-    /// `CT_MACRO` form (the hook lives on its driver since 7.2).
+    /// `CT_MACRO` form (the resolution hook is on the driver).
     #[derive(Debug, Clone, Copy)]
     struct CmdLang;
     impl Lang for CmdLang {
@@ -1774,8 +1774,8 @@ mod tests {
         }
     }
 
-    /// A library defining each of `names` as a zero-arg `CT_MACRO` callable (one shared
-    /// spec — flyweight).
+    /// A library defining each of `names` as a zero-arg `CT_MACRO` callable (all of them
+    /// sharing one spec value).
     fn macro_library<L: Lang<CallableTypeId = u32> + 'static>(names: &[&str]) -> Arc<Package<L>> {
         let mut lib = Package::new("test-macros");
         let spec: Arc<dyn CallableSpec<L>> = Arc::new(StdCallableSpec::default());
@@ -5632,8 +5632,8 @@ mod tests {
         assert_eq!(error.data().identifier(), ScopeOpFailed::IDENTIFIER);
     }
 
-    /// A lang whose specials hooks fold over the state's scope stack — the standard
-    /// preset wiring of the 7.3 provider-based specials.
+    /// A lang whose specials hooks consult the state's scope stack — the standard
+    /// preset wiring of provider-based specials.
     #[derive(Debug, Clone, Copy)]
     struct StackSpecialsLang;
     impl Lang for StackSpecialsLang {

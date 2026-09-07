@@ -152,7 +152,7 @@ impl fmt::Display for UnclosedGroup {
 ///    discarded with the descent; the hook is the last reader.
 /// 4. The **interior's merged record**
 ///    ([`NodesOutcome::after_effects`](super::NodesOutcome::after_effects)), passed **by
-///    value** so the hook may filter it in place and hand the same box back rather than
+///    value** so the hook may filter it in place and return the same box rather than
 ///    cloning.
 ///
 /// The return is the group's after-effect for its caller — `None` for the ordinary

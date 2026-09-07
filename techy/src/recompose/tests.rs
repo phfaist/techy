@@ -591,7 +591,7 @@ fn op_misuse_answers_the_mirrored_errors() {
 
 #[test]
 fn recompose_children_folds_a_nodes_children_through_the_passed_recomposer() {
-    /// Groups fold their children through the op — self-passing, from inside
+    /// Groups recompose their children through the op — self-passing, from inside
     /// `recompose_node` — and parenthesize the result; every other kind goes
     /// through the core reemitter (so the group's own delimiters are dropped).
     struct GroupChildren;
@@ -626,7 +626,7 @@ fn recompose_children_folds_a_nodes_children_through_the_passed_recomposer() {
     assert_eq!(recompose(&tree, (), &mut GroupChildren).unwrap(), "a()b");
 }
 
-/// Fold the three-slot fixture's callable through
+/// Recompose the three-slot fixture's callable through
 /// [`RecomposeContext::recompose_children`] with the given widening choices;
 /// chars children emit their text.
 fn children_op_with_scope(attached: bool, hidden: bool) -> String {
@@ -671,9 +671,9 @@ fn the_children_op_mirrors_the_concat_scope_flags() {
 
 #[test]
 fn the_children_op_folds_through_whichever_recomposer_it_is_handed() {
-    /// Groups hand their children to a *different* recomposer (the core
+    /// Groups pass their children to a *different* recomposer (the core
     /// reemitter) instead of `self`; chars this recomposer sees itself are
-    /// shouted, so the output shows which recomposer folded what.
+    /// shouted, so the output shows which recomposer produced what.
     struct Delegating;
     impl<A> Recomposer<Latexlike, A> for Delegating {
         type State = ();

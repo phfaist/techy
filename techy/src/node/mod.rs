@@ -656,8 +656,8 @@ mod tests {
         assert_eq!(map[&b0], "b");
     }
 
-    /// `get()` rejects an in-range foreign id in **every** build (the tag check is
-    /// no longer debug-only), and layout-preserving copies (`clone`, `materialize`,
+    /// `get()` rejects an in-range foreign id in **every** build (the tag check is not
+    /// debug-only), and layout-preserving copies (`clone`, `materialize`,
     /// `annotate`) share the tag — their ids are interchangeable.
     #[test]
     fn get_rejects_foreign_ids_and_copies_share_the_tag() {
@@ -1250,7 +1250,7 @@ mod tests {
     }
 
     /// The slot-side symmetry of `ArgumentExt`: per-instance derived
-    /// data about one content region (tabular cells, enumerate items) rides on the
+    /// data about one content region (tabular cells, enumerate items) is stored on the
     /// `ParsedSlot` record itself, not on the whole-callable ext.
     #[test]
     fn parsed_slot_carries_ext() {

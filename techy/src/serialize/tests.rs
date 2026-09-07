@@ -22,11 +22,12 @@ use super::{
 // --- the two test langs ---------------------------------------------------------------
 
 /// A language that NEVER implements `SerializableLang` — permanently, by design: it
-/// exists to pin the vacant-vtable behavior of the capability methods (cf. [§dd-dr:serialize-capability-traits]). Every
+/// exists to pin the vacant-vtable behavior of the capability methods. Every
 /// spec/provider trait object of this lang must still be built and usable for the
 /// non-serialization methods although `serialize_object` and the argument-spec pair
 /// can neither be called nor reached (no context value exists for this lang). Do not
 /// add a `SerializableLang` impl for it, ever: that would defeat the test.
+// Capability-trait design: cf. [§dd-dr:serialize-capability-traits].
 #[derive(Debug, Clone, Copy)]
 struct NeverSerializableLang;
 impl TrivialLang for NeverSerializableLang {}

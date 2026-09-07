@@ -217,7 +217,7 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
 /// [`temporary_group_rules`](crate::core::token::TokenRules::temporary_group_rules).
 /// Both describe what the *target* state was in the middle of expecting — which
 /// closing delimiter its own group descent was waiting for, which scoped delimiters
-/// were live in it — rather than its lexical context, and copying them here would
+/// were active in it — rather than its lexical context, and copying them here would
 /// plant one region's expectations in another. A state derived from this change
 /// inherits both from its own base as usual, and the next group descent installs its
 /// own expectation.
@@ -323,7 +323,7 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
 ///
 /// Build one with [`new`](LatexlikeDriver::new), which takes the one setting that has
 /// no sensible default — whether the parse is strict or tolerant
-/// ([`Recovery`]) — and hand it to [`Language::new`](crate::core::Language::new):
+/// ([`Recovery`]) — and pass it to [`Language::new`](crate::core::Language::new):
 ///
 /// ```
 /// use techy::core::{Language, ParsingState};
@@ -556,8 +556,8 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
 ///
 /// The core driver trait knows nothing about environments, since an environment is a
 /// preset concept — the `\begin{name} … \end{name}` composition that
-/// [`BeginSpec`](super::BeginSpec) puts together. The hooks that need to talk about
-/// one live here instead.
+/// [`BeginSpec`](super::BeginSpec) puts together. The hooks that need to name one are
+/// declared by this trait instead.
 ///
 /// [`LatexlikeLang`] requires this trait of a language's driver, so the preset's
 /// parsers reach these hooks directly on

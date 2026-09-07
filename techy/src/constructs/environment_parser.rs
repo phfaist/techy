@@ -430,7 +430,7 @@ pub fn read_rigid_name_group<L: Lang>(
 /// whitespace anywhere, rigid — up to the close delimiter of `rule`.
 ///
 /// The name spans several tokens, so for a language with
-/// [`OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false` its
+/// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false` its
 /// characters are accumulated as they are read and recorded on the group
 /// ([`NameGroup::with_name_as_read`]): there the span between the two positions is only
 /// what the reader describes for the stretch, and the name drives lookups, node data
@@ -675,8 +675,8 @@ pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// The span of the invocation name as written (`align` in `\begin{align}`), when
     /// the caller has one: it titles the body's traceback frame (`environment ‘align’`).
     /// Without it the frame falls back to the generic "environment body".
-    /// (`invocation_name` itself is a borrowed `&str` and cannot ride in the
-    /// allocation-free live frame — a span can.)
+    /// (`invocation_name` itself is a borrowed `&str`, which the allocation-free frame
+    /// cannot hold; a span can.)
     invocation_name_span: Option<SourceSpan<L::SourceOrigin>>,
 }
 
@@ -2298,7 +2298,7 @@ mod tests {
     }
 
     /// Drive an `EnvironmentBodyParser` for the environment `A` directly over
-    /// `content`, and hand the produced body (and the entry state) back.
+    /// `content`, and return the produced body together with the entry state.
     fn run_body(
         content: &str,
         state: &Arc<ParsingState<EnvLang>>,

@@ -11,7 +11,7 @@
 //! Assembling a slot from the result stays the calling invocation parser's job: both
 //! methods return an [`AttachedSourceOutcome`] — content nodes plus the included
 //! run's merged after-effect record — and the caller stages the nodes (for `\input`,
-//! as an [`Attached`](crate::node::SlotRole::Attached) slot of its callable node)
+//! as an [`Attached`](crate::core::node::SlotRole::Attached) slot of its callable node)
 //! and decides whether the record continues past the inclusion.
 //!
 //! The reference itself is the caller's to read, and the rule on it is one line: an
@@ -249,7 +249,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// `\input`-variant spec and framework:
     ///
     /// - no resolver configured on the driver
-    ///   ([`ParseDriver::source_resolver`](crate::engine::ParseDriver::source_resolver)
+    ///   ([`ParseDriver::source_resolver`](crate::core::ParseDriver::source_resolver)
     ///   is `None`) → [`NoSourceResolver`];
     /// - the resolver returned an error → [`UnresolvableSourceReference`]
     ///   (reference + the live [`ResolveError`], cause chain included).
@@ -300,7 +300,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
 
 /// Condition: an `\input`-style construct referenced an external source, but no
 /// [`SourceResolver`](crate::source::SourceResolver) is configured — the driver's
-/// [`source_resolver`](crate::engine::ParseDriver::source_resolver) accessor
+/// [`source_resolver`](crate::core::ParseDriver::source_resolver) accessor
 /// returned `None` ("this language resolves nothing"). Raised by
 /// [`ParseContext::attach_source_reference`]; distinct from
 /// [`UnresolvableSourceReference`] (a configured resolver that *failed*) — the

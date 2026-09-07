@@ -315,7 +315,7 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// carries no frames of its own. Carry
     /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
     /// behavior's own code,
-    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) for a
     /// violated library contract, or a document condition for a diagnosis made
     /// deliberately (a behavior reading malformed argument data). An infallible
     /// implementation wraps its delta in `Ok(...)` and that is the only change.
@@ -340,7 +340,7 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// which the composition routes through
     /// [`LatexlikeParseDriver::environment_after_effects`] — the environment's escape
     /// channel. A takeover body parser that runs a content loop fills them honestly
-    /// from its [`NodesOutcome`](crate::constructs::NodesOutcome); one that reports
+    /// from its [`NodesOutcome`](crate::core::constructs::NodesOutcome); one that reports
     /// `None` and its entry state (a raw body — [`VerbatimBodyParser`]) lets nothing
     /// escape.
     fn make_body_parser<'p>(
@@ -551,7 +551,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 /// serialized form, so an environment spec is serialized by *identity* — a reference
 /// to the provider that defined it plus its key — which needs the [`SpecProvenance`]
 /// stamp a shared package hands out ([`with_provenance`](EnvironmentSpec::with_provenance);
-/// [`Package::define_environment`](crate::scopes::Package::define_environment) stamps
+/// [`Package::define_environment`](crate::core::specs::Package::define_environment) stamps
 /// automatically in a shared package). An unstamped environment spec cannot be
 /// serialized (the error names the type).
 pub struct EnvironmentSpec<LLL: LatexlikeLang = Latexlike> {
@@ -583,7 +583,7 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     }
 
     /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
-    /// package hands out ([`Package::provenance_for`](crate::scopes::Package::provenance_for))
+    /// package hands out ([`Package::provenance_for`](crate::core::specs::Package::provenance_for))
     /// — so that the spec can be serialized by identity. Replaces a previous stamp.
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> EnvironmentSpec<LLL> {
         self.provenance = Some(provenance);
@@ -634,9 +634,9 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 /// ordinary [`Macro`](super::CallableType::Macro) entry of the
 /// [`builtin_package`](super::builtin_package) (shadowable and unloadable like any
 /// definition). Its parser is the preset's environment composition, which reads the
-/// rigid `\begin{name}` syntax ([`read_rigid_name_group`](crate::constructs::read_rigid_name_group)),
+/// rigid `\begin{name}` syntax ([`read_rigid_name_group`](crate::core::constructs::read_rigid_name_group)),
 /// resolves the environment's own definition, parses its declared arguments and its
-/// body ([`EnvironmentBodyParser`](crate::constructs::EnvironmentBodyParser)), and
+/// body ([`EnvironmentBodyParser`](crate::core::constructs::EnvironmentBodyParser)), and
 /// stages the environment node.
 ///
 /// The spec carries the **terminator command's name** — the `end` of `\end{name}` —
@@ -828,11 +828,12 @@ impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
     }
 }
 
-/// The environment composition (a tier-2 temporary, [`BeginSpec`]'s parser):
+/// The environment composition, a temporary construct parser built per invocation by
+/// [`BeginSpec`]:
 /// scaffolding, resolution, arguments, body, node assembly — assembled from the
 /// public core building blocks (module docs). The composition owns **all
 /// scanning**: it validates the trigger, reads the rigid name group
-/// ([`read_rigid_name_group`]), parses arguments and body, and hands the
+/// ([`read_rigid_name_group`]), parses arguments and body, and passes the
 /// collected facts to the environment record's constructor
 /// ([`EnvironmentSyntax::from_parsed`]) once, at staging time.
 ///
@@ -840,7 +841,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
 ///
 /// This parser is dispatched for the `\begin` **command** ([`BeginSpec`] is a
 /// macro-shaped entry), and its trigger must be a
-/// [`Command`](crate::token::TokenKind::Command) token — a different trigger
+/// [`Command`](crate::core::token::TokenKind::Command) token — a different trigger
 /// shape (a specials-dispatched begin, say) is a documented-contract violation
 /// and aborts as an implementation error. A custom trigger shape needs its own
 /// composition *and* its own `Env` record type: this composition's begin facts

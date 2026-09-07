@@ -3,7 +3,7 @@
 //! body-pushed item package, specials, math, comments, verbatim, paragraph breaks in
 //! both styles, `\input` across sources), the identity and self-contained spec forms,
 //! the reading environment (held providers and recipes), the instance-not-lookup
-//! guarantee ([§dd-dr:instance-not-lookup]), scopes and fallback providers, the failure surface (unstamped
+//! guarantee, scopes and fallback providers, the failure surface (unstamped
 //! specs, dropped providers, unregistered identifiers, missing providers), a hostile
 //! state, determinism, and — under the `serde` feature — the vocabulary parity between
 //! the value conversions and the serde derives plus a pinned JSON rendering.

@@ -116,7 +116,7 @@ const EVERY_EDGE: [TokenEdge; 5] = [
 /// stream over that source: one [`EndOfStream`](TokenKind::EndOfStream) token and no
 /// content. Tests build the reader they mean with [`ScriptedReader::new`] and drive
 /// parsers with it directly, or return it from a
-/// [`ParseDriver::make_token_reader`](crate::engine::ParseDriver::make_token_reader)
+/// [`ParseDriver::make_token_reader`](crate::core::ParseDriver::make_token_reader)
 /// override that holds the script.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ScriptedTokenization;

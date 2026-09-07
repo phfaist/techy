@@ -25,16 +25,17 @@
 //!
 //! Three contracts hold for everything in this module.
 //!
-//! # The two-tier ownership model
+//! # Temporaries and stored behavior
 //!
-//! Construct parsers are **temporaries** (tier 2): each is constructed with its
-//! per-use configuration where it is needed, keeps working state in its own fields
+//! Construct parsers are **temporaries**: each is constructed with its per-use
+//! configuration where it is needed, keeps working state in its own fields
 //! ([`ConstructParser::parse`] takes `&mut self`), may freely borrow, and is dropped
-//! when its construct's parse ends — construct parsers are never stored in specs.
-//! *Stored* behavior objects (tier 1 — specs and [`ArgumentParser`]s) are
-//! `Arc`-shared, immutable, `Send + Sync` by contract, and receive every per-use
-//! input as arguments. Closures (such as stop predicates) are thereby confined to
-//! tier 2; specs stay data.
+//! when its construct's parse ends. A construct parser is never stored in a spec.
+//!
+//! **Stored** behavior objects — specs and [`ArgumentParser`]s — are the opposite:
+//! `Arc`-shared, immutable, `Send + Sync` by contract, and given every per-use input
+//! as an argument. Closures (such as stop predicates) therefore belong to construct
+//! parsers only; specs stay data.
 //!
 //! # State threading: the caller applies deltas
 //!

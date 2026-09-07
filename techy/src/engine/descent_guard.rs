@@ -5,19 +5,19 @@
 //! group interior, an argument, an environment body) runs another construct parser
 //! over the same input. One such step is a **descent**, and every descent goes
 //! through the single entry point
-//! [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct).
+//! [`ParseContext::parse_construct`](crate::core::constructs::ParseContext::parse_construct).
 //! Each descent consumes call stack, so input nested deeply enough — pathological or
 //! hostile — would otherwise crash the process by exhausting the stack.
 //!
 //! The guard is the defense: a small per-run object that is asked before every
 //! descent whether the run may go one level deeper. A refusal aborts the parse
 //! with an ordinary error
-//! ([`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded)) instead of
+//! ([`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded)) instead of
 //! crashing — under any recovery policy, since past the limit there is no safe way
 //! to continue.
 //!
 //! The consumer traversals are bounded the same way: trees built by hand through
-//! a [`NodeTreeBuilder`](crate::node::NodeTreeBuilder) can be deeper than any
+//! a [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder) can be deeper than any
 //! parse-side limit, so the traversal drivers
 //! ([`TreeWalker`](crate::visit::TreeWalker),
 //! [`TreeRestager`](crate::transform::TreeRestager),
@@ -53,7 +53,7 @@ use alloc::string::String;
 /// One guard value is created per run. A parse's guard is stored on the
 /// [`ParserSession`](super::ParserSession) and driven from the single descent entry
 /// point,
-/// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct).
+/// [`ParseContext::parse_construct`](crate::core::constructs::ParseContext::parse_construct).
 /// A traversal's guard is created by its driver
 /// ([`TreeWalker`](crate::visit::TreeWalker) and its transform and recompose
 /// siblings) and wraps the per-node recursion.
@@ -87,10 +87,10 @@ pub trait DescentGuard: Sized {
     /// - `Ok(None)`: descend.
     /// - `Ok(Some(warning))`: descend, and surface `warning` — a parse records a
     ///   warning-severity diagnostic
-    ///   ([`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching)),
+    ///   ([`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching)),
     ///   a traversal notifies its visitor (`observe_descent_warning`).
     /// - `Err(refusal)`: do not descend — a parse aborts with
-    ///   [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded) under
+    ///   [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded) under
     ///   any recovery policy, a traversal with its own
     ///   `DescentLimitExceeded`-style error value.
     ///   [`exit`](DescentGuard::exit) is **not** called for a refused descent.
@@ -103,7 +103,7 @@ pub trait DescentGuard: Sized {
 }
 
 /// A guard's answer "do not descend": the run aborts — a parse with
-/// [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), a traversal
+/// [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), a traversal
 /// with its own `DescentLimitExceeded`-style error value — carrying
 /// `detail` as its message body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,8 +114,8 @@ pub struct DescentRefusal {
 
 /// A guard's early warning "descend, but the limit is getting close": a parse
 /// records it as a warning-severity
-/// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching)
-/// diagnostic, a traversal hands it to its visitor's `observe_descent_warning`
+/// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching)
+/// diagnostic, a traversal passes it to its visitor's `observe_descent_warning`
 /// hook; the run continues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentWarning {
@@ -139,7 +139,7 @@ pub struct DescentWarning {
 /// [`StdDescentGuard::DEFAULT_STACK_BUDGET`] bytes. It behaves differently from the
 /// same budget chosen explicitly, because the guard knows that nothing was
 /// configured: it records the one-time
-/// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching) warning
+/// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching) warning
 /// once half the budget is used, and its refusal message names the
 /// `with_descent_guard_init` method. The default budget is deliberately tight — in
 /// unoptimized (debug) builds it allows only on the order of ten parse nesting
@@ -280,10 +280,10 @@ impl Default for StdDescentGuardInit {
 /// it is a fixed budget of
 /// [`DEFAULT_STACK_BUDGET`](StdDescentGuard::DEFAULT_STACK_BUDGET) bytes. At the cap
 /// the next descent is refused, which ends the run with an ordinary error (for a
-/// parse, [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), under
+/// parse, [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), under
 /// any recovery policy) rather than letting it crash the process by exhausting the
 /// call stack. Under the default configuration the guard also reports a one-time
-/// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching) warning
+/// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching) warning
 /// once half the budget is used, so that the cap makes itself known before it is hit.
 ///
 /// The byte-budget modes **estimate** stack use by address distance: at

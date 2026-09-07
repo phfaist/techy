@@ -93,7 +93,7 @@ pub use provenance::{DefinitionKey, SpecProvenance};
 /// The syntax through which a callable invocation was recognized.
 ///
 /// Carried on a [`CallableQuery`] so resolvers can disambiguate between coexisting
-/// command syntaxes — with several [`CommandRule`](crate::token::CommandRule)s in scope,
+/// command syntaxes — with several [`CommandRule`](crate::core::token::CommandRule)s in scope,
 /// `\foo` and `#foo` both tokenize as `Command { name: "foo" }`, and the escape character
 /// is *not* recoverable from the token alone (a resolver has no access to the source
 /// content behind the token's span).
@@ -101,7 +101,7 @@ pub use provenance::{DefinitionKey, SpecProvenance};
 pub enum CallableSyntax {
     /// A command token: escape character + name (`\foo`).
     Command {
-        /// The escape character that fired ([`CommandRule::escape_char`](crate::token::CommandRule)).
+        /// The escape character that fired ([`CommandRule::escape_char`](crate::core::token::CommandRule)).
         escape_char: char,
     },
     /// A specials trigger (queried from inside a `Lang::scan_specials` implementation,
@@ -117,7 +117,7 @@ pub enum CallableSyntax {
 /// Scopes and packages look a callable up by **name and callable syntax** (e.g. the
 /// escape character that fired); they never see the token. A language that must
 /// dispatch on token details does so in
-/// [`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command),
+/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command),
 /// which receives the token and its reader, before or instead of consulting the
 /// scopes.
 pub struct CallableQuery<'a, L: Lang> {
@@ -171,7 +171,7 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, L> {
 ///
 /// A provider error is an *operational* failure (misconfiguration, extension bug, backing
 /// I/O), never a source condition: source-shaped failures of the specials scan travel as
-/// [`TokenError`](crate::token::TokenError)s instead, and "this name is an error" is
+/// [`TokenError`](crate::core::token::TokenError)s instead, and "this name is an error" is
 /// expressed as an ordinary [`ErrorCallableSpec`] definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -229,11 +229,11 @@ impl core::error::Error for ScopeStackError {
 }
 
 /// One [`ScopeOp`] failed while a delta was applied — the per-op failure record
-/// collected by the fallible [`ParsingState::derived`](crate::state::ParsingState::derived)
-/// into a [`DeriveError`](crate::state::DeriveError). Mechanical, not classified: the *caller* decides what a failure means —
+/// collected by the fallible [`ParsingState::derived`](crate::core::ParsingState::derived)
+/// into a [`DeriveError`](crate::core::DeriveError). Mechanical, not classified: the *caller* decides what a failure means —
 /// the in-parse derivation path treats it as a recoverable condition, reported
 /// through the recovery entry point
-/// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder applying a delta
+/// ([`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed)); an embedder applying a delta
 /// out of parse treats it as its own input error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -341,10 +341,10 @@ impl<L: Lang> fmt::Debug for DefinitionOp<L> {
 }
 
 /// One scope-stack operation of a state delta
-/// ([`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta)): stack-shape ops plus definition ops routed to a named
+/// ([`ParsingStateDelta::scope_ops`](crate::core::ParsingStateDelta)): stack-shape ops plus definition ops routed to a named
 /// provider. Ops apply in delta order, each on the result of the previous; failures are
 /// collected per op (the rest still apply) and surface through the fallible
-/// [`derived()`](crate::state::ParsingState::derived).
+/// [`derived()`](crate::core::ParsingState::derived).
 ///
 /// Name-targeted ops address the **innermost** provider with that name.
 pub enum ScopeOp<L: Lang> {
@@ -524,7 +524,7 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableO
     /// (`pos <= content.len()`) and on a character boundary. A caller passing an
     /// invalid `pos` violates this contract; an implementation that indexes
     /// `content` with `pos` must answer with an `Err` carrying an
-    /// [`ImplementationError`](crate::constructs::ImplementationError) rather
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) rather
     /// than panic ([`Package`] does). The default body below and implementations
     /// that ignore `pos` answer `Ok(None)`.
     fn scan_specials(
@@ -1076,7 +1076,7 @@ impl<L: Lang> Package<L> {
     /// (`None` = every mode the package is visible in — the [`insert`](Package::insert)
     /// default). This is the fine gate under the package-level
     /// [`set_visible_modes`](Package::set_visible_modes): both must admit the mode. A
-    /// text-only accent and a math-only script can live in one loadable package.
+    /// text-only accent and a math-only script can be defined in one loadable package.
     pub fn insert_in_modes<M>(
         &mut self,
         callable_type: L::CallableTypeId,
@@ -1151,7 +1151,7 @@ impl<L: Lang> Package<L> {
     /// is the raw data accessor; mode checks apply only on the provider paths).
     ///
     /// **Specials are not reachable here.** They are keyed by **trigger**, not by
-    /// name, and live in their own store — `get` answers `None` for a specials
+    /// name, and are held in a separate store — `get` answers `None` for a specials
     /// definition even immediately after
     /// [`insert_specials`](Package::insert_specials) (whose `callable_type`
     /// parameter is what the *match* reports, not a lookup key here). To read
@@ -1920,7 +1920,7 @@ impl<L: Lang> ScopeStack<L> {
     /// enumerable definitions, not the open-ended fallback behavior. For the raw
     /// per-provider walk without dedup, iterate [`providers`](ScopeStack::providers)
     /// yourself. To enumerate *every* form, drive this once per type — via
-    /// [`ClosedVocabulary::ALL`](crate::state::ClosedVocabulary) where the language's
+    /// [`ClosedVocabulary::ALL`](crate::core::ClosedVocabulary) where the language's
     /// type vocabulary implements it.
     pub fn iter_symbols(
         &self,
@@ -1943,7 +1943,7 @@ impl<L: Lang> ScopeStack<L> {
     }
 
     /// Apply one [`ScopeOp`] — the primitive behind
-    /// [`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta). Name-targeted
+    /// [`ParsingStateDelta::scope_ops`](crate::core::ParsingStateDelta). Name-targeted
     /// ops address the innermost provider with that name; failures are reported, never
     /// silent (see the per-variant docs on [`ScopeOp`]). On a stack of a language that
     /// declares the scope stack absent, every op fails with

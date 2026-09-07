@@ -25,7 +25,7 @@
 //! [`GroupArgumentParser`](super::GroupArgumentParser) or
 //! [`CharsGroupArgumentParser`](super::CharsGroupArgumentParser) argument — and the
 //! staged node self-describes (name, spec, its own
-//! [`ParsedArguments`](crate::node::ParsedArguments) record). Dispatch routes through
+//! [`ParsedArguments`](crate::core::node::ParsedArguments) record). Dispatch routes through
 //! [`ParseDriver::make_invocation_parser`], so takeover specs and driver interception
 //! work as everywhere else. By-name reading is the extraction helper
 //! [`split_tack_on_fields`](crate::extract::split_tack_on_fields).

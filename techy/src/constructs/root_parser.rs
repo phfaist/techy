@@ -35,7 +35,7 @@ use super::{
 ///
 /// Starting from the context's state (the parse's initial state) it runs the content
 /// loop through [`ParseContext::parse_nodes`] under [`StopSpec::none`] — through the
-/// driver's [`make_nodes_parser`](crate::engine::ParseDriver::make_nodes_parser)
+/// driver's [`make_nodes_parser`](crate::core::ParseDriver::make_nodes_parser)
 /// factory, like every other content descent, so an override there applies to the
 /// root run too — and reacts to how each run ends:
 ///
@@ -65,14 +65,14 @@ use super::{
 /// descent**: the entry point calls [`ConstructParser::parse`] directly rather than
 /// through [`ParseContext::parse_construct`], so no descent-guard level and no
 /// traceback frame cover it. Its output is the tree's root ([`BuildId`]), which the
-/// entry point hands to [`ParserSession::finish`](crate::engine::ParserSession::finish);
+/// entry point hands to [`ParserSession::finish`](crate::core::ParserSession::finish);
 /// its pass-through delta is discarded. On entry, `cx.state` is the parse's initial
 /// state and the reader stands at the start of the source.
 ///
-/// [`ParseDriver::make_root_parser`]: crate::engine::ParseDriver::make_root_parser
-/// [`Language::parse`]: crate::engine::Language::parse
-/// [`ParseSetup::parse`]: crate::engine::ParseSetup::parse
-/// [`ParseSetup::with_root_parser`]: crate::engine::ParseSetup::with_root_parser
+/// [`ParseDriver::make_root_parser`]: crate::core::ParseDriver::make_root_parser
+/// [`Language::parse`]: crate::core::Language::parse
+/// [`ParseSetup::parse`]: crate::core::ParseSetup::parse
+/// [`ParseSetup::with_root_parser`]: crate::core::ParseSetup::with_root_parser
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RootNodesParser;
 

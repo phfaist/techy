@@ -288,13 +288,13 @@ pub struct ResolvedContent<O: SourceOrigin = Option<String>> {
     /// ([`Source::with_line_column_number_offsets`]), or `None` to keep that source's
     /// default.
     ///
-    /// A resolver that hands over only part of what it read — a file whose leading
+    /// A resolver that returns only part of what it read — a file whose leading
     /// front-matter block it consumed itself, say — sets this so that line numbers in
     /// diagnostics still match the original file. The value is the offset itself, not an
     /// increment: a resolver that removed `n` leading lines from 1-indexed content sets
     /// `1 + n`.
     ///
-    /// Byte offsets and spans stay relative to the content handed over; only line and
+    /// Byte offsets and spans stay relative to the content returned here; only line and
     /// column numbering shifts.
     pub line_number_offset: Option<usize>,
     /// The column number offset for the source built from this content, or `None` to keep
@@ -548,7 +548,7 @@ mod tests {
         }
     }
 
-    /// A resolver that hands over a suffix of what it read (a front-matter block it
+    /// A resolver that returns a suffix of what it read (a front-matter block it
     /// consumed itself) keeps line numbers true through the offset fields.
     #[test]
     fn resolver_offsets_reach_the_minted_source() {

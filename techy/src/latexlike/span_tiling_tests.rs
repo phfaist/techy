@@ -1,6 +1,6 @@
 //! Preset-side parse tests for a language whose reader serves one parse from **several
 //! sources** — a member of the latexlike family declaring
-//! [`Lang::OBEYS_SPAN_TILING`](crate::state::Lang::OBEYS_SPAN_TILING) `= false`.
+//! [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`.
 //!
 //! [`RelaxedScriptedLatexlike`] is the demonstration the plan's rule R7 asks for: the
 //! preset's parsers, driver, specs and node-ext types are generic over the family, so
@@ -12,7 +12,7 @@
 //! order, each a source and a byte range of it, with a **seam** wherever the next token
 //! comes from a different source than the previous one. `Language::parse` is not the
 //! route here — a script is runtime data and
-//! [`Tokenization::make_token_reader`](crate::token::Tokenization::make_token_reader)
+//! [`Tokenization::make_token_reader`](crate::core::token::Tokenization::make_token_reader)
 //! sees only a source — so the tests build the reader and run the preset's content loop
 //! through a [`ParseContext`], exactly as the two-reader agreement suites drive parsers.
 

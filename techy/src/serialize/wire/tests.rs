@@ -380,8 +380,8 @@ fn strict_enum_reads() {
 }
 
 /// The wire shapes are the ones the serde bridge produces for the corresponding serde
-/// shapes (identical rendering across mechanisms — the canonical-form discipline,
-/// [§dd-dr:serial-value-model]).
+/// shapes (identical rendering across mechanisms — the canonical-form discipline).
+// Canonical-form discipline: cf. [§dd-dr:serial-value-model].
 #[cfg(feature = "serde")]
 #[test]
 fn shapes_agree_with_the_bridge() {

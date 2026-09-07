@@ -407,7 +407,7 @@ impl BodySlotExt for BodyMarker {
 /// The preset's node-ext bundle ([`Lang::NodeExts`]): no per-node and no per-argument
 /// data (`NodeExt`/`ArgumentExt` are `()`), while **`SlotExt` is claimed** for the
 /// [`BodyMarker`] — the preset marks environment body slots through the generic
-/// [`BodySlotExt`] mechanism, so [`NodeRef::body`](crate::node::NodeRef::body) selects
+/// [`BodySlotExt`] mechanism, so [`NodeRef::body`](crate::core::node::NodeRef::body) selects
 /// the marked slot rather than relying on slot positions.
 #[derive(Debug, Clone, Copy)]
 pub struct LatexlikeNodeExts;
@@ -421,7 +421,7 @@ impl NodeExtTypes for LatexlikeNodeExts {
 /// The latexlike language bundle: a ZST implementing [`Lang`] with the preset's
 /// vocabularies ([`GroupType`], [`CallableType`], [`Mode`]), the canonical seed
 /// ([`default_token_rules`] + the [`builtin_package`] on the scope stack), and the
-/// scope-stack specials scan. Parse-time behavior lives on [`LatexlikeDriver`].
+/// scope-stack specials scan. Parse-time behavior is defined by [`LatexlikeDriver`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Latexlike;
 
@@ -464,7 +464,7 @@ impl Lang for Latexlike {
     /// The two-class event contract's loud arm ([`Event`]): the preset's
     /// [`ExitMathContext`](Event::ExitMathContext) is **context-dependent** — it
     /// is lowered by the driver
-    /// ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event)) (via
+    /// ([`ParseDriver::resolve_state_event`](crate::core::ParseDriver::resolve_state_event)) (via
     /// [`exit_math_context_delta`]) inside a driven parse and never reaches this
     /// hook there. Reaching it here means a bare out-of-parse
     /// [`derived()`](ParsingState::derived) call (or a mis-wired driver): the
@@ -495,8 +495,10 @@ impl Lang for Latexlike {
         Ok(())
     }
 
-    /// The standard scope-stack fold: every provider is consulted innermost-first,
-    /// the longest match wins ([`ScopeStack::scan_specials`]).
+    /// Scans the scope stack for a specials trigger at `pos`.
+    ///
+    /// Every provider on the stack is consulted innermost-first and the longest
+    /// match wins ([`ScopeStack::scan_specials`]).
     fn scan_specials(
         state: &ParsingState<Self>,
         content: &str,
@@ -545,7 +547,7 @@ impl LatexlikeLang for Latexlike {
 /// `\(…\)`, `\[…\]` — all class [`GroupType::Math`]; `$` vs. `$$` at a close position
 /// is disambiguated by the tokenizer's expected-close rule), `%` comments, standard
 /// whitespace with multi-newline paragraph breaks, and specials enabled (recognition
-/// itself lives in the scope stack's providers).
+/// itself comes from the scope stack's providers).
 ///
 /// `[`/`]` are deliberately **not** group delimiters: in LaTeX they are plain
 /// characters outside optional-argument positions (`a [b] c` is plain text), and the
@@ -561,7 +563,7 @@ impl LatexlikeLang for Latexlike {
 /// Each math rule declares its [`MathGroupForm`] as class payload
 /// ([`GroupType::Math`]): `$…$`/`\(…\)` are [`Inline`](MathGroupForm::Inline),
 /// `$$…$$`/`\[…\]` are [`Display`](MathGroupForm::Display) — read back from parsed
-/// nodes via [`NodeRef::math_form`](crate::node::NodeRef::math_form), with no
+/// nodes via [`NodeRef::math_form`](crate::core::node::NodeRef::math_form), with no
 /// delimiter table anywhere.
 ///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]): the group classes
@@ -612,7 +614,7 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 /// not driver code, so they are shadowable and unloadable like anything else. The
 /// internal-flavored name marks the package as parsing substrate rather than
 /// definitions content: typography specials (`~`, the `--`/`---`/quote ligatures)
-/// are *definitions* and live in the opt-in [`minidefs`] package — a seed-only
+/// are *definitions* and belong to the opt-in [`minidefs`] package — a seed-only
 /// parse emits those triggers as plain characters.
 ///
 /// pylatexenc's default context also ships a `\n\n` paragraph-break special; the
@@ -621,7 +623,7 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 /// not a specials node.
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
-/// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"_builtin"` (which removes
+/// [`Unload`](crate::core::specs::ScopeOp::Unload) op naming `"_builtin"` (which removes
 /// `\begin`/`\end`), or shadow single entries by pushing a provider above it.
 ///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]): a family member

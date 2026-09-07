@@ -572,7 +572,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// # Panics
     ///
     /// Passing a token this reader did not produce violates contract clause 4 above,
-    /// and an implementation is free to panic on it. [`StdTokenReader`] does: it hands
+    /// and an implementation is free to panic on it. [`StdTokenReader`] does: it passes
     /// the token's offsets to [`SourceSpan::new`], whose precondition assert then fires
     /// (see the [list of panicking items](crate::guide::panics)).
     fn source_span_between(
@@ -611,7 +611,7 @@ pub trait TokenReader<'s, L: Lang> {
     ///
     /// Passing a position this reader did not produce violates contract clause 4
     /// above, and an implementation is free to panic on it. [`StdTokenReader`] does:
-    /// it hands the offset to [`SourcePos::new`], whose precondition assert then fires
+    /// it passes the offset to [`SourcePos::new`], whose precondition assert then fires
     /// (see the [list of panicking items](crate::guide::panics)).
     fn source_position_at(&self, at: &StreamPosition<L>) -> SourcePos<L::SourceOrigin>;
 
@@ -626,7 +626,7 @@ pub trait TokenReader<'s, L: Lang> {
     ///
     /// A position this reader did not produce is *not* answered with `None`: it
     /// violates contract clause 4 above, and an implementation is free to panic on it.
-    /// [`StdTokenReader`] does: it hands the two offsets to [`SourceSpan::new`], whose
+    /// [`StdTokenReader`] does: it passes the two offsets to [`SourceSpan::new`], whose
     /// precondition assert then fires (see the [list of panicking
     /// items](crate::guide::panics)).
     fn source_span_within(
@@ -661,7 +661,7 @@ pub trait TokenReader<'s, L: Lang> {
     ///
     /// "Always answers" holds for positions the reader produced. A foreign position
     /// violates contract clause 4 above, and an implementation is free to panic on it.
-    /// [`StdTokenReader`] does: it hands the offsets to [`SourceSpan::new`], whose
+    /// [`StdTokenReader`] does: it passes the offsets to [`SourceSpan::new`], whose
     /// precondition assert then fires (see the [list of panicking
     /// items](crate::guide::panics)).
     fn source_span_describing(

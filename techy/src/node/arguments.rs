@@ -403,7 +403,7 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
 /// - [`Attached`](SlotRole::Attached) — derived, and reconstructible from the
 ///   invocation itself. The example is `\input`'s resolved content, where the
 ///   invocation text *is* the recomposition. An attached slot is excluded from the
-///   parent's byte accounting, because its children live in their own source;
+///   parent's byte accounting, because its children are located in their own source;
 ///   declaring the role is what replaces inferring it from a change of source.
 /// - [`Hidden`](SlotRole::Hidden) — a framework- or callable-defined attachment that
 ///   the core ignores: no recomposition and no byte accounting, and nothing more. It

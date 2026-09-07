@@ -23,7 +23,7 @@ use crate::state::Lang;
 
 use super::structure::ArgumentSpec;
 
-/// Which part of a callable's parse a live traceback [`Frame`](crate::engine::Frame)
+/// Which part of a callable's parse a live traceback [`Frame`](crate::core::Frame)
 /// covers — the `role` input of [`CallableSpec::stack_frame_title`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -166,13 +166,13 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     /// unavailable — and **aborts the parse** under any recovery policy; the
     /// dispatch site attaches the live traceback when the error has no
     /// frames of its own
-    /// ([`ParseContext::attach_hook_frames`](crate::constructs::ParseContext::attach_hook_frames)).
+    /// ([`ParseContext::attach_hook_frames`](crate::core::constructs::ParseContext::attach_hook_frames)).
     /// Refusing to parse *deeper* is deliberately not this
     /// channel's business: nesting depth belongs to the descent guard
-    /// ([`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), raised
+    /// ([`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), raised
     /// before any factory-built parser runs). Carry
     /// [`HookFailed`](crate::error::HookFailed) for an operational failure,
-    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) for a
     /// violated library contract. An infallible implementation wraps its parser
     /// in `Ok(...)` and that is the only change.
     // The boxed-parser-or-abort pair is the decided factory signature; an alias

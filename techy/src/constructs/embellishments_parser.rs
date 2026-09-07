@@ -80,7 +80,7 @@ use super::{node_text_content, ConstructParserResult, FromInvocation, ParseConte
 ///
 /// The whole run is recorded as **one argument**. Each matched pair stages one
 /// classless wrapper `Group`
-/// ([`GroupData::untyped`](crate::node::GroupData::untyped)) whose opening delimiter
+/// ([`GroupData::untyped`](crate::core::node::GroupData::untyped)) whose opening delimiter
 /// is the marker as written and whose children are the expression's nodes; read the
 /// pairs back by marker with
 /// [`split_embellishments`](crate::extract::split_embellishments).

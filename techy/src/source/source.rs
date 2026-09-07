@@ -24,7 +24,7 @@ use super::span::Span;
 /// [`with_line_column_number_offsets`](Source::with_line_column_number_offsets) adjust how
 /// the source is displayed in diagnostics.
 ///
-/// Content is held as a plain `String`: an embedder with a memory-mapped UTF-8 file hands
+/// Content is held as a plain `String`: an embedder with a memory-mapped UTF-8 file passes
 /// it in as text after one validation pass, and genuinely chunked or streaming input would
 /// need a different reader design rather than a different backing behind this type.
 pub struct Source<O: SourceOrigin = Option<String>> {
@@ -634,7 +634,7 @@ mod tests {
         assert_eq!(span.content(), "Hello");
     }
 
-    /// The `Span` bridge: `new` accepts a plain `Span` directly, and `span()` hands the
+    /// The `Span` bridge: `new` accepts a plain `Span` directly, and `span()` returns the
     /// byte range back as a `Span` (the inverse).
     #[test]
     fn span_bridge_round_trips() {
