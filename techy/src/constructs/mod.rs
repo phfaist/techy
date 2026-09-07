@@ -43,6 +43,8 @@ mod argument_parsers;
 mod attached_source;
 mod chars_group_parser;
 mod child_state;
+#[cfg(test)]
+mod content_reader_tests;
 mod embellishments_parser;
 mod environment_parser;
 mod group_parser;
@@ -101,8 +103,8 @@ use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, Parse
 use crate::source::{SourceSpan, TextContent};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
-    BuildId, CallableData, NodeBuildError, NodeKind, ParsedArguments, ParsedSlots,
-    StagedNodes,
+    BuildId, CallableData, ContentNodes, NodeBuildError, NodeKind, NodeTree, NodeTreeBuilder,
+    ParsedArgument, ParsedArguments, ParsedSlots, StagedNodeView, StagedNodes,
 };
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, StreamPosition, Token, TokenEdge, TokenReader};
@@ -405,6 +407,348 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// through [`stage_node`](ParseContext::stage_node).
     pub fn staged_nodes(&self) -> StagedNodes<'_, L> {
         self.session.builder.staged_nodes()
+    }
+
+    /// Copies the content nodes a [`ContentNodes`] designation names into a small
+    /// finished [`NodeTree`], so the reading helpers of
+    /// [`extract`](crate::extract) apply while the enclosing parse is still running.
+    ///
+    /// This is the parse-time answer to "what does this argument or slot actually
+    /// say?". The nodes a parse has staged are not in a tree yet — the tree is built
+    /// once, at the end — so nothing that takes a
+    /// [`NodeRef`](crate::core::node::NodeRef) can be pointed at them. This copies the
+    /// designated nodes and their subtrees into a tree of their own, under a
+    /// synthesized `List` root, and hands that tree back.
+    ///
+    /// `region_nodes` are the staged ids of the region the designation belongs to, in
+    /// order — the slice of the callable's child list that the region's child offsets
+    /// cover. `content` is the designation itself:
+    /// [`InRegion`](ContentNodes::InRegion) offsets index `region_nodes`, and
+    /// [`InChildrenOf`](ContentNodes::InChildrenOf) offsets index the named staged
+    /// node's own children. Reading a *declared argument's* content is
+    /// [`argument_content_as_tree`](ParseContext::argument_content_as_tree), which
+    /// reads the region and the content designation off the argument record for you.
+    ///
+    /// # The tree that comes back
+    ///
+    /// The root is a `List` node holding one copy per designated content node, in
+    /// order. Its ext is minted through
+    /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext), as for every
+    /// synthesized node; the copies keep the exts they were staged with, which is the
+    /// rule for every copy in the library. Read the content with
+    /// `tree.root().children()`.
+    ///
+    /// The root's span and parsing state describe where the content came from: the
+    /// span covering the first through the last content node, and the first content
+    /// node's state. Two cases have no such pair to compute, and both fall back:
+    ///
+    /// - **No content node at all** (`\m{}` designates none): the content parent's
+    ///   span and state for an [`InChildrenOf`](ContentNodes::InChildrenOf)
+    ///   designation — the empty content still sits inside the group — and otherwise
+    ///   the empty span at the reader's position ([`here`](ParseContext::here)) with
+    ///   this context's own [`state`](ParseContext::state).
+    /// - **First and last node not laid out in order** — the two in different sources,
+    ///   which a language declaring
+    ///   [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false` allows,
+    ///   or the last node starting before the first does or ending before the first
+    ///   ends, so that no range from the first's start to the last's end would cover
+    ///   both: the content parent's span if the designation has one, and otherwise the
+    ///   first content node's own span. The state is the first content node's in either
+    ///   case.
+    ///
+    /// In both fallbacks the root's span says *where* the content sits rather than what
+    /// it covers, so it does not partition its children's spans the way a parsed `List`
+    /// does. A consumer that assumes that partition — the byte accounting of a language
+    /// declaring [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) — should
+    /// read the children and not the root's own span.
+    ///
+    /// # Annotations: the way back
+    ///
+    /// The tree is annotated with `Option<BuildId>`: every copied node carries
+    /// `Some(id)` naming the staged node it was copied from, and the synthesized root
+    /// carries `None`. Node ids of the returned tree mean nothing outside it, so the
+    /// annotation is what maps a result back onto the parse — for instance to anchor a
+    /// diagnostic at the staged node a helper objected to. Read one with
+    /// [`NodeRef::annotation`](crate::core::node::NodeRef::annotation).
+    ///
+    /// # Cost
+    ///
+    /// Every call copies: node data, spans, and states are cloned (`Arc`-shared where
+    /// the storage is shared), and [`finish`](crate::core::node::NodeTreeBuilder::finish)
+    /// takes one tree tag from a process-wide counter. That is cheap for one argument
+    /// and not free per invocation of a very frequently used spec — for such a spec,
+    /// read the content once and keep what you need, or use
+    /// [`content_as_plain_chars`](ParseContext::content_as_plain_chars) when plain
+    /// characters are all you are after.
+    ///
+    /// # Errors
+    ///
+    /// [`ContentOutOfBounds`](crate::core::node::NodeBuildError::ContentOutOfBounds)
+    /// when the designation's range does not fit the nodes it indexes into — the
+    /// region's own nodes, or the content parent's children — exactly as
+    /// [`add`](crate::core::node::NodeTreeBuilder::add) reports it,
+    /// [`ContentParentNotStaged`](crate::core::node::NodeBuildError::ContentParentNotStaged)
+    /// for an [`InChildrenOf`](ContentNodes::InChildrenOf) parent that is not staged,
+    /// [`ChildNotStaged`](crate::core::node::NodeBuildError::ChildNotStaged) for a
+    /// designated id that is not, plus what the copy itself reports. All of these are
+    /// contract violations by the calling parser — lift one with
+    /// [`implementation_error`](ParseContext::implementation_error) — except
+    /// [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed), the root
+    /// ext mint's own reported failure, which is an operational failure to lift as a
+    /// [`HookFailed`] condition, exactly as
+    /// [`stage_node`](ParseContext::stage_node) documents.
+    pub fn content_as_tree(
+        &self,
+        region_nodes: &[BuildId],
+        content: &ContentNodes,
+    ) -> Result<NodeTree<L, Option<BuildId>>, NodeBuildError> {
+        let (nodes, parent) = self.resolve_content_nodes(region_nodes, content)?;
+        let staged = self.staged_nodes();
+        let mut builder: NodeTreeBuilder<L, Option<BuildId>> = NodeTreeBuilder::new();
+        let mut children = Vec::with_capacity(nodes.len());
+        for id in nodes {
+            children.push(staged.copy_subtree_into(*id, &mut builder, &mut |view| {
+                Some(view.id())
+            })?);
+        }
+        let (span, state) = self.content_root_provenance(nodes, parent)?;
+        let kind = NodeKind::list();
+        let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children))?;
+        let root = builder.add(kind, span, state, children, ext, None)?;
+        builder.finish(root)
+    }
+
+    /// Copies a declared argument's content into a small finished [`NodeTree`] —
+    /// [`content_as_tree`](ParseContext::content_as_tree) reached from the argument
+    /// record, which is how an invocation parser reads what its own argument says.
+    ///
+    /// `argument` is the record the argument loop produced
+    /// ([`parse_declared_arguments`]) and `children` the flat child list those records
+    /// tile — the same pair that goes on to
+    /// [`stage_invocation`](ParseContext::stage_invocation). The argument's region
+    /// says which of `children` it covers and which of those are its content, and the
+    /// designated nodes are copied as described on
+    /// [`content_as_tree`](ParseContext::content_as_tree), whose page covers the shape
+    /// of the returned tree, its annotations, and its cost.
+    ///
+    /// `Ok(None)` means the argument **was not provided** — an absent optional, or a
+    /// mandatory one the argument parser already diagnosed as missing. A provided
+    /// argument always answers `Ok(Some(tree))`, whose root may still have no children:
+    /// `\m{}` is provided with empty content.
+    ///
+    /// # Errors
+    ///
+    /// [`RegionAlreadyResolved`](crate::core::node::NodeBuildError::RegionAlreadyResolved)
+    /// for an argument record whose region is not in staging coordinates — records read
+    /// back from a finished tree do not belong in a parse — and
+    /// [`RegionOutOfBounds`](crate::core::node::NodeBuildError::RegionOutOfBounds)
+    /// when the region's child offsets lie outside `children`, plus every error of
+    /// [`content_as_tree`](ParseContext::content_as_tree).
+    pub fn argument_content_as_tree(
+        &self,
+        argument: &ParsedArgument<L>,
+        children: &[BuildId],
+    ) -> Result<Option<NodeTree<L, Option<BuildId>>>, NodeBuildError> {
+        let Some((region_nodes, content)) = self.argument_designation(argument, children)? else {
+            return Ok(None);
+        };
+        self.content_as_tree(region_nodes, content).map(Some)
+    }
+
+    /// The characters of the content nodes a [`ContentNodes`] designation names,
+    /// concatenated in order — the cheap direct read, for content that must be plain
+    /// characters and nothing else.
+    ///
+    /// The text is read off the nodes' own data (each `Chars` node's payload), not off
+    /// their spans: node data is what a reader answered for the node, so the result is
+    /// the same under every language, including one declaring
+    /// [`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= false`, whose
+    /// content may come from more than one source. Characters are taken as written,
+    /// with no trimming and no normalization. Empty content reads as the empty string.
+    ///
+    /// The parameters are those of
+    /// [`content_as_tree`](ParseContext::content_as_tree); no tree is built and nothing
+    /// is copied.
+    ///
+    /// **This is a stricter rule than
+    /// [`extract::content_as_chars`](crate::extract::content_as_chars)**, which is the
+    /// helper for reading text out of a finished tree. That one descends into groups
+    /// and lists to collect the characters inside them and skips comments entirely; it
+    /// objects only to a callable. This one accepts nothing but `Chars` nodes at the
+    /// top level: anything other than characters among the content — a group, a
+    /// callable, a comment, or a nested list — is
+    /// [`NotPlainCharacters`](PlainCharsError::NotPlainCharacters). Use it where the
+    /// content names something — a file reference, a key, a label — and a group or a
+    /// comment in it means the document said something other than a name. Where the
+    /// flattening rule is wanted instead, read the content with
+    /// [`content_as_tree`](ParseContext::content_as_tree) and call
+    /// `extract::content_as_chars` on `tree.root().children()`.
+    ///
+    /// # Errors
+    ///
+    /// [`NotPlainCharacters`](PlainCharsError::NotPlainCharacters), naming the
+    /// offending staged node, for content holding anything other than characters — a
+    /// condition in the parsed document, to diagnose through
+    /// [`recover`](ParseContext::recover).
+    /// [`MalformedRecord`](PlainCharsError::MalformedRecord)
+    /// for a staged record that does not resolve, which is a contract violation by the
+    /// calling parser and carries the same
+    /// [`NodeBuildError`](crate::core::node::NodeBuildError) variants
+    /// [`content_as_tree`](ParseContext::content_as_tree) reports.
+    pub fn content_as_plain_chars(
+        &self,
+        region_nodes: &[BuildId],
+        content: &ContentNodes,
+    ) -> Result<String, PlainCharsError> {
+        let (nodes, _) = self.resolve_content_nodes(region_nodes, content)?;
+        let staged = self.staged_nodes();
+        let mut text = String::new();
+        for id in nodes {
+            let view =
+                staged.get(*id).ok_or(NodeBuildError::ChildNotStaged { child: *id })?;
+            match view.kind() {
+                NodeKind::Chars { content: chars, .. } => {
+                    text.push_str(chars.resolve(view.span().source()))
+                }
+                _ => return Err(PlainCharsError::NotPlainCharacters { node: *id }),
+            }
+        }
+        Ok(text)
+    }
+
+    /// The characters of a declared argument's content —
+    /// [`content_as_plain_chars`](ParseContext::content_as_plain_chars) reached from
+    /// the argument record, the way
+    /// [`argument_content_as_tree`](ParseContext::argument_content_as_tree) reaches
+    /// [`content_as_tree`](ParseContext::content_as_tree).
+    ///
+    /// `argument` and `children` are the argument loop's output pair, as there.
+    /// `Ok(None)` means the argument was not provided; a provided argument with empty
+    /// content answers `Ok(Some(String::new()))`.
+    ///
+    /// This is what the preset's `\input`-shaped spec
+    /// ([`InputMacroSpec`](crate::latexlike::InputMacroSpec)) reads its source
+    /// reference with, and the strict character rule stated on
+    /// [`content_as_plain_chars`](ParseContext::content_as_plain_chars) is why
+    /// `\input{{chap.tex}}` is diagnosed rather than resolved.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`content_as_plain_chars`](ParseContext::content_as_plain_chars), plus
+    /// — as [`MalformedRecord`](PlainCharsError::MalformedRecord) — the two record
+    /// failures [`argument_content_as_tree`](ParseContext::argument_content_as_tree)
+    /// reports: a region that is not in staging coordinates
+    /// ([`RegionAlreadyResolved`](crate::core::node::NodeBuildError::RegionAlreadyResolved)),
+    /// and region offsets outside `children`
+    /// ([`RegionOutOfBounds`](crate::core::node::NodeBuildError::RegionOutOfBounds)).
+    pub fn argument_content_as_plain_chars(
+        &self,
+        argument: &ParsedArgument<L>,
+        children: &[BuildId],
+    ) -> Result<Option<String>, PlainCharsError> {
+        let Some((region_nodes, content)) = self.argument_designation(argument, children)? else {
+            return Ok(None);
+        };
+        self.content_as_plain_chars(region_nodes, content).map(Some)
+    }
+
+    /// The shared first step of the two argument-side readers: the argument's region
+    /// nodes and its content designation, or `None` for an argument that was not
+    /// provided.
+    fn argument_designation<'c>(
+        &self,
+        argument: &'c ParsedArgument<L>,
+        children: &'c [BuildId],
+    ) -> Result<Option<(&'c [BuildId], &'c ContentNodes)>, NodeBuildError> {
+        let Some(region) = argument.region.as_ref() else {
+            return Ok(None);
+        };
+        // At parse time a region is staged by construction: `finish` has not run.
+        let Some((offsets, content)) = region.staged() else {
+            return Err(NodeBuildError::RegionAlreadyResolved);
+        };
+        let region_nodes = children
+            .get(offsets.start as usize..offsets.end as usize)
+            .ok_or_else(|| NodeBuildError::RegionOutOfBounds {
+                region: offsets.clone(),
+                n_children: children.len() as u32,
+            })?;
+        Ok(Some((region_nodes, content)))
+    }
+
+    /// The shared second step of the content readers: the staged ids a designation
+    /// names, plus the staged view of the content parent for an `InChildrenOf` one.
+    fn resolve_content_nodes<'c>(
+        &'c self,
+        region_nodes: &'c [BuildId],
+        content: &ContentNodes,
+    ) -> Result<(&'c [BuildId], Option<StagedNodeView<'c, L>>), NodeBuildError> {
+        match content {
+            ContentNodes::InRegion(range) => {
+                let nodes = region_nodes
+                    .get(range.start as usize..range.end as usize)
+                    .ok_or_else(|| NodeBuildError::ContentOutOfBounds {
+                        content: range.clone(),
+                        available: region_nodes.len() as u32,
+                    })?;
+                Ok((nodes, None))
+            }
+            ContentNodes::InChildrenOf(parent, range) => {
+                let view = self
+                    .staged_nodes()
+                    .get(*parent)
+                    .ok_or(NodeBuildError::ContentParentNotStaged { parent: *parent })?;
+                let nodes = view
+                    .children()
+                    .get(range.start as usize..range.end as usize)
+                    .ok_or_else(|| NodeBuildError::ContentOutOfBounds {
+                        content: range.clone(),
+                        available: view.children().len() as u32,
+                    })?;
+                Ok((nodes, Some(view)))
+            }
+        }
+    }
+
+    /// The span and parsing state of the `List` root
+    /// [`content_as_tree`](ParseContext::content_as_tree) synthesizes — the rule its
+    /// documentation states.
+    // The pair is exactly what `add()` wants next; naming it would not read better.
+    #[allow(clippy::type_complexity)]
+    fn content_root_provenance(
+        &self,
+        nodes: &[BuildId],
+        parent: Option<StagedNodeView<'_, L>>,
+    ) -> Result<(SourceSpan<L::SourceOrigin>, Arc<ParsingState<L>>), NodeBuildError> {
+        let staged = self.staged_nodes();
+        match (nodes.first(), nodes.last()) {
+            (Some(first), Some(last)) => {
+                let first =
+                    staged.get(*first).ok_or(NodeBuildError::ChildNotStaged { child: *first })?;
+                let last =
+                    staged.get(*last).ok_or(NodeBuildError::ChildNotStaged { child: *last })?;
+                let (from, to) = (first.span(), last.span());
+                let span = if from.same_source(to)
+                    && from.start() <= to.start()
+                    && from.end() <= to.end()
+                {
+                    SourceSpan::new(from.source(), from.start()..to.end())
+                } else {
+                    // No one forward range covers the content: the parent's span says
+                    // where it sits, and without a parent the first node's own span is
+                    // the nearest true statement.
+                    match parent {
+                        Some(parent) => parent.span().clone(),
+                        None => from.clone(),
+                    }
+                };
+                Ok((span, first.parsing_state().clone()))
+            }
+            _ => match parent {
+                Some(parent) => Ok((parent.span().clone(), parent.parsing_state().clone())),
+                None => Ok((self.here(), Arc::clone(&self.state))),
+            },
+        }
     }
 
     /// Stages the `Callable` node of a resolved invocation and returns its
@@ -1278,6 +1622,66 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                     .with_frames(self.session.snapshot_frames())
             }
             other => self.implementation_error(other, span),
+        }
+    }
+}
+
+/// Why [`ParseContext::content_as_plain_chars`] and
+/// [`ParseContext::argument_content_as_plain_chars`] could not answer.
+///
+/// The two variants are reported differently, and that is the whole point of the
+/// split: [`NotPlainCharacters`](PlainCharsError::NotPlainCharacters) is something the
+/// parsed document did, to diagnose through [`ParseContext::recover`], while
+/// [`MalformedRecord`](PlainCharsError::MalformedRecord) is a contract violation by
+/// the calling parser, to lift with [`ParseContext::implementation_error`] — it aborts
+/// under any recovery policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlainCharsError {
+    /// The content holds a node that is anything other than characters: a group, a
+    /// callable, a comment, or a nested list.
+    ///
+    /// Such a node carries no single text of its own, so there is nothing to read. The
+    /// staged node is named so a diagnostic can be anchored at it (its span is
+    /// [`StagedNodeView::span`](crate::core::node::StagedNodeView::span), through
+    /// [`ParseContext::staged_nodes`]).
+    NotPlainCharacters {
+        /// The staged id of the offending node.
+        node: BuildId,
+    },
+    /// A staged record did not resolve: the argument's region, its child offsets, the
+    /// content designation, or a node it names.
+    ///
+    /// None of this depends on the parsed document — see the
+    /// [`NodeBuildError`](crate::core::node::NodeBuildError) variants listed on
+    /// [`ParseContext::content_as_tree`], which reports the same set.
+    MalformedRecord(NodeBuildError),
+}
+
+impl From<NodeBuildError> for PlainCharsError {
+    fn from(error: NodeBuildError) -> PlainCharsError {
+        PlainCharsError::MalformedRecord(error)
+    }
+}
+
+impl fmt::Display for PlainCharsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlainCharsError::NotPlainCharacters { node } => {
+                write!(f, "the content node {:?} is not plain characters", node)
+            }
+            PlainCharsError::MalformedRecord(error) => {
+                write!(f, "the staged content record does not resolve: {}", error)
+            }
+        }
+    }
+}
+
+impl core::error::Error for PlainCharsError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            PlainCharsError::NotPlainCharacters { .. } => None,
+            PlainCharsError::MalformedRecord(error) => Some(error),
         }
     }
 }

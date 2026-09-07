@@ -133,6 +133,13 @@ helpers assemble real trees as output, so their results compose with every
 other tree consumer. Entry points, the annotation-callback forms, and worked
 examples are in the [`extract`](crate::extract) module documentation.
 
+These helpers all read a finished tree. Inside a construct parser, where the tree
+is still being built, the same reading goes through
+[`ParseContext::content_as_tree`](crate::core::constructs::ParseContext::content_as_tree)
+and its argument-side companion, which copy the nodes in question into a small tree
+of their own that every helper above then applies to — see [Writing a construct
+parser](crate::guide::construct_parsers).
+
 ## Traversing: `techy::visit`
 
 The [`visit`](crate::visit) module is read-only structural traversal:

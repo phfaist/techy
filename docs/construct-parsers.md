@@ -120,6 +120,33 @@ staged first, bottom-up, and claimed by the parent's own staging call.
 [`cx.staged_nodes()`](crate::core::constructs::ParseContext::staged_nodes)
 is the read-only view over what has been staged so far.
 
+**Reading an argument back, mid-parse.** A parser that must know what its own
+argument *says* — an `\input`-shaped macro reading a file name, a spec reading a
+comma-separated key list — cannot use the tree helpers, because the tree does not
+exist yet. Two context methods bridge that.
+[`cx.argument_content_as_tree(&argument, &children)`](crate::core::constructs::ParseContext::argument_content_as_tree)
+copies the argument's content nodes into a small finished tree of their own, so
+every helper of [`extract`](crate::extract) applies to
+`tree.root().children()` right there; the copies are annotated with the
+[`BuildId`](crate::core::node::BuildId) each came from, which is how a diagnostic
+gets anchored back at the staged node. It answers `Ok(None)` for an argument that
+was not provided. Copying is not free — node data is cloned and each finished tree
+takes an id from a process-wide counter — so for a spec used on every other line,
+read once and keep what you need.
+[`cx.argument_content_as_plain_chars(&argument, &children)`](crate::core::constructs::ParseContext::argument_content_as_plain_chars)
+is the cheap alternative when the content must be characters and nothing else: it
+copies nothing, and reports anything other than characters among the content — a
+group, a callable, a comment, or a nested list — as
+[`PlainCharsError::NotPlainCharacters`](crate::core::constructs::PlainCharsError::NotPlainCharacters)
+— a stricter rule than
+[`extract::content_as_chars`](crate::extract::content_as_chars), which descends
+into groups and skips comments. Both have a
+[`content_as_tree`](crate::core::constructs::ParseContext::content_as_tree) /
+[`content_as_plain_chars`](crate::core::constructs::ParseContext::content_as_plain_chars)
+form taking a region's nodes and a
+[`ContentNodes`](crate::core::node::ContentNodes) designation directly, for a slot
+or for a region a parser laid out itself.
+
 **State derivation and scoping.** `cx.state` is the parser's *input* state
 — the caller sets it.
 [`cx.derive_state(&delta)`](crate::core::constructs::ParseContext::derive_state)

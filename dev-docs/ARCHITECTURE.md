@@ -622,7 +622,12 @@ an in-crate test utility ([§dd-arch:span-tiling], [§dd-dr:tree-validation]).
   primitive ([§dd-dr:restage-ops]). The extract producers mint output
   annotations through a general per-part callback with suffixed shorthands over
   any input annotation type (`SplitAtChars`/`KeyVals` results;
-  [§dd-dr:extract-annotations]).
+  [§dd-dr:extract-annotations]). `restage_node` has a staged-side twin,
+  `NodeTreeBuilder::restage_staged_node`, which copies one node of a *staged*
+  record set (a `StagedNodeView`) under the same per-child replacement mapping,
+  with `StagedNodes::copy_subtree_into` as the bulk recursion over it; that pair
+  is what the parse-time content readers of [§dd-arch:constructs] are built on
+  ([§dd-dr:staged-content-copy]).
 - **Recomposition is the top-level `techy::recompose`** — a meaning-free `Piece`
   value fold with instruction lowering
   (`TreeRecomposer::new(&mut recomposer).recompose(&tree, state)`;
@@ -677,7 +682,7 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 transformation topic ([§dd-dr:transform]): [§dd-dr:node-annotations],
 [§dd-dr:tree-tags], [§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:restage-ops],
 [§dd-dr:recompose], [§dd-dr:recompose-machinery], [§dd-dr:recompose-concat-map],
-[§dd-dr:visit-engine],
+[§dd-dr:visit-engine], [§dd-dr:staged-content-copy],
 [§dd-dr:slot-roles], [§dd-dr:input-attachment], [§dd-dr:tree-navigation],
 [§dd-dr:invocation-syntax], [§dd-dr:extract-annotations].
 
@@ -876,6 +881,17 @@ returns (nodes, StopCause) — the caller interprets the ending.
   guard ([§dd-dr:traversal-builders]) — so hand-built trees
   (`NodeTreeBuilder`) deeper than any parse limit are refused, not crashed on,
   when traversed.
+- **Reading back what the parser has staged** ([§dd-dr:staged-content-copy]): the nodes a
+  construct parser has produced are staged records addressed by `BuildId`
+  (`cx.staged_nodes()`), not `NodeRef`s, so the `techy::extract` helpers — which read a
+  finished tree — do not apply to them directly. `cx.content_as_tree(region_nodes,
+  content)` copies an argument's or slot's designated content into a fresh
+  `NodeTree<L, Option<BuildId>>` under a synthesized `List` root, annotating each copied
+  node with the `BuildId` it came from, so every extract helper runs at parse time over
+  `tree.root().children()`; `cx.content_as_plain_chars` is the tree-free strict reader
+  (chars payloads concatenated, anything other than characters an error), which is how the
+  preset's `\input` spec reads its file reference. Both have an `argument_*` adapter for
+  the shape `parse_declared_arguments` returns.
 - **Attached-source parsing** ([§dd-dr:input-wiring]): the
   `cx.parse_attached_source(source, state, parser)` door sub-parses an included
   source into the *same* session/builder over a fresh inner reader — the

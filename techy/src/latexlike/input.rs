@@ -17,10 +17,10 @@ use core::fmt;
 use crate::constructs::{
     parse_declared_arguments, CharsGroupArgumentParser, ChildStateSpec, ConstructParser,
     ConstructParserResult, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
-    ParseContext, StopSpec,
+    ParseContext, PlainCharsError, StopSpec,
 };
 use crate::node::{
-    ArgumentExt, BuildId, ChildRegion, ContentNodes, NodeKind,
+    ArgumentExt, BuildId, ChildRegion, ContentNodes,
     ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole,
 };
 use crate::engine::ParseDriver;
@@ -540,11 +540,13 @@ where
                     at.clone(),
                 )
             })?;
-        let reference: Option<String> = if reference_argument.is_provided() {
-            match argument_text(cx, reference_argument, &children) {
-                Ok(text) => Some(text),
+        let reference: Option<String> =
+            match cx.argument_content_as_plain_chars(reference_argument, &children) {
+                // `None`: an absent argument — the argument parser already diagnosed the
+                // missing mandatory argument, and there is nothing here to add to it.
+                Ok(text) => text,
                 // The document's mistake: recovered, nothing resolved.
-                Err(ArgumentTextError::NotPlainCharacters) => {
+                Err(PlainCharsError::NotPlainCharacters { .. }) => {
                     let anchor = argument_span(cx, reference_argument, &children)
                         .unwrap_or_else(|| at.clone());
                     cx.recover(
@@ -557,15 +559,10 @@ where
                 }
                 // A staged record that does not resolve is a bug in the machinery, never
                 // the document's doing — it aborts under any recovery policy.
-                Err(ArgumentTextError::Malformed(detail)) => {
-                    return Err(cx.implementation_error(detail, at.clone()))
+                Err(PlainCharsError::MalformedRecord(error)) => {
+                    return Err(cx.implementation_error(error, at.clone()))
                 }
-            }
-        } else {
-            // An absent argument: the argument parser already diagnosed the missing
-            // mandatory argument, and there is nothing here to add to it.
-            None
-        };
+            };
 
         // 3. Resolve + attach through the single raising site, driving the root
         //    nodes-parse shape under the state at the `\input` point.
@@ -661,83 +658,6 @@ fn argument_span<LLL: LatexlikeLang>(
         return None;
     }
     Some(SourceSpan::new(first.source(), first.start()..last.end()))
-}
-
-/// Why [`argument_text`] could not answer.
-enum ArgumentTextError {
-    /// The argument's content is not plain characters — the document's mistake, which
-    /// the caller diagnoses as
-    /// [`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument).
-    NotPlainCharacters,
-    /// A staged record did not resolve: the region, its offsets, or a node it names.
-    /// None of this depends on the document — the caller reports it as an
-    /// implementation error, aborting under any recovery policy.
-    Malformed(&'static str),
-}
-
-/// The text of a **provided** argument's content: the character payloads of its content
-/// nodes, concatenated in order and read off the nodes' own data rather than off their
-/// coordinates. Empty content (`\input{}`) reads as the empty text.
-///
-/// Node data is what a reference may be read from under every language. A chars node
-/// carries the text the reader answered for it; a span covering several nodes is only a
-/// description of the stretch they were read from — exact for a language that obeys
-/// span tiling ([`OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)), and no
-/// more than a description for one that does not.
-///
-/// [`NotPlainCharacters`](ArgumentTextError::NotPlainCharacters) for content holding a
-/// group, a callable or a comment node: such node data carries no single text.
-/// [`Malformed`](ArgumentTextError::Malformed) for a staged record that does not
-/// resolve — the caller must have checked
-/// [`is_provided`](crate::core::node::ParsedArgument::is_provided) first.
-fn argument_text<LLL: LatexlikeLang>(
-    cx: &ParseContext<'_, '_, LLL>,
-    argument: &ParsedArgument<LLL>,
-    children: &[BuildId],
-) -> Result<String, ArgumentTextError> {
-    let malformed = ArgumentTextError::Malformed;
-    let region = argument
-        .region
-        .as_ref()
-        .ok_or(malformed("a provided reference argument records no child region"))?;
-    // At parse time the region is staged by construction (`finish` has not run).
-    let (offsets, content) = region
-        .staged()
-        .ok_or(malformed("the reference argument's child region is already resolved"))?;
-    let region_nodes = children
-        .get(offsets.start as usize..offsets.end as usize)
-        .ok_or(malformed("the reference argument's region lies outside the staged children"))?;
-    let staged = cx.staged_nodes();
-    let text_of = |ids: &[BuildId]| -> Result<String, ArgumentTextError> {
-        let mut text = String::new();
-        for id in ids {
-            let view = staged
-                .get(*id)
-                .ok_or(malformed("the reference argument names a node that is not staged"))?;
-            match view.kind() {
-                NodeKind::Chars { content, .. } => {
-                    text.push_str(content.resolve(view.span().source()))
-                }
-                _ => return Err(ArgumentTextError::NotPlainCharacters),
-            }
-        }
-        Ok(text)
-    };
-    match content {
-        ContentNodes::InRegion(range) => text_of(
-            region_nodes
-                .get(range.start as usize..range.end as usize)
-                .ok_or(malformed("the reference argument's content lies outside its region"))?,
-        ),
-        ContentNodes::InChildrenOf(id, range) => {
-            let view = staged.get(*id).ok_or(malformed(
-                "the reference argument's content parent is not staged",
-            ))?;
-            text_of(view.children().get(range.start as usize..range.end as usize).ok_or(
-                malformed("the reference argument's content lies outside its content parent"),
-            )?)
-        }
-    }
 }
 
 /// The argument list handed to [`InputMacroSpec::new`] declares no argument named

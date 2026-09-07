@@ -3400,6 +3400,89 @@ the recorded fallback is the fixed-error shape; a flag-level change, not a
 re-session. (The recompose surface mirrors this entry deliberately —
 [§dd-dr:recompose-machinery].)
 
+#### Reading staged content at parse time: a staged-node copier and `ParseContext::content_as_tree` [§dd-dr:staged-content-copy]
+
+Status: DECIDED (user-approved as recommended).
+
+A construct parser works over *staged* nodes — the records it has already added to the
+parse builder, addressed by `BuildId` and read back through `ParseContext::staged_nodes()`
+(`StagedNodes`/`StagedNodeView`) — whereas every read helper of `techy::extract` takes a
+`NodeRef`/`NodeSlice` over a *finished* `NodeTree`. Three additions close that gap by
+copying staged nodes into a temporary tree, leaving `techy::extract` untouched:
+
+- **`NodeTreeBuilder::restage_staged_node(node, replacements, content_parents, annotation)`** —
+  the staged-side twin of the finished-tree `restage_node` ([§dd-dr:restage-ops]), with the
+  same replacement semantics (positional per child: drop, one, or several; region offsets
+  translated through the prefix sums) and the same rule that kind, span, parsing state and
+  ext are cloned and the ext never re-minted. The translation is simpler than the
+  finished-tree one because staged regions are already in child-offset coordinates and name
+  their parents by `BuildId`: `InRegion` ranges go through the prefix sums, `InChildrenOf`
+  parents through the caller's `content_parents` mapping, the child range carried verbatim
+  and re-validated when the node is added and again at `finish`. An unmapped parent is the
+  new `NodeBuildError::StagedContentParentUnmapped { parent: BuildId }` (the pre-existing
+  `ContentParentUnmapped` carries a `NodeId`). Placement: the per-node primitive sits on
+  `NodeTreeBuilder`, the receiver of every write, mirroring `restage_node`; the bulk
+  `StagedNodes::copy_subtree_into(id, &mut builder, annotate)` sits on `StagedNodes`,
+  because a `StagedNodeView` holds no reference to the staged-node store and therefore
+  cannot resolve its own children — only the store's view can recurse.
+- **`ParseContext::content_as_tree(region_nodes, content)`** copies an argument's or slot's
+  parser-designated content ([§dd-dr:child-regions]) into a fresh
+  `NodeTree<L, Option<BuildId>>` under a synthesized `List` root — the root's ext minted by
+  `Lang::make_node_ext`, exactly as the extract producers do for their own `List` wrappers —
+  so every extract helper (`content_as_chars`, `split_at_chars`, `parse_keyval`, …) applies
+  at parse time over `tree.root().children()`. `argument_content_as_tree(argument, children)`
+  adapts the shape a construct parser holds (what `parse_declared_arguments` returns); the
+  core function takes the `ParsedArgumentNodes` shape an argument parser holds. **The
+  original-identifier map rides in the annotation channel** ([§dd-dr:node-annotations]):
+  each copied node is annotated with the `BuildId` it was copied from, the synthesized root
+  with `None`. Naming: `content_as_…` deliberately echoes `extract::content_as_chars`, and
+  "argument content" is the wording of `NodeRef::argument_content_nodes`, of which this is
+  the parse-time twin; no "staged" qualifier, because on `ParseContext` everything is staged
+  (naming principle 4, [§dd-arch:naming]).
+- **`ParseContext::content_as_plain_chars(region_nodes, content) -> Result<String, PlainCharsError>`**
+  (with the same `argument_content_as_plain_chars` adapter) is the cheap direct reader,
+  keeping the strict rule the built-in `\input` spec already applied: concatenate the chars
+  payloads read off node data (`TextContent::resolve`), and treat anything other than characters (a group, a callable, a
+  comment, or a nested list) among the content nodes as `PlainCharsError::NotPlainCharacters { node }`; a
+  malformed staged record is `PlainCharsError::MalformedRecord(NodeBuildError)`. A file-name lookup
+  should not have to build a tree, and `extract::content_as_chars` is not a drop-in for it
+  (it descends into groups and skips comments). The built-in `\input` spec moves onto this
+  public reader, replacing about thirty private lines that every author of an `\input`-like
+  spec would otherwise copy.
+
+The decisive reason for the copy route: every accessor a parser needs was already public, so
+the gap was ergonomic, not one of power — and copying closes it with additions that reuse
+machinery the crate already owns (region translation, the annotation channel) instead of
+reshaping a public surface that is under soft freeze.
+
+Rejected alternatives: **generalizing the extract helpers over a staged-or-finished node-view
+trait** — their public types (`SplitAtCharsPart`/`KeyValsPart` originals,
+`ExtractError::NonCharsContent { node: NodeId }`, the annotation callbacks) name
+`NodeRef`/`NodeId` throughout, so the generalization ripples through the whole extract
+surface, a poor fit for the API soft freeze ([§dd-dr:stability-rubric]); **a view-side-only
+copy API with no per-node primitive** (smaller, but asymmetric with the finished-tree side,
+and an author who needs replacement mapping has to reimplement the region translation);
+**returning a plain `NodeTree<L>`** (a parser that must report a diagnostic against one
+specific original node would be left with span arithmetic, which under a language that does
+not obey span tiling ([§dd-dr:span-tiling]) only describes a place, it does not identify a
+node); **a side `Vec` or struct for the original-identifier map** (a new type for what the
+annotation channel already provides; `tree.annotate(|_| ())` drops it where it is unwanted,
+and the extract `_keep_annotations` variants carry it through a split, `Option<BuildId>`
+being `Clone + Default`).
+
+Accepted costs: one copy per read; every `finish` consumes a tree tag from the global `u32`
+counter ([§dd-dr:tree-tags]), so a parse-time reader on a very hot definition — a keyval read
+on every `\item` of a large document — is a cost to weigh, documented rather than solved; the
+synthesized root runs `make_node_ext` while the copies keep their exts unchanged; and the
+temporary tree's node identifiers mean nothing back in the parse, only the annotation and the
+spans lead back to the originals. The copy is by value and claims nothing in the parse
+builder, so a later `stage_invocation` still sees the original staged nodes unchanged, and
+reading works equally well after the invocation has been staged.
+
+Revisit if: the extract helpers are generalized over a node-view trait for some other reason
+(the temporary-tree route then becomes redundant), or profiling shows parse-time content
+trees dominating a real workload.
+
 #### `techy::recompose`: recomposition as a downward-state fold [§dd-dr:recompose]
 
 Status: DECIDED (user, API-review session — direction and scope; recompose session

@@ -847,6 +847,17 @@ pub enum NodeBuildError {
         /// The old tree's id of the unmapped content parent.
         parent: super::NodeId,
     },
+    /// [`restage_staged_node`](NodeTreeBuilder::restage_staged_node)'s content-parent
+    /// mapping answered `None` for a content parent the input node's argument/slot
+    /// records designate.
+    ///
+    /// The staged-side twin of
+    /// [`ContentParentUnmapped`](NodeBuildError::ContentParentUnmapped), which carries
+    /// a finished tree's [`NodeId`](super::NodeId) instead.
+    StagedContentParentUnmapped {
+        /// The input builder's id of the unmapped content parent.
+        parent: BuildId,
+    },
 }
 
 impl fmt::Display for NodeBuildError {
@@ -923,6 +934,12 @@ impl fmt::Display for NodeBuildError {
             NodeBuildError::ContentParentUnmapped { parent } => write!(
                 f,
                 "restage_node's content-parent mapping has no staged counterpart \
+                 for content parent {:?}",
+                parent
+            ),
+            NodeBuildError::StagedContentParentUnmapped { parent } => write!(
+                f,
+                "restage_staged_node's content-parent mapping has no staged counterpart \
                  for content parent {:?}",
                 parent
             ),

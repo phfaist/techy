@@ -2034,6 +2034,538 @@ mod tests {
         assert_eq!(copy.node(record.content_parent()).span_content(), "{x}");
     }
 
+    // --- staged-side copying (restage_staged_node, StagedNodes::copy_subtree_into) ----
+
+    /// `x\frac{a}{b}` **staged and left unfinished** — the shape a construct parser
+    /// sees while the enclosing invocation is still being parsed. Every node gets a
+    /// distinct ext value, so a copy that re-minted instead of cloning would show
+    /// (`ExtLang`'s mint answers 42).
+    struct StagedExample {
+        builder: NodeTreeBuilder<ExtLang>,
+        source: Arc<Source>,
+        x: BuildId,
+        a_chars: BuildId,
+        a_group: BuildId,
+        b_chars: BuildId,
+        b_group: BuildId,
+        frac: BuildId,
+    }
+
+    fn staged_example() -> StagedExample {
+        let source: Arc<Source> = Arc::new(Source::new(r"x\frac{a}{b}"));
+        let st = state::<ExtLang>();
+        let mut b: NodeTreeBuilder<ExtLang> = NodeTreeBuilder::new();
+        let x = b
+            .add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![], 1, ())
+            .unwrap();
+        let a_chars = b
+            .add(NodeKind::chars(Span::new(7, 8)), spanned(&source, 7..8), st.clone(), vec![], 2, ())
+            .unwrap();
+        let a_group = b
+            .add(
+                NodeKind::group(brace_group(6..7, 8..9)),
+                spanned(&source, 6..9),
+                st.clone(),
+                vec![a_chars],
+                3,
+                (),
+            )
+            .unwrap();
+        let b_chars = b
+            .add(
+                NodeKind::chars(Span::new(10, 11)),
+                spanned(&source, 10..11),
+                st.clone(),
+                vec![],
+                4,
+                (),
+            )
+            .unwrap();
+        let b_group = b
+            .add(
+                NodeKind::group(brace_group(9..10, 11..12)),
+                spanned(&source, 9..12),
+                st.clone(),
+                vec![b_chars],
+                5,
+                (),
+            )
+            .unwrap();
+        let arg_specs = [brace_arg_spec::<ExtLang>(), brace_arg_spec::<ExtLang>()];
+        let spec: Arc<dyn CallableSpec<ExtLang>> =
+            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec(), ..Default::default() });
+        let frac = b
+            .add(
+                NodeKind::callable(CallableData {
+                    callable_type: CT_MACRO,
+                    name: "frac".into(),
+                    spec,
+                    arguments: vec![
+                        ParsedArgument::provided(
+                            arg_specs[0].clone(),
+                            ChildRegion::new(0..1, ContentNodes::InChildrenOf(a_group, 0..1)),
+                            (),
+                        ),
+                        ParsedArgument::provided(
+                            arg_specs[1].clone(),
+                            ChildRegion::new(1..2, ContentNodes::InChildrenOf(b_group, 0..1)),
+                            (),
+                        ),
+                    ]
+                    .into(),
+                    slots: ParsedSlots::empty(),
+                    invocation_syntax: (),
+                }),
+                spanned(&source, 1..12),
+                st.clone(),
+                vec![a_group, b_group],
+                6,
+                (),
+            )
+            .unwrap();
+        StagedExample { builder: b, source, x, a_chars, a_group, b_chars, b_group, frac }
+    }
+
+    #[test]
+    fn staged_copy_subtree_reproduces_structure_spans_exts_and_annotations() {
+        let example = staged_example();
+        let mut target: NodeTreeBuilder<ExtLang, Option<BuildId>> = NodeTreeBuilder::new();
+        let root = example
+            .builder
+            .staged_nodes()
+            .copy_subtree_into(example.frac, &mut target, &mut |view| Some(view.id()))
+            .unwrap();
+        let copy = target.finish(root).unwrap();
+        check_tree_invariants(&copy);
+
+        // Structure and text: the whole `\frac{a}{b}` subtree, in document order.
+        assert_eq!(copy.node_count(), 5);
+        assert_eq!(copy.root().span_content(), r"\frac{a}{b}");
+        let texts: Vec<_> = copy.descendants().map(|n| n.span_content()).collect();
+        assert_eq!(texts, ["{a}", "a", "{b}", "b"]);
+        // Exts are cloned verbatim, never re-minted (the mint would answer 42).
+        assert_eq!(*copy.root().ext(), 6);
+        let exts: Vec<u16> = copy.descendants().map(|n| *n.ext()).collect();
+        assert_eq!(exts, [3, 2, 5, 4]);
+        // States are shared, not cloned.
+        assert!(Arc::ptr_eq(
+            copy.root().parsing_state(),
+            example.builder.staged_nodes().get(example.frac).unwrap().parsing_state()
+        ));
+        // Every copy names the staged node it came from; nothing here is synthesized.
+        assert_eq!(*copy.root().annotation(), Some(example.frac));
+        let annotations: Vec<_> = copy.descendants().map(|n| *n.annotation()).collect();
+        assert_eq!(
+            annotations,
+            [
+                Some(example.a_group),
+                Some(example.a_chars),
+                Some(example.b_group),
+                Some(example.b_chars),
+            ]
+        );
+        // The `InChildrenOf` records were translated and re-resolved for the new layout.
+        let record = copy.root().arguments().unwrap().get(0).unwrap().region.clone().unwrap();
+        assert_eq!(copy.node(record.content_parent()).span_content(), "{a}");
+        assert_eq!(
+            copy.root().argument_content_nodes(1).unwrap().first().unwrap().chars(),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn staged_copy_leaves_the_source_builder_untouched() {
+        // A copy reads; it claims nothing. The source builder goes on staging over the
+        // very nodes that were copied, and finishes as if no copy had happened.
+        let mut example = staged_example();
+        let source = Arc::clone(&example.source);
+        let mut target: NodeTreeBuilder<ExtLang> = NodeTreeBuilder::new();
+        let copied_x = example
+            .builder
+            .staged_nodes()
+            .copy_subtree_into(example.x, &mut target, &mut |_| ())
+            .unwrap();
+        let copied_frac = example
+            .builder
+            .staged_nodes()
+            .copy_subtree_into(example.frac, &mut target, &mut |_| ())
+            .unwrap();
+        let target_root = target
+            .add(
+                NodeKind::list(),
+                SourceSpan::entire(&source),
+                state::<ExtLang>(),
+                vec![copied_x, copied_frac],
+                0,
+                (),
+            )
+            .unwrap();
+        let copy = target.finish(target_root).unwrap();
+        check_tree_invariants(&copy);
+        assert_eq!(copy.node_count(), 7);
+
+        // `x` and `frac` were never claimed by the copy: the source builder still takes
+        // them as the children of a new node, and finishes.
+        let list = example
+            .builder
+            .add(
+                NodeKind::list(),
+                SourceSpan::entire(&source),
+                state::<ExtLang>(),
+                vec![example.x, example.frac],
+                0,
+                (),
+            )
+            .unwrap();
+        let original = example.builder.finish(list).unwrap();
+        check_tree_invariants(&original);
+        assert_eq!(original.node_count(), 7);
+    }
+
+    #[test]
+    fn restage_staged_node_translates_regions_through_dropped_and_multiplied_children() {
+        // A three-argument callable, one region per child: a bare two-character token
+        // (`InRegion`), a group (`InChildrenOf`), and a second bare token. The first
+        // child is replaced by two nodes, the second by one, and the third by none.
+        let source: Arc<Source> = Arc::new(Source::new(r"\m 12{3}4"));
+        let st = state::<PlainLang>();
+        let mut b: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+        let one = b
+            .add(NodeKind::chars(Span::new(3, 5)), spanned(&source, 3..5), st.clone(), vec![], (), ())
+            .unwrap();
+        let three = b
+            .add(NodeKind::chars(Span::new(6, 7)), spanned(&source, 6..7), st.clone(), vec![], (), ())
+            .unwrap();
+        let group = b
+            .add(
+                NodeKind::group(brace_group(5..6, 7..8)),
+                spanned(&source, 5..8),
+                st.clone(),
+                vec![three],
+                (),
+                (),
+            )
+            .unwrap();
+        let four = b
+            .add(NodeKind::chars(Span::new(8, 9)), spanned(&source, 8..9), st.clone(), vec![], (), ())
+            .unwrap();
+        let arg_specs = [brace_arg_spec::<PlainLang>(), brace_arg_spec(), brace_arg_spec()];
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec(), ..Default::default() });
+        let m = b
+            .add(
+                NodeKind::callable(CallableData {
+                    callable_type: CT_MACRO,
+                    name: "m".into(),
+                    spec,
+                    arguments: vec![
+                        ParsedArgument::provided(
+                            arg_specs[0].clone(),
+                            ChildRegion::new(0..1, ContentNodes::InRegion(0..1)),
+                            (),
+                        ),
+                        ParsedArgument::provided(
+                            arg_specs[1].clone(),
+                            ChildRegion::new(1..2, ContentNodes::InChildrenOf(group, 0..1)),
+                            (),
+                        ),
+                        ParsedArgument::provided(
+                            arg_specs[2].clone(),
+                            ChildRegion::new(2..3, ContentNodes::InRegion(0..1)),
+                            (),
+                        ),
+                    ]
+                    .into(),
+                    slots: ParsedSlots::empty(),
+                    invocation_syntax: (),
+                }),
+                SourceSpan::entire(&source),
+                st.clone(),
+                vec![one, group, four],
+                (),
+                (),
+            )
+            .unwrap();
+
+        // The replacements, staged in a builder of their own: the "12" token cut in
+        // two, and a fresh copy of the group.
+        let mut target: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+        let one_a = target
+            .add(NodeKind::chars(Span::new(3, 4)), spanned(&source, 3..4), st.clone(), vec![], (), ())
+            .unwrap();
+        let one_b = target
+            .add(NodeKind::chars(Span::new(4, 5)), spanned(&source, 4..5), st.clone(), vec![], (), ())
+            .unwrap();
+        let new_three = target
+            .add(NodeKind::chars(Span::new(6, 7)), spanned(&source, 6..7), st.clone(), vec![], (), ())
+            .unwrap();
+        let new_group = target
+            .add(
+                NodeKind::group(brace_group(5..6, 7..8)),
+                spanned(&source, 5..8),
+                st.clone(),
+                vec![new_three],
+                (),
+                (),
+            )
+            .unwrap();
+        let new_m = {
+            let staged = b.staged_nodes();
+            let node = staged.get(m).unwrap();
+            target
+                .restage_staged_node(
+                    node,
+                    &[vec![one_a, one_b], vec![new_group], vec![]],
+                    |old| (old == group).then_some(new_group),
+                    (),
+                )
+                .unwrap()
+        };
+
+        // The staged records, in the replacement layout: prefix sums [0, 2, 3, 3].
+        let regions: Vec<(Range<u32>, ContentNodes)> = {
+            let view = target.staged_nodes().get(new_m).unwrap();
+            match view.kind() {
+                NodeKind::Callable(data) => data
+                    .arguments
+                    .iter()
+                    .map(|arg| {
+                        let (children, content) = arg.region.as_ref().unwrap().staged().unwrap();
+                        (children.clone(), content.clone())
+                    })
+                    .collect(),
+                other => panic!("expected a callable, got {:?}", other),
+            }
+        };
+        assert_eq!(
+            regions,
+            [
+                // Multiplied: the region and its content both grew to two nodes.
+                (0..2, ContentNodes::InRegion(0..2)),
+                // Shifted by that growth; the content parent mapped, its range kept.
+                (2..3, ContentNodes::InChildrenOf(new_group, 0..1)),
+                // Dropped: still a *provided* argument, now with an empty region.
+                (3..3, ContentNodes::InRegion(0..0)),
+            ]
+        );
+
+        // And the copy is a well-formed tree once resolved.
+        let tree = target.finish(new_m).unwrap();
+        check_tree_invariants(&tree);
+        let content = tree.root().argument_content_nodes(0).unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content.source_text(), Some("12"));
+        assert_eq!(
+            tree.root().argument_content_nodes(1).unwrap().first().unwrap().chars(),
+            Some("3")
+        );
+        assert!(tree.root().argument_content_nodes(2).unwrap().is_empty());
+        assert!(tree.root().arguments().unwrap().get(2).unwrap().is_provided());
+    }
+
+
+    #[test]
+    fn restage_staged_node_translates_a_slot_region_through_its_replacements() {
+        // The environment shape: a marker argument, then a slot whose content is the
+        // children of a body `List`. The marker is dropped and the body is replaced by
+        // two lists, so the slot's region moves *and* grows while its content
+        // designation still names one mapped body.
+        let source: Arc<Source> = Arc::new(Source::new(r"\m*{ab}"));
+        let st = state::<PlainLang>();
+        let mut b: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+        let marker = b
+            .add(NodeKind::chars(Span::new(2, 3)), spanned(&source, 2..3), st.clone(), vec![], (), ())
+            .unwrap();
+        let a = b
+            .add(NodeKind::chars(Span::new(4, 5)), spanned(&source, 4..5), st.clone(), vec![], (), ())
+            .unwrap();
+        let b_chars = b
+            .add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![], (), ())
+            .unwrap();
+        let body = b
+            .add(NodeKind::list(), spanned(&source, 4..6), st.clone(), vec![a, b_chars], (), ())
+            .unwrap();
+        let arg_spec = brace_arg_spec::<PlainLang>();
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()], ..Default::default() });
+        let m = b
+            .add(
+                NodeKind::callable(CallableData {
+                    callable_type: CT_ENVIRONMENT,
+                    name: "m".into(),
+                    spec,
+                    arguments: vec![ParsedArgument::provided(
+                        arg_spec,
+                        ChildRegion::new(0..1, ContentNodes::InRegion(0..1)),
+                        (),
+                    )]
+                    .into(),
+                    slots: ParsedSlots::new(vec![ParsedSlot::new(
+                        ChildRegion::new(1..2, ContentNodes::InChildrenOf(body, 0..2)),
+                        "body",
+                        SlotRole::Content,
+                        (),
+                    )]),
+                    invocation_syntax: (),
+                }),
+                SourceSpan::entire(&source),
+                st.clone(),
+                vec![marker, body],
+                (),
+                (),
+            )
+            .unwrap();
+
+        // The replacements: the marker dropped, the body doubled. The mapping points
+        // the slot's content at the first of the two bodies.
+        let mut target: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+        let mut new_body = || {
+            let a = target
+                .add(
+                    NodeKind::chars(Span::new(4, 5)),
+                    spanned(&source, 4..5),
+                    st.clone(),
+                    vec![],
+                    (),
+                    (),
+                )
+                .unwrap();
+            let b = target
+                .add(
+                    NodeKind::chars(Span::new(5, 6)),
+                    spanned(&source, 5..6),
+                    st.clone(),
+                    vec![],
+                    (),
+                    (),
+                )
+                .unwrap();
+            target
+                .add(NodeKind::list(), spanned(&source, 4..6), st.clone(), vec![a, b], (), ())
+                .unwrap()
+        };
+        let body_a = new_body();
+        let body_b = new_body();
+        let new_m = {
+            let staged = b.staged_nodes();
+            let node = staged.get(m).unwrap();
+            target
+                .restage_staged_node(
+                    node,
+                    &[vec![], vec![body_a, body_b]],
+                    |old| (old == body).then_some(body_a),
+                    (),
+                )
+                .unwrap()
+        };
+
+        // The staged records, in the replacement layout: prefix sums [0, 0, 2]. The
+        // dropped argument keeps an empty region; the slot region shifted to 0..2 and
+        // its content designation names the mapped body, range verbatim.
+        let (arguments, slots): (Vec<_>, Vec<_>) = {
+            let view = target.staged_nodes().get(new_m).unwrap();
+            match view.kind() {
+                NodeKind::Callable(data) => (
+                    data.arguments
+                        .iter()
+                        .map(|arg| {
+                            let (children, content) =
+                                arg.region.as_ref().unwrap().staged().unwrap();
+                            (children.clone(), content.clone())
+                        })
+                        .collect(),
+                    data.slots
+                        .iter()
+                        .map(|slot| {
+                            let (children, content) = slot.region.staged().unwrap();
+                            (slot.name().map(alloc::string::ToString::to_string), children.clone(), content.clone())
+                        })
+                        .collect(),
+                ),
+                other => panic!("expected a callable, got {:?}", other),
+            }
+        };
+        assert_eq!(arguments, [(0..0, ContentNodes::InRegion(0..0))]);
+        assert_eq!(
+            slots,
+            [(
+                Some(String::from("body")),
+                0..2,
+                ContentNodes::InChildrenOf(body_a, 0..2)
+            )]
+        );
+
+        // Resolved, the slot reads back as the mapped body's two children.
+        let tree = target.finish(new_m).unwrap();
+        assert!(validate_tree(&tree).is_ok(), "{:?}", validate_tree(&tree));
+        let content = tree.root().slot_content_nodes_named("body").unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content.first().unwrap().chars(), Some("a"));
+        assert_eq!(content.get(1).unwrap().chars(), Some("b"));
+        assert_eq!(tree.root().slots().unwrap().get(0).unwrap().role, SlotRole::Content);
+        // The dropped argument is still provided, with empty content.
+        assert!(tree.root().arguments().unwrap().get(0).unwrap().is_provided());
+        assert!(tree.root().argument_content_nodes(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn restage_staged_node_reports_an_unmapped_content_parent() {
+        let example = staged_example();
+        let mut target: NodeTreeBuilder<ExtLang> = NodeTreeBuilder::new();
+        let a_group = example
+            .builder
+            .staged_nodes()
+            .copy_subtree_into(example.a_group, &mut target, &mut |_| ())
+            .unwrap();
+        let b_group = example
+            .builder
+            .staged_nodes()
+            .copy_subtree_into(example.b_group, &mut target, &mut |_| ())
+            .unwrap();
+        let staged = example.builder.staged_nodes();
+        let node = staged.get(example.frac).unwrap();
+        // The mapping knows the first argument's group but not the second's.
+        let error = target
+            .restage_staged_node(
+                node,
+                &[vec![a_group], vec![b_group]],
+                |old| (old == example.a_group).then_some(a_group),
+                (),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error,
+            NodeBuildError::StagedContentParentUnmapped { parent: example.b_group }
+        );
+    }
+
+    #[test]
+    fn restage_staged_node_needs_one_replacement_entry_per_child() {
+        let example = staged_example();
+        let mut target: NodeTreeBuilder<ExtLang> = NodeTreeBuilder::new();
+        let staged = example.builder.staged_nodes();
+        let node = staged.get(example.frac).unwrap();
+        let error = target.restage_staged_node(node, &[], |_| None, ()).unwrap_err();
+        assert_eq!(
+            error,
+            NodeBuildError::ReplacementsLengthMismatch { children: 2, replacements: 0 }
+        );
+    }
+
+    #[test]
+    fn staged_copy_of_an_id_that_was_never_staged_is_an_error() {
+        // The view of an empty builder holds no node at all, so the copy names the very
+        // id it was asked for.
+        let example = staged_example();
+        let empty: NodeTreeBuilder<ExtLang> = NodeTreeBuilder::new();
+        let mut target: NodeTreeBuilder<ExtLang> = NodeTreeBuilder::new();
+        let error = empty
+            .staged_nodes()
+            .copy_subtree_into(example.frac, &mut target, &mut |_| ())
+            .unwrap_err();
+        assert_eq!(error, NodeBuildError::ChildNotStaged { child: example.frac });
+    }
+
     // --- navigation: parent links and position/span lookup ----------------------------
 
     #[test]
