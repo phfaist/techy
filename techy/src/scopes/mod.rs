@@ -960,6 +960,13 @@ impl<L: Lang> Package<L> {
     /// the latexlike one-liners [`define_macro`](Package::define_macro) and
     /// [`define_environment`](Package::define_environment) stamp on their own.
     ///
+    /// Calling `new_shared` again inside `build` — a package that builds another shared
+    /// package while it is being built — is allowed: each call creates an `Arc` of its
+    /// own, and stamping only clones the weak pointer to it, never upgrades it, so
+    /// nothing reaches the outer package before `build` returns. A stamp the outer
+    /// package issued inside `build` resolves to it
+    /// ([`SpecProvenance::provider`]) once `new_shared` has returned, not before.
+    ///
     /// ```
     /// use techy::core::specs::{Package, StdCallableSpec};
     /// use techy::core::TrivialLang;
@@ -2196,6 +2203,50 @@ mod tests {
         let a = package.get(MACRO, "emph").unwrap();
         let b = package.get(MACRO, "textit").unwrap();
         assert!(Arc::ptr_eq(a, b));
+    }
+
+    #[test]
+    fn a_shared_package_may_build_another_shared_package_inside_its_own_build() {
+        let mut outer_stamp = None;
+        let mut inner = None;
+        let outer = Package::<PlainLang>::new_shared("outer", |package| {
+            let stamp = package.provenance_for(MACRO, "outer-macro").expect("a shared package stamps");
+            // While `build` runs, the outer package's own stamp resolves to nothing:
+            // its `Arc` is not finished, so the weak pointer cannot be upgraded.
+            assert!(stamp.provider().is_none());
+            package.insert(MACRO, "outer-macro", new_spec());
+
+            // A second shared package, built here, gets an `Arc` of its own.
+            let nested = Package::<PlainLang>::new_shared("inner", |nested| {
+                let nested_stamp = nested.provenance_for(MACRO, "inner-macro").expect("a shared package stamps");
+                assert!(nested_stamp.provider().is_none());
+                nested.insert(MACRO, "inner-macro", new_spec());
+            });
+            assert!(nested.is_shared());
+            // The inner package is finished, so its stamps resolve to it — while the
+            // outer one is still being built.
+            let nested_stamp = nested.provenance_for(MACRO, "inner-macro").unwrap();
+            assert_eq!(nested_stamp.provider().expect("the inner package is finished").name(), "inner");
+
+            outer_stamp = Some(stamp);
+            inner = Some(nested);
+        });
+
+        assert!(outer.is_shared());
+        let inner = inner.unwrap();
+        assert!(inner.is_shared());
+        assert!(inner.get(MACRO, "inner-macro").is_some());
+        assert!(outer.get(MACRO, "outer-macro").is_some());
+
+        // The stamp issued inside `build` resolves to the outer package now.
+        let provider = outer_stamp.unwrap().provider().expect("the outer package is finished");
+        assert_eq!(provider.name(), "outer");
+        let outer_provider: Arc<dyn SpecsProvider<PlainLang>> = outer.clone();
+        assert!(Arc::ptr_eq(&provider, &outer_provider));
+        // Both stamps issued inside the inner build resolve to the inner package.
+        let nested_stamp = inner.provenance_for(MACRO, "inner-macro").unwrap();
+        let inner_provider: Arc<dyn SpecsProvider<PlainLang>> = inner.clone();
+        assert!(Arc::ptr_eq(&nested_stamp.provider().unwrap(), &inner_provider));
     }
 
     // --- stack retrieval: shadowing, fallbacks, error specs, provider errors ------------
