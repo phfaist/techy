@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
 
+use crate::error::InconsistentDiagnosticCounts;
 use crate::scopes::DefinitionKey;
 
 use super::value::TableId;
@@ -742,26 +743,16 @@ pub enum DeserializeError {
         /// projection itself is the offending value.
         path: String,
     },
-    /// A serialized diagnostics collection's counts contradict one another.
+    /// A serialized diagnostics collection's counts contradict one another, so
+    /// [`Diagnostics::from_parts`](crate::error::Diagnostics::from_parts) refused them.
     ///
-    /// `retained` diagnostics were listed, `retained_errors` of them of error severity, under
-    /// a retention cap of `limit`, with `suppressed` pushes beyond the cap and `error_count`
-    /// error-severity pushes in all. A live collection always has `retained <= limit`, has
-    /// `suppressed > 0` only when `retained == limit`, and has
-    /// `retained_errors <= error_count <= retained_errors + suppressed` — the invariants
+    /// The wrapped [`InconsistentDiagnosticCounts`] reports the counts that were read and
+    /// which invariant they break; a live collection always satisfies the invariants
     /// [`Diagnostics::push`](crate::error::Diagnostics::push) maintains.
-    InconsistentDiagnosticCounts {
-        /// The number of diagnostics listed.
-        retained: usize,
-        /// How many of them have error severity.
-        retained_errors: usize,
-        /// The recorded retention cap.
-        limit: usize,
-        /// The recorded number of pushes beyond the cap.
-        suppressed: usize,
-        /// The recorded number of error-severity pushes.
-        error_count: usize,
-    },
+    InconsistentDiagnosticCounts(
+        /// What was read and which invariant it breaks.
+        InconsistentDiagnosticCounts,
+    ),
     /// Where a failure happened: while deserializing entry `index` of table `table`.
     ///
     /// The session adds this wrapper around a driver's failure, which `cause` holds.
@@ -1012,15 +1003,8 @@ impl fmt::Display for DeserializeError {
                      strings, lists, and string-keyed maps)"
                 )
             }
-            DeserializeError::InconsistentDiagnosticCounts { retained, retained_errors, limit, suppressed, error_count } => {
-                write!(
-                    f,
-                    "the diagnostics collection's counts are inconsistent: {retained} diagnostics \
-                     listed ({retained_errors} errors) under a retention limit of {limit}, with \
-                     {suppressed} suppressed and {error_count} errors in all (a live collection has \
-                     retained <= limit, suppressed > 0 only when retained == limit, and \
-                     retained errors <= error count <= retained errors + suppressed)"
-                )
+            DeserializeError::InconsistentDiagnosticCounts(counts) => {
+                write!(f, "{counts}")
             }
             DeserializeError::InEntry { table, index, identifier, cause } => match identifier {
                 Some(identifier) => write!(
@@ -1047,6 +1031,7 @@ impl core::error::Error for DeserializeError {
                 cause.as_ref().map(|cause| &**cause as &(dyn core::error::Error + 'static))
             }
             DeserializeError::Value(error) => Some(error),
+            DeserializeError::InconsistentDiagnosticCounts(error) => Some(error),
             DeserializeError::InEntry { cause, .. } | DeserializeError::InNode { cause, .. } => Some(&**cause),
             _ => None,
         }

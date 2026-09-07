@@ -646,8 +646,8 @@ fn inconsistent_diagnostic_counts_are_rejected() {
     let result = Arc::new(parse("{a {b"));
     assert_eq!(result.diagnostics.len(), 2);
     let counts = |error: &DeserializeError| match innermost(error) {
-        DeserializeError::InconsistentDiagnosticCounts { retained, retained_errors, limit, suppressed, error_count } => {
-            (*retained, *retained_errors, *limit, *suppressed, *error_count)
+        DeserializeError::InconsistentDiagnosticCounts(counts) => {
+            (counts.retained, counts.retained_errors, counts.limit, counts.suppressed, counts.error_count)
         }
         other => panic!("unexpected error: {other}"),
     };

@@ -20,7 +20,7 @@ use core::fmt;
 use core::marker::PhantomData;
 
 use crate::engine::ParseResult;
-use crate::error::{Diagnostics, Severity};
+use crate::error::Diagnostics;
 use crate::node::NodeTree;
 use crate::state::Lang;
 
@@ -67,13 +67,14 @@ crate::serial_index! {
 /// diagnostics table (its condition is then a
 /// [`DeserializedCondition`](crate::serialize::DeserializedCondition) — see
 /// [`DiagnosticSerdeDriver`]), reads the session extension back, and re-establishes
-/// the diagnostics collection with the recorded cap and counts after checking they
-/// are consistent with one another (the invariants [`Diagnostics::push`] maintains:
-/// no more retained diagnostics than the cap, suppressed pushes only when the cap
-/// was reached, an error count between the retained errors and the retained errors
-/// plus the suppressed pushes — [`DeserializeError::InconsistentDiagnosticCounts`]
-/// otherwise; whether the suppressed pushes were errors is not recoverable, so the
-/// error count is trusted within those bounds).
+/// the diagnostics collection with the recorded cap and counts through
+/// [`Diagnostics::from_parts`], which checks that they are consistent with one another
+/// (the invariants [`Diagnostics::push`] maintains: no more retained diagnostics than
+/// the cap, suppressed pushes only when the cap was reached, an error count between the
+/// retained errors and the retained errors plus the suppressed pushes —
+/// [`DeserializeError::InconsistentDiagnosticCounts`] otherwise; whether the suppressed
+/// pushes were errors is not recoverable, so the error count is trusted within those
+/// bounds).
 ///
 /// A parse result is an object of the table: interning the same `Arc<ParseResult>` twice
 /// yields the existing position, unlike a tree or a diagnostic written on its own, which
@@ -213,21 +214,9 @@ impl<L: SerializableLang> DeserializableObject<L> for ParseResult<L> {
             .collect::<Result<Vec<_>, _>>()?;
         let session_ext = <L::SessionExt as DeserializableValue<L>>::deserialize_value(&wire.session_ext, cx)?;
         let WireDiagnostics { limit, suppressed, error_count, .. } = wire.diagnostics;
-        let retained_errors = items.iter().filter(|diagnostic| diagnostic.severity() == Severity::Error).count();
-        let consistent = items.len() <= limit
-            && (suppressed == 0 || items.len() == limit)
-            && retained_errors <= error_count
-            && error_count <= retained_errors.saturating_add(suppressed);
-        if !consistent {
-            return Err(DeserializeError::InconsistentDiagnosticCounts {
-                retained: items.len(),
-                retained_errors,
-                limit,
-                suppressed,
-                error_count,
-            });
-        }
-        Ok(ParseResult { tree, diagnostics: Diagnostics::from_parts(items, limit, suppressed, error_count), session_ext })
+        let diagnostics = Diagnostics::from_parts(items, limit, suppressed, error_count)
+            .map_err(DeserializeError::InconsistentDiagnosticCounts)?;
+        Ok(ParseResult { tree, diagnostics, session_ext })
     }
 }
 

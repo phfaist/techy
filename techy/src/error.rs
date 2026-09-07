@@ -764,19 +764,51 @@ impl<O: SourceOrigin> Diagnostics<O> {
     }
 
     /// Assembles a collection from the parts a serialized collection recorded — the
-    /// entry point used when deserializing.
+    /// entry point for reading one back.
     ///
-    /// The caller is responsible for the invariants `push` maintains:
-    /// `items.len() <= limit`; `suppressed > 0` only when `items.len() == limit`; and
-    /// `error_count` between the number of error-severity `items` and that number plus
-    /// `suppressed`.
-    pub(crate) fn from_parts(
+    /// The parts are exactly what the accessors report: `items` are the diagnostics that
+    /// were stored, `limit` the retention cap they were stored under,
+    /// [`suppressed`](Diagnostics::suppressed) the number of pushes dropped beyond that
+    /// cap, and [`error_count`](Diagnostics::error_count) the number of error-severity
+    /// pushes in all, stored and suppressed together.
+    ///
+    /// Use this to rebuild a collection from a serialized form — the one
+    /// [`techy::serialize`](crate::serialize) writes, a wire format of your own, or a
+    /// language binding handing the counts back. A collection filled diagnostic by
+    /// diagnostic is built with [`with_limit`](Diagnostics::with_limit) and
+    /// [`push`](Diagnostics::push) instead.
+    ///
+    /// # Errors
+    ///
+    /// The parts must satisfy the invariants [`push`](Diagnostics::push) maintains, and
+    /// [`InconsistentDiagnosticCounts`] is returned when they do not:
+    ///
+    /// - `items.len() <= limit`;
+    /// - `suppressed > 0` only when `items.len() == limit`;
+    /// - `error_count` is at least the number of error-severity `items`, and at most that
+    ///   number plus `suppressed`.
+    pub fn from_parts(
         items: Vec<Diagnostic<O>>,
         limit: usize,
         suppressed: usize,
         error_count: usize,
-    ) -> Self {
-        Diagnostics { items, limit, suppressed, error_count }
+    ) -> Result<Self, InconsistentDiagnosticCounts> {
+        let retained_errors =
+            items.iter().filter(|diagnostic| diagnostic.severity == Severity::Error).count();
+        let consistent = items.len() <= limit
+            && (suppressed == 0 || items.len() == limit)
+            && retained_errors <= error_count
+            && error_count <= retained_errors.saturating_add(suppressed);
+        if !consistent {
+            return Err(InconsistentDiagnosticCounts {
+                retained: items.len(),
+                retained_errors,
+                limit,
+                suppressed,
+                error_count,
+            });
+        }
+        Ok(Diagnostics { items, limit, suppressed, error_count })
     }
 
     /// Appends a diagnostic.
@@ -982,6 +1014,65 @@ impl<'a, O: SourceOrigin> IntoIterator for &'a Diagnostics<O> {
         self.items.iter()
     }
 }
+
+/// The failure of [`Diagnostics::from_parts`]: the parts given contradict one another,
+/// so no collection filled through [`Diagnostics::push`] could have produced them.
+///
+/// The fields report the parts as they were given: `retained` diagnostics were supplied,
+/// `retained_errors` of them of error severity, under a retention cap of `limit`, with
+/// `suppressed` pushes dropped beyond the cap and `error_count` error-severity pushes in
+/// all. The invariants they must satisfy are listed on
+/// [`from_parts`](Diagnostics::from_parts).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InconsistentDiagnosticCounts {
+    /// The number of diagnostics supplied.
+    pub retained: usize,
+    /// How many of them have error severity.
+    pub retained_errors: usize,
+    /// The retention cap supplied.
+    pub limit: usize,
+    /// The supplied number of pushes dropped beyond the cap.
+    pub suppressed: usize,
+    /// The supplied number of error-severity pushes.
+    pub error_count: usize,
+}
+
+impl fmt::Display for InconsistentDiagnosticCounts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let InconsistentDiagnosticCounts {
+            retained,
+            retained_errors,
+            limit,
+            suppressed,
+            error_count,
+        } = *self;
+        write!(
+            f,
+            "the diagnostics collection's counts are inconsistent: {retained} diagnostics \
+             supplied ({retained_errors} of them errors) under a retention limit of {limit}, \
+             with {suppressed} suppressed and {error_count} errors in all — "
+        )?;
+        if retained > limit {
+            write!(f, "more diagnostics were supplied than the retention limit allows")
+        } else if suppressed > 0 && retained != limit {
+            write!(
+                f,
+                "diagnostics were suppressed although the retention limit was not reached"
+            )
+        } else if retained_errors > error_count {
+            write!(f, "more of the supplied diagnostics are errors than were reported in all")
+        } else {
+            write!(
+                f,
+                "more errors were reported in all than the supplied errors plus the \
+                 suppressed diagnostics can account for"
+            )
+        }
+    }
+}
+
+impl core::error::Error for InconsistentDiagnosticCounts {}
 
 /// Whether a parse aborts at the first problem or records it and carries on.
 ///
@@ -1664,6 +1755,102 @@ mod tests {
         ));
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics.has_errors());
+    }
+
+    #[test]
+    fn from_parts_restores_a_collection_whose_diagnostics_were_dropped() {
+        let source = arc_source("abcd");
+        let mut original: Diagnostics = Diagnostics::with_limit(2);
+        for i in 0..4 {
+            original.push(Diagnostic::error(
+                TestCondition::new("boom"),
+                SourceSpan::new(&source, i..i + 1),
+            ));
+        }
+
+        // The parts a serialized form records, handed straight back.
+        let items: Vec<Diagnostic> = original.iter().cloned().collect();
+        let rebuilt = Diagnostics::from_parts(
+            items,
+            original.limit(),
+            original.suppressed(),
+            original.error_count(),
+        )
+        .unwrap();
+
+        assert_eq!(rebuilt.len(), original.len());
+        assert_eq!(rebuilt.limit(), 2);
+        assert_eq!(rebuilt.suppressed(), 2);
+        assert_eq!(rebuilt.error_count(), 4);
+        assert!(rebuilt.has_errors());
+        assert_eq!(rebuilt.render_all(), original.render_all());
+    }
+
+    #[test]
+    fn from_parts_rejects_counts_that_contradict_one_another() {
+        let source = arc_source("ab");
+        // Two diagnostics, one of them an error.
+        let items: Vec<Diagnostic> = vec![
+            Diagnostic::error(TestCondition::new("bad"), SourceSpan::new(&source, 0..1)),
+            Diagnostic::warning(TestCondition::new("odd"), SourceSpan::new(&source, 1..2)),
+        ];
+        let refuse = |limit, suppressed, error_count| {
+            Diagnostics::from_parts(items.clone(), limit, suppressed, error_count).unwrap_err()
+        };
+
+        // More diagnostics than the retention cap allows.
+        assert_eq!(
+            refuse(1, 0, 1),
+            InconsistentDiagnosticCounts {
+                retained: 2,
+                retained_errors: 1,
+                limit: 1,
+                suppressed: 0,
+                error_count: 1,
+            }
+        );
+        // Suppressed pushes although the cap was not reached.
+        assert_eq!(
+            refuse(5, 1, 1),
+            InconsistentDiagnosticCounts {
+                retained: 2,
+                retained_errors: 1,
+                limit: 5,
+                suppressed: 1,
+                error_count: 1,
+            }
+        );
+        // Fewer errors in all than there are error-severity diagnostics.
+        assert_eq!(
+            refuse(5, 0, 0),
+            InconsistentDiagnosticCounts {
+                retained: 2,
+                retained_errors: 1,
+                limit: 5,
+                suppressed: 0,
+                error_count: 0,
+            }
+        );
+        // More errors in all than the retained errors plus the suppressed pushes.
+        assert_eq!(
+            refuse(2, 1, 3),
+            InconsistentDiagnosticCounts {
+                retained: 2,
+                retained_errors: 1,
+                limit: 2,
+                suppressed: 1,
+                error_count: 3,
+            }
+        );
+
+        // Each refusal says which invariant failed.
+        assert!(refuse(1, 0, 1).to_string().contains("more diagnostics were supplied"));
+        assert!(refuse(5, 1, 1).to_string().contains("although the retention limit was not"));
+        assert!(refuse(5, 0, 0).to_string().contains("are errors than were reported in all"));
+        assert!(refuse(2, 1, 3).to_string().contains("more errors were reported in all"));
+
+        // And the consistent parts are accepted.
+        assert!(Diagnostics::from_parts(items, 2, 1, 2).is_ok());
     }
 
     #[test]
