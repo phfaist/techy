@@ -66,7 +66,8 @@ crate::serial_index! {
 /// Reading rebuilds the tree through the trees table and each diagnostic through the
 /// diagnostics table (its condition is then a
 /// [`DeserializedCondition`](crate::serialize::DeserializedCondition) — see
-/// [`DiagnosticSerdeDriver`]), reads the session extension back, and re-establishes
+/// [`DiagnosticSerdeDriver`](crate::serialize::DiagnosticSerdeDriver)), reads the
+/// session extension back, and re-establishes
 /// the diagnostics collection with the recorded cap and counts through
 /// [`Diagnostics::from_parts`], which checks that they are consistent with one another
 /// (the invariants [`Diagnostics::push`] maintains: no more retained diagnostics than
