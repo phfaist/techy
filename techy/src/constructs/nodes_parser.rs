@@ -2765,6 +2765,207 @@ mod tests {
         assert_eq!(err.span().range(), 2..3);
     }
 
+    /// Which kind of recovery placeholder [`PlaceholderReader`] mints.
+    #[derive(Debug, Clone, Copy)]
+    enum PlaceholderKind {
+        Specials,
+        GroupOpen,
+    }
+
+    /// A token source that offers a recovery placeholder of a chosen kind at one
+    /// offset: peeking there reports a recoverable error whose placeholder token
+    /// stands over that single character, with the resume position just past it.
+    ///
+    /// No standard reader mints a `Specials` or `GroupOpen` placeholder — the standard
+    /// forbidden-character recovery offers a `Char` — so this is the only way to reach
+    /// the content loop's unusable-placeholder arms.
+    struct PlaceholderReader<'s> {
+        inner: StdTokenReader<'s>,
+        /// The offset the placeholder is offered at.
+        at: usize,
+        kind: PlaceholderKind,
+    }
+
+    impl<'s> PlaceholderReader<'s> {
+        /// Delegation goes through a `dyn` view, as in [`StuckRecoveryReader`].
+        fn inner(&self) -> &dyn TokenReader<'s, TestLang> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, TestLang> {
+            &mut self.inner
+        }
+    }
+
+    impl<'s> TokenReader<'s, TestLang> for PlaceholderReader<'s> {
+        fn peek(
+            &mut self,
+            state: &Arc<ParsingState<TestLang>>,
+        ) -> TokenResult<TestLang, StdToken<TestLang>> {
+            let here = self.inner().position_here();
+            if here.offset() != self.at {
+                return self.inner_mut().peek(state);
+            }
+            let span = Span::new(self.at, self.at + 1);
+            let token = match self.kind {
+                PlaceholderKind::Specials => {
+                    let spec: Arc<dyn CallableSpec<TestLang>> =
+                        Arc::new(StdCallableSpec::default());
+                    StdToken::specials(CT_SPECIALS, spec, span, Span::empty(self.at))
+                }
+                PlaceholderKind::GroupOpen => StdToken::group_open(
+                    Arc::new(GroupRule {
+                        group_type: GT_BRACE,
+                        open: "{".into(),
+                        close: "}".into(),
+                    }),
+                    span,
+                    Span::empty(self.at),
+                ),
+            };
+            let resume = self.inner().position_at(&token, TokenEdge::EndPastPostSpace);
+            Err(TokenError::new(
+                TokenErrorKind::ForbiddenChar(crate::token::ForbiddenChar::new('#')),
+                SourceSpan::new(self.inner.source(), span),
+                Some(TokenRecovery { token, resume }),
+            ))
+        }
+
+        fn move_to(&mut self, tok: &StdToken<TestLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn token_kind<'t>(&self, tok: &'t StdToken<TestLang>) -> TokenKind<'t, TestLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &StdToken<TestLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &StdToken<TestLang>, edge: TokenEdge) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
+        }
+
+        fn source_span_describing(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> SourceSpan {
+            self.inner().source_span_describing(begin, end)
+        }
+    }
+
+    /// The `UnusableRecoveryToken` the run recorded, with the token error that came
+    /// ahead of it checked in passing.
+    fn unusable_placeholder<L: Lang>(result: &ParseResult<L>) -> UnusableRecoveryToken {
+        let diagnostics: Vec<_> = result.diagnostics.iter().collect();
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        // First the read failure itself, then the loop's refusal to use the
+        // placeholder it was offered.
+        assert_eq!(diagnostics[0].identifier(), crate::token::ForbiddenChar::IDENTIFIER);
+        assert_eq!(diagnostics[1].identifier(), UnusableRecoveryToken::IDENTIFIER);
+        diagnostics[1]
+            .data()
+            .downcast_ref::<UnusableRecoveryToken>()
+            .expect("the unusable-placeholder condition")
+            .clone()
+    }
+
+    #[test]
+    fn a_specials_placeholder_is_unusable_and_recovers_as_chars() {
+        // Recognition is resolution for specials, but a placeholder has no source
+        // bytes to invoke anything over: the loop diagnoses it and stages the span as
+        // ordinary chars instead.
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab~cd"));
+        let mut reader = PlaceholderReader {
+            inner: StdTokenReader::new(&source),
+            at: 2,
+            kind: PlaceholderKind::Specials,
+        };
+        let parsed =
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"ab\"", "chars 2..3 \"~\"", "chars 3..5 \"cd\""]
+        );
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        let condition = unusable_placeholder(&parsed.result);
+        assert_eq!(condition.kind, UnusableRecoveryTokenKind::Specials);
+        assert_eq!(condition.spelling, "~");
+        assert_partition(&parsed.result, 0..5);
+    }
+
+    #[test]
+    fn a_group_open_placeholder_is_unusable_and_recovers_as_chars() {
+        // The same for a group open: there is no group to parse behind a delimiter
+        // with no bytes, so the placeholder's span becomes a chars node.
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab{cd"));
+        let mut reader = PlaceholderReader {
+            inner: StdTokenReader::new(&source),
+            at: 2,
+            kind: PlaceholderKind::GroupOpen,
+        };
+        let parsed =
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"ab\"", "chars 2..3 \"{\"", "chars 3..5 \"cd\""]
+        );
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        let condition = unusable_placeholder(&parsed.result);
+        assert_eq!(condition.kind, UnusableRecoveryTokenKind::GroupOpen);
+        assert_eq!(condition.spelling, "{");
+        assert_partition(&parsed.result, 0..5);
+    }
+
+    #[test]
+    fn a_specials_placeholder_aborts_under_strict_recovery() {
+        // Strict recovery never adopts a token recovery: the read failure itself ends
+        // the parse, and the placeholder arm is never reached.
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab~cd"));
+        let mut reader = PlaceholderReader {
+            inner: StdTokenReader::new(&source),
+            at: 2,
+            kind: PlaceholderKind::Specials,
+        };
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
+            .unwrap_err();
+        assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
+        assert_eq!(err.span().range(), 2..3);
+    }
+
     /// A token source that violates the `TokenRecovery::resume` advancement contract:
     /// every `peek` reports a recoverable forbidden-char error whose `resume` is the
     /// position the reader already stands at, so adopting the recovery re-reads the

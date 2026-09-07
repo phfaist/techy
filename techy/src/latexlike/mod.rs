@@ -865,6 +865,27 @@ mod tests {
     }
 
     #[test]
+    fn a_childless_macro_ends_past_its_own_post_space() {
+        // `ParseContext::stage_invocation`'s childless rule: with no argument to end
+        // at, the node ends where the reader stands, which is past the trigger's own
+        // syntactic post-space. The two spaces after `\alpha` therefore belong to the
+        // macro node, and the sibling chars node starts at the `x`.
+        let language = with_alpha(crate::error::Recovery::Strict, false);
+        let result = language.parse(r"\alpha  x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+
+        let alpha = result.tree.root().child(0).unwrap();
+        assert_eq!(alpha.macro_name(), Some("alpha"));
+        assert_eq!(alpha.span().range(), 0..8);
+        // The post-space is recorded on the node, which is why it is inside the span.
+        assert_eq!(alpha.post_space(), Some("  "));
+
+        let rest = result.tree.root().child(1).unwrap();
+        assert_eq!(rest.chars(), Some("x"));
+        assert_eq!(rest.span().range(), 8..9);
+    }
+
+    #[test]
     fn mode_visibility_gates_package_definitions() {
         let language = with_alpha(crate::error::Recovery::Tolerant, true);
 

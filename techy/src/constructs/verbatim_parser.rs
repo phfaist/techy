@@ -995,9 +995,11 @@ mod tests {
     use crate::state::StateData;
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsRules, StdToken, StdTokenReader, TokenKind, TokenReader,
+        ParagraphRules, SpecialsRules, StdStreamPosition, StdToken, StdTokenReader, TokenEdge,
+        TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery, TokenResult,
         TokenRules, WhitespaceRules,
     };
+    use crate::source::SourcePos;
     use alloc::format;
     use alloc::string::ToString;
     use alloc::vec;
@@ -1530,18 +1532,31 @@ mod tests {
         terminator: VerbatimBodyTerminator<'_, VerbLang>,
     ) -> Result<BodyRun, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let state = plain_state();
         let mut reader = StdTokenReader::new(&source);
+        run_body_over(&source, &mut reader, recovery, gobble, terminator)
+    }
+
+    /// [`run_body_with`] over a caller-supplied reader — the seam the unreadable-token
+    /// test needs, the standard reader having nothing left to reject under the raw
+    /// reading state.
+    fn run_body_over<'s>(
+        source: &'s Arc<Source>,
+        reader: &mut dyn TokenReader<'s, VerbLang>,
+        recovery: Recovery,
+        gobble: bool,
+        terminator: VerbatimBodyTerminator<'_, VerbLang>,
+    ) -> Result<BodyRun, ParseError> {
+        let state = plain_state();
         let mut session = ParserSession::new();
         let driver = VerbDriver { recovery };
         let mut cx = ParseContext::new(
-            &mut reader,
+            reader,
             Arc::clone(&state),
             &mut session,
             &driver);
         let mut parser =
             VerbatimBodyParser::new(
-                SourceSpan::new(&source, 0..0),
+                SourceSpan::new(source, 0..0),
                 "verbatim",
                 terminator,
                 GT_VERB,
@@ -1558,7 +1573,7 @@ mod tests {
             .builder
             .add(
                 NodeKind::list(),
-                SourceSpan::new(&source, span),
+                SourceSpan::new(source, span),
                 Arc::clone(&state),
                 vec![body.body], (), (),
             )
@@ -1644,6 +1659,148 @@ mod tests {
         assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..]));
         assert_eq!(run.end_offset, text.len());
         // Nothing was consumed, so no terminator facts are reported.
+        assert!(run.terminator.is_none());
+    }
+
+    /// A token source that cannot read the character at one offset: peeking there
+    /// reports a recoverable error, whose recovery the tolerant policy takes by
+    /// skipping that one character.
+    ///
+    /// The standard reader has nothing left to reject under the raw-reading state (the
+    /// forbidden set is cleared with every other feature), so only a reader of the
+    /// embedder's own reaches the body's unreadable-token ending.
+    struct UnreadableAtReader<'s> {
+        inner: StdTokenReader<'s>,
+        /// The offset that cannot be read.
+        at: usize,
+    }
+
+    impl<'s> UnreadableAtReader<'s> {
+        /// Delegation goes through a `dyn` view: the inner reader's `TokenReader` impl
+        /// is generic over the language, which plain method syntax cannot infer here.
+        fn inner(&self) -> &dyn TokenReader<'s, VerbLang> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, VerbLang> {
+            &mut self.inner
+        }
+    }
+
+    impl<'s> TokenReader<'s, VerbLang> for UnreadableAtReader<'s> {
+        fn peek(
+            &mut self,
+            state: &Arc<ParsingState<VerbLang>>,
+        ) -> TokenResult<VerbLang, StdToken<VerbLang>> {
+            let here = self.inner().position_here();
+            if here.offset() != self.at {
+                return self.inner_mut().peek(state);
+            }
+            let span = Span::new(self.at, self.at + 1);
+            Err(TokenError::new(
+                TokenErrorKind::ForbiddenChar(crate::token::ForbiddenChar::new('?')),
+                SourceSpan::new(self.inner.source(), span),
+                Some(TokenRecovery {
+                    token: StdToken::char('?', span, Span::empty(self.at)),
+                    resume: StdStreamPosition::at(self.at + 1),
+                }),
+            ))
+        }
+
+        fn move_to(&mut self, tok: &StdToken<VerbLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn token_kind<'t>(&self, tok: &'t StdToken<VerbLang>) -> TokenKind<'t, VerbLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &StdToken<VerbLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &StdToken<VerbLang>, edge: TokenEdge) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
+        }
+
+        fn source_span_describing(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> SourceSpan {
+            self.inner().source_span_describing(begin, end)
+        }
+    }
+
+    #[test]
+    fn a_tolerated_unreadable_token_ends_the_body_and_is_not_end_of_input() {
+        // The body ends where the reading stopped, and the diagnostic says so: the
+        // input has more to give, so `EndOfInput` would be the wrong answer.
+        let text = "\nabc?def\\end{verbatim}";
+        let unreadable = text.find('?').unwrap();
+        let source: Arc<Source> = Arc::new(Source::new(text));
+        let mut reader =
+            UnreadableAtReader { inner: StdTokenReader::new(&source), at: unreadable };
+        let run = run_body_over(
+            &source,
+            &mut reader,
+            Recovery::Tolerant,
+            true,
+            literal_terminator(),
+        )
+        .expect("the tolerant policy keeps going");
+
+        assert_eq!(run.result.diagnostics.len(), 1);
+        let diagnostic = run.result.diagnostics.iter().next().unwrap();
+        assert_eq!(
+            diagnostic.identifier(),
+            <MissingEnvironmentTerminator as crate::error::DiagnosticInfo>::IDENTIFIER
+        );
+        let condition = diagnostic
+            .data()
+            .downcast_ref::<MissingEnvironmentTerminator>()
+            .expect("the missing-terminator condition");
+        assert_eq!(condition.found, MissingTerminatorFound::UnreadableToken);
+        assert_eq!(
+            diagnostic.message(),
+            "missing terminator of environment ‘verbatim’ before a token that could \
+             not be read"
+        );
+
+        // The content is what was read up to the unreadable character, and the body
+        // ends there — not at the input's end, which lies well beyond.
+        let list = run.result.tree.root().child(0).unwrap();
+        assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..unreadable]));
+        assert_eq!(run.end_offset, unreadable);
+        assert!(run.end_offset < text.len());
         assert!(run.terminator.is_none());
     }
 
