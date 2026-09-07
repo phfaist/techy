@@ -8,6 +8,7 @@ use core::fmt;
 
 use crate::engine::StdDescentGuard;
 
+use super::super::drivers::StandardTables;
 use super::super::error::{DeserializeError, SerializeError};
 use super::super::object::SerializableLang;
 use super::driver::{ObjectSerdeDriver, TableHandle};
@@ -75,6 +76,18 @@ impl<'a, L: SerializableLang> SerializeContext<'a, L> {
     /// This is how a serialization call finds a table it holds no handle for.
     pub fn table_handle<D: ObjectSerdeDriver<L>>(&self, name: &str) -> Option<TableHandle<D>> {
         self.session.table_handle::<D>(name)
+    }
+
+    /// The handles of the session's standard tables, if it has all of them (see
+    /// [`SerdeSession::standard_tables`]).
+    ///
+    /// This is how a serialization call reaches the tables the crate's own objects are
+    /// written to — sources, states, specs, providers, trees, diagnostics, parse
+    /// results — without naming them one by one. `None` means the session is missing at
+    /// least one of them, which is only possible for a session composed with
+    /// [`SerdeSession::empty`].
+    pub fn standard_tables(&self) -> Option<StandardTables<L>> {
+        self.session.standard_tables()
     }
 
     /// The session, for crate-internal operations (a driver's lookup of the
@@ -171,6 +184,18 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
     /// This is how a deserialization call finds a table it holds no handle for.
     pub fn table_handle<D: ObjectSerdeDriver<L>>(&self, name: &str) -> Option<TableHandle<D>> {
         self.session.table_handle::<D>(name)
+    }
+
+    /// The handles of the session's standard tables, if it has all of them (see
+    /// [`SerdeSession::standard_tables`]).
+    ///
+    /// This is how a deserialization call reaches the tables the crate's own objects are
+    /// read from — sources, states, specs, providers, trees, diagnostics, parse
+    /// results — without naming them one by one. `None` means the session is missing at
+    /// least one of them, which is only possible for a session composed with
+    /// [`SerdeSession::empty`].
+    pub fn standard_tables(&self) -> Option<StandardTables<L>> {
+        self.session.standard_tables()
     }
 
     /// The session, for crate-internal operations (the dispatching driver's reader

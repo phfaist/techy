@@ -3,7 +3,8 @@
 //! deserialized condition's contract (identifier, projection, message; no downcast to
 //! the original type), sources shared between a tree and its diagnostics, parse-result
 //! round trips (a toy language with a non-unit session ext; suppressed diagnostics;
-//! identity interning), the embedding of `DiagnosticValue`, `Severity`'s value
+//! identity interning), a driver of its own reaching the standard tables through the
+//! context, the embedding of `DiagnosticValue`, `Severity`'s value
 //! conversions, and the hostile-input battery (bad severity, byte strings and table
 //! positions inside a projection, spans out of range, references into the wrong table
 //! or out of range, inconsistent counts, a parse result naming a tree of another
@@ -355,6 +356,99 @@ fn a_parse_result_serialized_through_the_general_intern_reads_back_through_the_s
     reader.push_segment(pass_through(writer.take_segment())).unwrap();
     let back = reader.parse_result(reader.standard_tables().unwrap().parse_results.position(position.index())).unwrap();
     assert_parse_results_equivalent(&result, &back);
+}
+
+// --- a table of one's own, reaching the standard tables through the context -----------------
+
+/// A framework-style object of a table of its own: it holds a tree, and its driver
+/// reaches the trees table through the context rather than by naming it.
+#[derive(Debug)]
+struct Snapshot {
+    tree: crate::node::NodeTree<DiagLang>,
+}
+
+crate::serial_index! {
+    /// Position in the snapshots table.
+    pub struct SnapshotIndex;
+}
+
+struct SnapshotDriver;
+
+impl crate::serialize::ObjectSerdeDriver<DiagLang> for SnapshotDriver {
+    type Object = Snapshot;
+    type Index = SnapshotIndex;
+
+    fn table_name(&self) -> &'static str {
+        "snapshots"
+    }
+
+    fn homogeneous_identifier(&self) -> Option<&'static str> {
+        Some("test.snapshot")
+    }
+
+    fn serialize_object(
+        &self,
+        snapshot: &Arc<Snapshot>,
+        cx: &mut SerializeContext<'_, DiagLang>,
+    ) -> Result<crate::serialize::SerialEntry, SerializeError> {
+        let trees = cx
+            .standard_tables()
+            .ok_or_else(|| SerializeError::UnknownTableName { name: String::from("trees") })?
+            .trees;
+        let tree: Arc<dyn core::any::Any + Send + Sync> = Arc::new(snapshot.tree.clone());
+        let position = cx.intern(trees, &tree)?;
+        Ok(crate::serialize::SerialEntry {
+            identifier: "test.snapshot".into(),
+            data: SerialValue::Index { table: position.table(), index: position.index() },
+        })
+    }
+
+    fn deserialize_object(
+        &self,
+        entry: &crate::serialize::SerialEntry,
+        cx: &mut DeserializeContext<'_, DiagLang>,
+    ) -> Result<Arc<Snapshot>, DeserializeError> {
+        let trees = cx
+            .standard_tables()
+            .ok_or_else(|| DeserializeError::UnknownTableName { name: String::from("trees") })?
+            .trees;
+        let SerialValue::Index { table, index } = entry.data else {
+            return Err(DeserializeError::failed("a snapshot is a tree position"));
+        };
+        let object = cx.object(trees, crate::serialize::TreeIndex::from_parts(table, index))?;
+        let tree = object
+            .downcast::<crate::node::NodeTree<DiagLang>>()
+            .map_err(|_| DeserializeError::failed("the snapshot's tree has another annotation type"))?;
+        Ok(Arc::new(Snapshot { tree: (*tree).clone() }))
+    }
+}
+
+#[test]
+fn a_driver_of_its_own_reaches_the_trees_table_through_the_context() {
+    let result = parse("{a % note\n {b} c");
+    let snapshot = Arc::new(Snapshot { tree: result.tree.clone() });
+
+    let mut writer = setup();
+    writer.register_table(SnapshotDriver).unwrap();
+    let snapshots = writer.table_handle::<SnapshotDriver>("snapshots").unwrap();
+    let position = writer.intern(snapshots, &snapshot).unwrap();
+
+    let mut reader = setup();
+    reader.register_table(SnapshotDriver).unwrap();
+    reader.push_segment(pass_through(writer.take_segment())).unwrap();
+    let snapshots = reader.table_handle::<SnapshotDriver>("snapshots").unwrap();
+    let back = reader.object(snapshots, snapshots.position(position.index())).unwrap();
+    assert_trees_equivalent(&snapshot.tree, &back.tree, |(), ()| true);
+
+    // Without the standard tables the same driver says which one it needed.
+    let mut bare = SerdeSession::<DiagLang>::empty();
+    bare.register_table(SnapshotDriver).unwrap();
+    let snapshots = bare.table_handle::<SnapshotDriver>("snapshots").unwrap();
+    assert!(matches!(
+        bare.intern(snapshots, &snapshot),
+        Err(SerializeError::InTable { cause, .. })
+            if matches!(*cause, SerializeError::UnknownTableName { ref name } if name == "trees")
+    ));
 }
 
 // --- the value model pieces ---------------------------------------------------------------

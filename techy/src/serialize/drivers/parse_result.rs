@@ -33,9 +33,9 @@ use super::super::object::{
 use super::super::value::{SerialEntry, SerialValue};
 use super::super::wire::parse_result::{WireDiagnostics, WireParseResult};
 use super::super::wire::{FromSerialValue, ToSerialValue};
-use super::diagnostic::DiagnosticSerdeDriver;
-use super::tree::{tree_of_object, TreeSerdeDriver};
-use super::{DIAGNOSTICS_TABLE, PARSE_RESULTS_TABLE, PARSE_RESULT_IDENTIFIER, TREES_TABLE};
+use super::standard::StandardTables;
+use super::tree::tree_of_object;
+use super::{PARSE_RESULTS_TABLE, PARSE_RESULT_IDENTIFIER, TREES_TABLE};
 
 crate::serial_index! {
     /// A position in the parse-results table — the `Index` type of
@@ -162,12 +162,9 @@ impl<L: Lang> SerializableObject<L> for ParseResult<L> {
     where
         L: SerializableLang,
     {
-        let trees = cx
-            .table_handle::<TreeSerdeDriver<L>>(TREES_TABLE)
+        let StandardTables { trees, diagnostics, .. } = cx
+            .standard_tables()
             .ok_or_else(|| SerializeError::UnknownTableName { name: TREES_TABLE.to_string() })?;
-        let diagnostics = cx
-            .table_handle::<DiagnosticSerdeDriver<L>>(DIAGNOSTICS_TABLE)
-            .ok_or_else(|| SerializeError::UnknownTableName { name: DIAGNOSTICS_TABLE.to_string() })?;
         // The tree and the diagnostics are values: fresh entries, written in full.
         let tree_object: Arc<dyn Any + Send + Sync> = Arc::new(self.tree.clone());
         let tree = cx.intern(trees, &tree_object)?;
@@ -198,12 +195,9 @@ impl<L: SerializableLang> DeserializableObject<L> for ParseResult<L> {
 
     fn deserialize_object(value: &SerialValue, cx: &mut DeserializeContext<'_, L>) -> Result<ParseResult<L>, DeserializeError> {
         let wire = WireParseResult::from_serial_value(value)?;
-        let trees = cx
-            .table_handle::<TreeSerdeDriver<L>>(TREES_TABLE)
+        let StandardTables { trees, diagnostics, .. } = cx
+            .standard_tables()
             .ok_or_else(|| DeserializeError::UnknownTableName { name: TREES_TABLE.to_string() })?;
-        let diagnostics = cx
-            .table_handle::<DiagnosticSerdeDriver<L>>(DIAGNOSTICS_TABLE)
-            .ok_or_else(|| DeserializeError::UnknownTableName { name: DIAGNOSTICS_TABLE.to_string() })?;
         let tree_object = cx.object(trees, wire.tree)?;
         let tree: NodeTree<L> = tree_of_object(cx.session_mut(), tree_object)?;
         let items = wire

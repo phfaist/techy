@@ -69,19 +69,19 @@ pub type ProviderSerdeDriver<L> = DispatchingSerdeDriver<L, dyn SpecsProvider<L>
 /// built with [`SerdeSession::new`] always does).
 #[non_exhaustive]
 pub struct StandardTables<L: SerializableLang> {
-    /// The sources table.
+    /// The sources table, named `sources` in the serialized form.
     pub sources: TableHandle<SourceSerdeDriver<L>>,
-    /// The states table.
+    /// The states table, named `states` in the serialized form.
     pub states: TableHandle<StateSerdeDriver<L>>,
-    /// The specs table.
+    /// The specs table, named `specs` in the serialized form.
     pub specs: TableHandle<SpecSerdeDriver<L>>,
-    /// The providers table.
+    /// The providers table, named `providers` in the serialized form.
     pub providers: TableHandle<ProviderSerdeDriver<L>>,
-    /// The trees table.
+    /// The trees table, named `trees` in the serialized form.
     pub trees: TableHandle<TreeSerdeDriver<L>>,
-    /// The diagnostics table.
+    /// The diagnostics table, named `diagnostics` in the serialized form.
     pub diagnostics: TableHandle<DiagnosticSerdeDriver<L>>,
-    /// The parse-results table.
+    /// The parse-results table, named `parse-results` in the serialized form.
     pub parse_results: TableHandle<ParseResultSerdeDriver<L>>,
 }
 
