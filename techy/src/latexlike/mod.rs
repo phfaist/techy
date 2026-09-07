@@ -140,8 +140,8 @@ pub use environments::{
 };
 pub use input::{input_macro_spec, InputMacroSpec};
 pub use invocation_syntax::{
-    EnvironmentSyntax, InvocationSyntaxData, StdEnvironmentSideSyntax,
-    StdEnvironmentSyntax,
+    EnvironmentSyntax, EnvironmentSyntaxError, InvocationSyntaxData,
+    StdEnvironmentSideSyntax, StdEnvironmentSyntax,
 };
 pub use lang::{
     LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeInvocationSyntax,

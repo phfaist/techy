@@ -3555,9 +3555,15 @@ terminator's pieces and reports them back itself ([§dd-dr:verbatim-family]), so
 `StdEnvironmentSyntax` transcribes one arm and synthesizes nothing. Its other
 arm — a bare `Literal` terminator, which a custom `make_body_parser` may still
 report — has no command-plus-name-group spelling to transcribe and no field to
-keep the literal in: it records a placeholder command word that re-emits
-visibly wrong, rather than a plausible-looking guess (a record whose end side
-cannot be accurate must not look accurate).
+keep the literal in, so `from_parsed` **fails**: it returns
+`EnvironmentSyntaxError::LiteralTerminator` and the composition aborts the parse
+through `implementation_error`, under any recovery policy (amended 2026-09-07,
+user; it previously stored a placeholder command word that re-emitted visibly
+wrong text). The reasoning that ruled out a plausible-looking guess rules out the
+visible placeholder too: reporting a shape the record cannot store is a
+definition wiring a body parser to a record it does not fit — a documented
+contract violation, and the panic policy's answer to those is an `Err`
+([§dd-dr:panic-policy]), not a tree that recomposition silently corrupts.
 
 **The fifth role trait** joins the [§dd-dr:latexlike-generalization] roster:
 `LatexlikeInvocationSyntax`, on the syntax type — `type Env:
@@ -8095,8 +8101,10 @@ Points settled in flight:
   `EnvironmentBodyParser` reports — so a recording consumer needs no raw-body arm and
   keeps span-backed end facts ([§dd-dr:invocation-syntax]). A `Literal` terminator has
   no such structure and reports only its span; a record that cannot store a bare
-  literal (latexlike's `StdEnvironmentSyntax`) is then inaccurate by construction,
-  which is why the preset's `VerbatimBehavior` states the pieces instead. Every piece
+  literal (latexlike's `StdEnvironmentSyntax`) refuses to build one at all — its
+  `from_parsed` returns `EnvironmentSyntaxError::LiteralTerminator` and the parse
+  aborts (amended 2026-09-07) — which is why the preset's `VerbatimBehavior` states
+  the pieces instead. Every piece
   comes off the invocation — the escape character and the name group delimiters *as
   written*, the stop command name from the dispatching spec
   ([§dd-dr:environment-command-names]) — so a language re-ruling the escape character

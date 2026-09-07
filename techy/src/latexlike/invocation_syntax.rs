@@ -237,9 +237,10 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
 /// [`EnvironmentBehavior::make_body_parser`](super::EnvironmentBehavior::make_body_parser)
 /// that reports its terminator as
 /// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
-/// therefore records an end side that cannot reproduce the input; see
-/// [`StdEnvironmentSyntax::from_parsed`](EnvironmentSyntax::from_parsed) for what is
-/// stored in that case.
+/// therefore has no end side this record can keep, and building the record fails with
+/// [`EnvironmentSyntaxError::LiteralTerminator`] rather than storing something the
+/// writers would emit wrongly; see
+/// [`StdEnvironmentSyntax::from_parsed`](EnvironmentSyntax::from_parsed).
 pub struct StdEnvironmentSideSyntax<L: Lang> {
     /// The escape character as written.
     pub escape_char: char,
@@ -303,6 +304,43 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
     }
 }
 
+/// A terminator shape an environment-syntax record cannot store, returned when the
+/// record is built ([`EnvironmentSyntax::from_parsed`]).
+///
+/// The preset's own parsers never produce one: a latexlike environment ends with
+/// `\end{name}`, which every record here holds. It is reachable through a custom
+/// [`EnvironmentBehavior::make_body_parser`](super::EnvironmentBehavior::make_body_parser)
+/// reporting a terminator the record has nowhere to keep — a definition that wired a
+/// body parser to a syntax record it does not fit, which is why the parse aborts on it
+/// rather than diagnosing and continuing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EnvironmentSyntaxError {
+    /// The body parser reported its terminator as
+    /// [`Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
+    /// — a bare string, with no command and name group to record — and the record
+    /// holds only `\end{name}`-shaped end sides.
+    LiteralTerminator {
+        /// The environment being parsed, as its `\begin` named it.
+        environment: String,
+    },
+}
+
+impl fmt::Display for EnvironmentSyntaxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EnvironmentSyntaxError::LiteralTerminator { environment } => write!(
+                f,
+                "the body of environment ‘{environment}’ reported a literal terminator, \
+                 which the environment syntax record cannot store (it holds \
+                 ‘\\end{{name}}’-shaped terminators only)"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for EnvironmentSyntaxError {}
+
 /// What an environment-syntax record must provide: a constructor from the parsed
 /// facts, and a writer per side.
 ///
@@ -349,11 +387,19 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     /// keeps is checked against it: a span from another source — reachable only under
     /// a reader serving one parse from several sources — is recorded as text instead,
     /// or not at all.
+    ///
+    /// # Errors
+    ///
+    /// [`EnvironmentSyntaxError`] when the reported terminator has a shape this record
+    /// cannot store. That is a wiring mistake in the definition — a body parser and a
+    /// syntax record that do not fit each other — so the caller aborts the parse under
+    /// any recovery policy rather than recording something the writers would emit
+    /// wrongly.
     fn from_parsed(
         begin: EnvironmentBeginSyntaxData<L>,
         terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
         node_span: &SourceSpan<L::SourceOrigin>,
-    ) -> Self;
+    ) -> Result<Self, EnvironmentSyntaxError>;
 
     /// The begin-side spelling as recorded, written around `name` — the environment's
     /// name as written, which the record does not store itself.
@@ -404,11 +450,12 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
 /// [`EnvironmentBehavior::make_body_parser`](super::EnvironmentBehavior::make_body_parser)
 /// that reports its terminator as
 /// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
-/// leaves this record with no spelling to keep, and
-/// [`from_parsed`](EnvironmentSyntax::from_parsed) then stores a placeholder end side
-/// that re-emits visibly wrong text: [source recomposition](crate::recompose) still
-/// runs, but its output no longer reproduces the input. The preset's own verbatim
-/// environments do not take that path.
+/// leaves this record with no spelling to keep, so
+/// [`from_parsed`](EnvironmentSyntax::from_parsed) reports
+/// [`EnvironmentSyntaxError::LiteralTerminator`] and the parse aborts: recording an end
+/// side that [source recomposition](crate::recompose) would emit wrongly is worse than
+/// refusing to record one. The preset's own verbatim environments do not take that
+/// path.
 pub struct StdEnvironmentSyntax<L: Lang> {
     /// The `\begin{name}` side, always recorded.
     pub begin: StdEnvironmentSideSyntax<L>,
@@ -437,10 +484,9 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
     ///   the end side the same way;
     /// - a [`Literal`](EnvironmentTerminatorSyntaxData::Literal) terminator has no
     ///   command and name group to record, and this record has nowhere to keep the
-    ///   literal string instead, so the end side is filled with the placeholder
-    ///   command word `??END_SYNTAX_NOT_AVAILABLE??`. Re-emitting it is then visibly
-    ///   wrong rather than quietly plausible. The preset's own verbatim environments
-    ///   do not take this path: they give
+    ///   literal string instead, so nothing is recorded and
+    ///   [`EnvironmentSyntaxError::LiteralTerminator`] is returned. The preset's own
+    ///   verbatim environments do not take this path: they give
     ///   [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) a
     ///   [`StopEnvironmentCommand`](crate::core::constructs::VerbatimBodyTerminator::StopEnvironmentCommand)
     ///   terminator, which reports `Scanned` facts;
@@ -449,7 +495,7 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
         begin: EnvironmentBeginSyntaxData<L>,
         terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
         node_span: &SourceSpan<L::SourceOrigin>,
-    ) -> Self {
+    ) -> Result<Self, EnvironmentSyntaxError> {
         let transcribe_side = |escape_char: char,
                                command_word: &SourceSpan<L::SourceOrigin>,
                                post_space: &SourceSpan<L::SourceOrigin>,
@@ -475,19 +521,16 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
                 name_group,
             }) => Some(transcribe_side(*escape_char, command_word, post_space, name_group)),
             Some(EnvironmentTerminatorSyntaxData::Literal { .. }) => {
-                // In latexlike, environments should NOT report a Literal terminator if we
-                // want an accurate StdEnvironmentSyntax.
-                // If you report a Literal terminator, we store garbage.
-                Some(StdEnvironmentSideSyntax {
-                    escape_char: begin_side.escape_char,
-                    command_word: TextContent::from(String::from("??END_SYNTAX_NOT_AVAILABLE??")),
-                    post_space: TextContent::empty(),
-                    name_group_rule: Arc::clone(&begin_side.name_group_rule),
-                })
+                // Nothing here can hold a bare terminator string, and an end side that
+                // re-emits the wrong text is worse than none: the definition wired a
+                // body parser to a record it does not fit, and the caller aborts.
+                return Err(EnvironmentSyntaxError::LiteralTerminator {
+                    environment: begin.name_group.name_text().into(),
+                });
             }
             None => None,
         };
-        StdEnvironmentSyntax { begin: begin_side, end }
+        Ok(StdEnvironmentSyntax { begin: begin_side, end })
     }
 
     fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String {
@@ -528,7 +571,7 @@ mod tests {
 
     use super::super::test_support::{macro_package, with_package, with_packages};
     use super::super::{
-        CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver, MacroSpec,
+        CallableType, EnvironmentSpec, GroupType, Latexlike, LatexlikeDriver, MacroSpec,
         VerbatimBehavior,
     };
     use super::*;
@@ -563,6 +606,54 @@ mod tests {
     /// fields resolve identically to the parse's own source).
     fn src(content: &str) -> Source {
         Source::new(content)
+    }
+
+    // --- building the record -----------------------------------------------------------
+
+    #[test]
+    fn a_literal_terminator_is_refused_rather_than_recorded() {
+        // The record holds `\end{name}`-shaped end sides only. Handed a bare literal
+        // terminator it records nothing and says so, so that the caller can abort
+        // instead of writing back a spelling that is not the input's.
+        use crate::token::StdStreamPosition;
+        use alloc::sync::Arc;
+
+        let source: Arc<Source> = Arc::new(Source::new("\\begin{lit}x|END|"));
+        let at = |range: core::ops::Range<usize>| SourceSpan::new(&source, range);
+        let begin = EnvironmentBeginSyntaxData::<Latexlike> {
+            escape_char: '\\',
+            command_word: at(1..6),
+            post_space: at(6..6),
+            name_group: NameGroup::new(
+                at(7..10),
+                StdStreamPosition::at(11),
+                Arc::new(GroupRule {
+                    group_type: GroupType::Content,
+                    open: "{".into(),
+                    close: "}".into(),
+                }),
+            ),
+        };
+        let node_span = at(0..17);
+
+        let error = StdEnvironmentSyntax::<Latexlike>::from_parsed(
+            begin.clone(),
+            Some(EnvironmentTerminatorSyntaxData::Literal { span: at(12..17) }),
+            &node_span,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            EnvironmentSyntaxError::LiteralTerminator { environment: "lit".into() }
+        );
+        assert!(error.to_string().contains("‘lit’"), "{error}");
+
+        // The very same begin facts with no terminator build a record whose end side
+        // is simply empty — only the literal shape is refused.
+        let record =
+            StdEnvironmentSyntax::<Latexlike>::from_parsed(begin, None, &node_span).unwrap();
+        assert!(record.end.is_none());
+        assert_eq!(record.write_end("lit", &source), "");
     }
 
     // --- the macro arm -----------------------------------------------------------------

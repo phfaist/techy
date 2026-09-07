@@ -1070,7 +1070,12 @@ where
         // The node's own extent, needed before the payload: the record converts each
         // source-qualified fact it was handed into node data against it.
         let node_span = cx.source_span_within(&trigger_start, &body.end)?;
-        let env_syntax = Env::<LLL>::from_parsed(begin_syntax, body.terminator, &node_span);
+        // An `Err` here means the body parser reported a terminator shape the record
+        // cannot store — a definition wiring a body parser to a syntax record it does
+        // not fit, so it aborts under any recovery policy like every other
+        // extension-contract violation.
+        let env_syntax = Env::<LLL>::from_parsed(begin_syntax, body.terminator, &node_span)
+            .map_err(|error| cx.implementation_error(error, node_span.clone()))?;
 
         let offset = children.len() as u32;
         children.push(body.body);
@@ -1919,6 +1924,54 @@ mod tests {
         // frame, as `bad` declares no arguments.
         assert_eq!(error.frames().len(), 1);
         assert_eq!(error.frames()[0].title(), "macro ‘\\begin’");
+    }
+
+    #[test]
+    fn a_literal_terminator_the_record_cannot_store_aborts_under_any_policy() {
+        // `StdEnvironmentSyntax` holds `\end{name}`-shaped end sides only. A body
+        // parser reporting a bare literal terminator leaves it nothing to record, so
+        // `from_parsed` fails and the composition aborts — recording a spelling that
+        // source recomposition would emit wrongly is not an option.
+        #[derive(Debug)]
+        struct LiteralTerminated;
+        impl EnvironmentBehavior for LiteralTerminated {
+            fn make_body_parser<'p>(
+                &'p self,
+                invocation: EnvironmentInvocation<'p>,
+            ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p>
+            {
+                Box::new(VerbatimBodyParser::new(
+                    invocation.trigger_span.clone(),
+                    invocation.name,
+                    VerbatimBodyTerminator::Literal {
+                        terminator: String::from("\\end{lit}"),
+                    },
+                    GroupType::Verbatim,
+                ))
+            }
+        }
+
+        let mut package = Package::new("literal-terminator");
+        package.insert(
+            CallableType::Environment,
+            "lit",
+            EnvironmentSpec::from_behavior(Arc::new(LiteralTerminated)),
+        );
+        for recovery in [Recovery::Strict, Recovery::Tolerant] {
+            let language = Language::new(
+                LatexlikeDriver::new(recovery),
+                ParsingState::lang_initial_with_packages([package.clone()])
+                    .expect("seed state"),
+            );
+            let error = language.parse("\\begin{lit}x\\end{lit}").unwrap_err();
+            assert_eq!(error.identifier(), "core.constructs.implementation-error");
+            assert!(
+                error.message().contains("environment ‘lit’"),
+                "the message should name the environment: {}",
+                error.message()
+            );
+            assert!(error.message().contains("literal terminator"), "{}", error.message());
+        }
     }
 
     #[test]
