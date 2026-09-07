@@ -228,13 +228,17 @@ impl core::error::Error for ScopeStackError {
     }
 }
 
-/// One [`ScopeOp`] failed while a delta was applied — the per-op failure record
-/// collected by the fallible [`ParsingState::derived`](crate::core::ParsingState::derived)
-/// into a [`DeriveError`](crate::core::DeriveError). Mechanical, not classified: the *caller* decides what a failure means —
-/// the in-parse derivation path treats it as a recoverable condition, reported
-/// through the recovery entry point
-/// ([`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed)); an embedder applying a delta
-/// out of parse treats it as its own input error.
+/// One [`ScopeOp`] failed while a delta was applied.
+///
+/// This is the per-op failure record collected by the fallible
+/// [`ParsingState::derived`](crate::core::ParsingState::derived) into a
+/// [`DeriveError`](crate::core::DeriveError).
+///
+/// The record is mechanical, not classified: the *caller* decides what a failure
+/// means — the in-parse derivation path treats it as a recoverable condition,
+/// reported through the recovery entry point
+/// ([`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed)); an embedder applying a
+/// delta out of parse treats it as its own input error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ScopeOpError {
@@ -341,8 +345,10 @@ impl<L: Lang> fmt::Debug for DefinitionOp<L> {
 }
 
 /// One scope-stack operation of a state delta
-/// ([`ParsingStateDelta::scope_ops`](crate::core::ParsingStateDelta)): stack-shape ops plus definition ops routed to a named
-/// provider. Ops apply in delta order, each on the result of the previous; failures are
+/// ([`ParsingStateDelta::scope_ops`](crate::core::ParsingStateDelta)).
+///
+/// The variants are stack-shape ops plus definition ops routed to a named provider.
+/// Ops apply in delta order, each on the result of the previous; failures are
 /// collected per op (the rest still apply) and surface through the fallible
 /// [`derived()`](crate::core::ParsingState::derived).
 ///

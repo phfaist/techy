@@ -282,9 +282,12 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentInvocation<'_, LLL> {
 }
 
 /// The behavior of one environment, behind [`EnvironmentSpec`] — the wrapper's inner
-/// trait: third-party implementations override the
-/// defaulted methods; the composition reaches them through the concrete wrapper's
-/// downcast. The pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
+/// trait.
+///
+/// Third-party implementations override the defaulted methods; the composition
+/// reaches them through the concrete wrapper's downcast.
+///
+/// This is the pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
 /// `make_body_parsing_state_delta`), with the declarative standard implementation
 /// behind [`EnvironmentSpec::new`].
 ///
@@ -538,9 +541,11 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 }
 
 /// The preset's environment spec: the registration type for
-/// [`CallableType::Environment`](super::CallableType::Environment) entries — the concrete wrapper through which the `\begin` composition reaches the environment's
-/// [`EnvironmentBehavior`] (`Any` downcasts hit concrete types only, so the open set
-/// of behaviors is reached through this one concrete spec type).
+/// [`CallableType::Environment`](super::CallableType::Environment) entries.
+///
+/// It is the concrete wrapper through which the `\begin` composition reaches the
+/// environment's [`EnvironmentBehavior`] (`Any` downcasts hit concrete types only, so
+/// the open set of behaviors is reached through this one concrete spec type).
 ///
 /// The composition — not this spec — parses the invocation:
 /// [`make_invocation_parser`](CallableSpec::make_invocation_parser) is never
@@ -633,8 +638,9 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 
 // --- the `\begin` dispatcher and its composition ------------------------------------
 
-/// The `\begin` dispatcher: every environment enters through this shared spec, an
-/// ordinary [`Macro`](super::CallableType::Macro) entry of the
+/// The `\begin` dispatcher: every environment enters through this shared spec.
+///
+/// It is an ordinary [`Macro`](super::CallableType::Macro) entry of the
 /// [`builtin_package`](super::builtin_package) (shadowable and unloadable like any
 /// definition). Its parser is the preset's environment composition, which reads the
 /// rigid `\begin{name}` syntax ([`read_rigid_name_group`](crate::core::constructs::read_rigid_name_group)),

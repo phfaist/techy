@@ -837,13 +837,16 @@ impl<L: Lang> CommandResolver<L> for () {
     }
 }
 
-/// The standard scope-stack [`CommandResolver`] strategy: every command token
-/// resolves through [`resolve_command_in_scopes`] under the one fixed
-/// [`command_type`](ScopesCommandResolver::command_type). The field **is** the datum
-/// core cannot default — a language's command [`CallableTypeId`](Lang::CallableTypeId)
-/// (contrast specials, where the provider supplies the resolved type with the match);
-/// languages with several command-syntax callable types write their own resolver —
-/// that is what the strategy point exists for.
+/// The standard scope-stack [`CommandResolver`] strategy.
+///
+/// Every command token resolves through [`resolve_command_in_scopes`] under the one
+/// fixed [`command_type`](ScopesCommandResolver::command_type).
+///
+/// That field **is** the datum core cannot default — a language's command
+/// [`CallableTypeId`](Lang::CallableTypeId) (contrast specials, where the provider
+/// supplies the resolved type with the match); languages with several command-syntax
+/// callable types write their own resolver — that is what the strategy point exists
+/// for.
 ///
 /// Public home: `techy::core::specs`, beside [`resolve_command_in_scopes`] and the
 /// resolution family it packages.
@@ -881,9 +884,13 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
     }
 }
 
-/// The one ready-made [`ParseDriver`]: the [`Recovery`] policy setting, a pluggable
-/// [`CommandResolver`] strategy, and an optional [`SourceResolver`] — everything else
-/// keeps the trait defaults. It implements the trait for **every** language whose
+/// The one ready-made [`ParseDriver`].
+///
+/// It stores the [`Recovery`] policy setting, a pluggable [`CommandResolver`]
+/// strategy, and an optional [`SourceResolver`] — everything else keeps the trait
+/// defaults.
+///
+/// It implements the trait for **every** language whose
 /// [`SourceOrigin`](Lang::SourceOrigin) is `O` and whose commands `R` can resolve —
 /// the [`TrivialLang`](crate::core::TrivialLang) default driver (`type Driver =
 /// StdParseDriver`, all parameters defaulted).
@@ -1003,11 +1010,12 @@ impl<R: fmt::Debug, O: SourceOrigin> fmt::Debug for StdParseDriver<R, O> {
     }
 }
 
-/// A successful command resolution (the payload of [`CommandResolution::Resolved`]):
-/// which invocation form the command resolved to, and the behavior spec to drive its
-/// parse — exactly what the dispatch loop needs to build an
-/// [`Invocation`](crate::core::constructs::Invocation) (the core cannot know a preset's type
-/// ids).
+/// A successful command resolution — the payload of [`CommandResolution::Resolved`].
+///
+/// It names which invocation form the command resolved to, and the behavior spec to
+/// drive its parse: exactly what the dispatch loop needs to build an
+/// [`Invocation`](crate::core::constructs::Invocation) (the core cannot know a preset's
+/// type ids).
 pub struct ResolvedCallable<L: Lang> {
     /// The invocation form (latexlike: macro / environment / …).
     pub callable_type: L::CallableTypeId,

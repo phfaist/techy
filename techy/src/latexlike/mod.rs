@@ -375,11 +375,15 @@ impl ClosedVocabulary for Mode {
 }
 
 /// The preset's slot ext: marks whether a slot is **the body** of its callable
-/// ([`BodySlotExt`]). Minted by the preset's environment machinery via
+/// ([`BodySlotExt`]).
+///
+/// The preset's environment machinery mints the marker via
 /// [`BodySlotExt::make_body`]; a non-body slot's value comes from
-/// [`not_body`](BodyMarker::not_body). Deliberately no `Default` — an ext value is
-/// always minted by the party with the knowledge, never invented by a default
-/// (population is initialization, [`NodeExtTypes`]).
+/// [`not_body`](BodyMarker::not_body).
+///
+/// There is deliberately no `Default` — an ext value is always minted by the party
+/// with the knowledge, never invented by a default (population is initialization,
+/// [`NodeExtTypes`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BodyMarker {
@@ -404,11 +408,14 @@ impl BodySlotExt for BodyMarker {
     }
 }
 
-/// The preset's node-ext bundle ([`Lang::NodeExts`]): no per-node and no per-argument
-/// data (`NodeExt`/`ArgumentExt` are `()`), while **`SlotExt` is claimed** for the
-/// [`BodyMarker`] — the preset marks environment body slots through the generic
-/// [`BodySlotExt`] mechanism, so [`NodeRef::body`](crate::core::node::NodeRef::body) selects
-/// the marked slot rather than relying on slot positions.
+/// The preset's node-ext bundle ([`Lang::NodeExts`]).
+///
+/// There is no per-node and no per-argument data (`NodeExt`/`ArgumentExt` are `()`),
+/// while **`SlotExt` is claimed** for the [`BodyMarker`].
+///
+/// The preset marks environment body slots through the generic [`BodySlotExt`]
+/// mechanism, so [`NodeRef::body`](crate::core::node::NodeRef::body) selects the
+/// marked slot rather than relying on slot positions.
 #[derive(Debug, Clone, Copy)]
 pub struct LatexlikeNodeExts;
 
@@ -418,10 +425,13 @@ impl NodeExtTypes for LatexlikeNodeExts {
     type SlotExt = BodyMarker;
 }
 
-/// The latexlike language bundle: a ZST implementing [`Lang`] with the preset's
-/// vocabularies ([`GroupType`], [`CallableType`], [`Mode`]), the canonical seed
-/// ([`default_token_rules`] + the [`builtin_package`] on the scope stack), and the
-/// scope-stack specials scan. Parse-time behavior is defined by [`LatexlikeDriver`].
+/// The latexlike language bundle: a ZST implementing [`Lang`].
+///
+/// It provides the preset's vocabularies ([`GroupType`], [`CallableType`], [`Mode`]),
+/// the canonical seed ([`default_token_rules`] + the [`builtin_package`] on the scope
+/// stack), and the scope-stack specials scan.
+///
+/// Parse-time behavior is defined by [`LatexlikeDriver`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Latexlike;
 

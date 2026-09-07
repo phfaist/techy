@@ -56,9 +56,10 @@ use super::{CORE_TREE_IDENTIFIER, TREES_TABLE};
 
 crate::serial_index! {
     /// A position in the trees table — the `Index` type of [`TreeSerdeDriver`]: the
-    /// serialized reference to a [`NodeTree`]. Interning a tree returns a fresh
-    /// position every time (a tree is a value, written in full — see
-    /// [`TreeSerialization::serialize_tree`]).
+    /// serialized reference to a [`NodeTree`].
+    ///
+    /// Interning a tree returns a fresh position every time (a tree is a value,
+    /// written in full — see [`TreeSerialization::serialize_tree`]).
     pub struct TreeIndex;
 }
 

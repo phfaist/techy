@@ -238,10 +238,11 @@ impl LangFeatures for AllLangFeatures {
     type Scopes = FeaturePresent;
 }
 
-/// The every-feature-absent bundle: each [`LangFeatures`] member is [`FeatureAbsent`]
-/// — a language of plain content characters, with no whitespace handling, paragraph
-/// breaks, groups, commands, comments, specials, forbidden characters, or scope
-/// stack.
+/// The every-feature-absent bundle: each [`LangFeatures`] member is [`FeatureAbsent`].
+///
+/// The declaration describes a language of plain content characters, with no
+/// whitespace handling, paragraph breaks, groups, commands, comments, specials,
+/// forbidden characters, or scope stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoLangFeatures;
 
@@ -275,11 +276,13 @@ impl<L: Lang> LangHasWhitespace for L where
 
 /// Bound for paragraph-requiring code: a [`Lang`] whose [`Features`](Lang::Features)
 /// declare paragraph-break detection present
-/// ([`Paragraphs`](LangFeatures::Paragraphs) `=` [`FeaturePresent`]) — and, because
-/// this trait requires [`LangHasWhitespace`], whitespace handling too. Paragraph
-/// breaks are whitespace runs containing two or more newlines: whitespace detection
-/// is what finds them (the reader's paragraph-break check runs inside its whitespace
-/// handling), so a language cannot satisfy this bound with whitespace absent.
+/// ([`Paragraphs`](LangFeatures::Paragraphs) `=` [`FeaturePresent`]).
+///
+/// Because this trait requires [`LangHasWhitespace`], such a language declares
+/// whitespace handling too. Paragraph breaks are whitespace runs containing two or
+/// more newlines: whitespace detection is what finds them (the reader's
+/// paragraph-break check runs inside its whitespace handling), so a language cannot
+/// satisfy this bound with whitespace absent.
 ///
 /// Never implemented by hand: a blanket implementation covers every qualifying
 /// [`Lang`] automatically.

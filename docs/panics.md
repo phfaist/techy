@@ -91,7 +91,7 @@ the non-panicking companion:
   and [`write_end`](crate::latexlike::EnvironmentSyntax::write_end)), and the tree
   serialization of [`serialize`](crate::serialize) — namely
   [`TreeSerialization::serialize_tree`](crate::serialize::TreeSerialization::serialize_tree),
-  [`SerdeSession::serialize_parse_result`](crate::serialize::SerdeSession::serialize_parse_result)
+  [`ParseResultSerialization::serialize_parse_result`](crate::serialize::ParseResultSerialization::serialize_parse_result)
   and the [`SerializableObject`](crate::serialize::SerializableObject) implementation
   for [`ParseResult`](crate::core::ParseResult), each of which states the panic on its
   own page —

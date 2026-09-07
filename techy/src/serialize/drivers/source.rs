@@ -60,10 +60,14 @@ impl SourceDigest {
 }
 
 /// How a source's text is written: embedded in the source's entry, or kept outside
-/// the serialized form and *referenced* — the entry then records the text's length
-/// and, optionally, a [`SourceDigest`], and the reading side obtains the text from
-/// its [`SourceTextSupplier`]. The [`SourceTextPolicy`] of the writing session's
-/// source driver decides per source.
+/// the serialized form and *referenced*.
+///
+/// When the text is referenced, the entry records the text's length and, optionally,
+/// a [`SourceDigest`], and the reading side obtains the text from its
+/// [`SourceTextSupplier`].
+///
+/// The [`SourceTextPolicy`] of the writing session's source driver decides per
+/// source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTextForm {
     /// The text is written into the entry: the serialized form is self-contained.

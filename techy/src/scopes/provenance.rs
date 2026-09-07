@@ -12,10 +12,15 @@ use crate::state::Lang;
 
 use super::SpecsProvider;
 
-/// The key a provider defines a spec under: a callable **name** (the normalized
-/// spelling [`Package::insert`](super::Package::insert) registers, `"emph"` for
-/// `\emph`) or a specials **trigger** (the character sequence
-/// [`Package::insert_specials`](super::Package::insert_specials) registers, `"---"`).
+/// The key a provider defines a spec under.
+///
+/// A key is one of two things:
+///
+/// - a callable **name** — the normalized spelling
+///   [`Package::insert`](super::Package::insert) registers, `"emph"` for `\emph`;
+/// - a specials **trigger** — the character sequence
+///   [`Package::insert_specials`](super::Package::insert_specials) registers, `"---"`.
+///
 /// The two are separate keys — a package keeps its named definitions and its specials
 /// in separate stores, and a name and a trigger with the same spelling do not
 /// collide — so a [`SpecProvenance`] records which of the two it is.
@@ -45,10 +50,12 @@ impl fmt::Display for DefinitionKey {
     }
 }
 
-/// Where a callable spec was defined: the provider that holds it (a weak reference —
-/// the provider holds the spec strongly, and a strong reference back would keep both
-/// alive forever), the invocation form ([`Lang::CallableTypeId`]) and the
-/// [`DefinitionKey`] it was defined under. A *provenance stamp*.
+/// Where a callable spec was defined — a *provenance stamp*.
+///
+/// It records the provider that holds the spec (a weak reference — the provider holds
+/// the spec strongly, and a strong reference back would keep both alive forever), the
+/// invocation form ([`Lang::CallableTypeId`]) and the [`DefinitionKey`] it was defined
+/// under.
 ///
 /// The stamp is what makes a spec serializable by identity: the spec's serialized
 /// form is then a reference to its provider's entry plus the key, and the reading
