@@ -91,7 +91,10 @@ the non-panicking companion:
   and [`write_end`](crate::latexlike::EnvironmentSyntax::write_end)), and the tree
   serialization of [`serialize`](crate::serialize) —
   reaches this panic on a consumer-built tree that breaks the invariant, and on no other
-  input; [`validate_tree`](crate::core::node::validate_tree) is the check for it);
+  input. [`validate_tree`](crate::core::node::validate_tree) checks a tree for this,
+  with one gap: it does not inspect a language's invocation-syntax payload, so the
+  span-backed fields recorded there — a callable's post-space, an environment's
+  begin/end syntax — are the language's own responsibility to keep valid);
 - [`ChildRegion::children`](crate::core::node::ChildRegion::children),
   [`ChildRegion::content_range`](crate::core::node::ChildRegion::content_range), and
   [`ChildRegion::content_parent`](crate::core::node::ChildRegion::content_parent) —
