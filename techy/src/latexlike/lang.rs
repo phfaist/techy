@@ -1,11 +1,12 @@
 //! The traits that let a language of your own reuse the preset's behavior.
 //!
-//! Nothing in the preset is written for [`Latexlike`] alone. Its token rules, its
-//! specs, its construct parsers and its driver hooks are all generic over a *family*
-//! of languages, so a language that wants LaTeX-like syntax but its own vocabularies,
-//! node data, or state extension gets them without copying anything. The bound
-//! naming that family is [`LatexlikeLang`] — conventionally written as the type
-//! parameter `LLL` — and joining it is one line, `impl LatexlikeLang for MyLang {}`.
+//! Nothing in the preset is written for [`Latexlike`](super::Latexlike) alone. Its
+//! token rules, its specs, its construct parsers and its driver hooks are all generic
+//! over a *family* of languages, so a language that wants LaTeX-like syntax but its
+//! own vocabularies, node data, or state extension gets them without copying
+//! anything. The bound naming that family is [`LatexlikeLang`] — conventionally
+//! written as the type parameter `LLL` — and joining it is one line,
+//! `impl LatexlikeLang for MyLang {}`.
 //!
 //! To be admitted, a language's vocabularies must be able to supply the values the
 //! preset's machinery needs: a math group class, a macro invocation form, a math
@@ -29,12 +30,13 @@
 //! instead, which is what guarantees the values the preset needs still exist.
 //!
 //! [`LatexlikeLang`] also defines the preset's language-level settings as methods
-//! with defaults: the math-delimiter table ([`math_group_rules`](LatexlikeLang::math_group_rules)),
+//! with defaults: the math-delimiter table
+//! ([`math_group_rules`](LatexlikeLang::math_group_rules)),
 //! the characters a math interior forbids
 //! ([`math_interior_forbidden_chars`](LatexlikeLang::math_interior_forbidden_chars)),
 //! and the checks a parse runs at start-up
 //! ([`check_parse_start`](LatexlikeLang::check_parse_start)). Overriding one changes
-//! it for the whole family member, with no need to fork
+//! that setting for the whole language, with no need to fork
 //! [`default_token_rules`](super::default_token_rules).
 //!
 //! [Writing your own language](crate::guide::custom_lang) covers the [`Lang`] trait

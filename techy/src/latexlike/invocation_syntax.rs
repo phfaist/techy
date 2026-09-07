@@ -1,7 +1,8 @@
 //! How an invocation was spelled: the record the preset stores on every callable
 //! node.
 //!
-//! [`InvocationSyntaxData`] is the latexlike value of `Lang::InvocationSyntax`, and a
+//! [`InvocationSyntaxData`] is the latexlike value of
+//! [`Lang::InvocationSyntax`](crate::core::Lang::InvocationSyntax), and a
 //! parse stores one on every callable node it stages. Its three variants follow the
 //! three invocation forms: a macro records the escape character and the whitespace
 //! that ended the command name, an environment records its `\begin` and `\end`
@@ -12,7 +13,7 @@
 //! contract such a record fulfills, [`StdEnvironmentSyntax`] is the standard
 //! implementation, and [`StdEnvironmentSideSyntax`] holds one of its two sides.
 //!
-//! These records are what lets the preset reproduce the input byte for byte: source
+//! These records are what let the preset reproduce the input byte for byte: source
 //! recomposition ([`SourceRecomposer`](super::SourceRecomposer)) reads node payload
 //! and nothing else, so whatever it re-emits has to be recorded here while parsing.
 //! Read a record back with
@@ -313,8 +314,9 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
 /// A record scans nothing itself. The preset's `\begin` invocation parser does all
 /// the scanning — the begin trigger, the name group, the arguments, and the body,
 /// whose own parser consumes the terminator — and passes the collected facts to
-/// [`from_parsed`] once, when the node is staged. How tolerant that scanning is, is
-/// equally the parser's business: replace the invocation or body parser through
+/// [`from_parsed`] once, when the node is staged. How tolerantly the syntax is
+/// scanned is likewise the parser's business: replace the invocation or body parser
+/// through
 /// [`make_invocation_parser`](crate::core::specs::CallableSpec::make_invocation_parser),
 /// and the record records what the new parser consumed.
 ///

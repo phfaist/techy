@@ -97,17 +97,17 @@ pub enum ParagraphBreakStyle {
 /// The spec stamped on every paragraph-break node emitted under
 /// [`ParagraphBreakStyle::Specials`].
 ///
-/// It exists so that paragraph breaks are identifiable. The type is a
-/// zero-sized unit, so identity by spec is identity by type: downcast the node's
+/// It exists so that paragraph breaks are identifiable. The type is a zero-sized
+/// unit, so identity by spec is identity by type: downcast the node's
 /// [`spec`](crate::core::node::CallableData::spec) with `Any` to this type. Do not
 /// test the node's name instead — that name is the whitespace run as it was written.
-/// Every break node is stamped with this spec; the parse never invents a separate spec per
-/// break.
+/// Every break node is stamped with this spec; the parse never invents a separate
+/// spec per break.
 ///
 /// It implements [`CallableSpec`] for every language of the family, takes no
-/// arguments and parses no content, and is registered on no provider, since the
-/// choice to emit these nodes is the driver's ([`ParagraphBreakStyle`]) and not part
-/// of any package.
+/// arguments, parses no content, and titles its stack frames as specials. It is
+/// registered on no provider, since the choice to emit these nodes is the driver's
+/// ([`ParagraphBreakStyle`]) and not part of any package.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParagraphBreakSpec;
 
@@ -424,7 +424,8 @@ impl<LLL: LatexlikeLang> LatexlikeDriver<LLL> {
 
     /// Uses `resolver` for `\input`-like external source references.
     ///
-    /// Without this, the driver resolves nothing and a source reference fails. The
+    /// Without this the driver resolves nothing, and a source reference is reported
+    /// as [`NoSourceResolver`](crate::core::constructs::NoSourceResolver). The
     /// resolver is what [`ParseDriver::source_resolver`] returns, and what
     /// [`input_macro_spec`](super::input_macro_spec) needs in order to parse a
     /// referenced source into the same tree.
