@@ -4730,6 +4730,21 @@ parser dispatching a fallible hook itself repeated the same guarded three lines;
 mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
 unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.
 
+**Amendment (2026-09-07): a probe state may widen what reads cleanly, never narrow it.**
+The protocol's tolerant arm — `Ok(None)`, nothing diagnosed, nothing consumed — rests on
+the enclosing content loop re-reading the failing token under *its own* state and
+diagnosing it there. The assumption breaks the moment the derived probe state makes a
+token erroneous that the enclosing state accepts: the loop re-reads it, reads it fine,
+and nobody ever reports the failure. Found in `VerbatimArgumentParser`'s delimiter probe,
+which cleared the expected group close but left the forbidden-character block inherited.
+In the preset `$` is forbidden inside math mode, so `$\m$x$$` with a `v`-coded `\m`
+lost its verbatim argument silently under tolerant recovery (the only diagnostic came
+from the display-math group the stray `$$` then opened) and aborted with "character is
+forbidden here" under strict. Fixed by clearing the forbidden set in the probe delta too
+— which is also what the raw-reading rule demands independently: a `\verb` delimiter is
+read raw, exactly like the content it opens (`verbatim_state_delta`'s `disable_all()`).
+Any future probe delta gets the same reading: subtract recognizers, never add rejections.
+
 #### No spec-side slots: slots are pure record-level vocabulary [§dd-dr:no-spec-side-slots]
 
 Status: DECIDED (user, slots session; supersedes the same session's earlier

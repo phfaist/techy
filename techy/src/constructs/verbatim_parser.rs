@@ -69,9 +69,9 @@ use crate::engine::{Frame, FrameTitle};
 use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::{
-    CommandOverrides, CommentOverrides, FeaturePresence, GroupOverrides, Lang,
-    LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState, ParsingStateDelta,
-    SpecialsOverrides, TokenRulesOverrides,
+    CommandOverrides, CommentOverrides, FeaturePresence, ForbiddenCharsOverrides,
+    GroupOverrides, Lang, LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState,
+    ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
 };
 use crate::token::{GroupRule, StreamPosition, TokenEdge, TokenKind};
 
@@ -165,8 +165,22 @@ pub fn verbatim_state_delta<L: LangHasGroups>(
     })
 }
 
-/// The result of the shared raw-content loop: where the content ended and whether the
-/// terminator was actually consumed (with its span).
+/// Why the shared raw-content loop stopped. The two terminator-less endings are told
+/// apart because they are diagnosed differently: only one of them is the end of the
+/// input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawContentStop {
+    /// The terminator was found, and consumed.
+    Terminator,
+    /// The input ended before the terminator appeared.
+    EndOfInput,
+    /// A token the reader could not read was tolerated where the content was being
+    /// read. The input has not ended.
+    UnreadableToken,
+}
+
+/// The result of the shared raw-content loop: where the content ended, what stopped it,
+/// and whether the terminator was actually consumed (with its span).
 struct RawContentEnd<L: Lang> {
     /// End of the raw content (= the terminator's start when one was found).
     content_end: StreamPosition<L>,
@@ -178,8 +192,12 @@ struct RawContentEnd<L: Lang> {
     /// where the loop started to [`content_end`](RawContentEnd::content_end).
     content_text: Option<String>,
     /// The consumed terminator's span, or `None` when the region ended without one
-    /// (end of input, or a tolerated unreadable token).
+    /// (end of input, or a tolerated unreadable token — [`stop`](RawContentEnd::stop)
+    /// says which).
     terminator: Option<SourceSpan<L::SourceOrigin>>,
+    /// What stopped the loop. `Some(_)` in `terminator` exactly when this is
+    /// [`RawContentStop::Terminator`].
+    stop: RawContentStop,
     /// Just past the consumed terminator — equal to `content_end` when the region
     /// ended without one.
     end: StreamPosition<L>,
@@ -241,6 +259,7 @@ fn read_raw_content<L: Lang>(
                 content_end: here.clone(),
                 content_text: text,
                 terminator: None,
+                stop: RawContentStop::UnreadableToken,
                 end: here,
             });
         };
@@ -266,6 +285,7 @@ fn read_raw_content<L: Lang>(
                     content_end: cx.tokens.position_at(&token, TokenEdge::Start),
                     content_text: text,
                     terminator: Some(cx.tokens.source_span_of(&token)),
+                    stop: RawContentStop::Terminator,
                     end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                 });
             }
@@ -278,6 +298,7 @@ fn read_raw_content<L: Lang>(
                     content_end: end.clone(),
                     content_text: text,
                     terminator: None,
+                    stop: RawContentStop::EndOfInput,
                     end,
                 });
             }
@@ -310,8 +331,8 @@ fn default_auto_delimiters() -> Vec<(char, char)> {
 /// under a state where only whitespace scanning is left active. Comments are *not*
 /// skipped — `%` is a perfectly good `\verb` delimiter — and the skipped whitespace is
 /// staged like any other argument's surrounding noise. Any character the language can
-/// tokenize will do; one it declares forbidden in the surrounding state cannot be read,
-/// and the argument is then reported absent.
+/// tokenize will do, including one it declares forbidden in the surrounding state: the
+/// delimiter is read raw, like the content it opens.
 ///
 /// By default the closing delimiter is matched automatically: the paired closer for
 /// `{ [ < (` — that table is replaceable with
@@ -385,8 +406,21 @@ impl<L: LangHasGroups> VerbatimArgumentParser<L> {
 
     /// The delta of the delimiter-discovery peek: the one raw character after optional
     /// whitespace — whitespace scanning stays as the base state has it, every other
-    /// recognizer is off, and an inherited close expectation is **cleared** (a `}`
-    /// must be readable as a delimiter char even inside a braces group).
+    /// recognizer is off, an inherited close expectation is **cleared** (a `}` must be
+    /// readable as a delimiter char even inside a braces group), and the
+    /// forbidden-character set is cleared as well.
+    ///
+    /// Clearing the forbidden set matters twice over. The delimiter is read raw, like
+    /// the content it opens (the same rule [`verbatim_state_delta`] applies to the
+    /// content), so a character the language outlaws elsewhere is a perfectly good
+    /// delimiter. And a probe must never make a token erroneous that the enclosing
+    /// state accepts: the probe protocol leaves diagnosing a failed token to the
+    /// enclosing content loop, which re-reads it under *its* state, so a character
+    /// only the probe rejects would be reported by nobody. In the LaTeX-like preset
+    /// `$` is forbidden inside math mode while also closing the math group, and the
+    /// probe clears the close expectation — without clearing the forbidden set too,
+    /// the probe would reject the `$` of `$\verb$a$$` and no diagnostic would ever be
+    /// raised for it.
     fn delimiter_probe_delta(&self) -> ParsingStateDelta<L> {
         // Only the groups store is known transparent under `L: LangHasGroups`; the
         // other blocks are built through their store projections — a feature the
@@ -407,6 +441,9 @@ impl<L: LangHasGroups> VerbatimArgumentParser<L> {
             ),
             specials: <L::Features as LangFeatures>::Specials::store_with(
                 SpecialsOverrides::disable,
+            ),
+            forbidden_chars: <L::Features as LangFeatures>::ForbiddenChars::store_with(
+                ForbiddenCharsOverrides::disable,
             ),
             ..TokenRulesOverrides::default()
         })
@@ -737,8 +774,11 @@ impl<L: Lang> fmt::Debug for VerbatimBodyTerminator<'_, L> {
 /// When the input ends before the terminator appears — or a token the reader could not
 /// read is tolerated there — [`MissingEnvironmentTerminator`] is reported through
 /// [`ParseContext::recover`], anchored at the invocation trigger like the tokenizing body
-/// parser's. A strict driver aborts the parse; a tolerant one records the diagnostic,
-/// keeps the content read so far, closes the body where the reading stopped, and leaves
+/// parser's. Its [`found`](MissingEnvironmentTerminator::found) tells the two apart:
+/// [`MissingTerminatorFound::EndOfInput`] for the ended input,
+/// [`MissingTerminatorFound::UnreadableToken`] for the tolerated token error. A strict
+/// driver aborts the parse; a tolerant one records the diagnostic, keeps the content
+/// read so far, closes the body where the reading stopped, and leaves
 /// [`EnvironmentBody::terminator`] `None`.
 pub struct VerbatimBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{verbatim}`'s command token), anchoring
@@ -864,12 +904,14 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
 
         let content_start = cx.tokens.position_here();
         let raw_end = read_raw_content(cx, &verbatim_state, |_| false, |_| ())?;
-        if raw_end.terminator.is_none() {
+        let missing_terminator = match raw_end.stop {
+            RawContentStop::Terminator => None,
+            RawContentStop::EndOfInput => Some(MissingTerminatorFound::EndOfInput),
+            RawContentStop::UnreadableToken => Some(MissingTerminatorFound::UnreadableToken),
+        };
+        if let Some(found) = missing_terminator {
             cx.recover(
-                MissingEnvironmentTerminator::new(
-                    self.invocation_name,
-                    MissingTerminatorFound::EndOfInput,
-                ),
+                MissingEnvironmentTerminator::new(self.invocation_name, found),
                 self.trigger_span.clone(),
             )?;
         }
@@ -1240,6 +1282,30 @@ mod tests {
 
         let verb = root_child(&result, 0);
         assert_eq!(verbatim_text(verb), Some("a$b"));
+    }
+
+    #[test]
+    fn a_language_forbidden_char_can_be_the_delimiter() {
+        // The delimiter probe clears the forbidden set too (the raw-reading rule
+        // applies to the delimiter as much as to the content it opens), so a character
+        // the language outlaws elsewhere opens and closes the region like any other.
+        let st = {
+            let spec: Arc<dyn CallableSpec<VerbLang>> =
+                Arc::new(StdCallableSpec { arguments: vec![verb_arg()], ..Default::default() });
+            let mut package = Package::new("test-macros");
+            package.insert(CT_MACRO, "verb", spec);
+            let mut scopes = ScopeStack::new();
+            scopes.push(Arc::new(package));
+            let mut rules = rules::<VerbLang>();
+            rules.forbidden_chars.chars = "$".into();
+            Arc::new(ParsingState::new(StateData { rules, scopes, mode: (), ext: () }))
+        };
+        let result = parse(r"\verb$a$ x", &st, Recovery::Strict);
+        assert!(result.diagnostics.is_empty());
+
+        let verb = root_child(&result, 0);
+        assert_eq!(verb_group(verb).group_delimiters(), Some(("$", "$")));
+        assert_eq!(verbatim_text(verb), Some("a"));
     }
 
     #[test]

@@ -510,7 +510,9 @@ fn optional_group_parser<LLL: LatexlikeLang>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec};
+    use super::super::{
+        CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec, MathGroupForm,
+    };
     use super::*;
     use crate::engine::{Language, ParseResult};
     use crate::error::Recovery;
@@ -1171,5 +1173,36 @@ mod tests {
         // Prescribed delimiters.
         let result = parse_ok("v+-", r"\m+ab-");
         assert_eq!(content_chars(macro_node(&result), 0), "ab");
+    }
+
+    #[test]
+    fn a_forbidden_char_delimits_verbatim_inside_math() {
+        // `$` is forbidden inside math mode and also closes the math group, so it is
+        // the sharp case for the delimiter probe: the probe clears both the close
+        // expectation and the forbidden set, and reads it as an ordinary delimiter.
+        // Neither recovery policy has anything to report.
+        for recovery in [Recovery::Strict, Recovery::Tolerant] {
+            let result = language(recovery, "v").parse(r"$\m$x$$ y").unwrap();
+            check_latexlike_tree_invariants(&result.tree);
+            assert!(
+                result.diagnostics.is_empty(),
+                "unexpected diagnostics under {recovery:?}: {:?}",
+                result.diagnostics
+            );
+
+            let math = result.tree.root().child(0).expect("the math group");
+            assert_eq!(math.group_type(), Some(GroupType::Math(MathGroupForm::Inline)));
+            assert_eq!(math.group_delimiters(), Some(("$", "$")));
+            assert_eq!(math.span().range(), 0..7);
+
+            let m = math.child(0).expect("the macro inside the math group");
+            assert_eq!(m.macro_name(), Some("m"));
+            assert_eq!(content_chars(m, 0), "x");
+            let verbatim = m.child(0).expect("the verbatim group");
+            assert_eq!(verbatim.group_type(), Some(GroupType::Verbatim));
+            assert_eq!(verbatim.group_delimiters(), Some(("$", "$")));
+
+            assert_eq!(result.tree.root().child(1).unwrap().chars(), Some(" y"));
+        }
     }
 }

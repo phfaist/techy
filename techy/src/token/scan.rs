@@ -982,6 +982,24 @@ mod tests {
     }
 
     #[test]
+    fn command_of_a_single_name_character_takes_its_post_space() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        // The discriminating case for the post-space rule: what decides is the
+        // character right after the escape character, not the name's length. `t` is a
+        // name character, so `\t` consumes its post-space although its name is one
+        // character long — TeX's control-word rule.
+        assert_eq!(
+            scan_command(r"\t  x", 0, &rules, &backslash()),
+            Ok(CommandMatch {
+                escape_char: '\\',
+                span: sp(0, 4),
+                name: sp(1, 2),
+                post_space: sp(2, 4),
+            }),
+        );
+    }
+
+    #[test]
     fn command_post_space_stops_before_a_paragraph_break() {
         let rules: TokenRules<TestLang> = latex_rules();
         // `skip_whitespace`'s multi-newline rule: the post-space ends before the first

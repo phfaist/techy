@@ -54,9 +54,9 @@ pub struct MalformedEnvironmentTerminator {
 
 /// Condition: an environment's body ended without its terminator ever appearing.
 ///
-/// Either the input ended inside the body, or a group close delimiter appeared that
-/// nothing at the body's level had opened;
-/// [`found`](MissingEnvironmentTerminator::found) says which.
+/// The input ended inside the body, a group close delimiter appeared that nothing at
+/// the body's level had opened, or the reading stopped at a token the reader could not
+/// read; [`found`](MissingEnvironmentTerminator::found) says which.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.environments.missing-terminator")]
@@ -77,6 +77,15 @@ pub enum MissingTerminatorFound {
     /// The body closes without consuming it, leaving it for an enclosing level to
     /// claim.
     StrayGroupClose,
+    /// The body ended at a token the reader could not read and the driver tolerated.
+    /// The input has *not* ended: the body closes where the reading stopped, and the
+    /// enclosing content loop re-reads the failing token and applies its own token
+    /// recovery to it.
+    ///
+    /// Only a raw body ([`VerbatimBodyParser`](super::VerbatimBodyParser)) reports
+    /// this, and only with a token reader of the embedder's own: the standard reader
+    /// has nothing left to reject under the raw-reading state.
+    UnreadableToken,
 }
 
 // Hand-written wording: the message varies by what ended the body (a match, which the
@@ -92,6 +101,12 @@ impl fmt::Display for MissingEnvironmentTerminator {
             MissingTerminatorFound::StrayGroupClose => {
                 write!(f, "missing terminator of environment ‘{}’", self.environment)
             }
+            MissingTerminatorFound::UnreadableToken => write!(
+                f,
+                "missing terminator of environment ‘{}’ before a token that could not \
+                 be read",
+                self.environment
+            ),
         }
     }
 }

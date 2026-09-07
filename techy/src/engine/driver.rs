@@ -498,8 +498,15 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// [`ParseSetup::with_initial_state`](crate::core::ParseSetup::with_initial_state)
     /// put in its place.
     ///
-    /// The hook may record warnings and notes into `diagnostics`, but it cannot alter
-    /// the parse. The default does nothing.
+    /// The hook returns nothing, so it cannot fail and cannot stop the parse: whatever
+    /// it records, the parse goes on. Record warnings and notes only. Nothing prevents
+    /// pushing an entry of `Error` severity, but such an entry is kept and counted like
+    /// any other — [`Diagnostics::has_errors`](crate::error::Diagnostics::has_errors)
+    /// answers `true` afterwards — while the parse still runs to completion, and the
+    /// strict recovery policy never sees it (this hook does not go through
+    /// [`recover`](ParseDriver::recover)). A consumer would be handed a result that both
+    /// completed and reports errors, with nothing to explain the difference. The default
+    /// does nothing.
     ///
     /// The latexlike driver delegates to
     /// [`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
