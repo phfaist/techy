@@ -1,8 +1,8 @@
-//! The preset's source re-emission: [`SourceRecomposer`] (constructor
-//! [`source_recomposer`]) — the ONE recomposer implementation that
-//! reconstructs a latexlike-family tree's source spelling from its recorded
-//! facts. (Internal file note: this module is private; the public story
-//! lives on the items' own docs.)
+//! The preset's source re-emission: [`SourceRecomposer`], built by
+//! [`source_recomposer`] — the recomposer that reconstructs the source text of a
+//! latexlike-family tree out of the facts the parse recorded on its nodes.
+
+// This module is private; the public story lives on the items' own docs.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -19,61 +19,106 @@ use super::invocation_syntax::EnvironmentSyntax;
 use super::lang::{LatexlikeCallableType, LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
 
-/// The preset's source reemitter: reconstructs a latexlike-family tree's
-/// **source spelling from its recorded facts** —
-/// `TreeRecomposer::new(&mut source_recomposer()).recompose(&tree, ())` reemits
-/// the tree.
+/// Reconstructs the source text of a parsed latexlike-family tree.
 ///
-/// Everything it emits comes from node payload: the core-complete kinds
-/// through [`core_source_instruction`] (chars content, comment parts, group
-/// delimiters), and callables from the family's recorded invocation-syntax
-/// payload — the macro escape character + name + post-space, the environment
-/// sides through the record's own spelling writers
-/// ([`write_begin`](EnvironmentSyntax::write_begin)/[`write_end`](EnvironmentSyntax::write_end)),
-/// and the specials name-as-written. No span content is ever resolved (the
-/// per-node reading contract, [`techy::recompose`](crate::recompose)); on a
-/// [`materialize`](crate::core::node::NodeTree::materialize)d tree the
-/// reconstruction touches no `Source` at all.
+/// This is the ready-made [`Recomposer`] for writing a tree back out as markup.
+/// Build one with [`source_recomposer`] (or [`Default`]) and run it with a
+/// [`TreeRecomposer`](crate::recompose::TreeRecomposer):
 ///
-/// **Accuracy is what the parse records** (the preset's accuracy rule,
-/// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
-/// for trees the latexlike parse produces, reemission is byte-exact —
-/// including tolerant-recovery shapes, which reemit exactly what was
-/// recorded (an environment that never found its terminator has an empty end
-/// side and reemits no terminator). The one recorded-less-than-consumed
-/// recovery is the malformed environment terminator (its `\end` is consumed
-/// alone, diagnosed, and recorded nowhere): that consumed command spelling
-/// is not reproduced.
+/// ```
+/// use techy::core::specs::Package;
+/// use techy::core::{Language, ParsingState};
+/// use techy::error::Recovery;
+/// use techy::latexlike::{source_recomposer, Latexlike, LatexlikeDriver};
+/// use techy::recompose::TreeRecomposer;
 ///
-/// Byte-exactness is byte-equality with the parsed source, so it is stated for a
-/// language that obeys span tiling
-/// ([`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING)) — the
-/// preset's own [`Latexlike`] included. A family member declaring
-/// `OBEYS_SPAN_TILING = false` — whose parsers assume nothing about where the
-/// tokens come from — has its trees reemitted **as stored**: the owned text the
-/// parser recorded, in tree order. No byte-equality with any one source is claimed
-/// for such a tree.
+/// let mut package: Package<Latexlike> = Package::new("mydefs");
+/// package.define_macro("emph", ["m"]).unwrap();
+/// let language: Language<Latexlike> = Language::new(
+///     LatexlikeDriver::new(Recovery::Strict),
+///     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
+/// );
 ///
-/// A [`Recomposer`] with `State = ()`, `Piece = String`, instruction-only —
-/// it never descends explicitly, so it composes correctly under a wrapping
-/// recomposer (the wrapping contract), and it needs no scope call at all:
-/// the default `Concat` scope already skips `Attached` and `Hidden` slot
-/// children (an `\input`'s attached content reemits as the `\input{…}`
-/// invocation it came from). Works for any language family member (`LLL:`
-/// [`LatexlikeLang`]) over trees with any annotation type.
+/// let input = "a \\emph{b} % note\n  c";
+/// let result = language.parse(input).unwrap();
+/// let text: String = TreeRecomposer::new(&mut source_recomposer())
+///     .recompose(&result.tree, ())
+///     .unwrap();
+/// assert_eq!(text, input);
+/// ```
 ///
-/// Its only failure is [`SourceRecomposeError`]'s payload-coherence check,
-/// which **no parse output can trigger**
-/// ([`IncoherentInvocationSyntax`](SourceRecomposeError::IncoherentInvocationSyntax)
-/// reports a hand-built or incoherently restaged tree) — over trees a parse
-/// produced, the recomposition never errs.
+/// It serves any member of the language family (`LLL:` [`LatexlikeLang`]) and trees
+/// carrying any annotation type.
+///
+/// # What it emits
+///
+/// Everything comes from what the parse recorded on the nodes themselves; the source
+/// text under a node's own span is never read. Chars content, comment parts, and
+/// group delimiters come through [`core_source_instruction`]; a callable is written
+/// from the family's recorded invocation syntax — the escape character, the name as
+/// written, and the post-space for a macro, the two sides' own spelling writers
+/// ([`write_begin`](EnvironmentSyntax::write_begin) and
+/// [`write_end`](EnvironmentSyntax::write_end)) for an environment, and the name as
+/// written for a specials. On a
+/// [`materialize`](crate::core::node::NodeTree::materialize)d tree the reconstruction
+/// therefore reads no [`Source`](crate::source::Source) at all.
+///
+/// # What the output equals
+///
+/// For a tree the latexlike parse produced, the output equals the parsed source byte
+/// for byte. Only what the parse recorded can be re-emitted (see
+/// [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)),
+/// and a tolerant parse records the shapes it recovered as they were written: an
+/// environment that never found its terminator has an empty end side and re-emits no
+/// terminator, which is exactly what the input had. The one recovery that consumes
+/// more than it records is the malformed environment terminator — its `\end` is
+/// consumed on its own, diagnosed, and recorded nowhere — so that command spelling is
+/// not reproduced.
+///
+/// Byte-equality with one source presupposes that the tree's nodes tile that source,
+/// so it is stated for a language declaring
+/// [`Lang::OBEYS_SPAN_TILING`](crate::core::Lang::OBEYS_SPAN_TILING) `= true`, the
+/// preset's own [`Latexlike`] included. A family member declaring it `false` has
+/// parsers that assume nothing about where their tokens came from; its trees are
+/// re-emitted **as stored** — the text the parser recorded, in tree order — and no
+/// byte-equality with any one source is claimed for them.
+///
+/// # How it composes
+///
+/// `State = ()` and `Piece = `[`String`]. Every node is answered with an instruction
+/// alone, and the recomposer never descends by itself, so it also works as the inner
+/// recomposer of one that wraps it. It needs no scope call: the default `Concat` scope
+/// already skips `Attached` and `Hidden` slot children, so an `\input`'s attached
+/// content is re-emitted as the `\input{…}` invocation it came from rather than as the
+/// included file's text.
+///
+/// # Errors
+///
+/// [`SourceRecomposeError::IncoherentInvocationSyntax`], for a callable whose recorded
+/// invocation syntax does not match the role its callable type plays. No parse output
+/// can hold such a node, so over a tree a parse produced the recomposition never
+/// fails.
+///
+/// # Panics
+///
+/// Panics if a span-backed payload field of a node names a range that is not within
+/// the content of that node's own source, or does not fall on character boundaries —
+/// the panic condition of
+/// [`TextContent::resolve`](crate::source::TextContent::resolve). That means a tree
+/// invariant is broken, which no parsed input can cause; only a tree assembled by hand
+/// through [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder) can reach it, and
+/// [`validate_tree`](crate::core::node::validate_tree) is the check for it.
 pub struct SourceRecomposer<LLL: LatexlikeLang = Latexlike> {
     _lang: PhantomData<LLL>,
 }
 
-/// The [`SourceRecomposer`] constructor:
-/// `TreeRecomposer::new(&mut source_recomposer()).recompose(&tree, ())` reemits
-/// `tree`'s source spelling.
+/// Creates a [`SourceRecomposer`], which re-emits a parsed latexlike-family tree as
+/// source text.
+///
+/// Run it with a [`TreeRecomposer`](crate::recompose::TreeRecomposer):
+/// `TreeRecomposer::new(&mut source_recomposer()).recompose(&tree, ())`. The type's
+/// documentation states what the output is guaranteed to equal, and the one condition
+/// under which a run panics.
 pub fn source_recomposer<LLL: LatexlikeLang>() -> SourceRecomposer<LLL> {
     SourceRecomposer { _lang: PhantomData }
 }
@@ -99,12 +144,13 @@ impl<LLL: LatexlikeLang> fmt::Debug for SourceRecomposer<LLL> {
     }
 }
 
-/// Error of a [`SourceRecomposer`] run.
+/// The failure of a [`SourceRecomposer`] run.
 ///
-/// Variant/`callable_type` coherence is deliberately **unenforced at parse
-/// time** (an accepted cost of the Lang-owned payload channel) — the source
-/// recomposer is where an incoherent combination surfaces, as
-/// [`IncoherentInvocationSyntax`](SourceRecomposeError::IncoherentInvocationSyntax).
+/// A parse never produces a tree that causes one. The single variant reports a
+/// callable whose recorded invocation syntax does not match the role its callable type
+/// plays, which only a tree built by hand or restaged incoherently can hold: the parse
+/// deliberately does not check the pairing when it records it, and the source
+/// recomposer is where a mismatch surfaces.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceRecomposeError {
@@ -149,6 +195,19 @@ impl<LLL: LatexlikeLang, A> Recomposer<LLL, A> for SourceRecomposer<LLL> {
     type Piece = String;
     type Error = SourceRecomposeError;
 
+    /// Returns the instruction that re-emits `node`'s recorded source spelling.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceRecomposeError::IncoherentInvocationSyntax`] if `node` is a callable
+    /// whose recorded invocation syntax does not match the role its callable type
+    /// plays.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a span-backed payload field of `node` names a range that is not
+    /// within the content of the node's own source, or does not fall on character
+    /// boundaries — see [`SourceRecomposer`].
     fn recompose_node(
         &mut self,
         node: NodeRef<'_, LLL, A>,

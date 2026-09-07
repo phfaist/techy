@@ -1,39 +1,37 @@
-//! Environments: the `\begin{name} … \end{name}` composition and its spec surface.
+//! Environments: the `\begin{name} … \end{name}` construct and the specs behind it.
 //!
-//! The *notion* of "environment" is preset property; core contributes parameterized
-//! building blocks only. This module promotes a composition once rehearsed test-side:
+//! An environment is a named region with a body, which may also take arguments written
+//! after `\begin{name}`. This module holds everything the LaTeX-like preset needs for
+//! one: [`EnvironmentSpec`], the definition an author registers for a single
+//! environment; [`EnvironmentBehavior`], through which a definition changes how its
+//! body is read; and the two dispatcher specs [`BeginSpec`] and [`EndSpec`], which
+//! [`builtin_package`](super::builtin_package) registers as the ordinary macros
+//! `\begin` and `\end`.
 //!
-//! - [`BeginSpec`] — the `\begin` dispatcher, registered as an ordinary
-//!   [`Macro`](CallableType::Macro) entry of the [`builtin_package`](super::builtin_package)
-//!   (decided at the 7.6 checkpoint: data in the scope stack, not driver code — it is
-//!   shadowable and unloadable like any definition). Its invocation parser reads the
-//!   rigid name group ([`read_rigid_name_group`]), resolves the environment's spec from
-//!   the scope stack under [`CallableType::Environment`], parses declared arguments
-//!   ([`parse_declared_arguments`] — frames quote the *environment's* name), drives the
-//!   body parser, and stages the callable node with its `"body"` slot record.
-//! - [`EndSpec`] — the orphan-`\end` diagnoser: inside an environment body, `\end` is
-//!   the body parser's stop condition and never reaches command resolution, so a
-//!   *resolved* `\end` is always an orphan.
-//! - [`EnvironmentSpec`] — the registration type for environments: declared arguments
-//!   plus body behavior, reachable through the sanctioned funnel pattern:
-//!   the concrete wrapper holds an
-//!   `Arc<dyn `[`EnvironmentBehavior`]`>`, whose defaulted methods carry the body
-//!   state delta and the body-parser choice (pylatexenc's
-//!   `EnvironmentSpec.make_body_parser` precedent; [`VerbatimBehavior`] overrides it
-//!   for raw bodies).
+//! # The core knows nothing about `\begin` and `\end`
 //!
-//! Neither command name of the pair is fixed here: the opening one is whatever the
-//! [`BeginSpec`] entry is registered under, and the terminator one is
-//! [`BeginSpec::new`]'s argument — `\begin`/`\end` is what
-//! [`builtin_package`](super::builtin_package) happens to register. The diagnostics
-//! this module raises quote the spellings the source used.
+//! The core supplies one generic building block:
+//! [`EnvironmentBodyParser`](crate::core::constructs::EnvironmentBodyParser) reads
+//! content up to a terminator command of a chosen name followed by that name's group,
+//! and consumes it. It says nothing about how the construct is *opened*. Making the
+//! LaTeX spelling work is this module's job: `\begin` is an ordinary macro definition
+//! whose invocation parser reads the name group, resolves the environment's own
+//! definition, parses that definition's declared arguments, and only then runs the
+//! core body parser.
 //!
-//! An environment spec's own
-//! [`make_invocation_parser`](CallableSpec::make_invocation_parser) is never invoked —
-//! the permanent boundary decided with the composition's rehoming: per-environment
-//! variation flows through the [`EnvironmentBehavior`] surface. Starred environments
-//! (`figure*`) are ordinary separate entries — `*` reads as a plain character inside
-//! the rigid name group.
+//! Neither command name of the pair is fixed here either. The opening one is whatever
+//! name [`BeginSpec`] is registered under, and the closing one is the argument given
+//! to [`BeginSpec::new`], so a language that spells the pair `\open`/`\shut` registers
+//! `BeginSpec::new("shut")` under `"open"` and needs no code of its own. Diagnostics
+//! quote the spellings the source actually used.
+//!
+//! # Defining an environment
+//!
+//! Register an [`EnvironmentSpec`] under
+//! [`CallableType::Environment`](super::CallableType::Environment) in a package. Its
+//! argument list is parsed immediately after `\begin{name}`, before the body starts;
+//! [`Package::define_environment`](crate::core::specs::Package::define_environment) is
+//! the one-line form over [argument codes](super::argument_specs).
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -57,6 +55,42 @@
 //! assert_eq!(env.environment_name(), Some("itemize"));
 //! assert_eq!(env.body().unwrap().len(), 1);
 //! ```
+//!
+//! A starred environment (`figure*`) is a separate entry under its own name: `*` is a
+//! plain character inside the name group. To change how the body itself is read —
+//! math mode for an `equation`, raw text for a `verbatim` ([`VerbatimBehavior`]) —
+//! give the spec a body state delta ([`EnvironmentSpec::with_body_delta`]) or a custom
+//! [`EnvironmentBehavior`]. [Defining macros, environments, and
+//! specials](crate::guide::specs) covers the whole task, and [Learn techy by
+//! example](crate::guide::learn_by_example#environments) shows the result being read
+//! back.
+//!
+//! # What one parse produces
+//!
+//! An environment becomes a single
+//! [`Callable`](crate::core::node::NodeKind::Callable) node of callable type
+//! [`Environment`](super::CallableType::Environment), named after the environment
+//! itself rather than after `\begin`. Its children are the nodes of the declared
+//! arguments in declaration order, followed by one
+//! [`List`](crate::core::node::NodeKind::List) node holding the body — recorded as a
+//! slot named `"body"` and read back with
+//! [`NodeRef::body`](crate::core::node::NodeRef::body).
+//!
+//! The characters of `\begin{name}` and `\end{name}` belong to no child node. How they
+//! were written is recorded on the node's invocation-syntax payload
+//! ([`StdEnvironmentSyntax`](super::StdEnvironmentSyntax)), which is what lets the
+//! source be reproduced exactly.
+//!
+//! # When the terminator is wrong or missing
+//!
+//! The body ends at the first terminator command at its own nesting level; one inside
+//! a nested group or a nested environment belongs to that construct. A terminator that
+//! names a different environment, a terminator with no name group after it, and input
+//! that ends inside the body are all diagnosed by the core body parser, each closing
+//! the body in its own defined way — see
+//! [`EnvironmentBodyParser`](crate::core::constructs::EnvironmentBodyParser) for the
+//! exact recovery of each case. A terminator that no open body claims reaches command
+//! resolution instead, where [`EndSpec`] diagnoses it as an [`OrphanEnd`].
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -96,16 +130,20 @@ use super::Latexlike;
 // --- conditions --------------------------------------------------------------------
 
 /// Condition: the environment-opening command was not followed immediately by its
-/// rigid name group (`\begin [x]`, `\begin{ itemize }`). Tolerant recovery stages the
-/// trigger alone — its syntactic post-space included, keeping the sibling partition
-/// exact — as a `Chars` node (the accepted markup-in-chars recovery artifact) and
-/// consumes nothing past it.
+/// name group.
+///
+/// The name group is rigid, so `\begin [x]` and `\begin{ itemize }` both raise this.
+/// Under tolerant recovery the command alone is staged as a
+/// [`Chars`](crate::core::node::NodeKind::Chars) node — the whitespace the command
+/// token itself consumed included, so that the siblings still partition the source
+/// exactly — and nothing after it is consumed, leaving the rest to parse as ordinary
+/// content.
 ///
 /// The message quotes the command as it was written: the opening command's name is
-/// [`BeginSpec`]'s registration name, `\begin` only by convention.
+/// whatever [`BeginSpec`] was registered under, `\begin` only by convention.
 ///
-/// Like every condition, it is constructible outside the crate (e.g. for
-/// manufacturing diagnostics in an embedding's own tests):
+/// Like every condition, it can be constructed outside the crate, for instance to
+/// manufacture a diagnostic in an embedding's own tests:
 ///
 /// ```
 /// use techy::latexlike::MalformedBegin;
@@ -121,14 +159,17 @@ use super::Latexlike;
                immediately after the command"
 )]
 pub struct MalformedBegin {
-    /// The opening command as written, escape character included and the trigger's
-    /// syntactic post-space excluded (`\begin`).
+    /// The opening command as written: escape character included, the whitespace
+    /// after it excluded (`\begin`).
     pub command: String,
 }
 
-/// Condition: `\begin{name}` named an environment no provider of the scope stack
-/// defines. Tolerant recovery parses on with an argument-less body-only fallback
-/// spec, so the body still runs to its `\end{name}` terminator.
+/// Condition: `\begin{name}` named an environment that no provider in the scope stack
+/// defines.
+///
+/// Under tolerant recovery the parse continues with a fallback definition that
+/// declares no arguments, so the body is still parsed and still ends at its
+/// `\end{name}` terminator.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -140,24 +181,28 @@ pub struct UnknownEnvironment {
     pub name: String,
 }
 
-/// Condition: an environment terminator with no environment open at its level.
-/// Inside a body the terminator is consumed by the body parser before command
-/// resolution, so a dispatched terminator is always an orphan ([`EndSpec`]). Tolerant
-/// recovery stages the consumed extent — `\end{name}` whole, or the command alone when
-/// the name group is malformed — as a `Chars` node.
+/// Condition: an environment terminator appeared with no environment open at its
+/// level.
 ///
-/// The message quotes the terminator as it was written; nothing here spells the
-/// *opening* command, which this site has no way to know (the pairing is
-/// [`BeginSpec`]'s, and only in the opening direction).
+/// Inside a body the terminator is consumed by the body parser before any command
+/// resolution happens, so a terminator that reaches its own definition ([`EndSpec`])
+/// is always an orphan. Under tolerant recovery what was consumed — `\end{name}`
+/// whole, or the command alone when no name group followed it — is staged as a
+/// [`Chars`](crate::core::node::NodeKind::Chars) node.
+///
+/// The message quotes the terminator as it was written. It never spells the *opening*
+/// command, which this site has no way to know: the pairing is recorded by
+/// [`BeginSpec`], and only in the opening direction.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "latexlike.environments.orphan-end")]
 pub struct OrphanEnd {
     /// The environment named by the terminator, when its name group parsed.
     pub name: Option<String>,
-    /// The terminator as written: the whole consumed extent (`\end{align}`), or the
-    /// command alone — post-space excluded — when its name group was malformed
-    /// (`\end`).
+    /// The terminator as written: the whole consumed extent (`\end{align}`), or, when
+    /// no name group followed, the command alone with the whitespace after it excluded
+    /// (`\end`). A terminator spelled some other way than as a command is always
+    /// quoted with its whole extent.
     pub terminator: String,
 }
 

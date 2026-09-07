@@ -117,7 +117,9 @@ crate::serial_index! {
 /// consumer-built tree that violates the [`TextContent::Spanned`] invariant — a
 /// span-backed text of the invocation syntax whose byte range is not a valid range of
 /// the node's source — panics there, exactly as [`NodeTree::materialize`] does on such a
-/// tree.
+/// tree. The write entry points state the condition:
+/// [`TreeSerialization::serialize_tree`] and this driver's
+/// [`serialize_object`](ObjectSerdeDriver::serialize_object).
 pub struct TreeSerdeDriver<L: SerializableLang> {
     lang: core::marker::PhantomData<fn() -> L>,
 }
@@ -153,6 +155,17 @@ impl<L: SerializableLang> ObjectSerdeDriver<L> for TreeSerdeDriver<L> {
         None
     }
 
+    /// Writes the node tree in `object` as an entry of the trees table.
+    ///
+    /// # Panics
+    ///
+    /// Each callable node's invocation syntax is materialized against that node's own
+    /// source before it is written ([`InvocationSyntax::materialized`]), so this panics
+    /// if a range recorded there is not a valid `char`-boundary range of that source.
+    /// That is a broken tree invariant, which no parsed input can cause and which
+    /// [`validate_tree`](crate::core::node::validate_tree) detects; the panic is
+    /// [`TextContent::resolve`](crate::source::TextContent::resolve)'s (see the [list of
+    /// panicking items](crate::guide::panics)).
     fn serialize_object(
         &self,
         object: &Arc<dyn Any + Send + Sync>,
@@ -515,6 +528,16 @@ pub trait TreeSerialization<L: SerializableLang> {
     /// [`SerializeError::InTable`]); a node's serialization fails (its error, wrapped
     /// in [`SerializeError::InNode`] and [`SerializeError::InTable`]); the errors of
     /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern).
+    ///
+    /// # Panics
+    ///
+    /// Each callable node's invocation syntax is materialized against that node's own
+    /// source before it is written ([`InvocationSyntax::materialized`]), so this panics
+    /// if a range recorded there is not a valid `char`-boundary range of that source.
+    /// That is a broken tree invariant, which no parsed input can cause and which
+    /// [`validate_tree`](crate::core::node::validate_tree) detects; the panic is
+    /// [`TextContent::resolve`](crate::source::TextContent::resolve)'s (see the [list of
+    /// panicking items](crate::guide::panics)).
     fn serialize_tree<A>(&mut self, tree: &NodeTree<L, A>) -> Result<TreeIndex, SerializeError>
     where
         A: SerializableValue<L> + DeserializableValue<L> + Clone + Debug + Send + Sync + 'static;

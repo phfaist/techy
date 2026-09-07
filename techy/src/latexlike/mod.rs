@@ -1,50 +1,15 @@
-//! The `latexlike` preset: the familiar LaTeX behavior, assembled from the
-//! generic core.
+//! The LaTeX-like language preset: the familiar meaning of `\`, `{`, `}`, `%`, math
+//! modes, and environments.
 //!
-//! The core has no privileged language concepts (no built-in math mode, `{`/`}`, `%`,
-//! or `\`); this module is where the familiar vocabulary returns — as *preset data and
-//! preset code* over the same extension surface any language uses:
+//! techy's parsing engine has no built-in LaTeX behavior. This module supplies it, as
+//! preset data and preset code written against the same public extension points a
+//! language of your own would use. [`Latexlike`] declares the language;
+//! [`LatexlikeDriver`] carries the parse-time policy.
 //!
-//! - [`Latexlike`] — the [`Lang`] ZST, with the preset's closed vocabularies
-//!   [`GroupType`], [`CallableType`], [`Mode`], and [`Event`];
-//! - the **language family**: the [`LatexlikeLang`] family trait and the per-vocabulary
-//!   role traits ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
-//!   [`LatexlikeMode`], [`LatexlikeEvent`]) — every generic preset component takes
-//!   an `LLL: LatexlikeLang`, and a framework language with its own vocabularies or
-//!   exts joins the family instead of forking the preset;
-//! - [`LatexlikeDriver`] — the preset's [`ParseDriver`](crate::engine::ParseDriver):
-//!   recovery policy, scope-stack command resolution, and the math-mode group plug —
-//!   plus [`LatexlikeParseDriver`], the preset's driver extension (the hooks that speak
-//!   preset vocabulary, e.g. what an environment body's after-effects may escape),
-//!   which every family member's driver implements;
-//! - [`default_token_rules`] and [`builtin_package`] — the canonical seed data behind
-//!   [`Latexlike::initial_state_data`];
-//! - [`minidefs`] — the opt-in toy `"minilatex"` package (a handful of familiar
-//!   definitions for prototyping; never preloaded);
-//! - the callable spec types — [`MacroSpec`] and [`SpecialsSpec`] (declarative,
-//!   with the preset's traceback vocabulary), and [`EnvironmentSpec`] (declared
-//!   arguments plus body behavior via [`EnvironmentBehavior`]) with the
-//!   `\begin`/`\end` composition ([`BeginSpec`]/[`EndSpec`], seeded in
-//!   [`builtin_package`]);
-//! - the argument-code factory [`argument_specs`] (`["o", "{"]` → configured
-//!   [`ArgumentSpec`](crate::spec::ArgumentSpec)s; compact whole-spec strings via
-//!   [`argument_specs_from_str`]) and the verbatim wiring —
-//!   [`VerbatimBehavior`] for `verbatim`-style environment bodies, the `v` codes for
-//!   `\verb`-style delimited verbatim arguments;
-//! - the **opt-in** `\input` spec ([`input_macro_spec`], never preloaded):
-//!   resolve-and-attach inclusion — the referenced source parses at the invocation
-//!   point into the same tree, as the callable's `Attached` body slot;
-//! - `NodeRef` accessor sugar for latexlike trees
-//!   ([`math_form`](crate::node::NodeRef::math_form),
-//!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
-//!   latexlike-shaped `NodeRef`s;
-//! - [`serialize`] — the preset's serialization support: [`Latexlike`] is a
-//!   [`SerializableLang`](crate::serialize::SerializableLang), the vocabulary and
-//!   ext types have value conversions, the spec types serialize (by identity through
-//!   their provenance stamps, or in a self-contained form), and
-//!   [`serialize::register`] prepares a reading session. Under the `serde` cargo
-//!   feature the vocabulary types and [`BodyMarker`] also derive serde's traits, with
-//!   the same names as their value conversions, for use inside serde-shaped payloads.
+//! # Parsing a document
+//!
+//! A [`Language`](crate::core::Language) pairs the driver with the parsing state a
+//! parse starts from, and parses any number of documents:
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -61,15 +26,86 @@
 //! assert_eq!(math.child(0).unwrap().parsing_state().mode(), Mode::Math);
 //! ```
 //!
-//! **What the preset does not ship yet:** macro and environment *definitions*. The
-//! standard spec database (pylatexenc's default-specs port) is planned but not yet
-//! shipped; until
-//! then embedders and tests register the specs they need in their own packages
-//! ([`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages)),
-//! as [`MacroSpec`]/[`EnvironmentSpec`]/[`SpecialsSpec`] entries (or any custom
-//! [`CallableSpec`](crate::spec::CallableSpec)) — `\verb` and `verbatim` included:
-//! the machinery ships here, the definitions with the database. For a quick start,
-//! [`minidefs`] carries a toy package to load explicitly.
+//! [`ParsingState::lang_initial`](crate::core::ParsingState::lang_initial) builds the
+//! canonical starting state: the preset's token rules ([`default_token_rules`]) and a
+//! scope stack holding the [`builtin_package`].
+//!
+//! # Definitions are yours to supply
+//!
+//! The preset defines the syntax, not a library of macros. `\emph`, `\textbf`,
+//! `itemize` and the rest are undefined until a program registers them: the only
+//! preloaded definitions are the `\begin` and `\end` pair of [`builtin_package`], and
+//! the standard definitions database (a port of pylatexenc's default specs) is planned
+//! but not yet available.
+//!
+//! Register what you need in your own [`Package`] and
+//! seed the parsing state with it
+//! ([`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)),
+//! as [`MacroSpec`], [`EnvironmentSpec`], and [`SpecialsSpec`] entries — or as any
+//! custom [`CallableSpec`](crate::core::specs::CallableSpec). `\verb` and `verbatim`
+//! are no exception: the machinery for them is here ([`VerbatimBehavior`] and the `v`
+//! argument codes), the definitions are not. The guide chapter [Defining macros,
+//! environments, and specials](crate::guide::specs) walks through registration, and
+//! [`minidefs`] is a toy package of familiar definitions to load explicitly while
+//! prototyping.
+//!
+//! An unregistered command is not a syntax error: a strict parse stops at it, and a
+//! tolerant one records a diagnostic and keeps the characters as text
+//! ([`Recovery`](crate::error::Recovery)).
+//!
+//! # The preset's vocabulary
+//!
+//! Node *kinds* stay the core's ([`NodeKind`](crate::core::node::NodeKind): characters,
+//! group, callable, comment, list). What makes a tree latexlike are the four closed
+//! vocabularies the preset stamps on those nodes:
+//!
+//! - [`CallableType`] — the invocation forms: a macro (`\emph{…}`), an environment
+//!   (`\begin{itemize}…\end{itemize}`), or specials, a trigger character sequence such
+//!   as `~` or `---`.
+//! - [`GroupType`] — the group classes: a content group (`{…}`), a math group, or a
+//!   verbatim region. A math group also records its [`MathGroupForm`], inline or
+//!   display.
+//! - [`Mode`] — text or math. A math group's interior parses in [`Mode::Math`], and
+//!   definition visibility can be restricted to one mode.
+//! - [`Event`] — the one state-transition event, "leave the math context": what an
+//!   argument that must parse in the surrounding text context (the `\text{…}` shape)
+//!   asks for.
+//!
+//! After a parse, the preset's accessors on [`NodeRef`](crate::core::node::NodeRef)
+//! read that vocabulary back off a node —
+//! [`macro_name`](crate::core::node::NodeRef::macro_name),
+//! [`environment_name`](crate::core::node::NodeRef::environment_name),
+//! [`specials_name`](crate::core::node::NodeRef::specials_name),
+//! [`is_math_group`](crate::core::node::NodeRef::is_math_group),
+//! [`math_form`](crate::core::node::NodeRef::math_form), and
+//! [`post_space`](crate::core::node::NodeRef::post_space).
+//!
+//! # What else is here
+//!
+//! - **Defining callables** — [`MacroSpec`], [`SpecialsSpec`], and [`EnvironmentSpec`]
+//!   (declared arguments plus body behavior, [`EnvironmentBehavior`]), configured by
+//!   the argument codes [`argument_specs`] and [`argument_specs_from_str`]
+//!   (`["o", "m"]` for an optional argument then a mandatory one). [`BeginSpec`] and
+//!   [`EndSpec`] are the definitions of `\begin` and `\end` themselves.
+//! - **Verbatim content** — [`VerbatimBehavior`] for `verbatim`-style environment
+//!   bodies, and the `v` argument codes for `\verb`-style delimited arguments.
+//! - **Including other sources** — [`input_macro_spec`], an `\input`-shaped definition
+//!   that parses the referenced source into the same tree at the point of invocation.
+//!   It is never preloaded and needs a
+//!   [`SourceResolver`](crate::source::SourceResolver) on the driver.
+//! - **Writing source back out** — [`source_recomposer`] re-emits a parsed tree as
+//!   source text.
+//! - **Serialization** — [`serialize`]: [`Latexlike`], its vocabularies, and its spec
+//!   types convert to and from techy's format-independent value model.
+//! - **Extending the preset** — the generic items here are written over a *family* of
+//!   languages ([`LatexlikeLang`], conventionally the type parameter `LLL`) rather than
+//!   over [`Latexlike`] alone, so a language with its own vocabularies, node data, or
+//!   driver ([`LatexlikeParseDriver`]) reuses the preset's rules, specs, and parse
+//!   behavior instead of copying them.
+//!
+//! The guide chapter [Language syntax](crate::guide::language_syntax) describes what
+//! the preset accepts, and [Learn techy by example](crate::guide::learn_by_example)
+//! parses, defines, and reads a document from beginning to end.
 
 mod arguments;
 mod driver;
@@ -138,31 +174,28 @@ use crate::token::{
     StdTokenization, TokenRules, TriggerChars, WhitespaceRules,
 };
 
-/// The form in which a math group appears: inline or display — the typed class
-/// payload of [`GroupType::Math`], declared by the rule author at
-/// [`GroupRule`] registration and read back off the node via
-/// [`NodeRef::math_form`](crate::node::NodeRef::math_form) (no table, no string
-/// matching, no state lookup — correct for embedder-registered and mid-parse-minted
-/// delimiters alike).
+/// The form in which a math group appears: inline or display.
 ///
-/// The name is *form*, deliberately not "style": typesetting **style** (fonts, script
-/// level, `\displaystyle`) is orthogonal — `$\displaystyle …$` renders display-*style*
-/// math inside an inline-*form* group. The type names how the math group appears in
-/// the source, not how its content is typeset.
+/// The form is the payload of the [`GroupType::Math`] class. Whoever registers a
+/// delimiter pair states it there, on the [`GroupRule`], so reading it back off a
+/// parsed node ([`NodeRef::math_form`](crate::core::node::NodeRef::math_form)) needs no
+/// table of delimiter spellings and works for delimiters an embedder registered or a
+/// parse introduced mid-document.
 ///
-/// **Exhaustive on purpose** (no `#[non_exhaustive]`): renderers match on the form
-/// constantly, and a wildcard arm on every consumer would be a permanent tax against
-/// a third form nobody can name. Adding one is a conscious breaking change.
+/// The name is *form*, not "style": typesetting style (fonts, script level,
+/// `\displaystyle`) is a separate matter, and `$\displaystyle …$` renders
+/// display-*style* math inside an inline-*form* group. The type names how the math
+/// group appears in the source, not how its content is typeset.
 ///
-/// # The payload-admission rule
-///
-/// Class payloads are not a dumping ground. A payload on a
-/// [`GroupType`] class is admissible only when it is (a) **parse-behavior-invariant**
-/// — parse wiring keeps a single arm (`Math(_)` matches once; interior delta,
-/// visibility, and forbidden-char logic are form-blind); (b) **semantically
-/// universal** for downstream consumers of the class; and (c) **declared at rule
-/// registration**, never derived from delimiter spellings. Inline/display passes all
-/// three; a hypothetical `Content(BraceKind)` fails (b).
+/// Both forms parse identically, so the form never affects parsing; it is there for
+/// the consumers of the tree. The enum is not `#[non_exhaustive]` — consumers match on
+/// it constantly — so adding a third form would be a breaking change.
+// The payload-admission rule for `GroupType` class payloads: a payload is admissible
+// only when it is (a) parse-behavior-invariant — the parse wiring keeps a single arm
+// (`Math(_)` matches once; interior delta, visibility, and forbidden-char logic ignore
+// the form); (b) semantically universal for downstream consumers of the class; and
+// (c) declared at rule registration, never derived from delimiter spellings.
+// Inline/display passes all three; a hypothetical `Content(BraceKind)` fails (b).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -177,66 +210,72 @@ pub enum MathGroupForm {
     Display,
 }
 
-/// The preset's group classes ([`Lang::GroupTypeId`]).
+/// The preset's group classes: the parse behavior a group's delimiters select.
 ///
-/// Classes classify **parse behavior**, not delimiter spellings: several delimiter
-/// pairs share one class, and the node's [`GroupData`](crate::node::GroupData) records
-/// the delimiters as written. There is deliberately a *single* math class: inline and
-/// display math parse identically — same interior [`Mode::Math`], same definition
-/// visibility — so parse wiring stays single-armed (`Math(_)`), while the
-/// inline/display **form** rides as typed class payload ([`MathGroupForm`]), declared
-/// at rule registration and exposed by
-/// [`NodeRef::math_form`](crate::node::NodeRef::math_form).
+/// A class says how the group's interior parses, not how the group is spelled: several
+/// delimiter pairs can share one class, and the node's
+/// [`GroupData`](crate::core::node::GroupData) records the delimiters as written.
+///
+/// Inline and display math share the single [`Math`](GroupType::Math) class, because
+/// the two parse identically — same interior [`Mode::Math`], same definition
+/// visibility. Which of the two a group is appears as the class payload
+/// [`MathGroupForm`], stated where the delimiter rule is registered and read back with
+/// [`NodeRef::math_form`](crate::core::node::NodeRef::math_form).
+///
+/// This is the preset's [`Lang::GroupTypeId`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GroupType {
-    /// A plain content group (`{…}`, and the argument groups minted by argument
-    /// parsers — e.g. the optional `[…]`): the interior continues in the surrounding
-    /// mode.
+    /// A content group: `{…}`, and the argument groups argument parsers produce, such
+    /// as an optional `[…]`. Its interior continues in the surrounding mode.
     #[serial(name = "content")]
     #[cfg_attr(feature = "serde", serde(rename = "content"))]
     Content,
-    /// A math group (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`): the interior parses in
-    /// [`Mode::Math`] (the driver's
-    /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)
-    /// plug — form-blind: a single `Math(_)` wiring arm). The payload records the
-    /// group's [`MathGroupForm`], declared where the delimiter rule is registered.
+    /// A math group (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`): its interior parses in
+    /// [`Mode::Math`], the state change the preset driver derives for it
+    /// ([`math_group_interior_delta`], which treats both forms the same). The payload
+    /// records the group's [`MathGroupForm`], stated where the delimiter rule is
+    /// registered.
     #[serial(name = "math")]
     #[cfg_attr(feature = "serde", serde(rename = "math"))]
     Math(MathGroupForm),
-    /// A verbatim region's group: the `\verb|…|` shape staged by the `v`
-    /// argument codes ([`argument_specs`]), and the class of the terminator rules
-    /// verbatim readers mint. The interior is **raw text** — it is read under a
-    /// features-disabled derived state, never tokenized — so this class appears on no
-    /// tokenizer-declared rule and never descends through the driver's
-    /// `group_interior_delta`.
+    /// A verbatim region's group: the `\verb|…|` shape the `v` argument codes stage
+    /// ([`argument_specs`]), and the class of the terminator rules verbatim readers
+    /// create.
+    ///
+    /// Its interior is raw text, read under a state with the parsing features turned
+    /// off rather than tokenized. This class therefore appears on no rule the tokenizer
+    /// follows, and the driver's interior-state hook never sees it.
     #[serial(name = "verbatim")]
     #[cfg_attr(feature = "serde", serde(rename = "verbatim"))]
     Verbatim,
 }
 
-/// The preset's invocation forms ([`Lang::CallableTypeId`]): the familiar
-/// macro/environment/specials trichotomy, closed per the core's callable-type
-/// contract — new invocation *forms* are never registered at runtime, new *callables*
-/// are (via the scope stack).
+/// The preset's invocation forms: macro, environment, and specials.
+///
+/// The set of forms is closed. New *callables* are registered freely, in a
+/// [`Package`] on the scope stack, but every one of them is invoked in one of these
+/// three ways.
+///
+/// This is the preset's [`Lang::CallableTypeId`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CallableType {
-    /// A macro invocation (`\emph{…}`). Every command token resolves as a macro —
-    /// `\begin` and `\end` themselves are ordinary macro entries of the
-    /// [`builtin_package`] ([`BeginSpec`]/[`EndSpec`]) whose parsers dispatch the
-    /// environment shape.
+    /// A macro invocation (`\emph{…}`). Every command token resolves as a macro:
+    /// `\begin` and `\end` are themselves ordinary macro entries of the
+    /// [`builtin_package`] ([`BeginSpec`] and [`EndSpec`]), whose parsers then handle
+    /// the environment shape.
     #[serial(name = "macro")]
     #[cfg_attr(feature = "serde", serde(rename = "macro"))]
     Macro,
-    /// An environment (`\begin{itemize}…\end{itemize}`): entered through
-    /// [`BeginSpec`]'s composition, which resolves the *environment's* spec —
-    /// normally an [`EnvironmentSpec`] — under this callable type by the name in the
-    /// `\begin` name group, and stamps this type on the staged node.
+    /// An environment (`\begin{itemize}…\end{itemize}`). [`BeginSpec`] reads the name
+    /// in the `\begin` group, resolves the environment's own definition — normally an
+    /// [`EnvironmentSpec`] — under this callable type, and records this type on the
+    /// resulting node.
     #[serial(name = "environment")]
     #[cfg_attr(feature = "serde", serde(rename = "environment"))]
     Environment,
@@ -246,14 +285,19 @@ pub enum CallableType {
     Specials,
 }
 
-/// The preset's parsing modes ([`Lang::ModeId`]): text vs. math.
+/// The preset's parsing modes: text and math.
 ///
-/// The mode is first-class state data ([`ParsingState::mode`]) — the single source of
-/// truth for "am I in math" (no `StateExt` flag): math groups *initiate* the change
-/// through the driver's descent-delta plug, and definition visibility keys on it
-/// ([`Package::set_visible_modes`]). Inline vs. display math is deliberately **not** a
-/// mode (nor its own group class): it changes nothing about how the interior parses —
-/// the form is class payload, [`MathGroupForm`].
+/// The mode is part of the parsing state ([`ParsingState::mode`]) and is the one place
+/// that answers "is this inside math". Entering a math group is what changes it (the
+/// state the preset driver derives for a math interior,
+/// [`math_group_interior_delta`]), and a package can restrict its definitions to
+/// chosen modes ([`Package::set_visible_modes`]).
+///
+/// Inline and display math are not separate modes, and not separate group classes
+/// either: they parse identically, and the distinction is the class payload
+/// [`MathGroupForm`].
+///
+/// This is the preset's [`Lang::ModeId`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[derive(SerializableValue, DeserializableValue)]
@@ -270,35 +314,38 @@ pub enum Mode {
     Math,
 }
 
-/// The preset's semantic transition events ([`Lang::Event`]).
+/// The preset's state-transition events: one, "leave the math context".
 ///
-/// Events split into **two classes** (the contract on
-/// [`ParsingStateDelta::events`](crate::state::ParsingStateDelta::events)):
-/// context-free events are consumed by [`Lang::finalize_transition`]; a
-/// **context-dependent** event — one whose effect depends on the enclosing-state
-/// stack — is lowered by the driver
-/// ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event))
-/// inside [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
-/// and never reaches `finalize_transition`; reaching it anyway (a bare
-/// out-of-parse [`derived()`](ParsingState::derived) call) is a loud error.
+/// An event asks for a state change that cannot be written out in advance. This one's
+/// effect depends on the states enclosing the point of use, so it is resolved while a
+/// parse derives a state — the driver turns it into a concrete change
+/// ([`ParseDriver::resolve_state_event`](crate::core::ParseDriver::resolve_state_event),
+/// called from
+/// [`ParseContext::derive_state`](crate::core::constructs::ParseContext::derive_state)).
+/// Deriving a state outside a parse ([`ParsingState::derived`]) has no enclosing states
+/// to consult and returns an error rather than guessing; events whose effect does not
+/// depend on the surroundings are handled by [`Lang::finalize_transition`] instead.
+///
+/// The events of a state change are declared on
+/// [`ParsingStateDelta::events`](crate::core::ParsingStateDelta::events).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[derive(SerializableValue, DeserializableValue)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Event {
-    /// **Exit the math context** (context-dependent): restore the innermost
-    /// enclosing *non-math* context — its [`TokenRules`] minus the transient
-    /// gates (`expecting_group_close`/`temporary_group_rules`, in-flight structural
-    /// expectations that are never restored) and its mode — found on the
-    /// enclosing-state stack (else the outermost, seed context). The `\text{…}`
-    /// recipe: an [`ArgumentSpec`](crate::spec::ArgumentSpec) state delta carrying
-    /// this event makes the argument parse in the surrounding non-math context
-    /// even deep inside display math — composably with every argument shape, and
-    /// without clobbering embedder rule customizations the way a static
-    /// rules-reset would. Lowered via
-    /// [`exit_math_context_delta`]; deliberately **not**
-    /// "restore text mode": the target is whatever the enclosing context is, never
-    /// an invented mode value.
+    /// Leave the math context: restore the innermost enclosing *non-math* context —
+    /// its [`TokenRules`] and its mode — or, if every enclosing context is math, the
+    /// outermost one. The rules are restored except for the in-flight structural
+    /// expectations `expecting_group_close` and `temporary_group_rules`.
+    ///
+    /// This is how `\text{…}` is defined: an
+    /// [`ArgumentSpec`](crate::core::specs::ArgumentSpec) whose state change carries
+    /// this event parses its argument in the surrounding non-math context, however deep
+    /// inside display math it sits, and whatever token rules an embedder had customized
+    /// there. The target is the enclosing context as it actually is, so nothing here
+    /// invents a "text mode" or resets the rules to a fixed set.
+    ///
+    /// [`exit_math_context_delta`] computes the resulting state change.
     #[serial(name = "exit-math-context")]
     #[cfg_attr(feature = "serde", serde(rename = "exit-math-context"))]
     ExitMathContext,

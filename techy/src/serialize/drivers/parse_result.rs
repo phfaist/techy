@@ -148,6 +148,15 @@ impl<L: SerializableLang> ObjectSerdeDriver<L> for ParseResultSerdeDriver<L> {
 /// diagnostic written into the diagnostics table, plus the cap and counts), and its
 /// session extension (see [`ParseResultSerdeDriver`]).
 impl<L: Lang> SerializableObject<L> for ParseResult<L> {
+    /// # Panics
+    ///
+    /// Writing the result's tree materializes each callable node's invocation syntax
+    /// against that node's own source, so this panics if a range recorded there is not a
+    /// valid `char`-boundary range of that source — a broken tree invariant, which no
+    /// parsed input can cause and which
+    /// [`validate_tree`](crate::core::node::validate_tree) detects; the panic is
+    /// [`TextContent::resolve`](crate::source::TextContent::resolve)'s (see the [list of
+    /// panicking items](crate::guide::panics)).
     fn serialize_object(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialEntry, SerializeError>
     where
         L: SerializableLang,
@@ -256,6 +265,16 @@ pub trait ParseResultSerialization<L: SerializableLang> {
     /// ([`SerialValueError::IntegerOutOfRange`](crate::serialize::SerialValueError::IntegerOutOfRange)
     /// through [`SerializeError::Value`]); the errors of
     /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern).
+    ///
+    /// # Panics
+    ///
+    /// Writing the result's tree materializes each callable node's invocation syntax
+    /// against that node's own source, so this panics if a range recorded there is not a
+    /// valid `char`-boundary range of that source. That is a broken tree invariant,
+    /// which no parsed input can cause and which
+    /// [`validate_tree`](crate::core::node::validate_tree) detects; the panic is
+    /// [`TextContent::resolve`](crate::source::TextContent::resolve)'s (see the [list of
+    /// panicking items](crate::guide::panics)).
     fn serialize_parse_result(&mut self, result: &Arc<ParseResult<L>>) -> Result<ParseResultIndex, SerializeError>;
 
     /// The parse result at `position` of the parse-results table: the `Arc` the session
