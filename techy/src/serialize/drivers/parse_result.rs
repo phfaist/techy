@@ -12,7 +12,7 @@
 //! providers — is shared through the standard tables, so one stream holds a whole parse.
 //! This is the table a program that keeps or transmits complete parses works with.
 
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
@@ -145,6 +145,17 @@ impl<L: SerializableLang> ObjectSerdeDriver<L> for ParseResultSerdeDriver<L> {
 
 // --- the object impls -------------------------------------------------------------------
 
+/// The name for the `UnknownTableName` error of a call whose
+/// [`SerdeSession::standard_tables`](crate::serialize::SerdeSession::standard_tables)
+/// came back `None`: the standard table the session is actually missing.
+///
+/// One of them is missing whenever `standard_tables()` answers `None`, so the trees
+/// table named here as a last resort cannot in fact be reached — the parse-result
+/// driver needs the trees table in any case.
+fn missing_standard_table_name<L: SerializableLang>(session: &SerdeSession<L>) -> String {
+    session.missing_standard_table().unwrap_or(TREES_TABLE).to_string()
+}
+
 /// A parse result is serialized as its tree's position (the tree written into the
 /// trees table under the unit annotation), its diagnostics collection (each retained
 /// diagnostic written into the diagnostics table, plus the cap and counts), and its
@@ -163,9 +174,11 @@ impl<L: Lang> SerializableObject<L> for ParseResult<L> {
     where
         L: SerializableLang,
     {
-        let StandardTables { trees, diagnostics, .. } = cx
-            .standard_tables()
-            .ok_or_else(|| SerializeError::UnknownTableName { name: TREES_TABLE.to_string() })?;
+        let Some(StandardTables { trees, diagnostics, .. }) = cx.standard_tables() else {
+            return Err(SerializeError::UnknownTableName {
+                name: missing_standard_table_name(cx.session_mut()),
+            });
+        };
         // The tree and the diagnostics are values: fresh entries, written in full.
         let tree_object: Arc<dyn Any + Send + Sync> = Arc::new(self.tree.clone());
         let tree = cx.intern(trees, &tree_object)?;
@@ -196,9 +209,11 @@ impl<L: SerializableLang> DeserializableObject<L> for ParseResult<L> {
 
     fn deserialize_object(value: &SerialValue, cx: &mut DeserializeContext<'_, L>) -> Result<ParseResult<L>, DeserializeError> {
         let wire = WireParseResult::from_serial_value(value)?;
-        let StandardTables { trees, diagnostics, .. } = cx
-            .standard_tables()
-            .ok_or_else(|| DeserializeError::UnknownTableName { name: TREES_TABLE.to_string() })?;
+        let Some(StandardTables { trees, diagnostics, .. }) = cx.standard_tables() else {
+            return Err(DeserializeError::UnknownTableName {
+                name: missing_standard_table_name(cx.session_mut()),
+            });
+        };
         let tree_object = cx.object(trees, wire.tree)?;
         let tree: NodeTree<L> = tree_of_object(cx.session_mut(), tree_object)?;
         let items = wire

@@ -183,6 +183,35 @@ impl<L: SerializableLang> SerdeSession<L> {
             parse_results: self.table_handle(PARSE_RESULTS_TABLE)?,
         })
     }
+
+    /// The name of the first standard table this session does not have, in the order
+    /// [`standard_tables`](SerdeSession::standard_tables) looks them up — `None` when it
+    /// has all seven.
+    ///
+    /// This is what a caller whose `standard_tables()` came back `None` names in its
+    /// [`SerializeError::UnknownTableName`](crate::serialize::SerializeError::UnknownTableName)
+    /// or its deserialization counterpart, so that the error names the table that is
+    /// actually missing. A table registered under a standard name with another driver
+    /// type counts as missing, as it does for `standard_tables`.
+    pub(crate) fn missing_standard_table(&self) -> Option<&'static str> {
+        if self.table_handle::<SourceSerdeDriver<L>>(SOURCES_TABLE).is_none() {
+            Some(SOURCES_TABLE)
+        } else if self.table_handle::<StateSerdeDriver<L>>(STATES_TABLE).is_none() {
+            Some(STATES_TABLE)
+        } else if self.table_handle::<SpecSerdeDriver<L>>(SPECS_TABLE).is_none() {
+            Some(SPECS_TABLE)
+        } else if self.table_handle::<ProviderSerdeDriver<L>>(PROVIDERS_TABLE).is_none() {
+            Some(PROVIDERS_TABLE)
+        } else if self.table_handle::<TreeSerdeDriver<L>>(TREES_TABLE).is_none() {
+            Some(TREES_TABLE)
+        } else if self.table_handle::<DiagnosticSerdeDriver<L>>(DIAGNOSTICS_TABLE).is_none() {
+            Some(DIAGNOSTICS_TABLE)
+        } else if self.table_handle::<ParseResultSerdeDriver<L>>(PARSE_RESULTS_TABLE).is_none() {
+            Some(PARSE_RESULTS_TABLE)
+        } else {
+            None
+        }
+    }
 }
 
 impl<L: SerializableLang> Default for SerdeSession<L> {

@@ -440,7 +440,8 @@ fn a_driver_of_its_own_reaches_the_trees_table_through_the_context() {
     let back = reader.object(snapshots, snapshots.position(position.index())).unwrap();
     assert_trees_equivalent(&snapshot.tree, &back.tree, |(), ()| true);
 
-    // Without the standard tables the same driver says which one it needed.
+    // Without the standard tables the same driver says which one it needed — on the
+    // writing side, where nothing was interned yet…
     let mut bare = SerdeSession::<DiagLang>::empty();
     bare.register_table(SnapshotDriver).unwrap();
     let snapshots = bare.table_handle::<SnapshotDriver>("snapshots").unwrap();
@@ -449,6 +450,76 @@ fn a_driver_of_its_own_reaches_the_trees_table_through_the_context() {
         Err(SerializeError::InTable { cause, .. })
             if matches!(*cause, SerializeError::UnknownTableName { ref name } if name == "trees")
     ));
+
+    // … and on the reading side, where the segment is complete but the session
+    // reading it has no diagnostics table, so it has no standard tables either.
+    let mut writer = setup();
+    writer.register_table(SnapshotDriver).unwrap();
+    let snapshots = writer.table_handle::<SnapshotDriver>("snapshots").unwrap();
+    writer.intern(snapshots, &snapshot).unwrap();
+    let mut reader = session_without_the_diagnostics_table(true);
+    reader.register_table(SnapshotDriver).unwrap();
+    let error = reader.push_segment(pass_through(writer.take_segment())).unwrap_err();
+    assert!(
+        matches!(innermost(&error), DeserializeError::UnknownTableName { name } if name == "trees"),
+        "{error}"
+    );
+}
+
+/// A session with every standard table but the diagnostics one, so that
+/// `standard_tables()` answers `None`. With `under_another_driver`, a table of that
+/// name is registered with another driver type, so that a segment naming it can still
+/// be pushed — `standard_tables()` checks the driver type as well as the name.
+fn session_without_the_diagnostics_table(under_another_driver: bool) -> SerdeSession<DiagLang> {
+    use crate::serialize::{
+        ParseResultSerdeDriver, ProviderSerdeDriver, SourceSerdeDriver, SpecSerdeDriver,
+        StateSerdeDriver, TreeSerdeDriver,
+    };
+
+    let mut session = SerdeSession::<DiagLang>::empty();
+    session.register_table(SourceSerdeDriver::<DiagLang>::new()).unwrap();
+    session.register_table(StateSerdeDriver::<DiagLang>::new()).unwrap();
+    session.register_table(SpecSerdeDriver::<DiagLang>::new("specs")).unwrap();
+    session.register_table(ProviderSerdeDriver::<DiagLang>::new("providers")).unwrap();
+    session.register_table(TreeSerdeDriver::<DiagLang>::new()).unwrap();
+    if under_another_driver {
+        session.register_table(SpecSerdeDriver::<DiagLang>::new("diagnostics")).unwrap();
+    }
+    session.register_table(ParseResultSerdeDriver::<DiagLang>::new()).unwrap();
+    assert!(session.standard_tables().is_none());
+    session
+}
+
+#[test]
+fn the_parse_result_driver_names_the_standard_table_that_is_missing() {
+    // The trees table is there; the diagnostics table is not. Naming the trees table —
+    // the first one the driver reaches for — would send the caller after the wrong
+    // table.
+    let result = Arc::new(parse("x"));
+    assert!(result.diagnostics.is_empty(), "an empty diagnostics table keeps the segment pushable");
+
+    let mut writer = session_without_the_diagnostics_table(false);
+    let parse_results = writer
+        .table_handle::<crate::serialize::ParseResultSerdeDriver<DiagLang>>("parse-results")
+        .unwrap();
+    assert!(
+        matches!(
+            writer.intern(parse_results, &result),
+            Err(SerializeError::InTable { cause, .. })
+                if matches!(*cause, SerializeError::UnknownTableName { ref name } if name == "diagnostics")
+        ),
+        "the writing side names the missing table"
+    );
+
+    // The reading side, over a segment a complete session wrote.
+    let mut complete = setup();
+    complete.serialize_parse_result(&result).unwrap();
+    let mut reader = session_without_the_diagnostics_table(true);
+    let error = reader.push_segment(pass_through(complete.take_segment())).unwrap_err();
+    assert!(
+        matches!(innermost(&error), DeserializeError::UnknownTableName { name } if name == "diagnostics"),
+        "{error}"
+    );
 }
 
 // --- the value model pieces ---------------------------------------------------------------
