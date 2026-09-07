@@ -36,7 +36,8 @@ use crate::state::{ParsingState, ParsingStateDelta};
 use super::minidefs::minilatex_package;
 use super::serialize::{register, register_package_recipes};
 use super::{
-    argument_specs, builtin_package, input_macro_spec, BeginSpec, BodyMarker, CallableType,
+    argument_specs, argument_specs_named, builtin_package, input_macro_spec, BeginSpec,
+    BodyMarker, CallableType,
     EndSpec, EnvironmentSpec, InputMacroSpec, Latexlike, LatexlikeDriver, MacroSpec, Mode,
     ParagraphBreakSpec, ParagraphBreakStyle, SpecialsSpec, VerbatimBehavior,
 };
@@ -496,6 +497,43 @@ fn a_dropped_provider_is_a_write_error_naming_the_spec() {
         }
         other => panic!("unexpected: {other}"),
     }
+}
+
+#[test]
+fn an_input_spec_with_its_own_arguments_serializes_by_identity_only() {
+    let arguments = || {
+        argument_specs_named::<Latexlike, _, _, _>([("o", "options"), ("m", "reference")]).unwrap()
+    };
+    // Unstamped: the argument parsers have no wire form, so there is no self-contained
+    // form to fall back on — the `MacroSpec` rule.
+    let mut session = SerdeSession::<Latexlike>::new();
+    let unstamped: Arc<dyn CallableSpec<Latexlike>> =
+        Arc::new(InputMacroSpec::new(arguments(), false, BodyMarker::not_body()).unwrap());
+    let error = session.intern_spec(&unstamped).unwrap_err();
+    assert!(
+        matches!(innermost_write(&error), SerializeError::MissingProvenance { spec: "InputMacroSpec" }),
+        "{error}"
+    );
+
+    // Stamped: by identity, read back as the reading environment's very instance.
+    let package = Package::<Latexlike>::new_shared("custom", |package| {
+        let spec = InputMacroSpec::new(arguments(), false, BodyMarker::not_body())
+            .unwrap()
+            .with_provenance(package.provenance_for(CallableType::Macro, "input").unwrap());
+        package.insert(CallableType::Macro, "input", spec);
+    });
+    let mut resolver = MapResolver::new();
+    resolver.insert("sub.tex", "in");
+    let language = Language::new(
+        LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver.with_reference_as_origin()),
+        ParsingState::lang_initial_with_packages([Arc::clone(&package) as Arc<dyn SpecsProvider<Latexlike>>])
+            .expect("seed state"),
+    );
+    let result = parse(&language, "\\input[x]{sub.tex}");
+    let back = round_trip_tree(session_factory(seed_providers(&language)), &result.tree, ignore_annotations);
+    let input = back.root().child(0).unwrap();
+    assert!(Arc::ptr_eq(input.spec().unwrap(), package.get(CallableType::Macro, "input").unwrap()));
+    assert_eq!(input.slot_content_nodes_named("attached").unwrap().source_text(), Some("in"));
 }
 
 #[test]

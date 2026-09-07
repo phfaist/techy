@@ -886,18 +886,23 @@ returns (nodes, StopCause) — the caller interprets the ending.
   resolve-diagnose-attach raising site of two of the three `core.sources.*`
   conditions (`NoSourceResolver`, `UnresolvableSourceReference`); the third,
   `InvalidSourceReferenceArgument`, is defined beside them and raised by the
-  invocation parser that reads the reference argument — a chars-group argument
-  (commands and specials read as characters inside the braces, [§dd-dr:input-wiring])
+  invocation parser that reads the reference argument — the declared argument
+  *named* `"reference"` (`InputMacroSpec::REFERENCE_ARGUMENT_NAME`), wherever it
+  stands in the list; a chars-group argument under the standard recipe (commands
+  and specials read as characters inside the braces, [§dd-dr:input-wiring]) —
   whose content must be plain characters, the reference coming from the argument's
   node data under every language ([§dd-dr:span-tiling]). The door returns an
   `AttachedSourceOutcome` — content nodes plus the included run's merged
   after-effect record (`NodesOutcome::after_effects`, the effective as-applied
   deltas merged in application order) — and slot assembly stays the invocation
   parser's job: the preset's opt-in `input_macro_spec(persist_state,
-  attached_slot_ext)` stages the nodes as the `Attached` slot under the
-  embedder-supplied ext (not-body in the shipped recipe) and, under
-  `persist_state: true`, forwards the merged record as the invocation's own
-  after-effect through the ordinary sibling channel.
+  attached_slot_ext)` — or `InputMacroSpec::new(arguments, persist_state,
+  attached_slot_ext)` with an argument structure of the embedder's own, refused
+  without a `"reference"` argument (`NoReferenceArgumentError`) — stages the nodes
+  as the `Attached` slot under the embedder-supplied ext (not-body in the shipped
+  recipe) and, under `persist_state: true`, forwards the merged record as the
+  invocation's own after-effect through the ordinary sibling channel. A `new`-built
+  spec serializes by identity only ([§dd-dr:input-wiring]).
 - The standard inventory mirrors pylatexenc's parser library: the group parser,
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,

@@ -223,7 +223,12 @@ either, nothing resolves:
    marked) are documented on the item. The reference argument carries plain
    text — `\input{{chap.tex}}` or a callable inside the braces raises
    [`InvalidSourceReferenceArgument`](crate::core::constructs::InvalidSourceReferenceArgument)
-   and resolves nothing.
+   and resolves nothing. An argument list of your own (`\input[options]{file}`,
+   another parser for the file name) is
+   [`InputMacroSpec::new`](crate::latexlike::InputMacroSpec::new); the reference
+   is read from the argument **named `"reference"`**, wherever it stands, and a
+   list without one is refused at construction
+   ([`NoReferenceArgumentError`](crate::latexlike::NoReferenceArgumentError)).
 2. **The resolver**: a [`SourceResolver`](crate::source::SourceResolver)
    configured on the driver
    ([`with_source_resolver`](crate::latexlike::LatexlikeDriver::with_source_resolver)).

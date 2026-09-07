@@ -138,7 +138,7 @@ pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
 };
-pub use input::{input_macro_spec, InputMacroSpec};
+pub use input::{input_macro_spec, InputMacroSpec, NoReferenceArgumentError};
 pub use invocation_syntax::{
     EnvironmentSyntax, EnvironmentSyntaxError, InvocationSyntaxData,
     StdEnvironmentSideSyntax, StdEnvironmentSyntax,

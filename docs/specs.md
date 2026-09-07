@@ -349,6 +349,29 @@ marked — are documented on the item. The file-name argument is a chars-group
 its contents read as plain characters, so `\input{my_file.tex}` keeps its
 underscore and a command inside the braces is part of the name, not markup.
 
+An invocation shape of your own — an options argument ahead of the file name,
+or the file name parsed by another argument parser — is
+[`InputMacroSpec::new`](crate::latexlike::InputMacroSpec::new) with the full
+argument list. One argument must be named `"reference"`
+([`InputMacroSpec::REFERENCE_ARGUMENT_NAME`](crate::latexlike::InputMacroSpec::REFERENCE_ARGUMENT_NAME)):
+the file name is read from that argument wherever it stands, and a list
+without it is refused when the spec is built
+([`NoReferenceArgumentError`](crate::latexlike::NoReferenceArgumentError)).
+The other arguments are parsed and staged like any macro's.
+
+```rust
+use techy::latexlike::{argument_specs_named, BodyMarker, InputMacroSpec, Latexlike};
+
+// `\include[options]{file}`
+let arguments = argument_specs_named::<Latexlike, _, _, _>([
+    ("o", "options"),
+    ("m", InputMacroSpec::<Latexlike>::REFERENCE_ARGUMENT_NAME),
+])
+.unwrap();
+let include = InputMacroSpec::new(arguments, false, BodyMarker::not_body()).unwrap();
+# let _ = include;
+```
+
 A resolver that hands over only part of what it read — a file minus a leading
 front-matter block the resolver consumed itself, say — keeps line numbers true
 to the file with

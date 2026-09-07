@@ -5434,10 +5434,38 @@ Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
   (the preset recipe passes `BodyMarker::not_body()`; a body-marked ext remains
   a framework option `body()` finds — [§dd-dr:slot-roles] — never the shipped
   default). Its body is the brief form the helpers exist for — argument
-  text → `attach_source_reference` → `Attached` slot — so `\input[options]{file}`
-  / `\input*{f1,f2,f3}` variants are easy custom-spec work (the form-specific
-  parts stay in the spec).
-- **The reference argument is a chars-group** (`CharsGroupArgumentParser`,
+  text → `attach_source_reference` → `Attached` slot — so a variant that is no
+  longer an argument list (`\input*{f1,f2,f3}` naming several sources) is easy
+  custom-spec work (the form-specific parts stay in the spec).
+- **The argument structure is the embedder's; the reference is the argument
+  *named* `"reference"`** (amendment, user ruling). `InputMacroSpec::new(arguments,
+  persist_state, attached_slot_ext) -> Result<_, NoReferenceArgumentError>` takes
+  the full declared list (the `MacroSpec::new` pattern), and the invocation
+  parser reads the reference from the declared argument named
+  `InputMacroSpec::REFERENCE_ARGUMENT_NAME` (`"reference"`), wherever it stands;
+  the other arguments are parsed and staged like any macro's. `input_macro_spec`
+  stays the standard recipe — the chars-group argument, built by the helper
+  itself. The first shipped parser hard-coded `arguments.first()`, which left the
+  declared name decorative and the machinery unusable for
+  `\input[options]{file}`-shaped custom macros or for a differently parsed
+  reference (`GroupArgumentParser`, say) — both now `new` with that list. A
+  list with no `"reference"` argument is a definition mistake, refused when the
+  spec is built (panic-policy rule 3: a contract violation is an `Err`, and
+  surfacing it at parse time would put it far from where it was made); the
+  parser's own lookup failing is an implementation error, unreachable by
+  construction. Serialization consequence: argument parsers have no wire form,
+  so a `new`-built spec serializes by identity only — unstamped is
+  `MissingProvenance`, the `MacroSpec` rule — and the self-contained
+  `latexlike.input` form is reserved for the standard structure, recorded by a
+  constructor-set `standard_arguments` flag rather than inferred from the
+  parsers. Rejected: a narrower constructor swapping only the reference parser
+  (keeps the self-contained form, loses the options-argument shape); a
+  constructor parameter naming the reference argument (a fixed name suffices);
+  guarding the bare-argument fallback that `GroupArgumentParser` brings along
+  (`\input a` reading `a`) — the embedder chose that parser, and the preset never
+  supported TeX's space-terminated file names anyway.
+- **The reference argument is a chars-group under the standard recipe**
+  (`CharsGroupArgumentParser`,
   pylatexenc's `_arg_charsname`/`LatexCharsGroupParser`; comments and nested groups
   on, its defaults): a file name is a name, not markup — `\input{my_file.tex}` must
   keep its underscore, and `\input{\jobname.tex}` reads as the literal text. The

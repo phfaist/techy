@@ -37,10 +37,12 @@
 //!
 //! A spec whose data is plain has a **self-contained** form instead, which the reading
 //! side rebuilds an equivalent spec from: [`BeginSpec`] (the terminator command's name),
-//! [`InputMacroSpec`] (its two constructor choices), and the stateless [`EndSpec`] and
-//! [`ParagraphBreakSpec`]. A `BeginSpec` or an `InputMacroSpec` that does carry a stamp
-//! serializes by identity after all, so that reading yields the very instance the reading
-//! side's package holds.
+//! [`InputMacroSpec`] built by [`input_macro_spec`] (its two constructor choices), and the
+//! stateless [`EndSpec`] and [`ParagraphBreakSpec`]. A `BeginSpec` or an `InputMacroSpec`
+//! that does carry a stamp serializes by identity after all, so that reading yields the
+//! very instance the reading side's package holds. An `InputMacroSpec` built by
+//! [`InputMacroSpec::new`] carries argument parsers, so it has no self-contained form and
+//! serializes by identity only, like `MacroSpec`.
 //!
 //! Reading a spec written by identity resolves it in the reading environment's package of
 //! that name ([`KnownProviders`]): the result is the instance that package holds, not a
@@ -463,7 +465,8 @@ impl<LLL: LatexlikeLang + SerializableLang> DeserializableObject<LLL> for Paragr
     }
 }
 
-/// An `InputMacroSpec`'s self-contained form: its two constructor choices.
+/// An `InputMacroSpec`'s self-contained form: its two constructor choices, under the
+/// standard argument structure.
 #[derive(ToSerialValue, FromSerialValue)]
 struct WireInputMacroSpec {
     #[serial(name = "persist_state")]
@@ -474,7 +477,10 @@ struct WireInputMacroSpec {
 }
 
 /// By identity when stamped; otherwise the self-contained form `{persist_state,
-/// attached_slot_ext}` under `latexlike.input`.
+/// attached_slot_ext}` under `latexlike.input` — for a spec with the standard argument
+/// structure ([`input_macro_spec`]). A spec with an argument structure of its own
+/// ([`InputMacroSpec::new`]) has no self-contained form: unstamped, it is
+/// [`SerializeError::MissingProvenance`].
 impl<LLL: LatexlikeLang> SerializableObject<LLL> for InputMacroSpec<LLL> {
     fn serialize_object(&self, cx: &mut SerializeContext<'_, LLL>) -> Result<SerialEntry, SerializeError>
     where
@@ -482,6 +488,9 @@ impl<LLL: LatexlikeLang> SerializableObject<LLL> for InputMacroSpec<LLL> {
     {
         if let Some(provenance) = self.provenance.as_ref() {
             return provenance.serialize_object(cx);
+        }
+        if !self.standard_arguments {
+            return Err(SerializeError::MissingProvenance { spec: "InputMacroSpec" });
         }
         let wire = WireInputMacroSpec {
             persist_state: self.persist_state(),

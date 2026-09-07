@@ -61,6 +61,11 @@ use super::{Latexlike, LatexlikeLang};
 /// inside the included content continue past the `\input`, and what [`SlotExt`] value the
 /// attached slot records. Both have their own section below.
 ///
+/// **The argument structure**, optionally. [`input_macro_spec`] declares the one standard
+/// argument; [`InputMacroSpec::new`] takes an argument list of your own instead, for an
+/// invocation shape of your choosing — see
+/// [The reference argument](#the-reference-argument-carries-plain-text).
+///
 /// # The node an invocation stages
 ///
 /// One callable node, whose own span is the invocation in the *including* source
@@ -73,7 +78,12 @@ use super::{Latexlike, LatexlikeLang};
 ///
 /// # The reference argument carries plain text
 ///
-/// The one declared argument, named `"reference"`, is a mandatory `{…}` group whose
+/// The reference is read from the declared argument named `"reference"`
+/// ([`REFERENCE_ARGUMENT_NAME`](InputMacroSpec::REFERENCE_ARGUMENT_NAME)); the other
+/// declared arguments, if any, are parsed and staged like any macro's and play no part in
+/// the inclusion.
+///
+/// Under [`input_macro_spec`] it is the only argument: a mandatory `{…}` group whose
 /// contents read as plain characters — a chars-group
 /// ([`CharsGroupArgumentParser`](crate::core::constructs::CharsGroupArgumentParser),
 /// pylatexenc's chars-name argument). Commands and specials are off inside the braces,
@@ -81,6 +91,10 @@ use super::{Latexlike, LatexlikeLang};
 /// underscore, and `\input{\jobname.tex}` asks the resolver for the literal
 /// `"\jobname.tex"`. Comments and nested groups stay recognized (pylatexenc's defaults).
 /// There is no single-token fallback: `\input a` reports a missing mandatory argument.
+///
+/// Under [`InputMacroSpec::new`] the argument list is yours, and so is the reference
+/// argument's parser: what it stages must still read as plain characters, by the rule
+/// below, for the reference to be read at all.
 ///
 /// The reference is the character payloads of the argument's content nodes, concatenated
 /// in order and read off the nodes themselves. Characters are taken as written, with no
@@ -184,17 +198,36 @@ use super::{Latexlike, LatexlikeLang};
 /// then finds it: `body()` selects on the ext value alone, with no additional condition on
 /// the slot's role, precisely so that this choice cannot become silently unfindable.
 ///
-/// # Variants are custom-spec work
+/// # Variants
 ///
-/// A different invocation shape — `\input[options]{file}`, `\input*{f1,f2,f3}` — is a spec
-/// of your own: it parses its own argument shapes and then reuses the same two steps, the
+/// An invocation shape that is still an argument list — `\input[options]{file}`, or a
+/// reference argument parsed differently — is [`InputMacroSpec::new`] with that list. A
+/// shape that is not — `\input*{f1,f2,f3}` naming several sources, say — is a spec of
+/// your own: it parses its own argument shapes and then reuses the same two steps, the
 /// argument's text and
 /// [`attach_source_reference`](crate::core::constructs::ParseContext::attach_source_reference),
 /// staging the returned nodes as an [`Attached`](SlotRole::Attached) slot. This spec is
 /// the short template for that.
+///
+/// # Serialization
+///
+/// A spec built by [`input_macro_spec`] serializes in a self-contained form, the two
+/// constructor choices, unless it is stamped with a provenance
+/// ([`with_provenance`](InputMacroSpec::with_provenance)), in which case it serializes by
+/// identity like every other stamped spec. A spec built by [`InputMacroSpec::new`] carries
+/// argument parsers, which have no serialized form, so it serializes by identity only: an
+/// unstamped one is
+/// [`SerializeError::MissingProvenance`](crate::serialize::SerializeError::MissingProvenance),
+/// as for [`MacroSpec`](super::MacroSpec).
 pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
-    /// The argument structure: one mandatory `{…}` argument named `"reference"`.
+    /// The argument structure. Invariant: one argument is named
+    /// [`REFERENCE_ARGUMENT_NAME`](InputMacroSpec::REFERENCE_ARGUMENT_NAME); both
+    /// constructors establish it.
     arguments: Vec<Arc<ArgumentSpec<LLL>>>,
+    /// Whether `arguments` is the standard structure [`input_macro_spec`] declares —
+    /// then the spec is rebuildable from its two choices, and serializes in that
+    /// self-contained form. `pub(super)`: read by the preset's wire layer.
+    pub(super) standard_arguments: bool,
     /// Whether the included run's merged after-effects continue past the `\input`.
     persist_state: bool,
     /// The ext value cloned into every invocation's attached slot.
@@ -206,6 +239,64 @@ pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
 }
 
 impl<LLL: LatexlikeLang> InputMacroSpec<LLL> {
+    /// The name of the declared argument the reference is read from: `"reference"`.
+    pub const REFERENCE_ARGUMENT_NAME: &'static str = "reference";
+
+    /// An `\input`-shaped spec with an argument structure of your own.
+    ///
+    /// `arguments` is the full declared list, in invocation order, exactly as for
+    /// [`MacroSpec::new`](super::MacroSpec::new). One of them must be named
+    /// [`REFERENCE_ARGUMENT_NAME`](InputMacroSpec::REFERENCE_ARGUMENT_NAME): the
+    /// reference is read from that argument, and the others are parsed and staged like
+    /// any macro's. A list with no argument of that name is
+    /// [`NoReferenceArgumentError`] — a mistake in a definition, reported when the spec
+    /// is built rather than diagnosed during a parse.
+    ///
+    /// `persist_state` and `attached_slot_ext` are the two choices documented on
+    /// [`input_macro_spec`], which is this constructor with the standard argument
+    /// structure. A spec built here serializes by identity only — see
+    /// [Serialization](InputMacroSpec#serialization).
+    ///
+    /// ```
+    /// use techy::latexlike::{argument_specs_named, BodyMarker, InputMacroSpec, Latexlike};
+    ///
+    /// // `\include[options]{file}`: an optional argument ahead of the reference, and the
+    /// // reference parsed as an ordinary `{…}` group (code `m`) rather than as plain
+    /// // characters.
+    /// let arguments = argument_specs_named::<Latexlike, _, _, _>([
+    ///     ("o", "options"),
+    ///     ("m", InputMacroSpec::<Latexlike>::REFERENCE_ARGUMENT_NAME),
+    /// ])
+    /// .unwrap();
+    /// let spec = InputMacroSpec::new(arguments, false, BodyMarker::not_body()).unwrap();
+    /// assert_eq!(spec.persist_state(), false);
+    ///
+    /// // No argument named "reference": refused when the spec is built.
+    /// let arguments = argument_specs_named::<Latexlike, _, _, _>([("m", "file")]).unwrap();
+    /// assert!(InputMacroSpec::new(arguments, false, BodyMarker::not_body()).is_err());
+    /// ```
+    pub fn new(
+        arguments: Vec<Arc<ArgumentSpec<LLL>>>,
+        persist_state: bool,
+        attached_slot_ext: SlotExt<LLL>,
+    ) -> Result<InputMacroSpec<LLL>, NoReferenceArgumentError> {
+        let has_reference = arguments
+            .iter()
+            .any(|argument| argument.name.as_deref() == Some(Self::REFERENCE_ARGUMENT_NAME));
+        if !has_reference {
+            return Err(NoReferenceArgumentError {
+                declared_names: arguments.iter().map(|argument| argument.name.clone()).collect(),
+            });
+        }
+        Ok(InputMacroSpec {
+            arguments,
+            standard_arguments: false,
+            persist_state,
+            attached_slot_ext,
+            provenance: None,
+        })
+    }
+
     /// Whether state changes made inside the included content continue past the
     /// `\input` — the `persist_state` choice made at construction
     /// ([`input_macro_spec`]).
@@ -237,6 +328,12 @@ impl<LLL: LatexlikeLang> InputMacroSpec<LLL> {
 /// preloaded — and configure a [`SourceResolver`](crate::source::SourceResolver) on the
 /// driver. The type's documentation carries the full contract: the parsed shape, the rule
 /// on the reference argument, and what a failed resolution does.
+///
+/// The argument structure is the standard one: a single mandatory `{…}` argument named
+/// `"reference"` whose contents read as plain characters (a
+/// [`CharsGroupArgumentParser`](crate::core::constructs::CharsGroupArgumentParser)). For
+/// a structure of your own — an options argument, a differently parsed reference — build
+/// the spec with [`InputMacroSpec::new`] instead.
 ///
 /// ```
 /// use techy::core::{Language, ParsingState};
@@ -312,8 +409,9 @@ where
     InputMacroSpec {
         arguments: vec![Arc::new(ArgumentSpec::new(
             Arc::new(CharsGroupArgumentParser::new(LLL::GroupTypeId::content_group())),
-            "reference",
+            InputMacroSpec::<LLL>::REFERENCE_ARGUMENT_NAME,
         ))],
+        standard_arguments: true,
         persist_state,
         attached_slot_ext,
         provenance: None,
@@ -366,6 +464,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for InputMacroSpec<LLL> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InputMacroSpec")
             .field("arguments", &self.arguments)
+            .field("standard_arguments", &self.standard_arguments)
             .field("persist_state", &self.persist_state)
             .field("attached_slot_ext", &self.attached_slot_ext)
             .field("provenance", &self.provenance)
@@ -377,6 +476,7 @@ impl<LLL: LatexlikeLang> Clone for InputMacroSpec<LLL> {
     fn clone(&self) -> Self {
         InputMacroSpec {
             arguments: self.arguments.clone(),
+            standard_arguments: self.standard_arguments,
             persist_state: self.persist_state,
             attached_slot_ext: self.attached_slot_ext.clone(),
             provenance: self.provenance.clone(),
@@ -427,16 +527,26 @@ where
         //    tiling it describes them exactly, and then it says nothing the node data
         //    does not.) The argument's content must be plain characters: anything else
         //    is diagnosed here and no reference is read.
-        let reference: Option<String> = match arguments
-            .first()
-            .filter(|argument| argument.is_provided())
-        {
-            Some(argument) => match argument_text(cx, argument, &children) {
+        //
+        //    The argument is the declared one named `"reference"`, wherever it stands in
+        //    the list. Both constructors guarantee one exists; a spec without it is an
+        //    invariant break in the machinery, never the document's doing.
+        let reference_argument = arguments
+            .iter()
+            .find(|argument| argument.name() == Some(InputMacroSpec::<LLL>::REFERENCE_ARGUMENT_NAME))
+            .ok_or_else(|| {
+                cx.implementation_error(
+                    "the input spec declares no argument named \"reference\"",
+                    at.clone(),
+                )
+            })?;
+        let reference: Option<String> = if reference_argument.is_provided() {
+            match argument_text(cx, reference_argument, &children) {
                 Ok(text) => Some(text),
                 // The document's mistake: recovered, nothing resolved.
                 Err(ArgumentTextError::NotPlainCharacters) => {
-                    let anchor =
-                        argument_span(cx, argument, &children).unwrap_or_else(|| at.clone());
+                    let anchor = argument_span(cx, reference_argument, &children)
+                        .unwrap_or_else(|| at.clone());
                     cx.recover(
                         InvalidSourceReferenceArgument::new(
                             InvalidReferenceReason::NotPlainCharacters,
@@ -450,10 +560,11 @@ where
                 Err(ArgumentTextError::Malformed(detail)) => {
                     return Err(cx.implementation_error(detail, at.clone()))
                 }
-            },
+            }
+        } else {
             // An absent argument: the argument parser already diagnosed the missing
             // mandatory argument, and there is nothing here to add to it.
-            None => None,
+            None
         };
 
         // 3. Resolve + attach through the single raising site, driving the root
@@ -629,12 +740,51 @@ fn argument_text<LLL: LatexlikeLang>(
     }
 }
 
+/// The argument list handed to [`InputMacroSpec::new`] declares no argument named
+/// [`REFERENCE_ARGUMENT_NAME`](InputMacroSpec::REFERENCE_ARGUMENT_NAME), so the spec
+/// would have no argument to read the reference from.
+///
+/// A mistake in a definition, reported when the spec is built rather than diagnosed
+/// during a parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NoReferenceArgumentError {
+    /// The names of the declared arguments, in order; `None` for an unnamed one.
+    pub declared_names: Vec<Option<Box<str>>>,
+}
+
+impl fmt::Display for NoReferenceArgumentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the input spec's argument list declares no argument named {:?}",
+            InputMacroSpec::<Latexlike>::REFERENCE_ARGUMENT_NAME
+        )?;
+        if self.declared_names.is_empty() {
+            return write!(f, " (the list is empty)");
+        }
+        write!(f, " (declared: ")?;
+        for (i, name) in self.declared_names.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            match name {
+                Some(name) => write!(f, "{name:?}")?,
+                None => write!(f, "<unnamed>")?,
+            }
+        }
+        write!(f, ")")
+    }
+}
+
+impl core::error::Error for NoReferenceArgumentError {}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::root_shapes;
     use super::super::{
-        check_latexlike_tree_invariants, BodyMarker, CallableType, GroupType, Latexlike,
-        LatexlikeDriver, MacroSpec, SpecialsSpec,
+        argument_specs, argument_specs_named, check_latexlike_tree_invariants, BodyMarker,
+        CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec, SpecialsSpec,
     };
     use super::*;
     use crate::constructs::{
@@ -1345,5 +1495,128 @@ mod tests {
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
         // Both definitions — one from each segment — govern the includer.
         assert_eq!(root_shapes(&result), ["Macro(input)", "Macro(a)", "Macro(b)"]);
+    }
+
+    // --- an argument structure of the embedder's own (`InputMacroSpec::new`) ---------
+
+    /// `\input` under an argument list built from `(code, name)` pairs.
+    fn custom_input_package(codes: &[(&str, &str)]) -> Package<Latexlike> {
+        let arguments =
+            argument_specs_named::<Latexlike, _, _, _>(codes.iter().copied()).unwrap();
+        let mut package = Package::new("inputs");
+        package.insert(
+            CallableType::Macro,
+            "input",
+            InputMacroSpec::new(arguments, false, BodyMarker::not_body()).unwrap(),
+        );
+        package
+    }
+
+    #[test]
+    fn the_reference_is_read_from_the_argument_named_reference_wherever_it_stands() {
+        // `\input[options]{file}`: the reference is the second declared argument.
+        let package = custom_input_package(&[("o", "options"), ("m", "reference")]);
+        let language =
+            language_with_packages(Recovery::Strict, &[("chapter.tex", "hello")], [package]);
+        let result = language.parse(r"A\input[draft]{chapter.tex}B").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(root_shapes(&result), ["chars(A)", "Macro(input)", "chars(B)"]);
+        let input = result.tree.root().child(1).unwrap();
+        assert_eq!(input.span_content(), r"\input[draft]{chapter.tex}");
+        assert_eq!(
+            input.argument_content_nodes_named("options").unwrap().unwrap().source_text(),
+            Some("draft")
+        );
+        assert_eq!(
+            input.argument_content_nodes_named("reference").unwrap().unwrap().source_text(),
+            Some("chapter.tex")
+        );
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("hello")
+        );
+
+        // The optional argument absent: the reference is still the named one, not
+        // the first provided.
+        let result = language.parse(r"\input{chapter.tex}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let input = result.tree.root().child(0).unwrap();
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn a_custom_reference_parser_is_still_held_to_the_plain_characters_rule() {
+        // The reference parsed as an ordinary `{…}` group (code `m`): what it stages
+        // must still read as plain characters. A protective group inside the braces
+        // (`\input{{chap.tex}}`) carries no such text, under this parser as under the
+        // standard chars-group.
+        let package = custom_input_package(&[("m", "reference")]);
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("chap.tex", "x"), ("my-file.tex", "x")],
+            [package],
+        );
+        let result = language.parse(r"\input{{chap.tex}}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), InvalidSourceReferenceArgument::IDENTIFIER);
+        let input = result.tree.root().child(0).unwrap();
+        assert!(input.slots().unwrap().is_empty());
+        // A name the group parser reads as characters resolves.
+        let result = language.parse(r"\input{my-file.tex}").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let input = result.tree.root().child(0).unwrap();
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("x")
+        );
+    }
+
+    #[test]
+    fn a_list_without_a_reference_argument_is_refused_when_the_spec_is_built() {
+        let arguments =
+            argument_specs_named::<Latexlike, _, _, _>([("o", "options"), ("m", "file")])
+                .unwrap();
+        let error = InputMacroSpec::new(arguments, false, BodyMarker::not_body()).unwrap_err();
+        assert_eq!(
+            error.declared_names,
+            vec![Some("options".into()), Some("file".into())]
+        );
+        assert_eq!(
+            error.to_string(),
+            r#"the input spec's argument list declares no argument named "reference" (declared: "options", "file")"#
+        );
+
+        // An empty list, and an unnamed argument.
+        let error =
+            InputMacroSpec::<Latexlike>::new(vec![], false, BodyMarker::not_body()).unwrap_err();
+        assert!(error.declared_names.is_empty());
+        assert!(error.to_string().ends_with("(the list is empty)"), "{error}");
+        let arguments = argument_specs::<Latexlike, _>(["m"]).unwrap();
+        let error = InputMacroSpec::new(arguments, false, BodyMarker::not_body()).unwrap_err();
+        assert_eq!(error.declared_names, vec![None]);
+        assert!(error.to_string().ends_with("(declared: <unnamed>)"), "{error}");
+    }
+
+    #[test]
+    fn the_standard_recipe_declares_the_named_reference_argument() {
+        let spec = input_macro_spec::<Latexlike>(false, BodyMarker::not_body());
+        assert!(spec.standard_arguments);
+        let names: Vec<Option<&str>> =
+            spec.arguments().iter().map(|argument| argument.name.as_deref()).collect();
+        assert_eq!(names, vec![Some(InputMacroSpec::<Latexlike>::REFERENCE_ARGUMENT_NAME)]);
+        assert_eq!(InputMacroSpec::<Latexlike>::REFERENCE_ARGUMENT_NAME, "reference");
+        // The same list handed to `new` builds a spec that is not the standard one:
+        // the flag records the constructor, not the list's shape.
+        let custom =
+            InputMacroSpec::new(spec.arguments().to_vec(), false, BodyMarker::not_body())
+                .unwrap();
+        assert!(!custom.standard_arguments);
     }
 }
