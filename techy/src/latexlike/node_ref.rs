@@ -15,8 +15,9 @@
 //! - [`post_space`](NodeRef::post_space) — the whitespace a macro's trigger token
 //!   consumed after the macro name.
 //!
-//! Every one of them answers `None` for a node it does not apply to, so they compose
-//! as filters over [`children`](NodeRef::children) without a preceding kind test.
+//! None of them requires a kind test first: each answers `None` — or, for
+//! [`is_math_group`](NodeRef::is_math_group), `false` — on a node it does not apply
+//! to, so they work as filters straight over [`children`](NodeRef::children).
 //!
 //! The accessors are defined for every language of the latexlike family
 //! ([`LatexlikeLang`], annotated trees included) and read the vocabulary through the
