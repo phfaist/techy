@@ -208,7 +208,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// go **through `self`**, which a delegating driver must account for — see
     /// *Wrapping a driver* on the trait.
     ///
-    /// Overriding this method replaces the policy, not the plumbing. A richer policy
+    /// Overriding this method replaces the policy, not the two calls it is made of. A
+    /// richer policy
     /// — per-condition severities, a list of conditions to ignore, a budget of
     /// problems — decides per call between [`ParserSession::recover`]'s two modes. An
     /// override also takes on the refinement step: either route the condition through
@@ -580,7 +581,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// callers compose accessor → [`resolve_source_reference`](crate::source::resolve_source_reference)
     /// → parse, so caching frameworks can substitute either half.
     ///
-    /// Deliberately infallible: this accessor only hands out an already-configured
+    /// Deliberately infallible: this accessor only returns an already-configured
     /// resolver — failure belongs on [`SourceResolver::resolve`], which is already
     /// fallible and reports per reference. Embedding or binding code that cannot
     /// produce its resolver should report the failure through the embedding's own

@@ -299,12 +299,14 @@ impl<L: Lang> ParseContext<'_, '_, L> {
 }
 
 /// Condition: an `\input`-style construct referenced an external source, but no
-/// [`SourceResolver`](crate::source::SourceResolver) is configured — the driver's
-/// [`source_resolver`](crate::core::ParseDriver::source_resolver) accessor
-/// returned `None` ("this language resolves nothing"). Raised by
-/// [`ParseContext::attach_source_reference`]; distinct from
-/// [`UnresolvableSourceReference`] (a configured resolver that *failed*) — the
-/// remedies differ: configure a resolver vs. fix the reference/environment.
+/// [`SourceResolver`](crate::source::SourceResolver) is configured.
+///
+/// The driver's [`source_resolver`](crate::core::ParseDriver::source_resolver)
+/// accessor returned `None` ("this language resolves nothing"). Raised by
+/// [`ParseContext::attach_source_reference`].
+///
+/// Distinct from [`UnresolvableSourceReference`] (a configured resolver that *failed*)
+/// — the remedies differ: configure a resolver vs. fix the reference/environment.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -318,9 +320,10 @@ pub struct NoSourceResolver {
 }
 
 /// Condition: the configured [`SourceResolver`](crate::source::SourceResolver)
-/// failed to resolve an external source reference. Raised by
-/// [`ParseContext::attach_source_reference`]; carries the live [`ResolveError`],
-/// so embedders can downcast along its
+/// failed to resolve an external source reference.
+///
+/// Raised by [`ParseContext::attach_source_reference`]; carries the live
+/// [`ResolveError`], so embedders can downcast along its
 /// [`Error::source`](core::error::Error::source) chain (e.g. to an `io::Error`)
 /// — the serialized projection renders the reference, the message, and the cause
 /// chain. Distinct from [`NoSourceResolver`] (no resolver configured at all).
@@ -355,8 +358,10 @@ impl fmt::Display for UnresolvableSourceReference {
 }
 
 /// Condition: the reference argument of an `\input`-style construct does not carry
-/// plain text. The argument's content must be plain characters: the reference drives
-/// source resolution, so it is read off the argument's content nodes — their character
+/// plain text.
+///
+/// The argument's content must be plain characters: the reference drives source
+/// resolution, so it is read off the argument's content nodes — their character
 /// payloads, exactly as read. Content that is anything else (a nested group, a
 /// callable, a comment) carries no such text, and no reference is read from it.
 ///

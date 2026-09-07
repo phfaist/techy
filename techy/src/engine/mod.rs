@@ -826,9 +826,9 @@ mod tests {
     }
 
     /// A toy construct parser: reads one `Char` token via the context, stages a
-    /// `Chars` node, returns no delta. Exercises the full 6.1 plumbing —
-    /// `ParseContext` over a `TokenListReader`, staging through the session's builder,
-    /// `finish` into a `ParseResult`.
+    /// `Chars` node, returns no delta. Exercises the whole path — `ParseContext` over
+    /// a `TokenListReader`, staging through the session's builder, `finish` into a
+    /// `ParseResult`.
     struct OneCharParser;
 
     impl ConstructParser<PlainLang> for OneCharParser {

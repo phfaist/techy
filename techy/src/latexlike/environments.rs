@@ -389,18 +389,21 @@ impl<LLL: LatexlikeLang> fmt::Debug for StdEnvironmentBehavior<LLL> {
     }
 }
 
-/// The verbatim-environment behavior (pylatexenc's
-/// `LatexVerbatimEnvironmentContentsParser` wired as an [`EnvironmentBehavior`]):
-/// declared arguments parse normally — tokenized, before the raw region begins
-/// (`lstlisting`-style options) — and the **body is raw text**, read by the core
-/// [`VerbatimBodyParser`] up to the `\end{name}` terminator, given to it as a
+/// The behavior of a verbatim environment: its **body is raw text**, read up to the
+/// `\end{name}` terminator with nothing recognized inside it.
+///
+/// This is pylatexenc's `LatexVerbatimEnvironmentContentsParser` wired as an
+/// [`EnvironmentBehavior`]. Declared arguments parse normally — tokenized, before the
+/// raw region begins (`lstlisting`-style options).
+///
+/// The body is read by the core [`VerbatimBodyParser`], given a
 /// [`StopEnvironmentCommand`](VerbatimBodyTerminator::StopEnvironmentCommand)
-/// terminator built from the invocation's own spellings (the escape character it was
+/// terminator built from the invocation's own spellings: the escape character it was
 /// written with, its name group's delimiters, and the terminator command name the
 /// dispatching [`BeginSpec`] carries — the same spellings the `\begin` composition
-/// itself is built on). The single newline right
-/// after the begin syntax is staged but designated out of the body content
-/// (the gobble rule — see [`VerbatimBodyParser`]).
+/// itself is built on. The single newline right after the begin syntax is staged but
+/// designated out of the body content (the gobble rule — see
+/// [`VerbatimBodyParser`]).
 ///
 /// One behavior instance serves any environment name (the terminator back-reference
 /// comes from the invocation), so `verbatim`, `verbatim*`, and listing-style
@@ -550,7 +553,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 /// **Serialization.** The behavior (its arguments' parsers, its body handling) has no
 /// serialized form, so an environment spec is serialized by *identity* — a reference
 /// to the provider that defined it plus its key — which needs the [`SpecProvenance`]
-/// stamp a shared package hands out ([`with_provenance`](EnvironmentSpec::with_provenance);
+/// stamp a shared package issues ([`with_provenance`](EnvironmentSpec::with_provenance);
 /// [`Package::define_environment`](crate::core::specs::Package::define_environment) stamps
 /// automatically in a shared package). An unstamped environment spec cannot be
 /// serialized (the error names the type).
@@ -583,7 +586,7 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     }
 
     /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
-    /// package hands out ([`Package::provenance_for`](crate::core::specs::Package::provenance_for))
+    /// package issues ([`Package::provenance_for`](crate::core::specs::Package::provenance_for))
     /// — so that the spec can be serialized by identity. Replaces a previous stamp.
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> EnvironmentSpec<LLL> {
         self.provenance = Some(provenance);
@@ -682,7 +685,7 @@ impl<LLL: LatexlikeLang> BeginSpec<LLL> {
     }
 
     /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
-    /// package hands out — so that the spec is serialized by identity rather than in
+    /// package issues — so that the spec is serialized by identity rather than in
     /// its self-contained form. Replaces a previous stamp.
     pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> BeginSpec<LLL> {
         self.provenance = Some(provenance);

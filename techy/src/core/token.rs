@@ -36,9 +36,9 @@
 //! token and stream-position types, the `TokenReader` trait and the standard reader, the
 //! scan helpers, the token rules the reader reads together with the overrides that change
 //! them mid-parse and the caches derived from them, the types the specials-scan hooks
-//! answer with, and the token conditions and errors. The [hub](crate::core) keeps the
-//! `Lang` trait (its associated types and hooks), the parsing state and its deltas, and
-//! the engine.
+//! answer with, and the token conditions and errors. The [`core`](crate::core) module
+//! keeps the `Lang` trait (its associated types and hooks), the parsing state and its
+//! deltas, and the engine.
 //!
 //! A **scan helper**, one of the groups listed below, is a free function
 //! that recognizes one construct at a byte offset in the text being scanned and answers

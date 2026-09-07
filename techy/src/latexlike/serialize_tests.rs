@@ -1171,16 +1171,16 @@ mod rendering {
         assert_eq!(json, expected);
     }
 
-    /// The setup of the schema description's worked example
-    /// (`dev-docs/serialize_schema.md`): a tolerant parse of `\e{x} {`
-    /// (a macro `\e` with one mandatory argument, defined in a shared package `d`;
-    /// then an unclosed group) serialized as a parse result into a fresh session
-    /// declaring the profile `schema example`, the segment naming the parse
-    /// result as its main entry. Ignored: run it to REGENERATE the description's
-    /// example after a wire change —
-    /// `cargo test --features serde -p techy --lib schema_worked_example -- --ignored --nocapture`
-    /// — and paste its output; the description's example is never edited by hand.
-    /// Prints the exact canonical line first, then a readable per-entry layout.
+    // The setup of the schema description's worked example
+    // (`dev-docs/serialize_schema.md`): a tolerant parse of `\e{x} {`
+    // (a macro `\e` with one mandatory argument, defined in a shared package `d`;
+    // then an unclosed group) serialized as a parse result into a fresh session
+    // declaring the profile `schema example`, the segment naming the parse
+    // result as its main entry. Ignored: run it to REGENERATE the description's
+    // example after a wire change —
+    // `cargo test --features serde -p techy --lib schema_worked_example -- --ignored --nocapture`
+    // — and paste its output; the description's example is never edited by hand.
+    // Prints the exact canonical line first, then a readable per-entry layout.
     #[test]
     #[ignore = "prints the schema description's worked example; run with --ignored --nocapture to regenerate it"]
     fn schema_worked_example() {

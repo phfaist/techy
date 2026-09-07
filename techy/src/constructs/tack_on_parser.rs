@@ -67,12 +67,15 @@ use crate::token::{TokenEdge, TokenKind};
 use super::argument_parsers::{scan_argument_noise, stage_pre_space};
 use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
 
-/// Condition: a non-repeatable tack-on information field was specified more than once
-/// (`\section{x}\label{a}\label{b}` with `label` registered via
-/// [`with_field`](TackOnFieldsArgumentParser::with_field)) — detected by
-/// [`TackOnFieldsArgumentParser`]. Tolerant recovery keeps the repeated field parsed
-/// in the argument's region — techy trees keep every byte, so nothing is discarded:
-/// consumers see both the diagnostic and the record. Strict parses abort.
+/// Condition: a non-repeatable tack-on information field was specified more than once.
+///
+/// An example is `\section{x}\label{a}\label{b}` with `label` registered through
+/// [`with_field`](TackOnFieldsArgumentParser::with_field); the condition is detected by
+/// [`TackOnFieldsArgumentParser`].
+///
+/// Tolerant recovery keeps the repeated field parsed in the argument's region — techy
+/// trees keep every byte, so nothing is discarded: consumers see both the diagnostic
+/// and the record. Strict parses abort.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(

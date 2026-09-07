@@ -65,7 +65,7 @@ use super::{
 /// descent**: the entry point calls [`ConstructParser::parse`] directly rather than
 /// through [`ParseContext::parse_construct`], so no descent-guard level and no
 /// traceback frame cover it. Its output is the tree's root ([`BuildId`]), which the
-/// entry point hands to [`ParserSession::finish`](crate::core::ParserSession::finish);
+/// entry point passes to [`ParserSession::finish`](crate::core::ParserSession::finish);
 /// its pass-through delta is discarded. On entry, `cx.state` is the parse's initial
 /// state and the reader stands at the start of the source.
 ///

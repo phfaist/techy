@@ -548,8 +548,9 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
 
 impl<L: Lang> core::error::Error for DeriveError<L> {}
 
-/// A language hook's refusal to produce parsing state data. Either of the two hooks
-/// that build state data can return one:
+/// A language hook's refusal to produce parsing state data.
+///
+/// Either of the two hooks that build state data can return one:
 ///
 /// - [`Lang::finalize_transition`] refusing a **transition** — "this delta cannot be
 ///   applied here". The usual case is a context-dependent event that reached

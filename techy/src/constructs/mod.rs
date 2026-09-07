@@ -1283,8 +1283,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 }
 
 /// Condition: an implementation of an extension point — an argument or construct
-/// parser, a [`Lang`] hook, a spec factory — violated a library contract. An
-/// implementation bug to fix, not a source-input problem: it aborts the parse even
+/// parser, a [`Lang`] hook, a spec factory — violated a library contract.
+///
+/// An implementation bug to fix, not a source-input problem: it aborts the parse even
 /// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) (built through
 /// [`ParseContext::implementation_error`], which ignores the recovery policy).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
@@ -1298,11 +1299,12 @@ pub struct ImplementationError {
     pub detail: String,
 }
 
-/// Condition: a scope op of an in-parse state delta failed
-/// ([`ScopeOpError`](crate::core::specs::ScopeOpError), rendered into `detail`) — reported
-/// through the recovery entry point by the [`ParseContext`] derivation methods:
-/// strict parses abort on it; tolerant parses record it and continue under the
-/// ops-skipped state
+/// Condition: a scope op of an in-parse state delta failed.
+///
+/// The failure ([`ScopeOpError`](crate::core::specs::ScopeOpError)) is rendered into
+/// `detail`, and the condition is reported through the recovery entry point by the
+/// [`ParseContext`] derivation methods: strict parses abort on it; tolerant parses
+/// record it and continue under the ops-skipped state
 /// ([`DeriveError::recovered`](crate::core::DeriveError::recovered)).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -1317,13 +1319,16 @@ pub struct ScopeOpFailed {
 }
 
 /// Condition: the parse's [`DescentGuard`](crate::core::DescentGuard) refused to
-/// open one more nesting level — the input nests deeper than the configured (or
-/// built-in default) limit allows. Raised by
-/// [`ParseContext::parse_construct`](ParseContext::parse_construct) and **aborts
-/// under any recovery policy**: the limit exists so deeply nested input cannot
-/// crash the process by stack exhaustion, and past it there is no safe way to
-/// continue. The `detail` names the limit that was hit and, when the parse ran on
-/// the unconfigured built-in default, points at
+/// open one more nesting level.
+///
+/// The input nests deeper than the configured (or built-in default) limit allows.
+/// Raised by [`ParseContext::parse_construct`](ParseContext::parse_construct) and
+/// **aborts under any recovery policy**: the limit exists so deeply nested input
+/// cannot crash the process by stack exhaustion, and past it there is no safe way to
+/// continue.
+///
+/// The `detail` names the limit that was hit and, when the parse ran on the
+/// unconfigured built-in default, points at
 /// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -1337,15 +1342,18 @@ pub struct DescentLimitExceeded {
 }
 
 /// Condition (warning severity): the parse's
-/// [`DescentGuard`](crate::core::DescentGuard) reported the nesting limit as
-/// getting close — for the standard guard
-/// ([`StdDescentGuard`](crate::core::StdDescentGuard)): the first descent past
-/// half of the **unconfigured built-in default** stack budget, reported once per
-/// parse. Recorded immediately by
+/// [`DescentGuard`](crate::core::DescentGuard) reported the nesting limit as getting
+/// close.
+///
+/// For the standard guard ([`StdDescentGuard`](crate::core::StdDescentGuard)) that is
+/// the first descent past half of the **unconfigured built-in default** stack budget,
+/// reported once per parse. Recorded immediately by
 /// [`ParseContext::parse_construct`](ParseContext::parse_construct); the parse
-/// continues. A configured limit never produces this warning — it exists as the
-/// early notice that no limit was chosen explicitly and that the built-in default
-/// will soon refuse deeper input; choose a limit with
+/// continues.
+///
+/// A configured limit never produces this warning — it exists as the early notice that
+/// no limit was chosen explicitly and that the built-in default will soon refuse deeper
+/// input; choose a limit with
 /// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]

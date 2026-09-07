@@ -1379,7 +1379,8 @@ mod tests {
     }
 
     /// The record collections have discoverable constructors (`new(Vec)`; the
-    /// `From<Vec>` conversions stay as plumbing), and `ParsedSlot` follows the
+    /// `From<Vec>` conversions remain as low-level conversions), and `ParsedSlot`
+    /// follows the
     /// named-first family: `new(region, name, …)` names the slot,
     /// `new_unnamed(region, …)` is the marked anonymous spelling.
     #[test]
