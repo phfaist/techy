@@ -340,9 +340,10 @@ The declarations also shape the two whole-value override constructors.
 [`TokenRulesOverrides::disable_all()`](crate::core::token::TokenRulesOverrides::disable_all)
 disables every feature the language *has*: it consults the presence
 declarations and flips the `enabled` flag of exactly the present features
-(forbidden characters, which have no flag, are never touched) — absent
-features are simply not mentioned by the value it returns — so it
-can never fail, whatever the language declares. Its counterpart
+(forbidden characters have no flag, so their off is written in the data
+instead — the set is replaced with the empty one) — absent features are
+simply not mentioned by the value it returns — so it can never fail,
+whatever the language declares. Its counterpart
 [`TokenRulesOverrides::override_all()`](crate::core::token::TokenRulesOverrides::override_all)
 reads the same declarations the other way round: it copies the given
 [`TokenRules`](crate::core::token::TokenRules) into overrides for exactly the

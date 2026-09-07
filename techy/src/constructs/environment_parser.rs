@@ -83,8 +83,8 @@ pub enum MissingTerminatorFound {
     /// recovery to it.
     ///
     /// Only a raw body ([`VerbatimBodyParser`](super::VerbatimBodyParser)) reports
-    /// this, and only with a token reader of the embedder's own: the standard reader
-    /// has nothing left to reject under the raw-reading state.
+    /// this, and only when the embedder supplies its own token reader: the standard
+    /// reader has nothing left to reject under the raw-reading state.
     UnreadableToken,
 }
 

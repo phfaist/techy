@@ -338,6 +338,19 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// delta (its reported [terminator facts](EnvironmentBody::terminator) feed the
     /// invocation-syntax recording).
     ///
+    /// The parser's reported [terminator facts](EnvironmentBody::terminator) must be
+    /// a shape the language's environment-syntax record can store. The shipped
+    /// [`StdEnvironmentSyntax`](super::StdEnvironmentSyntax) holds `\end{name}`-shaped
+    /// end sides only, so a body parser reporting
+    /// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
+    /// under it ends the parse with
+    /// [`EnvironmentSyntaxError`](super::EnvironmentSyntaxError) — an
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) abort
+    /// under any recovery policy. Give
+    /// [`VerbatimBodyParser`] a
+    /// [`StopEnvironmentCommand`](crate::core::constructs::VerbatimBodyTerminator::StopEnvironmentCommand)
+    /// terminator, as [`VerbatimBehavior`] does, and the facts come back `Scanned`.
+    ///
     /// The produced body also **reports the interior's after-effect record and exit
     /// state** ([`EnvironmentBody::after_effects`], [`EnvironmentBody::exit_state`]),
     /// which the composition routes through

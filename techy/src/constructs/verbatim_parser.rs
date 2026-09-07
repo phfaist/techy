@@ -168,10 +168,10 @@ pub fn verbatim_state_delta<L: LangHasGroups>(
 /// Why the shared raw-content loop stopped. The two terminator-less endings are told
 /// apart because they are diagnosed differently: only one of them is the end of the
 /// input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RawContentStop {
-    /// The terminator was found, and consumed.
-    Terminator,
+#[derive(Debug, Clone)]
+enum RawContentStop<L: Lang> {
+    /// The terminator was found and consumed, over this span.
+    Terminator(SourceSpan<L::SourceOrigin>),
     /// The input ended before the terminator appeared.
     EndOfInput,
     /// A token the reader could not read was tolerated where the content was being
@@ -179,8 +179,8 @@ enum RawContentStop {
     UnreadableToken,
 }
 
-/// The result of the shared raw-content loop: where the content ended, what stopped it,
-/// and whether the terminator was actually consumed (with its span).
+/// The result of the shared raw-content loop: where the content ended, and what stopped
+/// it — the consumed terminator's span among the answers.
 struct RawContentEnd<L: Lang> {
     /// End of the raw content (= the terminator's start when one was found).
     content_end: StreamPosition<L>,
@@ -191,16 +191,24 @@ struct RawContentEnd<L: Lang> {
     /// source and a span could not describe their text. Covers exactly the stretch from
     /// where the loop started to [`content_end`](RawContentEnd::content_end).
     content_text: Option<String>,
-    /// The consumed terminator's span, or `None` when the region ended without one
-    /// (end of input, or a tolerated unreadable token — [`stop`](RawContentEnd::stop)
-    /// says which).
-    terminator: Option<SourceSpan<L::SourceOrigin>>,
-    /// What stopped the loop. `Some(_)` in `terminator` exactly when this is
-    /// [`RawContentStop::Terminator`].
-    stop: RawContentStop,
+    /// What stopped the loop; read the consumed terminator's span off it with
+    /// [`terminator`](RawContentEnd::terminator).
+    stop: RawContentStop<L>,
     /// Just past the consumed terminator — equal to `content_end` when the region
     /// ended without one.
     end: StreamPosition<L>,
+}
+
+impl<L: Lang> RawContentEnd<L> {
+    /// The consumed terminator's span, or `None` when the region ended without one
+    /// (end of input, or a tolerated unreadable token — [`stop`](RawContentEnd::stop)
+    /// says which).
+    fn terminator(&self) -> Option<&SourceSpan<L::SourceOrigin>> {
+        match &self.stop {
+            RawContentStop::Terminator(span) => Some(span),
+            RawContentStop::EndOfInput | RawContentStop::UnreadableToken => None,
+        }
+    }
 }
 
 /// The raw content as node data on a `Chars` node spanning `content_span` — or `None`
@@ -258,7 +266,6 @@ fn read_raw_content<L: Lang>(
             return Ok(RawContentEnd {
                 content_end: here.clone(),
                 content_text: text,
-                terminator: None,
                 stop: RawContentStop::UnreadableToken,
                 end: here,
             });
@@ -284,8 +291,7 @@ fn read_raw_content<L: Lang>(
                 return Ok(RawContentEnd {
                     content_end: cx.tokens.position_at(&token, TokenEdge::Start),
                     content_text: text,
-                    terminator: Some(cx.tokens.source_span_of(&token)),
-                    stop: RawContentStop::Terminator,
+                    stop: RawContentStop::Terminator(cx.tokens.source_span_of(&token)),
                     end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                 });
             }
@@ -297,7 +303,6 @@ fn read_raw_content<L: Lang>(
                 return Ok(RawContentEnd {
                     content_end: end.clone(),
                     content_text: text,
-                    terminator: None,
                     stop: RawContentStop::EndOfInput,
                     end,
                 });
@@ -529,7 +534,7 @@ where
                 }
             },
         )?;
-        if raw_end.terminator.is_none() {
+        if raw_end.terminator().is_none() {
             cx.recover(UnterminatedVerbatim::new(String::from(close)), open_span.clone())?;
         }
 
@@ -556,8 +561,7 @@ where
             group_type: Some(self.group_type),
             open: node_text_content(&open_span, &group_span),
             close: raw_end
-                .terminator
-                .as_ref()
+                .terminator()
                 .map(|span| node_text_content(span, &group_span))
                 .unwrap_or_else(TextContent::empty),
         };
@@ -904,8 +908,8 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
 
         let content_start = cx.tokens.position_here();
         let raw_end = read_raw_content(cx, &verbatim_state, |_| false, |_| ())?;
-        let missing_terminator = match raw_end.stop {
-            RawContentStop::Terminator => None,
+        let missing_terminator = match &raw_end.stop {
+            RawContentStop::Terminator(_) => None,
             RawContentStop::EndOfInput => Some(MissingTerminatorFound::EndOfInput),
             RawContentStop::UnreadableToken => Some(MissingTerminatorFound::UnreadableToken),
         };
@@ -951,8 +955,8 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                 // scan exists either way — the pieces are the ones the terminator
                 // string was composed from).
                 terminator: raw_end
-                    .terminator
-                    .map(|span| self.terminator.syntax_data(span, end.clone())),
+                    .terminator()
+                    .map(|span| self.terminator.syntax_data(span.clone(), end.clone())),
                 // A raw body runs no content loop: no sibling construct parsed inside
                 // it, so nothing evolved the state it was read under and nothing can
                 // escape it. The honest facts are the entry state and an empty record.
@@ -990,7 +994,7 @@ mod tests {
     use crate::node::{check_tree_invariants, BuildId, NodeRef};
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::constructs::tests::{relaxed_driver, RelaxedStdLang, RELAXED_MACRO};
-    use crate::source::Source;
+    use crate::source::{Source, SourcePos};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::StateData;
     use crate::token::{
@@ -999,7 +1003,6 @@ mod tests {
         TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery, TokenResult,
         TokenRules, WhitespaceRules,
     };
-    use crate::source::SourcePos;
     use alloc::format;
     use alloc::string::ToString;
     use alloc::vec;
@@ -1306,8 +1309,12 @@ mod tests {
         assert!(result.diagnostics.is_empty());
 
         let verb = root_child(&result, 0);
-        assert_eq!(verb_group(verb).group_delimiters(), Some(("$", "$")));
+        let group = verb_group(verb);
+        assert_eq!(group.group_delimiters(), Some(("$", "$")));
+        assert_eq!(group.span().range(), 5..8);
         assert_eq!(verbatim_text(verb), Some("a"));
+        // The region ends at the closing delimiter: what follows is enclosing content.
+        assert_eq!(root_child(&result, 1).chars(), Some(" x"));
     }
 
     #[test]

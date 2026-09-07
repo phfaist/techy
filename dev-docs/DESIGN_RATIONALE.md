@@ -3525,7 +3525,8 @@ points on `Lang`); the single customization entry is the Lang's choice of
 `InvocationSyntax` type. **`EnvironmentSyntax<L>`**, implemented by Env
 types, is the **pure record contract**:
 `from_parsed(begin: EnvironmentBeginSyntaxData<L>, terminator:
-Option<EnvironmentTerminatorSyntaxData<L>>) -> Self` plus the **spelling writer
+Option<EnvironmentTerminatorSyntaxData<L>>) -> Result<Self,
+EnvironmentSyntaxError>` plus the **spelling writer
 pair `write_begin`/`write_end`** — the Env type owns its own re-emission (the
 accuracy doctrine made literal; kept as a *pair* because `Concat` head/tail and
 the span-tiling law's prefix/suffix pins need the two sides separately — a fused
@@ -3557,13 +3558,12 @@ arm — a bare `Literal` terminator, which a custom `make_body_parser` may still
 report — has no command-plus-name-group spelling to transcribe and no field to
 keep the literal in, so `from_parsed` **fails**: it returns
 `EnvironmentSyntaxError::LiteralTerminator` and the composition aborts the parse
-through `implementation_error`, under any recovery policy (amended 2026-09-07,
-user; it previously stored a placeholder command word that re-emitted visibly
-wrong text). The reasoning that ruled out a plausible-looking guess rules out the
-visible placeholder too: reporting a shape the record cannot store is a
-definition wiring a body parser to a record it does not fit — a documented
-contract violation, and the panic policy's answer to those is an `Err`
-([§dd-dr:panic-policy]), not a tree that recomposition silently corrupts.
+through `implementation_error`, under any recovery policy. The reasoning that
+ruled out a plausible-looking guess rules out a visible placeholder too:
+reporting a shape the record cannot store is a definition wiring a body parser to
+a record it does not fit — a documented contract violation, and the panic
+policy's answer to those is an `Err` ([§dd-dr:panic-policy]), not a tree that
+recomposition silently corrupts.
 
 **The fifth role trait** joins the [§dd-dr:latexlike-generalization] roster:
 `LatexlikeInvocationSyntax`, on the syntax type — `type Env:
@@ -3593,6 +3593,14 @@ also pins foreign family members (downcast to
 `InvocationSyntaxData<StdEnvironmentSyntax<LLL>>`, not just the default-Env
 enum). The body parser's pass-through-delta check is an implementation-error
 path, not an assert ([§dd-dr:panic-policy]).
+
+*Reversal note (2026-09-07, user).* `from_parsed` was infallible, and the
+`Literal` arm stored a placeholder command word (`??END_SYNTAX_NOT_AVAILABLE??`)
+on the end side so that source recomposition ran to completion and emitted
+visibly wrong text rather than a plausible-looking guess. The record is now
+refused instead: a body parser reporting a shape the record cannot store is a
+contract violation, and a violation returns an `Err` ([§dd-dr:panic-policy]),
+whatever the wrongness of the output would have looked like.
 
 Revisit if: a construct's invocation syntax cannot be expressed as per-node
 recorded payload — that is a new axis to design, not a reason to resurrect
@@ -4736,13 +4744,14 @@ parser dispatching a fallible hook itself repeated the same guarded three lines;
 mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
 unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.
 
-**Amendment (2026-09-07): a probe state may widen what reads cleanly, never narrow it.**
-The protocol's tolerant arm — `Ok(None)`, nothing diagnosed, nothing consumed — rests on
-the enclosing content loop re-reading the failing token under *its own* state and
-diagnosing it there. The assumption breaks the moment the derived probe state makes a
-token erroneous that the enclosing state accepts: the loop re-reads it, reads it fine,
-and nobody ever reports the failure. Found in `VerbatimArgumentParser`'s delimiter probe,
-which cleared the expected group close but left the forbidden-character block inherited.
+*Amendment (user, documentation/code discrepancy review).* A probe state may widen what
+reads cleanly, never narrow it. The protocol's tolerant arm — `Ok(None)`, nothing
+diagnosed, nothing consumed — rests on the enclosing content loop re-reading the failing
+token under *its own* state and diagnosing it there. The assumption breaks the moment the
+derived probe state makes a token erroneous that the enclosing state accepts: the loop
+re-reads it, reads it fine, and nobody ever reports the failure. Found in
+`VerbatimArgumentParser`'s delimiter probe, which cleared the expected group close but
+left the forbidden-character block inherited.
 In the preset `$` is forbidden inside math mode, so `$\m$x$$` with a `v`-coded `\m`
 lost its verbatim argument silently under tolerant recovery (the only diagnostic came
 from the display-math group the stray `$$` then opened) and aborted with "character is
@@ -8103,8 +8112,8 @@ Points settled in flight:
   no such structure and reports only its span; a record that cannot store a bare
   literal (latexlike's `StdEnvironmentSyntax`) refuses to build one at all — its
   `from_parsed` returns `EnvironmentSyntaxError::LiteralTerminator` and the parse
-  aborts (amended 2026-09-07) — which is why the preset's `VerbatimBehavior` states
-  the pieces instead. Every piece
+  aborts — which is why the preset's `VerbatimBehavior` states the pieces
+  instead. Every piece
   comes off the invocation — the escape character and the name group delimiters *as
   written*, the stop command name from the dispatching spec
   ([§dd-dr:environment-command-names]) — so a language re-ruling the escape character
