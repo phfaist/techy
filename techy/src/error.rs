@@ -766,11 +766,13 @@ impl<O: SourceOrigin> Diagnostics<O> {
     /// Assembles a collection from the parts a serialized collection recorded — the
     /// entry point for reading one back.
     ///
-    /// The parts are exactly what the accessors report: `items` are the diagnostics that
-    /// were stored, `limit` the retention cap they were stored under,
-    /// [`suppressed`](Diagnostics::suppressed) the number of pushes dropped beyond that
-    /// cap, and [`error_count`](Diagnostics::error_count) the number of error-severity
-    /// pushes in all, stored and suppressed together.
+    /// The parts are what a collection reports about itself: `items` are the diagnostics
+    /// it stored, in the order [`iter`](Diagnostics::iter) yields them; `limit` is the
+    /// retention cap they were stored under ([`limit`](Diagnostics::limit));
+    /// `suppressed` is the number of pushes dropped beyond that cap
+    /// ([`suppressed`](Diagnostics::suppressed)); and `error_count` is the number of
+    /// error-severity pushes in all, stored and suppressed together
+    /// ([`error_count`](Diagnostics::error_count)).
     ///
     /// Use this to rebuild a collection from a serialized form — the one
     /// [`techy::serialize`](crate::serialize) writes, a wire format of your own, or a
@@ -1038,6 +1040,8 @@ pub struct InconsistentDiagnosticCounts {
     pub error_count: usize,
 }
 
+// Hand-written wording: the counts need number agreement, which a message format
+// string cannot express, and the closing clause names the invariant that failed.
 impl fmt::Display for InconsistentDiagnosticCounts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let InconsistentDiagnosticCounts {
@@ -1049,9 +1053,11 @@ impl fmt::Display for InconsistentDiagnosticCounts {
         } = *self;
         write!(
             f,
-            "the diagnostics collection's counts are inconsistent: {retained} diagnostics \
-             supplied ({retained_errors} of them errors) under a retention limit of {limit}, \
-             with {suppressed} suppressed and {error_count} errors in all — "
+            "the diagnostics collection's counts are inconsistent: {retained} diagnostic{} \
+             supplied ({retained_errors} of error severity) under a retention limit of \
+             {limit}, with {suppressed} suppressed and {error_count} error{} in all — ",
+            if retained == 1 { "" } else { "s" },
+            if error_count == 1 { "" } else { "s" },
         )?;
         if retained > limit {
             write!(f, "more diagnostics were supplied than the retention limit allows")
@@ -1848,6 +1854,13 @@ mod tests {
         assert!(refuse(5, 1, 1).to_string().contains("although the retention limit was not"));
         assert!(refuse(5, 0, 0).to_string().contains("are errors than were reported in all"));
         assert!(refuse(2, 1, 3).to_string().contains("more errors were reported in all"));
+
+        // The counts agree in number with what they count.
+        let one = vec![Diagnostic::error(TestCondition::new("bad"), SourceSpan::new(&source, 0..1))];
+        let message = Diagnostics::from_parts(one, 0, 0, 1).unwrap_err().to_string();
+        assert!(message.contains("1 diagnostic supplied"), "{message}");
+        assert!(message.contains("1 error in all"), "{message}");
+        assert!(refuse(1, 0, 1).to_string().contains("2 diagnostics supplied"));
 
         // And the consistent parts are accepted.
         assert!(Diagnostics::from_parts(items, 2, 1, 2).is_ok());
