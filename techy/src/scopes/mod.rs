@@ -671,12 +671,16 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
 // --- the parse-initialization escape-shadowing check -------------------------------------
 
 /// Condition (warning): every definition a provider makes under one callable type
-/// begins with an escape character.
+/// begins with an escape character and is longer than that one character.
 ///
 /// This is the registration mistake of inserting names *with* their escape character
 /// (`"\greet"` instead of `"greet"` — see [`Package::insert`]'s normalized-name
 /// contract). The name in a command token does not include the escape character, so
 /// none of these definitions can ever resolve.
+///
+/// A name that is *exactly* one escape character is not a mistake and does not count:
+/// the tokenizer reads `\\` as the command whose name is `\`, so `\\` is registered
+/// under the one-character name `"\\"`.
 ///
 /// Recorded by [`check_provider_commands_shadowed_by_escape`] at parse initialization;
 /// the latexlike preset runs that check for every parse.
@@ -705,8 +709,9 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
         write!(
             f,
             "every ‘{}’ definition of provider ‘{}’ begins with an escape character \
-             (‘{}’ — {} definition{}, e.g. ‘{}’): command names are registered \
-             without the escape character, so none of these definitions can resolve",
+             followed by more characters (‘{}’ — {} definition{}, e.g. ‘{}’): command \
+             names are registered without the escape character, so none of these \
+             definitions can resolve",
             self.callable_type,
             self.provider,
             self.escape_chars,
@@ -718,8 +723,9 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
 }
 
 /// Warns when every definition a provider makes under one callable type begins with an
-/// escape character — the registration mistake of writing `"\\greet"` where `"greet"`
-/// was meant, which leaves the whole table unreachable.
+/// escape character and is longer than that one character — the registration mistake of
+/// writing `"\\greet"` where `"greet"` was meant, which leaves the whole table
+/// unreachable.
 ///
 /// One [`ProviderCommandsShadowedByEscape`] **warning** is recorded per affected
 /// (provider, callable type) pair, at `source`'s start. For each provider on `state`'s
@@ -727,7 +733,12 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
 /// provider lists ([`SpecsProvider::iter_symbols`], over every mode) are tested against
 /// the state's command escape characters
 /// ([`TokenRules::command_rules`](crate::core::token::TokenRules::command_rules)); the
-/// warning fires when **all** of them (at least one) begin with such a character.
+/// warning fires when **all** of them (at least one) begin with such a character and
+/// have at least one character after it.
+///
+/// A name of exactly one escape character is a legitimate registration and is never
+/// counted as a mistake: the tokenizer reads `\\` as the command whose name is `\`, so
+/// a package defining that command registers it under the name `"\\"`.
 ///
 /// Nothing is checked when commands are disabled, and providers that cannot list their
 /// definitions (a [`FallbackProvider`]) are skipped: this is a best-effort check on the
@@ -776,8 +787,13 @@ pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
                 continue;
             }
             names.sort_unstable();
+            // A name of exactly one escape character is legitimate: the tokenizer
+            // reads `\\` as the command whose name is `\`, so that command is
+            // registered under the one-character name `"\\"`.
             let shadowed = |name: &str| {
-                name.chars().next().is_some_and(|first| escape_chars.contains(&first))
+                let mut chars = name.chars();
+                chars.next().is_some_and(|first| escape_chars.contains(&first))
+                    && chars.next().is_some()
             };
             if !names.iter().all(|name| shadowed(name)) {
                 continue;
@@ -1057,8 +1073,9 @@ impl<L: Lang> Package<L> {
     /// escape-prefixed near-misses
     /// ([`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes)),
     /// and a check at parse initialization warns when *all* of a provider's definitions
-    /// begin with an escape character
-    /// ([`check_provider_commands_shadowed_by_escape`]).
+    /// begin with an escape character and continue past it
+    /// ([`check_provider_commands_shadowed_by_escape`], which leaves the legitimate
+    /// one-character name `"\\"` — the command `\\` — alone).
     ///
     /// **The spec type and the callable type are not cross-checked either.** A
     /// "mismatched" registration — say a plain macro-shaped spec under an environment
@@ -3006,6 +3023,39 @@ mod tests {
         assert_eq!(condition.count, 1);
         assert_eq!(condition.example, r"\align");
         assert_eq!(condition.escape_chars, "\\");
+    }
+
+    #[test]
+    fn escape_shadowing_check_leaves_one_character_names_alone() {
+        use crate::latexlike::{CallableType, Latexlike, MacroSpec};
+        use crate::source::Source;
+
+        /// The warnings the check records for a package of `names` under `Macro`.
+        fn warnings(names: &[&str]) -> usize {
+            let mut package: Package<Latexlike> = Package::new("pkg");
+            for name in names {
+                package.insert(CallableType::Macro, *name, Arc::new(MacroSpec::default()));
+            }
+            let state =
+                crate::state::ParsingState::<Latexlike>::lang_initial_with_packages([package])
+                    .expect("seed state");
+            let source = Arc::new(Source::new("any content"));
+            let mut diagnostics = crate::error::Diagnostics::new();
+            check_provider_commands_shadowed_by_escape(&state, &source, &mut diagnostics);
+            diagnostics.len()
+        }
+
+        // The command `\\` is registered under the one-character name `\`: the
+        // tokenizer reads a single non-name character as a one-character command name.
+        // That is a legitimate registration, alone or beside a real mistake.
+        assert_eq!(warnings(&["\\"]), 0);
+        assert_eq!(warnings(&["\\", r"\greet"]), 0);
+        // Other one-character command names — `\#`, read as the command `#` — likewise.
+        assert_eq!(warnings(&["\\", "#"]), 0);
+        // The mistake itself still warns, one character past the escape included.
+        assert_eq!(warnings(&[r"\greet"]), 1);
+        assert_eq!(warnings(&[r"\x"]), 1);
+        assert_eq!(warnings(&[r"\greet", r"\x"]), 1);
     }
 
     #[test]

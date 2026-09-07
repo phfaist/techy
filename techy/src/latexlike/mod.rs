@@ -1003,6 +1003,22 @@ mod tests {
     }
 
     #[test]
+    fn a_macro_named_by_an_escape_character_alone_is_not_escape_shadowed() {
+        // `\\` is read as the command whose name is `\`: a single non-name character
+        // makes a one-character command name. A package defining that command
+        // registers the name `\`, which is a legitimate registration and not the
+        // escape-prefixed mistake — no warning, and the macro is invoked.
+        let mut package = Package::new("linebreaks");
+        package.insert(CallableType::Macro, "\\", Arc::new(super::MacroSpec::default()));
+        let language = test_support::with_package(crate::error::Recovery::Strict, package);
+        let result = language.parse(r"a\\b").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let invocation = result.tree.root().child(1).unwrap();
+        assert_eq!(invocation.macro_name(), Some("\\"));
+        assert_eq!(invocation.span().range(), 1..3);
+    }
+
+    #[test]
     fn parse_init_warning_fires_regardless_of_fallback_providers() {
         use crate::scopes::{FallbackProvider, ScopeOp};
 
