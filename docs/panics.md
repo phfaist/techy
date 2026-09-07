@@ -89,7 +89,12 @@ the non-panicking companion:
   source recomposer and its environment-syntax writers
   ([`EnvironmentSyntax::write_begin`](crate::latexlike::EnvironmentSyntax::write_begin)
   and [`write_end`](crate::latexlike::EnvironmentSyntax::write_end)), and the tree
-  serialization of [`serialize`](crate::serialize) —
+  serialization of [`serialize`](crate::serialize) — namely
+  [`TreeSerialization::serialize_tree`](crate::serialize::TreeSerialization::serialize_tree),
+  [`SerdeSession::serialize_parse_result`](crate::serialize::SerdeSession::serialize_parse_result)
+  and the [`SerializableObject`](crate::serialize::SerializableObject) implementation
+  for [`ParseResult`](crate::core::ParseResult), each of which states the panic on its
+  own page —
   reaches this panic on a consumer-built tree that breaks the invariant, and on no other
   input. [`validate_tree`](crate::core::node::validate_tree) checks a tree for this,
   with one gap: it does not inspect a language's invocation-syntax payload, so the
