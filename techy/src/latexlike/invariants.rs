@@ -205,7 +205,7 @@ mod tests {
     }
 
     /// A root `List` over `span` holding one callable node of the same span,
-    /// carrying the given payload.
+    /// with the given payload.
     fn callable_tree(
         content: &str,
         span: core::ops::Range<usize>,

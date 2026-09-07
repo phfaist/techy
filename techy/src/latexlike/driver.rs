@@ -101,7 +101,7 @@ pub enum ParagraphBreakStyle {
 /// zero-sized unit, so identity by spec is identity by type: downcast the node's
 /// [`spec`](crate::core::node::CallableData::spec) with `Any` to this type. Do not
 /// test the node's name instead — that name is the whitespace run as it was written.
-/// Every break node carries this spec; the parse never invents a separate spec per
+/// Every break node is stamped with this spec; the parse never invents a separate spec per
 /// break.
 ///
 /// It implements [`CallableSpec`] for every language of the family, takes no
@@ -275,8 +275,8 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
 ///
 /// `break_span` is the break token's span as the token reader reported it. Under
 /// [`Chars`](ParagraphBreakStyle::Chars) the result is a whitespace `Chars` node over
-/// that span; under [`Specials`](ParagraphBreakStyle::Specials) it is a `Callable`
-/// node named by the whitespace run the span covers and carrying a
+/// that span. Under [`Specials`](ParagraphBreakStyle::Specials) it is a `Callable`
+/// node whose name is the whitespace run that span covers and whose spec is a
 /// [`ParagraphBreakSpec`]. `state` is the parsing state in force and is not consulted
 /// by this implementation.
 ///
@@ -622,7 +622,7 @@ pub trait LatexlikeParseDriver<LLL: LatexlikeLang>: ParseDriver<LLL> {
     /// language tagging its own operations: `\gdef` emits a
     /// [`ScopeOp::Define`](crate::core::specs::ScopeOp) against a globally named
     /// scope and `\def` against a local one, and the hook keeps the globally targeted
-    /// operations and drops the rest. Rule, mode and extension overrides carry no such
+    /// operations and drops the rest. Rule, mode and extension overrides have no such
     /// tag and were already merged, so for those the only honest answers are all or
     /// nothing. [`GroupAfterEffectsFn`](crate::core::constructs::GroupAfterEffectsFn)
     /// describes the mechanics in full.
@@ -635,7 +635,7 @@ pub trait LatexlikeParseDriver<LLL: LatexlikeLang>: ParseDriver<LLL> {
     ///
     /// `Err` aborts the parse under any recovery policy. It propagates exactly like a
     /// construct parser's own `Err`, and the traceback is attached at the call site,
-    /// since a driver hook has no access to the session. Carry
+    /// since a driver hook has no access to the session. Return
     /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
     /// hook's own code, and
     /// [`ImplementationError`](crate::core::constructs::ImplementationError) for a

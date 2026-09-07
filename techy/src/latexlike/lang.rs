@@ -28,7 +28,7 @@
 //! language that extends one of them with variants of its own implements the trait
 //! instead, which is what guarantees the values the preset needs still exist.
 //!
-//! [`LatexlikeLang`] also carries the preset's language-level settings as methods
+//! [`LatexlikeLang`] also defines the preset's language-level settings as methods
 //! with defaults: the math-delimiter table ([`math_group_rules`](LatexlikeLang::math_group_rules)),
 //! the characters a math interior forbids
 //! ([`math_interior_forbidden_chars`](LatexlikeLang::math_interior_forbidden_chars)),
@@ -98,7 +98,7 @@ pub trait LatexlikeGroupType: Copy {
 
     /// Whether interiors of this class parse as math.
     ///
-    /// Defaults to "carries a math form". Override it to answer `true` for a
+    /// Defaults to "has a math form". Override it to answer `true` for a
     /// math-like class with no inline/display presentation — see the trait
     /// documentation.
     fn is_math(self) -> bool {
@@ -197,7 +197,7 @@ pub trait LatexlikeMode: Copy + PartialEq {
 ///
 /// `Self::exit_math_context().is_exit_math_context() == true`, and the recognizer
 /// answers `true` for exactly the events meaning "exit the math context". The
-/// recognizer is a required method because events carry no equality bound.
+/// recognizer is a required method because events are not required to support equality.
 pub trait LatexlikeEvent {
     /// The event asking to restore the innermost enclosing non-math context.
     fn exit_math_context() -> Self;
