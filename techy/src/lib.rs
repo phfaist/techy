@@ -122,10 +122,11 @@
 //! possible: currently only `hashbrown`, plus `serde` when that feature is enabled.
 //! A few build-time dependencies implement the derive macros.
 //!
-//! **The panic policy.** This library never panics on document input. A small set of
-//! public methods and functions may panic on a caller contract violation, following
-//! standard Rust patterns such as unguarded index accessors; the guide chapter
-//! [Panics](guide::panics) is the complete list of public items that can panic.
+//! **The panic policy.** This library is designed never to panic on document
+//! input. A small set of public methods and functions may panic on a caller
+//! contract violation, following standard Rust patterns such as unguarded index
+//! accessors; the guide chapter [Panics](guide::panics) is the complete list of
+//! public items that can panic.
 //!
 //! **Cargo features.**
 //! - `serde` (off by default) — renders techy's serialized values (node trees, for

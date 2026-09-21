@@ -2,6 +2,7 @@
 
 A fast, extensible parser for a LaTeX-like markup language.
 
+
 ## Overview
 
 `techy` is a Rust library for parsing LaTeX-like markup languages. It builds an
@@ -12,35 +13,37 @@ This is loosely a Rust port of the Python
 [pylatexenc](https://github.com/phfaist/pylatexenc) library, focusing on the
 `latexnodes`, `macrospec`, and `latexwalker` modules.
 
-**For AI agents:** → Read `docs/ai-guide.md`, a guide optimized for AI agents.
-(Humans with a penchant for densely packed, condensed details may read this, too.)
+**For AI agents:** → Read
+[`docs/ai-guide.md`](https://github.com/phfaist/techy/blob/main/docs/ai-guide.md)
+in this repo, a guide optimized for AI agents.  (Humans with a penchant for
+densely packed, condensed details may read this, too.)
 
 **Experimental status:** This library is still at an experimental development
 stage. The API might still change!
 
-Techy is NOT a TeX engine. It parses LaTeX-like constructs as a markup language,
+`techy` is NOT a TeX engine. It parses LaTeX-like constructs as a markup language,
 yielding content structure.
 
 See also:
 
 - The [`techy-xp`](https://github.com/phfaist/techy-xp) package: `techy-xp`
-  plugs into techy's extension mechanism to provide parsing that more closely
-  resembles TeX/LaTeX', honoring `\newcommand`, `\def`, and other similar
+  plugs into `techy`'s extension mechanism to provide parsing that more closely
+  approximates TeX/LaTeX, honoring `\newcommand`, `\def`, and other similar
   commands.
   
 - The [`techxt`](https://github.com/phfaist/techxt) package, which provides
-  conversion of LaTeX code to unicode text.  It is a rust-based redesign of
+  conversion of LaTeX code to Unicode text.  It is a Rust-based redesign of
   pylatexenc's [`latex2text`](https://github.com/phfaist/pylatexenc) based on
   `techy` and `techy-xp`.  You can try [it out
   here](https://phfaist.github.io/techxt/) and even install it as an app on your
   device!
   
 - The [`untechxt`](https://github.com/phfaist/untechxt) package provides a way
-  to perform the reverse conversion, from unicode text to LaTeX code.  The
-  `untechxt` package is a rust-based redesign of `pylatexenc`'s
+  to perform the reverse conversion, from Unicode text to LaTeX code.  The
+  `untechxt` package is a Rust-based redesign of pylatexenc's
   [`latexencode`](https://github.com/phfaist/pylatexenc).  The `untechxt`
   package does not depend on `techy` since it operates in the other direction
-  from unicode to LaTeX; it is only closely related.
+  from Unicode to LaTeX; it is only closely related.
 
 
 ## Quick Start
@@ -71,6 +74,7 @@ assert!(math.is_math_group());
 The narrative guide (chapters under `techy::guide` in the generated
 documentation) walks through parsing, defining macros and environments, math
 modes, verbatim, error recovery, and content extraction.
+
 
 ## Architecture
 
@@ -105,7 +109,10 @@ Internally the crate is organized in three strata (a `Lang`-free foundation, one
 mutually recursive core, the presets); that file layout is private and never
 shows in public paths.
 
-To build HTML documentation:
+
+## Documentation
+
+Build the HTML documentation with:
 
 ```bash
 cargo docs  # alias for 'cargo doc --workspace --no-deps'
@@ -115,23 +122,31 @@ If you accidentally ran `cargo doc` instead of `cargo docs`, delete `target/doc`
 to drop the stale dependency pages (rustdoc merges new output into what is already
 there).
 
-## Differences from pylatexenc
+The documentation contains a series of **guides** linked with the rustdoc API
+that aim to help you out in using the library.  Having trouble compiling the
+docs with Cargo?  The guides can also be read as plain Markdown files in this
+repo's `docs/` folder.
 
-While this library is inspired by pylatexenc, there are some intentional
-differences:
 
-1. **Clean Architecture**: Careful redesign with no backwards compatibility
-   baggage from v1.x/v2.x
+## Relation with pylatexenc
 
-2. **Strong Typing**: Leverages Rust's type system for safety
+This library is a Rust-based redesigned version of pylatexenc's LaTeX-like
+parser. We did not attempt to provide backwards compatibility with pylatexenc's
+API, allowing flexibility for a better parser design and API.
 
-3. **Performance**: Aim for significant performance improvements thanks to
-   Rust's zero-cost abstractions (found ~20x speedups on some quick internal
-   benchmarks)
+Rust's strong typing and memory ownership model enable faster, safer code.  We've
+found a speedup of about ~20x on some quick internal benchmarks between the
+Rust version and pylatexenc.
 
-4. **Error Handling**: Uses `Result` instead of exceptions
+See also the *Migrating from pylatexenc* guide in the compiled documentation
+(`cargo docs`), also to be found in this repo as `docs/pylatexenc-migration.md`.
 
-5. **Memory Safety**: Rust's ownership system prevents common bugs
+Some level of Python bindings are potentially planned.  However, given the
+general, versatile nature of `techy` and its many extension knobs, we currently
+recommend you write the core logic where you need `techy` in *Rust*; this allows
+you to make use of `techy`'s native features, all while exposing bindings at a
+higher level for your project in Python (or any other language).
+
 
 ## Testing
 
@@ -156,6 +171,7 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted for
 inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual
 licensed as above, without any additional terms or conditions.
+
 
 ## References
 
