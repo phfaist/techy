@@ -4,20 +4,44 @@ A fast, extensible parser for a LaTeX-like markup language.
 
 ## Overview
 
-`techy` is a Rust library for parsing LaTeX-like markup languages. It builds an Abstract Syntax Tree (AST) from LaTeX source code, allowing you to analyze, transform, or convert LaTeX documents.
+`techy` is a Rust library for parsing LaTeX-like markup languages. It builds an
+Abstract Syntax Tree (AST) from LaTeX source code, allowing you to analyze,
+transform, or convert LaTeX documents.
 
-This is loosely a Rust port of the Python [pylatexenc](https://github.com/phfaist/pylatexenc) library, focusing on the `latexnodes`, `macrospec`, and `latexwalker` modules.
+This is loosely a Rust port of the Python
+[pylatexenc](https://github.com/phfaist/pylatexenc) library, focusing on the
+`latexnodes`, `macrospec`, and `latexwalker` modules.
 
 **For AI agents:** → Read `docs/ai-guide.md`, a guide optimized for AI agents.
 (Humans with a penchant for densely packed, condensed details may read this, too.)
 
-## Features
+**Experimental status:** This library is still at an experimental development
+stage. The API might still change!
 
-- **Fast**: Zero-copy parsing where possible, efficient memory usage
-- **Extensible**: Define custom macros, environments, and special characters
-- **Type-safe**: Leverages Rust's type system for correctness
-- **Flexible**: Support for standard LaTeX and custom LaTeX-like languages
-- **Well-tested**: Comprehensive test suite
+Techy is NOT a TeX engine. It parses LaTeX-like constructs as a markup language,
+yielding content structure.
+
+See also:
+
+- The [`techy-xp`](https://github.com/phfaist/techy-xp) package: `techy-xp`
+  plugs into techy's extension mechanism to provide parsing that more closely
+  resembles TeX/LaTeX', honoring `\newcommand`, `\def`, and other similar
+  commands.
+  
+- The [`techxt`](https://github.com/phfaist/techxt) package, which provides
+  conversion of LaTeX code to unicode text.  It is a rust-based redesign of
+  pylatexenc's [`latex2text`](https://github.com/phfaist/pylatexenc) based on
+  `techy` and `techy-xp`.  You can try [it out
+  here](https://phfaist.github.io/techxt/) and even install it as an app on your
+  device!
+  
+- The [`untechxt`](https://github.com/phfaist/untechxt) package provides a way
+  to perform the reverse conversion, from unicode text to LaTeX code.  The
+  `untechxt` package is a rust-based redesign of `pylatexenc`'s
+  [`latexencode`](https://github.com/phfaist/pylatexenc).  The `untechxt`
+  package does not depend on `techy` since it operates in the other direction
+  from unicode to LaTeX; it is only closely related.
+
 
 ## Quick Start
 
@@ -91,19 +115,22 @@ If you accidentally ran `cargo doc` instead of `cargo docs`, delete `target/doc`
 to drop the stale dependency pages (rustdoc merges new output into what is already
 there).
 
-
-## Development Status
-
-This is a work in progress.
-
 ## Differences from pylatexenc
 
-While this library is inspired by pylatexenc, there are some intentional differences:
+While this library is inspired by pylatexenc, there are some intentional
+differences:
 
-1. **Clean Architecture**: No backwards compatibility baggage from v1.x/v2.x
+1. **Clean Architecture**: Careful redesign with no backwards compatibility
+   baggage from v1.x/v2.x
+
 2. **Strong Typing**: Leverages Rust's type system for safety
-3. **Performance**: Significantly faster due to Rust's zero-cost abstractions
+
+3. **Performance**: Aim for significant performance improvements thanks to
+   Rust's zero-cost abstractions (found ~20x speedups on some quick internal
+   benchmarks)
+
 4. **Error Handling**: Uses `Result` instead of exceptions
+
 5. **Memory Safety**: Rust's ownership system prevents common bugs
 
 ## Testing
@@ -112,18 +139,6 @@ Run the test suite:
 
 ```bash
 cargo test
-```
-
-Run tests with output:
-
-```bash
-cargo test -- --nocapture
-```
-
-Run a specific test:
-
-```bash
-cargo test test_macro_parsing
 ```
 
 ## License
