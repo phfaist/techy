@@ -12,6 +12,12 @@ repository.workspace = true
 # re-exported from `techy::error` and `techy::serialize`, next to the traits they implement.
 # Publish this crate before `techy` (techy depends on it by version).
 
+# docs.rs ignores `.cargo/config.toml`: inject the same sidebar customization that
+# `cargo docs` uses locally (`rustdoc-header.html` links to the workspace
+# `docs/rustdoc-header.html`).
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "rustdoc-header.html"]
+
 [lints]
 workspace = true
 

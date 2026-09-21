@@ -11,6 +11,13 @@ repository.workspace = true
 keywords = ["latex", "parser", "flm", "markup"]
 categories = ["parser-implementations", "text-processing"]
 
+# docs.rs ignores `.cargo/config.toml`: document every feature, and inject the same
+# sidebar customization that `cargo docs` uses locally (the path resolves from the
+# package root, where `docs` links to the workspace `docs/` folder).
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--html-in-header", "docs/rustdoc-header.html"]
+
 [lints]
 workspace = true
 

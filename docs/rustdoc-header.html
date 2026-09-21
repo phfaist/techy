@@ -11,7 +11,13 @@
        - adding a guide chapter (markdown page in `docs/` plus a module under
          `guide` in `techy/src/lib.rs`): add it to GUIDE_PAGES below, in
          reading order;
-       - adding a workspace crate: add it to CRATES below.
+       - adding a workspace crate: add it (with its package name) to CRATES below.
+
+     On docs.rs (which reads this file through `rustdoc-args` in the
+     `[package.metadata.docs.rs]` section of each crate's `Cargo.toml`), each crate is
+     documented separately, under `https://docs.rs/<package>/<version>/`, so
+     links into another crate go to that crate's docs.rs pages, at the version
+     segment of the current page (the workspace crates share one version).
 
      This relies only on coarse, stable parts of rustdoc's page structure (the
      `rustdoc-vars` meta tag, `.sidebar-elems`, `#rustdoc-toc`,
@@ -89,8 +95,9 @@ document.addEventListener("DOMContentLoaded", () => {
         ["ai_guide_serialize/", "AI guide: serialization"],
         ["ai_guide_pylatexenc/", "AI guide: pylatexenc migration"],
     ];
-    /* The workspace crates: the entry points of the "API" section. */
-    const CRATES = ["techy", "techy_derive"];
+    /* The workspace crates: the entry points of the "API" section, as
+       [crate name in paths, package name on docs.rs]. */
+    const CRATES = [["techy", "techy"], ["techy_derive", "techy-derive"]];
 
     const vars = document.querySelector("meta[name='rustdoc-vars']");
     const elems = document.querySelector("nav.sidebar .sidebar-elems");
@@ -98,7 +105,22 @@ document.addEventListener("DOMContentLoaded", () => {
         return; /* source view, help/settings page, or unexpected layout */
     }
     const rootPath = vars.getAttribute("data-root-path") || "./";
-    const href = path => new URL(rootPath + path, window.location.href).href;
+    const currentCrate = vars.getAttribute("data-current-crate");
+    /* On docs.rs the path is /<package>/<version>/<crate>/...; a local
+       build keeps every workspace crate in one doc tree. */
+    const docsRsVersion = window.location.hostname === "docs.rs"
+        ? window.location.pathname.split("/")[2]
+        : null;
+    /* URL of `path` inside the documentation of crate `name`. */
+    const href = (name, path) => {
+        if (docsRsVersion && name !== currentCrate) {
+            const entry = CRATES.find(([crate]) => crate === name);
+            const pkg = entry ? entry[1] : name;
+            return "https://docs.rs/" + pkg + "/" + docsRsVersion + "/" +
+                name + "/" + path;
+        }
+        return new URL(rootPath + name + "/" + path, window.location.href).href;
+    };
 
     const sectionHeader = text => {
         const h = document.createElement("h3");
@@ -141,7 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chapters.className = "block";
     let onGuidePage = false;
     for (const [sub, title] of GUIDE_PAGES) {
-        const url = href("techy/guide/" + sub + "index.html");
+        const url = href("techy", "guide/" + sub + "index.html");
         const item = linkItem(url, title);
         if (new URL(url).pathname === window.location.pathname) {
             item.className = "current";
@@ -154,9 +176,9 @@ document.addEventListener("DOMContentLoaded", () => {
     /* The workspace crates, current one highlighted. */
     const crates = document.createElement("ul");
     crates.className = "block techy-crates";
-    for (const name of CRATES) {
-        const item = linkItem(href(name + "/index.html"), name);
-        if (name === vars.getAttribute("data-current-crate")) {
+    for (const [name] of CRATES) {
+        const item = linkItem(href(name, "index.html"), name);
+        if (name === currentCrate) {
             item.className = "current";
         }
         crates.appendChild(item);
