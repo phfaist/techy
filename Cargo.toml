@@ -13,7 +13,7 @@ edition = "2021"
 # [§dd-dr:errors]) stabilized in 1.86; core::error::Error, the previous pin, needed only 1.81.
 rust-version = "1.86"
 authors = ["Philippe Faist"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/phfaist/techy"
 
 # Workspace-wide lint policy; members opt in with `[lints] workspace = true`.
