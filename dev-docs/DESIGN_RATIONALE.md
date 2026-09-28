@@ -6668,7 +6668,7 @@ Status: DECIDED (user + design sessions).
 `cx.with_frame(frame, |cx| …)` at the descent points (invocation, argument, group interior,
 environment body); the recover funnel snapshots the live stack into every `Diagnostic` and
 `ParseError` as `L`-free `TraceFrame<O>`s (rendered `title: String` + `SourceSpan<O>`),
-innermost first — this finally produces `format_traceback`'s input and renders as
+innermost first (frames appended after the parse: [§dd-dr:diagnostic-outer-frames]) — this finally produces `format_traceback`'s input and renders as
 pylatexenc-style "while parsing …" tracebacks (exactly LSP `relatedInformation` shape). Live
 frames allocate nothing: `FrameTitle<L>` stores *mechanisms, not a construct taxonomy* — a
 `&'static str` label, a quoted source slice, or an `Arc<dyn CallableSpec<L>>` + role whose
@@ -6692,6 +6692,49 @@ must be `O`-generic only, or `L` re-enters `Diagnostic` through the back door. "
 Rejected alternatives: frames in `ParsingState` (above); structured machine fields on frames (frames are
 the human-facing projection — machine data belongs in the condition payload; title + span is
 what tools need); wrapping-on-bubble (the tolerant path never bubbles).
+
+#### Frames appended after the parse: `Diagnostic::with_outer_frames` [§dd-dr:diagnostic-outer-frames]
+
+Status: DECIDED (user + design session, on a request from the FLM framework).
+
+`Diagnostic` has one append-only builder, `with_outer_frames(Vec<TraceFrame<O>>) -> Self`:
+the given frames enclose the stored ones and are stored after them, so the list stays
+innermost first; `frames()` is unchanged. Code that processes the tree after the parse (FLM
+lowering a copy of a heading's title where a reference shows it) uses it to say where it was
+when a condition was reported. The rendered heading is the neutral `Inside:`, since frames
+are no longer only the parse's. This closes the asymmetry with `ParseError::with_frames`.
+Rationale: frames already are the nested activities open at detection, in LSP
+`relatedInformation` shape ([§dd-dr:parse-traceback]); a copy shown elsewhere is such an
+activity, and copies nest as frames nest. One list keeps the nesting order right when both
+kinds coexist (a framework re-parsing copied text puts parse frames inside its own), and the
+serialized `frames` field carries appended frames with no wire change. The diagnostic's own
+span stays put: the framework copies *nodes*, which keep the spans of the place the content
+was written, and the report must keep pointing there. The intended framework-side discipline
+is the parse's own model — attach at creation, from the framework's own stack of frames,
+inside the one method through which all its diagnostics pass — not wrapping on the way out
+(the tolerant path never bubbles, and `Diagnostics` has no mutable iteration; none is added).
+Append rather than replace, because replace (mirroring `ParseError::with_frames`) would
+discard parse frames. "Outer" pairs with "innermost first" and states the direction.
+
+Rejected alternatives: (1) a second frame list ("context") with its own heading — a second
+mechanism for the same concept, a new wire field, inverted nesting in the rendered report
+when both lists are present, and a name `ParseContext` already owns; (2) synthesized-source
+provenance (`Source::synthesized`) — it is per source, and positions become relative to the
+new content, losing the original place; the revisit clause of
+[§dd-dr:provenance-on-source] concerns per-node provenance, while this need is per
+diagnostic; (3) a wrapping condition type carrying the shown-at span — it changes the
+identifier every consumer matches on, and condition payloads carry no spans; (4) a
+framework-side wrapper struct around `Diagnostic` — it cannot live in the shared
+`Diagnostics` collection; (5) replace semantics mirroring `ParseError::with_frames` — it
+clobbers parse frames; (6) a kind tag on `TraceFrame` — frames stay the human-facing
+projection ([§dd-dr:parse-traceback]).
+
+Accepted costs: appended frames are distinguishable from parse frames only by title; the
+rendered heading loses its pylatexenc echo (`Open LaTeX blocks:`).
+
+Revisit if: a consumer needs to filter or style appended frames apart from parse frames
+(then a kind on `TraceFrame`, still free of `L`), or a framework needs the same builder on
+`ParseError`.
 
 #### `ParseDriver::refine_diagnostic` hook [§dd-dr:refine-diagnostic-hook]
 
