@@ -3465,7 +3465,7 @@ mod tests {
         assert_eq!(unresolvable.frames()[0].title(), "group ‘{’");
         assert_eq!(unresolvable.frames()[0].span().range(), 0..1);
         // render() appends the traceback.
-        assert!(unresolvable.render().contains("Open blocks:\n  @ (line 1, col 1): group ‘{’"));
+        assert!(unresolvable.render().contains("Inside:\n  @ (line 1, col 1): group ‘{’"));
 
         let unclosed = parsed
             .result

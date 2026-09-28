@@ -458,7 +458,8 @@ impl ToDiagnosticValue for Arc<dyn core::error::Error + Send + Sync + 'static> {
     }
 }
 
-/// One frame of a parse traceback: what the parse had descended into, and where.
+/// One frame of a traceback: what the parse, or processing after it, had descended into,
+/// and where.
 ///
 /// The [`title`](TraceFrame::title) is already rendered for display (`group ‘{’`,
 /// `argument #1 of ‘\frac’`), and the [`span`](TraceFrame::span) is the source location
@@ -468,7 +469,9 @@ impl ToDiagnosticValue for Arc<dyn core::error::Error + Send + Sync + 'static> {
 /// snapshot of the frames that were open when the problem was reported. The recovery
 /// entry point,
 /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), takes that
-/// snapshot from the session's live frame stack.
+/// snapshot from the session's live frame stack. Processing after the parse appends
+/// frames of its own with
+/// [`Diagnostic::with_outer_frames`](Diagnostic::with_outer_frames).
 ///
 /// Unlike the live [`Frame`](crate::core::Frame), a `TraceFrame` is not generic over the
 /// language — only over the source origin — so diagnostics produced by parses of
@@ -553,7 +556,8 @@ impl fmt::Display for Severity {
 /// [`frames`](Diagnostic::frames) is the traceback of parse frames that were open when
 /// the problem was reported; the recovery entry point,
 /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), attaches
-/// it.
+/// it; processing after the parse may append outer frames with
+/// [`with_outer_frames`](Diagnostic::with_outer_frames).
 ///
 /// `Diagnostic` deliberately does not implement `PartialEq`, since conditions are
 /// compared through a trait object that hides their type. Compare
@@ -610,6 +614,24 @@ impl<O: SourceOrigin> Diagnostic<O> {
         Diagnostic { severity, data, span, frames }
     }
 
+    /// Appends frames that enclose the ones already stored.
+    ///
+    /// The traceback grows outward: `frames` are the activities the diagnostic's own
+    /// frames were nested in, innermost first, and they are stored after the frames
+    /// already present, which stay first. Code that processes a parsed tree after the
+    /// parse — a framework lowering or transforming it — uses this to record where it
+    /// was when the condition was reported, for instance "while lowering the copy of a
+    /// heading's title shown by a reference". The diagnostic's own
+    /// [`span`](Diagnostic::span) is unchanged.
+    ///
+    /// An empty `frames` changes nothing. The parse itself never calls this; its
+    /// frames arrive through the recovery entry point,
+    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover).
+    pub fn with_outer_frames(mut self, frames: Vec<TraceFrame<O>>) -> Self {
+        self.frames.extend(frames);
+        self
+    }
+
     /// The severity of this diagnostic.
     pub fn severity(&self) -> Severity {
         self.severity
@@ -647,10 +669,12 @@ impl<O: SourceOrigin> Diagnostic<O> {
         &self.span
     }
 
-    /// The parse frames that were open when the condition was recorded, innermost first.
+    /// The traceback frames, innermost first: the parse frames that were open when the
+    /// condition was recorded, followed by any outer frames appended afterwards with
+    /// [`with_outer_frames`](Diagnostic::with_outer_frames).
     ///
-    /// Empty when the diagnostic was recorded outside a parse descent. Format them with
-    /// [`format_traceback`].
+    /// Empty when the diagnostic was recorded outside a parse descent and nothing was
+    /// appended. Format them with [`format_traceback`].
     pub fn frames(&self) -> &[TraceFrame<O>] {
         &self.frames
     }
@@ -658,9 +682,8 @@ impl<O: SourceOrigin> Diagnostic<O> {
     /// Renders a human-readable, multi-line report of this diagnostic.
     ///
     /// The report holds the message, the position (line and column, plus the source's
-    /// origin label when it has one), the traceback of open blocks
-    /// ([`format_traceback`]), and the source's provenance chain, as `included from …` or
-    /// `synthesized from …` lines.
+    /// origin label when it has one), the traceback ([`format_traceback`]), and the
+    /// source's provenance chain, as `included from …` or `synthesized from …` lines.
     ///
     /// Line and column numbers are computed through a [`LineIndexCache`] created for this
     /// call and dropped with it. Use [`render_with`](Diagnostic::render_with) to supply a
@@ -1396,7 +1419,7 @@ pub fn format_position_with<O: SourceOrigin>(
 }
 
 /// Formats a traceback — the [`TraceFrame`]s of [`Diagnostic::frames`] or
-/// [`ParseError::frames`], innermost first — as one line per open block.
+/// [`ParseError::frames`], innermost first — as one line per frame.
 ///
 /// Each frame's position and origin label come from its own source, so a traceback that
 /// crosses an included document reads correctly. Returns an empty string when `frames` is
@@ -1410,7 +1433,7 @@ pub fn format_position_with<O: SourceOrigin>(
 /// # Example output
 ///
 /// ```text
-/// Open blocks:
+/// Inside:
 ///   @ (line 8, col 1): environment ‘document’
 ///   @ (line 5, col 3): argument #1 of ‘\section’
 /// ```
@@ -1429,7 +1452,7 @@ pub fn format_traceback_with<O: SourceOrigin>(
         return String::new();
     }
 
-    let mut result = String::from("Open blocks:");
+    let mut result = String::from("Inside:");
     for frame in frames {
         result.push_str("\n  ");
         result.push_str(&format_position_with(&frame.span, line_cols));
@@ -1907,7 +1930,7 @@ mod tests {
             vec![TraceFrame::new("environment ‘document’", SourceSpan::new(&source, 6..11))];
 
         let traceback = format_traceback(&frames);
-        assert_eq!(traceback, "Open blocks:\n  @ (line 2, col 1): environment ‘document’");
+        assert_eq!(traceback, "Inside:\n  @ (line 2, col 1): environment ‘document’");
     }
 
     #[test]
@@ -1923,7 +1946,7 @@ mod tests {
         let traceback = format_traceback(&frames);
         assert_eq!(
             traceback,
-            "Open blocks:\n  @ (line 3, col 1): callable ‘\\textbf’\n  @ (line 2, col 1): environment ‘document’\n  @ (line 1, col 1): callable ‘\\section’"
+            "Inside:\n  @ (line 3, col 1): callable ‘\\textbf’\n  @ (line 2, col 1): environment ‘document’\n  @ (line 1, col 1): callable ‘\\section’"
         );
     }
 
@@ -1945,7 +1968,7 @@ mod tests {
         let traceback = format_traceback(&frames);
         assert_eq!(
             traceback,
-            "Open blocks:\n  @ (line 2, col 1) [test.tex]: environment ‘document’"
+            "Inside:\n  @ (line 2, col 1) [test.tex]: environment ‘document’"
         );
     }
 
@@ -1960,7 +1983,103 @@ mod tests {
         );
         let rendered = diagnostic.render();
         assert!(rendered.contains("error: boom"));
-        assert!(rendered.contains("Open blocks:\n  @ (line 1, col 1): group ‘{’"));
+        assert!(rendered.contains("Inside:\n  @ (line 1, col 1): group ‘{’"));
+    }
+
+    #[test]
+    fn with_outer_frames_on_an_empty_traceback_stores_them_in_order() {
+        let source = arc_source("Hello\nWorld");
+        let diagnostic =
+            Diagnostic::error(TestCondition::new("boom"), SourceSpan::new(&source, 6..7))
+                .with_outer_frames(vec![
+                    TraceFrame::new("copy of a title", SourceSpan::new(&source, 0..5)),
+                    TraceFrame::new("reference", SourceSpan::new(&source, 6..11)),
+                ]);
+        let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(titles, ["copy of a title", "reference"]);
+    }
+
+    #[test]
+    fn with_outer_frames_keeps_existing_frames_first() {
+        let source = arc_source("Hello\nWorld");
+        let diagnostic = Diagnostic::from_parts(
+            Severity::Error,
+            Box::new(TestCondition::new("boom")),
+            SourceSpan::new(&source, 6..7),
+            vec![TraceFrame::new("group ‘{’", SourceSpan::new(&source, 0..1))],
+        )
+        .with_outer_frames(vec![TraceFrame::new(
+            "appended",
+            SourceSpan::new(&source, 6..11),
+        )]);
+        let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(titles, ["group ‘{’", "appended"]);
+
+        let diagnostic = diagnostic.with_outer_frames(vec![TraceFrame::new(
+            "appended later",
+            SourceSpan::new(&source, 0..5),
+        )]);
+        let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(titles, ["group ‘{’", "appended", "appended later"]);
+    }
+
+    #[test]
+    fn with_outer_frames_with_no_frames_changes_nothing() {
+        let source = arc_source("Hello\nWorld");
+        let diagnostic = Diagnostic::from_parts(
+            Severity::Error,
+            Box::new(TestCondition::new("boom")),
+            SourceSpan::new(&source, 6..7),
+            vec![TraceFrame::new("group ‘{’", SourceSpan::new(&source, 0..1))],
+        );
+        let rendered_before = diagnostic.render();
+        let spans_before: Vec<_> =
+            diagnostic.frames().iter().map(|f| (f.title().to_string(), f.span().span())).collect();
+
+        let diagnostic = diagnostic.with_outer_frames(Vec::new());
+        let spans_after: Vec<_> =
+            diagnostic.frames().iter().map(|f| (f.title().to_string(), f.span().span())).collect();
+        assert_eq!(spans_after, spans_before);
+        assert_eq!(diagnostic.render(), rendered_before);
+    }
+
+    #[test]
+    fn render_shows_outer_frames_after_parse_frames() {
+        let source = arc_source("Hello\nWorld");
+        let diagnostic = Diagnostic::from_parts(
+            Severity::Error,
+            Box::new(TestCondition::new("boom")),
+            SourceSpan::new(&source, 6..7),
+            vec![TraceFrame::new("group ‘{’", SourceSpan::new(&source, 0..1))],
+        )
+        .with_outer_frames(vec![TraceFrame::new(
+            "copy shown by a reference",
+            SourceSpan::new(&source, 7..8),
+        )]);
+        let rendered = diagnostic.render();
+        assert!(rendered.contains(
+            "Inside:\n  @ (line 1, col 1): group ‘{’\n  @ (line 2, col 2): copy shown by a reference"
+        ));
+        // The diagnostic's own position is unchanged.
+        assert!(rendered.contains("at: @ (line 2, col 1)"), "{rendered}");
+    }
+
+    #[test]
+    fn with_outer_frames_accepts_frames_from_another_source() {
+        let source = arc_source("Hello\nWorld");
+        let other: Arc<Source> =
+            Arc::new(Source::new("one\ntwo\nthree").with_origin(origin("other.tex")));
+        let diagnostic =
+            Diagnostic::error(TestCondition::new("boom"), SourceSpan::new(&source, 6..7))
+                .with_outer_frames(vec![TraceFrame::new(
+                    "reference",
+                    SourceSpan::new(&other, 8..13),
+                )]);
+        let rendered = diagnostic.render();
+        assert!(
+            rendered.contains("Inside:\n  @ (line 3, col 1) [other.tex]: reference"),
+            "{rendered}"
+        );
     }
 
     #[test]

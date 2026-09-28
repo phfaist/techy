@@ -193,6 +193,22 @@ fn a_diagnostic_of_each_severity_round_trips_as_a_deserialized_condition() {
 }
 
 #[test]
+fn outer_frames_round_trip() {
+    let src = source("{{x\nshown here");
+    let condition = UnclosedGroup { expected_close: String::from("}"), found: UnclosedGroupFound::EndOfInput };
+    let original = Diagnostic::error(condition, SourceSpan::new(&src, 1..2)).with_outer_frames(vec![
+        TraceFrame::new("copy of a title", SourceSpan::new(&src, 0..3)),
+        TraceFrame::new("reference", SourceSpan::new(&src, 4..14)),
+    ]);
+    let back = round_trip_diagnostic(&original);
+    assert_diagnostics_equivalent(&original, &back);
+    let titles: Vec<&str> = back.frames().iter().map(|frame| frame.title()).collect();
+    assert_eq!(titles, ["copy of a title", "reference"]);
+    assert_eq!((back.frames()[0].span().start(), back.frames()[0].span().end()), (0, 3));
+    assert_eq!((back.frames()[1].span().start(), back.frames()[1].span().end()), (4, 14));
+}
+
+#[test]
 fn a_diagnostic_from_a_real_tolerant_parse_round_trips() {
     let result = parse("a{b");
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);

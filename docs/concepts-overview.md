@@ -198,7 +198,10 @@ hooks, command resolution strategy — lives on the driver, not the session.
 Problems surface as structured conditions, not prose: a
 [`Diagnostic`](crate::error::Diagnostic) (collected in
 [`Diagnostics`](crate::error::Diagnostics), available on the parse result)
-carries a typed condition payload plus span and traceback frames; the human
+carries a typed condition payload plus span and traceback frames (which code
+processing the tree after the parse can extend with
+[`Diagnostic::with_outer_frames`](crate::error::Diagnostic::with_outer_frames));
+the human
 message is derived from the payload, and machine consumers match the concrete
 condition type or its stable identifier string. Third-party condition types
 are structurally identical to the library's own — implement

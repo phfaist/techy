@@ -948,7 +948,7 @@ mod tests {
         // The strict ParseError snapshotted the stack, innermost first.
         let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
         assert_eq!(titles, ["inner frame", "outer frame"]);
-        assert!(err.render().contains("Open blocks:"));
+        assert!(err.render().contains("Inside:"));
     }
 
     #[test]
