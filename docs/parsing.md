@@ -129,9 +129,10 @@ initial state is just the first one.
 
 Each [`Diagnostic`](crate::error::Diagnostic) carries a severity
 ([`Severity`](crate::error::Severity)), an exact source span, a traceback of
-frames (the parse frames open when it was recorded, plus any that processing
-after the parse appended with
-[`with_outer_frames`](crate::error::Diagnostic::with_outer_frames)), and — centrally — a structured **condition payload**: a typed
+frames (the parse frames open when the diagnostic was recorded, plus any
+appended after the parse with
+[`with_outer_frames`](crate::error::Diagnostic::with_outer_frames)), and —
+centrally — a structured **condition payload**: a typed
 value describing what happened, from which the human-readable message is
 derived. [`ParseError`](crate::error::ParseError), the strict-mode abort,
 carries the same information.

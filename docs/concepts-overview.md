@@ -201,9 +201,8 @@ Problems surface as structured conditions, not prose: a
 carries a typed condition payload plus span and traceback frames (which code
 processing the tree after the parse can extend with
 [`Diagnostic::with_outer_frames`](crate::error::Diagnostic::with_outer_frames));
-the human
-message is derived from the payload, and machine consumers match the concrete
-condition type or its stable identifier string. Third-party condition types
+the human message is derived from the payload, and machine consumers match the
+concrete condition type or its stable identifier string. Third-party condition types
 are structurally identical to the library's own — implement
 [`DiagnosticInfo`](crate::error::DiagnosticInfo) on a data struct and it flows
 through the same carriers. The strict/tolerant decision is the

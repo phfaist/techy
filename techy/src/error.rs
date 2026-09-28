@@ -6,7 +6,9 @@
 //! went wrong. A condition reaches the caller in one of two ways: as a [`Diagnostic`],
 //! which a parse records and continues past, or as a [`ParseError`], which ends the
 //! parse. Both store the condition itself, the [`SourceSpan`] where it occurred, and a
-//! snapshot of the parse frames that were open at that moment ([`TraceFrame`]s).
+//! snapshot of the parse frames that were open at that moment ([`TraceFrame`]s); code
+//! processing the tree after the parse can append outer frames to a `Diagnostic` with
+//! [`Diagnostic::with_outer_frames`].
 //!
 //! The library reports its conditions only through these two types; it never writes them
 //! to a logging side channel.
@@ -576,7 +578,9 @@ impl<O: SourceOrigin> Diagnostic<O> {
     /// Creates a diagnostic from a condition, at the given severity and span.
     ///
     /// The traceback is empty; a parse attaches frames through the recovery entry point,
-    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover).
+    /// [`ParseContext::recover`](crate::core::constructs::ParseContext::recover); code
+    /// outside the parse appends frames with
+    /// [`with_outer_frames`](Diagnostic::with_outer_frames).
     ///
     /// [`error`](Diagnostic::error), [`warning`](Diagnostic::warning) and
     /// [`note`](Diagnostic::note) are the shorthands for the three severities.
@@ -616,13 +620,13 @@ impl<O: SourceOrigin> Diagnostic<O> {
 
     /// Appends frames that enclose the ones already stored.
     ///
-    /// The traceback grows outward: `frames` are the activities the diagnostic's own
-    /// frames were nested in, innermost first, and they are stored after the frames
-    /// already present, which stay first. Code that processes a parsed tree after the
-    /// parse — a framework lowering or transforming it — uses this to record where it
-    /// was when the condition was reported, for instance "while lowering the copy of a
-    /// heading's title shown by a reference". The diagnostic's own
-    /// [`span`](Diagnostic::span) is unchanged.
+    /// The appended frames are the outer ones: the activities the diagnostic's own
+    /// frames were nested in, innermost first. They are stored after the frames already
+    /// present, which stay first. Code that processes a parsed tree after the parse, for
+    /// instance a framework transforming it, uses this to record where it was when the
+    /// condition was reported, as in "while processing the copy of a heading's title
+    /// shown by a reference". The diagnostic's own [`span`](Diagnostic::span) is
+    /// unchanged, so the report keeps pointing to where the content was written.
     ///
     /// An empty `frames` changes nothing. The parse itself never calls this; its
     /// frames arrive through the recovery entry point,
