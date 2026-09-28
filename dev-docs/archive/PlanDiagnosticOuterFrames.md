@@ -1,10 +1,6 @@
 # Plan — Frames appended after the parse: `Diagnostic::with_outer_frames`
 
-**Status: PLANNED (2026-09-28), not executed.** Design approved by the user and by the
-requesting agent in flm-rs. **Archive this file under `dev-docs/archive/` once the
-execution below is merged into `main`** — the durable record is then the
-DESIGN_RATIONALE entry [§dd-dr:diagnostic-outer-frames] (stage 5), and this plan
-becomes history.
+**Status: EXECUTED (2026-09-28) on branch `outer-frames`; archived.** The record is [§dd-dr:diagnostic-outer-frames].
 
 ## 0. What is being added, in one paragraph
 
