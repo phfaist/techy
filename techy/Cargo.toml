@@ -30,7 +30,7 @@ workspace = true
 # DESIGN_RATIONALE.md [§dd-dr:errors]): build-time only — the runtime stays zero-dep.
 [dependencies]
 hashbrown = "0.15"
-techy-derive = { version = "0.1.0", path = "../techy-derive" }
+techy-derive = { version = "0.1.1", path = "../techy-derive" }
 # serde is optional and rendering-only: the serialization capability (the value model
 # and the capability traits of `techy::serialize`, and what is built on them) is
 # unconditional plain Rust; enabling the `serde` feature only adds the serde impls that

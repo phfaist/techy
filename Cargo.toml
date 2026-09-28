@@ -7,7 +7,7 @@ members = ["techy", "techy-derive"]
 
 # Shared metadata inherited by member crates (`<field>.workspace = true`).
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 # Dyn trait upcasting to `dyn Any` (diagnostics condition payloads, DESIGN_RATIONALE.md
 # [§dd-dr:errors]) stabilized in 1.86; core::error::Error, the previous pin, needed only 1.81.
