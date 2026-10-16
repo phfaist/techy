@@ -393,15 +393,14 @@ in the parsed document.
 
 ## A complete takeover parser
 
-An argument that runs up to a fixed string needs no parser of your own:
-[`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser)
-reads it, with the content parsed or read as raw text as the argument's
-parsing state decides. The example below builds a similar construct by hand,
-to show the mechanics a takeover parser works with.
-
 Everything above in one compile-checked example: `\until … ;` reads
 everything up to the next `;` as raw text — groups, comments, and commands
-lose their meaning inside, like `\verb`. The raw-reading state comes from
+lose their meaning inside, like `\verb`. In practice such a construct needs
+no parser of your own:
+[`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser)
+reads an argument that runs up to a fixed string, with the content parsed or
+read as raw text as the argument's parsing state decides, so read the example
+for the mechanics it shows. The raw-reading state comes from
 the shipped recipe
 [`verbatim_state_delta`](crate::core::constructs::verbatim_state_delta):
 every tokenization feature off, the terminator installed as the one

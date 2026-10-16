@@ -922,9 +922,9 @@ returns (nodes, StopCause) — the caller interprets the ending.
 - The standard inventory mirrors pylatexenc's parser library: the group parser,
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,
-  verbatim, terminated — content up to a marked character sequence, read under the
-  argument's own state with the terminator as the expected group close
-  [§dd-dr:terminated-argument]), `EnvironmentBodyParser`, `ExpressionParser` — the
+  verbatim, terminated (content ended by a terminator string, read under the
+  argument's own state with the terminator as the expected group close,
+  [§dd-dr:terminated-argument])), `EnvironmentBodyParser`, `ExpressionParser` — the
   parity survey and its per-parser decisions: [§dd-dr:parity-gap-list],
   [§dd-dr:parity-parsers]. (No
   `CommentParser`: whole-comment tokens made it vestigial.) An argument parser owns

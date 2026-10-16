@@ -304,7 +304,8 @@ traits: a blanket implementation covers every `Lang` whose declaration
 makes the feature present, so each exists purely as a bound. The bounds a
 language author actually encounters, and why each holds:
 
-- **Verbatim parsing and the group-minting argument parsers require
+- **Verbatim parsing, terminated arguments, and the argument parsers that
+  add temporary group rules require
   [`LangHasGroups`](crate::core::LangHasGroups).** A verbatim region's
   terminator is a group rule matched by the group-close machinery
   ([`verbatim_state_delta`](crate::core::constructs::verbatim_state_delta),
@@ -312,7 +313,7 @@ language author actually encounters, and why each holds:
   [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser)), and so
   is the terminator of an argument that runs up to a fixed character sequence
   ([`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser)).
-  The argument parsers that recognize per-use delimiters by minting
+  The argument parsers that recognize per-use delimiters by adding
   temporary group rules (bracketed optional arguments, for instance) write
   group data. All of these are built out of the group feature.
 - **Scope mutation requires

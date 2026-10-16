@@ -178,13 +178,18 @@ impl fmt::Display for MissingArgumentTerminator {
 ///   `\phf a{b\endphf}c\endphf` ends at the second `\endphf`. Likewise, an argument of
 ///   the same kind inside the content expects its own terminator, so such arguments
 ///   nest: in `\phf a \phf b\endphf c\endphf`, the first `\endphf` ends the inner one.
+///   In the other direction, inside parsed content the closing `]` of an enclosing
+///   optional argument reads as an ordinary character, as it does inside a brace
+///   group: in `\foo[\phf a]b\endphf]`, the content is `a]b`.
 /// - The terminator is matched literally, character for character, and wherever its
 ///   characters appear, even at the start of a longer word: `\endphfoo` ends a
 ///   `\endphf` argument and leaves `oo` as the content that follows. In the same way,
 ///   a run of three backticks ends a code span opened with two at its first two
 ///   backticks, and the third follows the argument. (CommonMark instead requires a
 ///   closing run of exactly the opening length; that rule is not implemented.)
-/// - No whitespace is allowed inside the terminator.
+/// - A terminator that starts with a whitespace character is never found in content
+///   read with whitespace scanning on, because the reader skips whitespace before it
+///   looks for the terminator.
 /// - Nothing is removed from the content. In a code span the spaces next to the
 ///   backticks are content, and trimming them is up to the code that reads the tree.
 /// - The content is read under a parsing state of its own, so the parser needs a token
@@ -633,6 +638,7 @@ impl<L: Lang> fmt::Debug for TerminatedArgumentParser<L> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{GroupArgumentParser, OptionalGroupArgumentParser};
     use super::*;
     use crate::constructs::tests::{relaxed_driver, RelaxedStdLang, RELAXED_MACRO};
     use crate::constructs::ImplementationError;
@@ -652,6 +658,7 @@ mod tests {
 
     const GT_BRACE: u32 = 0;
     const GT_TERM: u32 = 1;
+    const GT_OPTION: u32 = 2;
     const CT_MACRO: u32 = 10;
 
     /// A compact test language over the standard reader, obeying span tiling (the
@@ -1043,6 +1050,11 @@ mod tests {
         let result = parse(&plus_run_language(Recovery::Tolerant), r"\c a");
         let condition: ExpectedArgumentOpener = only_condition(&result);
         assert_eq!(condition.expected, "+");
+        // Anchored at the argument's start, where the run was expected.
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().span().range(),
+            3..3
+        );
         let c = root_child(&result, 0);
         assert!(!c.arguments().unwrap().get(0).unwrap().is_provided());
         // Nothing consumed: what follows the trigger (whose own token took the space
@@ -1145,6 +1157,93 @@ mod tests {
         assert_eq!(root_child(&result, 1).chars(), Some("#"));
     }
 
+    /// `\q<<…>>` with parsed content, and `\two{…}<<…>>`, which reads a group argument
+    /// before the same argument.
+    fn angle_language(recovery: Recovery) -> Language<TermLang> {
+        let angles = || TerminatedArgumentParser::new(GT_TERM, ">>").with_opener("<<");
+        language(
+            vec![
+                ("q", vec![term_arg(angles(), false)]),
+                (
+                    "two",
+                    vec![
+                        ArgumentSpec::new_unnamed(GroupArgumentParser::new(GT_BRACE)),
+                        term_arg(angles(), false),
+                    ],
+                ),
+            ],
+            recovery,
+        )
+    }
+
+    #[test]
+    fn a_partly_matched_opener_is_rewound() {
+        let err = try_parse(&angle_language(Recovery::Strict), r"\q<x>>").unwrap_err();
+        assert_eq!(
+            err.identifier(),
+            ExpectedArgumentOpener::IDENTIFIER,
+            "{err}"
+        );
+
+        let result = parse(&angle_language(Recovery::Tolerant), r"\q<x>>");
+        let condition: ExpectedArgumentOpener = only_condition(&result);
+        assert_eq!(condition.expected, "<<");
+        // Anchored at the first character that does not match the opener.
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().span().range(),
+            3..4
+        );
+        let q = root_child(&result, 0);
+        assert!(!q.arguments().unwrap().get(0).unwrap().is_provided());
+        // The matched `<` is given back with the rest.
+        assert_eq!(root_child(&result, 1).chars(), Some("<x>>"));
+    }
+
+    #[test]
+    fn nothing_is_skipped_before_a_non_empty_prefix() {
+        // The space follows a group argument, not a command name, so no token before
+        // the argument owns it: the opener is expected exactly there.
+        let result = parse(&angle_language(Recovery::Tolerant), r"\two{a} <<b>>");
+        let condition: ExpectedArgumentOpener = only_condition(&result);
+        assert_eq!(condition.expected, "<<");
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().span().range(),
+            7..8
+        );
+        let two = root_child(&result, 0);
+        let arguments = two.arguments().unwrap();
+        assert!(arguments.get(0).unwrap().is_provided());
+        assert!(!arguments.get(1).unwrap().is_provided());
+        assert_eq!(root_child(&result, 1).chars(), Some(" <<b>>"));
+
+        // Adjacent to the group argument, the same argument is read.
+        let result = parse(&angle_language(Recovery::Strict), r"\two{a}<<b>>");
+        let two = root_child(&result, 0);
+        assert_eq!(
+            two.argument_content_nodes(1).unwrap().source_text(),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn empty_content_stages_a_group_without_children() {
+        let result = parse(&angle_language(Recovery::Strict), r"\q<<>>");
+        assert!(result.diagnostics.is_empty());
+        let q = root_child(&result, 0);
+        let group = arg_group(q);
+        assert_eq!(group.group_delimiters(), Some(("<<", ">>")));
+        assert_eq!(group.children().len(), 0);
+        assert!(arg_content(q).is_empty());
+
+        let result = parse(&rust_raw_language(Recovery::Strict), r#"\r"""#);
+        assert!(result.diagnostics.is_empty());
+        let r = root_child(&result, 0);
+        let group = arg_group(r);
+        assert_eq!(group.group_delimiters(), Some(("\"", "\"")));
+        assert_eq!(group.children().len(), 0);
+        assert!(arg_content(r).is_empty());
+    }
+
     #[test]
     fn a_head_a_run_and_a_tail_read_a_lua_long_string() {
         let lang = language(
@@ -1242,6 +1341,51 @@ mod tests {
         assert_eq!(root_child(&result, 1).chars(), Some(" d"));
     }
 
+    #[test]
+    fn an_enclosing_optional_arguments_close_is_ordinary_content() {
+        // Installing the terminator as the expected close ends the option's temporary
+        // `[`…`]` rule for the content, as entering a group does.
+        let option_rule = Arc::new(GroupRule {
+            group_type: GT_OPTION,
+            open: "[".into(),
+            close: "]".into(),
+        });
+        let lang = language(
+            vec![
+                (
+                    "m",
+                    vec![term_arg(
+                        TerminatedArgumentParser::new(GT_TERM, r"\endm"),
+                        false,
+                    )],
+                ),
+                (
+                    "foo",
+                    vec![
+                        ArgumentSpec::new_unnamed(OptionalGroupArgumentParser::new(option_rule)),
+                        ArgumentSpec::new_unnamed(GroupArgumentParser::new(GT_BRACE)),
+                    ],
+                ),
+            ],
+            Recovery::Strict,
+        );
+        let result = parse(&lang, r"\foo[\m a]b\endm]{x}");
+        assert!(result.diagnostics.is_empty());
+        let foo = root_child(&result, 0);
+        let option: Vec<_> = foo.argument_content_nodes(0).unwrap().iter().collect();
+        assert_eq!(option.len(), 1);
+        assert_eq!(option[0].name(), Some("m"));
+        assert_eq!(arg_text(option[0]), "a]b");
+        // The `]` after the terminator closes the option.
+        let option_group = foo.argument_nodes(0).unwrap().iter().next_back().unwrap();
+        assert_eq!(option_group.group_delimiters(), Some(("[", "]")));
+        assert_eq!(
+            foo.argument_content_nodes(1).unwrap().source_text(),
+            Some("x")
+        );
+        assert!(result.tree.root().child(1).is_none());
+    }
+
     // --- recovery --------------------------------------------------------------------
 
     #[test]
@@ -1272,6 +1416,64 @@ mod tests {
         let m = root_child(&result, 0);
         assert_eq!(arg_group(m).group_delimiters(), Some(("", "")));
         assert_eq!(arg_text(m), "abc");
+    }
+
+    #[test]
+    fn the_end_of_input_diagnostic_points_at_the_prefix() {
+        let result = parse(&rust_raw_language(Recovery::Tolerant), r###"\r##"abc"###);
+        let condition: MissingArgumentTerminator = only_condition(&result);
+        assert_eq!(condition.terminator, "\"##");
+        assert_eq!(condition.found, MissingTerminatorFound::EndOfInput);
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().span().range(),
+            2..5
+        );
+        let r = root_child(&result, 0);
+        assert_eq!(arg_group(r).group_delimiters(), Some(("##\"", "")));
+        assert_eq!(arg_text(r), "abc");
+    }
+
+    #[test]
+    fn inside_an_enclosing_group_a_stray_close_ends_the_argument() {
+        let lang = |recovery| {
+            language(
+                vec![(
+                    "m",
+                    vec![term_arg(
+                        TerminatedArgumentParser::new(GT_TERM, r"\endm"),
+                        false,
+                    )],
+                )],
+                recovery,
+            )
+        };
+        let err = try_parse(&lang(Recovery::Strict), r"{\m a}b").unwrap_err();
+        assert_eq!(
+            err.identifier(),
+            MissingArgumentTerminator::IDENTIFIER,
+            "{err}"
+        );
+        assert!(
+            err.to_string()
+                .contains(r"missing terminator ‘\endm’ of the argument"),
+            "{err}"
+        );
+
+        // Tolerant: one diagnostic, at the `}`; the `}` is left for the enclosing group,
+        // which it closes.
+        let result = parse(&lang(Recovery::Tolerant), r"{\m a}b");
+        let condition: MissingArgumentTerminator = only_condition(&result);
+        assert_eq!(condition.found, MissingTerminatorFound::StrayGroupClose);
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().span().range(),
+            5..6
+        );
+        let braces = root_child(&result, 0);
+        assert_eq!(braces.group_delimiters(), Some(("{", "}")));
+        let m = braces.child(0).unwrap();
+        assert_eq!(arg_group(m).group_delimiters(), Some(("", "")));
+        assert_eq!(arg_text(m), "a");
+        assert_eq!(root_child(&result, 1).chars(), Some("b"));
     }
 
     #[test]
@@ -1399,5 +1601,68 @@ mod tests {
             .collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].chars(), Some("a b"));
+    }
+
+    // --- the motivating case: a code span behind a specials trigger ------------------
+
+    #[test]
+    fn a_code_span_behind_a_specials_trigger_in_the_latexlike_preset() {
+        use crate::latexlike::{
+            check_latexlike_tree_invariants, CallableType, GroupType, Latexlike, LatexlikeDriver,
+            SpecialsSpec,
+        };
+
+        // The trigger reads the first backtick; the argument counts the others.
+        let mut package: Package<Latexlike> = Package::new("code-spans");
+        package.insert_specials(
+            CallableType::Specials,
+            "`",
+            SpecialsSpec::new(vec![Arc::new(
+                ArgumentSpec::new(
+                    TerminatedArgumentParser::new(GroupType::Verbatim, "`").with_repeat_char('`'),
+                    "code",
+                )
+                .with_state_delta(
+                    ParsingStateDelta::new().rules(TokenRulesOverrides::disable_all()),
+                ),
+            )]),
+        );
+        let language: Language<Latexlike> = Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
+        );
+        let parse = |input: &str| {
+            let result = language.parse(input).expect("parse");
+            check_latexlike_tree_invariants(&result.tree);
+            assert!(result.diagnostics.is_empty());
+            result
+        };
+
+        let result = parse("`x`");
+        let span = result.tree.root().child(0).unwrap();
+        assert_eq!(
+            span.argument_content_nodes(0).unwrap().source_text(),
+            Some("x")
+        );
+
+        let result = parse("``y`z``");
+        let span = result.tree.root().child(0).unwrap();
+        assert_eq!(
+            span.argument_content_nodes(0).unwrap().source_text(),
+            Some("y`z")
+        );
+        let group = span.argument_nodes(0).unwrap().get(0).unwrap();
+        assert_eq!(group.group_delimiters(), Some(("`", "``")));
+
+        // Inside braces, a `}` is code-span content; the braces close after the span.
+        let result = parse("{`}`}x");
+        let braces = result.tree.root().child(0).unwrap();
+        assert_eq!(braces.group_delimiters(), Some(("{", "}")));
+        let span = braces.child(0).unwrap();
+        assert_eq!(
+            span.argument_content_nodes(0).unwrap().source_text(),
+            Some("}")
+        );
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("x"));
     }
 }

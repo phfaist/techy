@@ -6275,7 +6275,7 @@ separate decision; or a filter policy genuinely needs per-op provenance in the r
 report their records honestly, at which point the reported field pair is what to
 re-examine.
 
-#### Terminated arguments: content up to a marked character sequence [§dd-dr:terminated-argument]
+#### Terminated arguments: content ended by a terminator string [§dd-dr:terminated-argument]
 
 Status: DECIDED (user, request from the flm-rs frontend).
 
@@ -6317,35 +6317,28 @@ Points settled:
   "closing run of exactly N" rule is deliberately not implemented — it needs lookahead past
   the expected close, which the reader does not offer. The cost is accepted and documented.
 - *Nested groups hide the terminator* under a parsed state (`{…}` expects its own close),
-  and nested terminated arguments nest naturally, each installing its own close. The stop
-  token makes no node.
-- *Node shape*: one `Group` of the configured class; open = the prefix as written (empty
-  for an empty prefix; owned text when `OBEYS_SPAN_TILING = false`, where a span over
-  several tokens only describes them — [§dd-dr:span-tiling]), close = the terminator as
-  written, children = the content nodes, content = the group's children. The group records
-  the argument's state, the content nodes the content state (the verbatim-family
-  convention).
-- *Conditions and recovery*: `ExpectedArgumentOpener { expected }`
-  (`core.arguments.expected-opener`) when the opener does not follow the run, or when the
-  run is the whole terminator and has no copy — argument absent, nothing consumed.
-  `MissingArgumentTerminator { terminator, found }` (`core.arguments.missing-terminator`)
-  reuses `MissingTerminatorFound`; only `EndOfInput` and `StrayGroupClose` arise, since the
-  content loop absorbs unreadable tokens itself. Content kept, close recorded empty, a stray
-  close left unconsumed for the enclosing level ([§dd-dr:terminator-mismatch-recovery]).
-  The two unusable configurations — an always-empty terminator, an opener starting with the
-  repeat character — are implementation errors when the parser runs
-  ([§dd-dr:panic-policy]).
+  and nested terminated arguments nest naturally, each installing its own close. Installing
+  the close also ends an enclosing optional argument's temporary rules for the content, as
+  a group descent does ([§dd-dr:temporary-group-rules]). The stop token makes no node.
+- *Node shape*: the `\verb` shape of [§dd-dr:verbatim-family] — one `Group` whose
+  delimiters are the prefix and the terminator as written, its children the content — so
+  no new node form is introduced.
+- *Recovery reuses the existing rules*: a missing terminator closes the group where the
+  reading stopped and leaves a stray close unconsumed
+  ([§dd-dr:terminator-mismatch-recovery]), with `MissingTerminatorFound` shared with the
+  environment condition rather than duplicated.
 
-Rejected alternatives: *a specials provider pushed by the parser for the terminator* —
-four flaws: the specials definition stays in scope inside nested groups and tokenizes there
-as an invocation, breaking the hiding rule above; it never fires under a raw state, since
-one gate covers all specials; a package built at parse time cannot stamp its specs, so the
-resulting nodes could not be serialized; and it makes a node where the expected close makes
-none. *A tokenizer-level test of the expected close before whitespace skipping* (to keep
-the separator) — a reader special case changing when every expected close, group closes
-included, is recognized, for one parser's benefit. *Splitting a trailing-space node off at
-node granularity* (a parser-side trim) — it would build one trimming policy into the tree
-shape for every language using the parser, where the trim belongs to the consumer.
+Rejected alternatives: *a specials provider pushed by the parser for the terminator* — a
+specials pushed as a provider stays in scope inside nested groups and tokenizes there as an
+invocation, so a `{…}` could not hide the terminator (it would also never fire under a raw
+state, could not be serialized, and would make a node). *Testing the expected close before
+whitespace skipping* (to keep the separator) — the standard reader skips whitespace before
+it tests the expected close, so a close starting with whitespace can never match under a
+whitespace-enabled state, and a special case there would be a tokenizer rule driven by one
+consumer. *Splitting a trailing space off the content* (a parser-side trim) — content is
+designated by whole-node ranges (`ContentNodes`), and under a raw state the content is one
+`Chars` node, so a trailing space cannot be designated out without a custom read loop;
+CommonMark's trim is post-processing anyway, so the consumer trims.
 
 Revisit if: a consumer needs the exact-run closer or a whitespace-led terminator (both
 point at reader support for the expected close, not at this parser); or a preset argument
