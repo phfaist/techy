@@ -6314,8 +6314,9 @@ Points settled:
   consumer's (one space each side); the parser never strips anything.
 - *The match is literal and a prefix match*: `\endphfoo` ends a `\endphf` argument and
   leaves `oo`; a three-backtick run ends a two-backtick span at its first two. CommonMark's
-  "closing run of exactly N" rule is deliberately not implemented — it needs lookahead past
-  the expected close, which the reader does not offer. The cost is accepted and documented.
+  "closing run of exactly N" rule is deliberately not implemented — it would need the
+  parser to look past every matched close and resume the content loop when the run
+  continues, which the frontends in view do not need. The cost is accepted and documented.
 - *Nested groups hide the terminator* under a parsed state (`{…}` expects its own close),
   and nested terminated arguments nest naturally, each installing its own close. Installing
   the close also ends an enclosing optional argument's temporary rules for the content, as
@@ -6340,9 +6341,10 @@ designated by whole-node ranges (`ContentNodes`), and under a raw state the cont
 `Chars` node, so a trailing space cannot be designated out without a custom read loop;
 CommonMark's trim is post-processing anyway, so the consumer trims.
 
-Revisit if: a consumer needs the exact-run closer or a whitespace-led terminator (both
-point at reader support for the expected close, not at this parser); or a preset argument
-code for this parser is wanted (the latexlike code table has none yet).
+Revisit if: a consumer needs the exact-run closer (a parser-side look past the close plus
+a resumed content loop) or a whitespace-led terminator (reader support for the expected
+close); or a preset argument code for this parser is wanted (the latexlike code table has
+none yet).
 
 ## Generics strategy [§dd-dr:generics]
 
