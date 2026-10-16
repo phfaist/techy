@@ -191,7 +191,10 @@ requirement: each code resolves to a configured argument parser
 [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s from those parser types
 directly — that is also how per-argument parsing-state deltas are attached
 (a `\text`-style argument that leaves math mode, for instance; see the
-[`ArgumentSpec`](crate::core::specs::ArgumentSpec) documentation).
+[`ArgumentSpec`](crate::core::specs::ArgumentSpec) documentation), and how
+the parsers that no code selects are reached, such as
+[`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser)
+for an argument that runs up to a fixed string (`\phf … \endphf`).
 
 ## Scoped and body-scoped definitions
 

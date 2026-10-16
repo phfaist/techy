@@ -54,6 +54,7 @@ mod root_parser;
 #[cfg(test)]
 mod span_tiling_tests;
 mod tack_on_parser;
+mod terminated_parser;
 mod verbatim_parser;
 
 pub use argument_parsers::{
@@ -86,6 +87,9 @@ pub use nodes_parser::{
     UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
 pub use root_parser::RootNodesParser;
+pub use terminated_parser::{
+    ExpectedArgumentOpener, MissingArgumentTerminator, TerminatedArgumentParser,
+};
 pub use verbatim_parser::{
     verbatim_state_delta, ExpectedVerbatimDelimiter, UnterminatedVerbatim,
     VerbatimArgumentParser, VerbatimBodyParser, VerbatimBodyTerminator,

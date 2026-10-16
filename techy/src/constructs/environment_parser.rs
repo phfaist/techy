@@ -67,24 +67,29 @@ pub struct MissingEnvironmentTerminator {
     pub found: MissingTerminatorFound,
 }
 
-/// What ended a body whose terminator never appeared ([`MissingEnvironmentTerminator`]).
+/// What ended an environment body or an argument whose terminator never appeared
+/// ([`MissingEnvironmentTerminator`],
+/// [`MissingArgumentTerminator`](super::MissingArgumentTerminator)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum MissingTerminatorFound {
-    /// The input ended inside the body.
+    /// The input ended before the terminator appeared.
     EndOfInput,
-    /// A group close delimiter appeared that nothing at the body's level had opened.
-    /// The body closes without consuming it, leaving it for an enclosing level to
-    /// claim.
+    /// A group close delimiter appeared that nothing inside the body or argument had
+    /// opened. The body or argument closes without consuming it, leaving it for an
+    /// enclosing level to claim.
     StrayGroupClose,
-    /// The body ended at a token the reader could not read and the driver tolerated.
-    /// The input has *not* ended: the body closes where the reading stopped, and the
-    /// enclosing content loop re-reads the failing token and applies its own token
-    /// recovery to it.
+    /// The reading stopped at a token the reader could not read and the driver
+    /// tolerated. The input has *not* ended: the body closes where the reading
+    /// stopped, and the enclosing content loop re-reads the failing token and applies
+    /// its own token recovery to it.
     ///
     /// Only a raw body ([`VerbatimBodyParser`](super::VerbatimBodyParser)) reports
     /// this, and only when the embedder supplies its own token reader: the standard
     /// reader has nothing left to reject under the raw-reading state.
+    /// [`TerminatedArgumentParser`](super::TerminatedArgumentParser) never reports
+    /// it, since its content is read by the standard content loop, which recovers
+    /// from such a token itself.
     UnreadableToken,
 }
 

@@ -14,10 +14,11 @@
 //!
 //! An argument is a parser too: [`ArgumentParser`] returns
 //! [`ParsedArgumentNodes`], and the standard argument forms — delimited group,
-//! optional group, chars group, literal marker, verbatim, embellishments, tack-on
-//! fields — are shipped as ordinary parsers you configure with the group types and
-//! rules they should use. Each parser's diagnostic conditions are documented next
-//! to the parser that raises them.
+//! optional group, chars group, literal marker, verbatim, content up to a terminator
+//! ([`TerminatedArgumentParser`]), embellishments, tack-on fields — are shipped as
+//! ordinary parsers you configure with the group types and rules they should use.
+//! Each parser's diagnostic conditions are documented next to the parser that raises
+//! them.
 //!
 //! [Writing a construct parser](crate::guide::construct_parsers) introduces the job
 //! from scratch, and [the parsing model](crate::guide::parsing_model) shows where
@@ -71,18 +72,20 @@ pub use crate::constructs::{
     DescentLimitApproaching, DescentLimitExceeded,
     EmbellishmentsArgumentParser, EnvironmentBeginSyntaxData, EnvironmentBody,
     EnvironmentBodyParser, EnvironmentTerminatorMismatch, EnvironmentTerminatorSyntaxData,
-    ExpectedExpressionArgument, ExpectedVerbatimDelimiter,
+    ExpectedArgumentOpener, ExpectedExpressionArgument, ExpectedVerbatimDelimiter,
     ExpressionCallableRequiresContent, ExpressionParser, FromInvocation,
     GroupAfterEffectsFn, GroupArgumentParser, GroupChildState, GroupParser,
     ImplementationError, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
     InvocationChildState,
-    MalformedEnvironmentTerminator, MarkerArgumentParser, MissingEnvironmentTerminator,
+    MalformedEnvironmentTerminator, MarkerArgumentParser, MissingArgumentTerminator,
+    MissingEnvironmentTerminator,
     MissingMandatoryArgument, MissingTerminatorFound, NameGroup, NoSourceResolver,
     NodesOutcome, NodesParser,
     OptionalGroupArgumentParser, ParseContext, PlainCharsError, RepeatedTackOnField,
     RootNodesParser,
     ScopeOpFailed,
     StdInvocationParser, StopCause, StopSpec, StrayGroupClose, TackOnFieldsArgumentParser,
+    TerminatedArgumentParser,
     TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound,
     UnresolvableCommand, UnresolvableSourceReference, UnterminatedVerbatim,
     UnusableRecoveryToken, UnusableRecoveryTokenKind, VerbatimArgumentParser,

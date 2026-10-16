@@ -309,10 +309,12 @@ language author actually encounters, and why each holds:
   terminator is a group rule matched by the group-close machinery
   ([`verbatim_state_delta`](crate::core::constructs::verbatim_state_delta),
   [`VerbatimArgumentParser`](crate::core::constructs::VerbatimArgumentParser),
-  [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser)), and
-  the argument parsers that recognize per-use delimiters by minting
+  [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser)), and so
+  is the terminator of an argument that runs up to a fixed character sequence
+  ([`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser)).
+  The argument parsers that recognize per-use delimiters by minting
   temporary group rules (bracketed optional arguments, for instance) write
-  group data — both are built out of the group feature.
+  group data. All of these are built out of the group feature.
 - **Scope mutation requires
   [`LangHasScopes`](crate::core::LangHasScopes).**
   [`ScopeStack::push`](crate::core::specs::ScopeStack::push), the delta

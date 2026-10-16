@@ -105,7 +105,8 @@ impl<L: Lang> fmt::Debug for ParsedArgumentNodes<L> {
 /// [`GroupArgumentParser`](crate::core::constructs::GroupArgumentParser),
 /// [`OptionalGroupArgumentParser`](crate::core::constructs::OptionalGroupArgumentParser),
 /// [`MarkerArgumentParser`](crate::core::constructs::MarkerArgumentParser),
-/// [`ExpressionParser`](crate::core::constructs::ExpressionParser). An
+/// [`ExpressionParser`](crate::core::constructs::ExpressionParser),
+/// [`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser). An
 /// [`ArgumentSpec`] pairs one of them with the argument's name and state delta.
 ///
 /// The entry point is [`parse_argument`](ArgumentParser::parse_argument). An

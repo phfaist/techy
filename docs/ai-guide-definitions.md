@@ -100,7 +100,12 @@ value ([`GroupArgumentParser`](crate::core::constructs::GroupArgumentParser),
 [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s — that is also how
 per-argument parsing-state deltas are attached (a `\text`-style argument
 that restores the enclosing non-math context: recipe on
-[`Event::ExitMathContext`](crate::latexlike::Event)).
+[`Event::ExitMathContext`](crate::latexlike::Event)), and how parsers that
+no code selects are reached — e.g.
+[`TerminatedArgumentParser`](crate::core::constructs::TerminatedArgumentParser)
+for content up to a fixed terminator (`\phf … \endphf`, code spans, raw
+strings; raw vs parsed is the argument spec's state delta, e.g.
+`TokenRulesOverrides::disable_all()`).
 
 ## Spec types
 
