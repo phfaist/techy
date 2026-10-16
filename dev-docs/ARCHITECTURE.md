@@ -922,8 +922,11 @@ returns (nodes, StopCause) — the caller interprets the ending.
 - The standard inventory mirrors pylatexenc's parser library: the group parser,
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,
-  verbatim), `EnvironmentBodyParser`, `ExpressionParser` — the parity survey and its
-  per-parser decisions: [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers]. (No
+  verbatim, terminated — content up to a marked character sequence, read under the
+  argument's own state with the terminator as the expected group close
+  [§dd-dr:terminated-argument]), `EnvironmentBodyParser`, `ExpressionParser` — the
+  parity survey and its per-parser decisions: [§dd-dr:parity-gap-list],
+  [§dd-dr:parity-parsers]. (No
   `CommentParser`: whole-comment tokens made it vestigial.) An argument parser owns
   its region's leading whitespace and comments (the shared `scan_argument_noise`
   step), which is what lets the group parsers' `require_adjacent()` opt-in decline
@@ -940,7 +943,7 @@ Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:p
 [§dd-dr:parse-scoped], [§dd-dr:descent-guard] (the `parse_construct` funnel, the
 guard, the boxed pass-through delta), [§dd-dr:emptiness-surface],
 [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers], [§dd-dr:expression-fallback],
-[§dd-dr:argument-adjacency].
+[§dd-dr:argument-adjacency], [§dd-dr:terminated-argument].
 
 ## Engine and sessions [§dd-arch:engine]
 

@@ -6275,6 +6275,82 @@ separate decision; or a filter policy genuinely needs per-op provenance in the r
 report their records honestly, at which point the reported field pair is what to
 re-examine.
 
+#### Terminated arguments: content up to a marked character sequence [§dd-dr:terminated-argument]
+
+Status: DECIDED (user, request from the flm-rs frontend).
+
+`TerminatedArgumentParser` parses a mandatory argument written *prefix, content,
+terminator*: the prefix is a greedy run of N ≥ 0 copies of an optional repeat character
+followed by a fixed opener (empty by default); the terminator is a fixed head, the same N
+copies, and a fixed tail. One parser covers `\phf … \endphf`, a code span behind a `` ` ``
+specials trigger, `\verbcode++…++`, Rust raw strings `##"…"##`, Lua long strings and
+`<<…>>`. The decisive choice is the mechanism: **the terminator is installed as the content
+state's expected group close**, and the content is read by the ordinary content loop with a
+`GroupClose { group_type, close: terminator }` stop condition — the `GroupParser` interior
+shape ([§dd-dr:stop-conditions]) and the verbatim parsers' terminator carrier
+([§dd-dr:verbatim-family]). The standard reader tests the expected close right after
+whitespace, before groups, commands, comments and specials, regardless of the groups gate;
+every group descent replaces the expectation with the entered rule's close.
+
+Points settled:
+
+- *Raw or parsed content is the argument's state, never the parser's.* `cx.state` in
+  `parse_argument` already is the argument's state (the spec's `parsing_state_delta`,
+  applied by `parse_declared_arguments`), so the parser's own content delta sets only
+  `expecting_close`. A raw argument is the spec-side
+  `ParsingStateDelta::new().rules(TokenRulesOverrides::disable_all())`, which composes
+  because the expected close ignores the groups gate. No raw/parsed flag on the parser.
+- *Nothing is skipped before the prefix* — no `scan_argument_noise`, no adjacency peek:
+  with an empty prefix there is nothing to skip to, and a leading space can be content
+  (`` ` x` ``). The prefix is read under a probe state with every feature off **including
+  whitespace** (unlike the verbatim delimiter probe, which keeps it on), the inherited close
+  cleared (a `}` prefix character inside braces) and the forbidden set cleared (a probe must
+  not reject what the enclosing loop accepts).
+- *The separator was dropped.* A configurable separator inside the delimiters (CommonMark's
+  `` ` x ` ``) cannot work: the standard reader skips whitespace *before* testing the
+  expected close, so a close beginning with a space never matches under a
+  whitespace-enabled state, and only a tokenizer special case could change that (rejected
+  below). CommonMark's one-space trim is post-processing anyway, so trimming is the
+  consumer's (one space each side); the parser never strips anything.
+- *The match is literal and a prefix match*: `\endphfoo` ends a `\endphf` argument and
+  leaves `oo`; a three-backtick run ends a two-backtick span at its first two. CommonMark's
+  "closing run of exactly N" rule is deliberately not implemented — it needs lookahead past
+  the expected close, which the reader does not offer. The cost is accepted and documented.
+- *Nested groups hide the terminator* under a parsed state (`{…}` expects its own close),
+  and nested terminated arguments nest naturally, each installing its own close. The stop
+  token makes no node.
+- *Node shape*: one `Group` of the configured class; open = the prefix as written (empty
+  for an empty prefix; owned text when `OBEYS_SPAN_TILING = false`, where a span over
+  several tokens only describes them — [§dd-dr:span-tiling]), close = the terminator as
+  written, children = the content nodes, content = the group's children. The group records
+  the argument's state, the content nodes the content state (the verbatim-family
+  convention).
+- *Conditions and recovery*: `ExpectedArgumentOpener { expected }`
+  (`core.arguments.expected-opener`) when the opener does not follow the run, or when the
+  run is the whole terminator and has no copy — argument absent, nothing consumed.
+  `MissingArgumentTerminator { terminator, found }` (`core.arguments.missing-terminator`)
+  reuses `MissingTerminatorFound`; only `EndOfInput` and `StrayGroupClose` arise, since the
+  content loop absorbs unreadable tokens itself. Content kept, close recorded empty, a stray
+  close left unconsumed for the enclosing level ([§dd-dr:terminator-mismatch-recovery]).
+  The two unusable configurations — an always-empty terminator, an opener starting with the
+  repeat character — are implementation errors when the parser runs
+  ([§dd-dr:panic-policy]).
+
+Rejected alternatives: *a specials provider pushed by the parser for the terminator* —
+four flaws: the specials definition stays in scope inside nested groups and tokenizes there
+as an invocation, breaking the hiding rule above; it never fires under a raw state, since
+one gate covers all specials; a package built at parse time cannot stamp its specs, so the
+resulting nodes could not be serialized; and it makes a node where the expected close makes
+none. *A tokenizer-level test of the expected close before whitespace skipping* (to keep
+the separator) — a reader special case changing when every expected close, group closes
+included, is recognized, for one parser's benefit. *Splitting a trailing-space node off at
+node granularity* (a parser-side trim) — it would build one trimming policy into the tree
+shape for every language using the parser, where the trim belongs to the consumer.
+
+Revisit if: a consumer needs the exact-run closer or a whitespace-led terminator (both
+point at reader support for the expected close, not at this parser); or a preset argument
+code for this parser is wanted (the latexlike code table has none yet).
+
 ## Generics strategy [§dd-dr:generics]
 
 #### Defer `Rc`/`Arc` genericity [§dd-dr:defer-rc-arc]
