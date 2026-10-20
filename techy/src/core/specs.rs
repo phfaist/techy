@@ -62,8 +62,9 @@
 //!
 //! A common registration mistake is to register a command name *with* its escape
 //! character (`"\\greet"` instead of `"greet"`), which makes the definition
-//! unreachable. [`check_provider_commands_shadowed_by_escape`] warns about it at parse
-//! initialization ([`ProviderCommandsShadowedByEscape`]).
+//! unreachable. [`check_provider_commands_shadowed_by_escape`] warns about it
+//! ([`ProviderCommandsShadowedByEscape`]); no parse runs it, so call it once on the
+//! providers you have built.
 //!
 //! # Changing definitions during a parse
 //!

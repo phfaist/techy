@@ -510,8 +510,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///
     /// The latexlike driver delegates to
     /// [`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
-    /// which for the shipped preset runs the all-escape-shadowed provider check
-    /// ([`check_provider_commands_shadowed_by_escape`](crate::core::specs::check_provider_commands_shadowed_by_escape)).
+    /// which checks nothing for the shipped preset.
     ///
     /// Attached-source sub-parses
     /// ([`parse_attached_source`](crate::core::constructs::ParseContext::parse_attached_source))
@@ -1113,8 +1112,8 @@ pub enum CommandResolution<L: Lang> {
 /// called out explicitly, and small-edit-distance names are suggested. Providers
 /// that cannot enumerate are skipped, and an in-stack fallback provider makes
 /// resolution *succeed*, so the miss path — hints included — never runs there
-/// (accepted limitation; the parse-initialization check
-/// `check_provider_commands_shadowed_by_escape` fires regardless of fallbacks).
+/// (accepted limitation; the check `check_provider_commands_shadowed_by_escape`,
+/// run once on the built providers, fires regardless of fallbacks).
 pub fn resolve_command_in_scopes<L: Lang>(
     state: &ParsingState<L>,
     token: &Token<L>,

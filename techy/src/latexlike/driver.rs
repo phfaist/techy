@@ -475,9 +475,8 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     }
 
     /// Runs the language's start-of-parse checks,
-    /// [`LatexlikeLang::check_parse_start`]. For [`Latexlike`](super::Latexlike),
-    /// that is the warning about a provider whose commands no escape character in
-    /// force can reach.
+    /// [`LatexlikeLang::check_parse_start`]. [`Latexlike`](super::Latexlike) runs
+    /// none.
     fn observe_parse_start(
         &self,
         source: &Arc<Source<LLL::SourceOrigin>>,

@@ -537,19 +537,8 @@ impl Lang for Latexlike {
 
 /// [`Latexlike`] opts into its own language family: its vocabularies are the
 /// preset enums (which implement the role traits), and every [`LatexlikeLang`]
-/// behavior default is exactly the preset behavior — except the
-/// parse-initialization checks, wired here unconditionally (the preset
-/// vocabularies are enumerable, so the check function's
-/// [`ClosedVocabulary`] bounds hold).
-impl LatexlikeLang for Latexlike {
-    fn check_parse_start(
-        source: &Arc<crate::source::Source<Option<String>>>,
-        seed: &Arc<ParsingState<Self>>,
-        diagnostics: &mut crate::error::Diagnostics<Option<String>>,
-    ) {
-        crate::scopes::check_provider_commands_shadowed_by_escape(seed, source, diagnostics);
-    }
-}
+/// behavior default is exactly the preset behavior.
+impl LatexlikeLang for Latexlike {}
 
 /// The preset's canonical [`TokenRules`]: `\` + letters commands (single non-letter
 /// characters form single-character commands like `\&` by the tokenizer's standard
@@ -953,9 +942,8 @@ mod tests {
         );
         let language = test_support::with_package(crate::error::Recovery::Tolerant, package);
         let result = language.parse(r"\greet x").unwrap();
-        // Both defenses fire: the parse-init warning (every mydefs definition is
-        // escape-shadowed) and the per-miss did-you-mean detail.
-        assert_eq!(result.diagnostics.len(), 2);
+        // The miss detail alone: no parse runs the escape-shadowing check.
+        assert_eq!(result.diagnostics.len(), 1);
         let message = result
             .diagnostics
             .with_identifier("core.specs.unresolvable-command")
@@ -968,19 +956,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_init_warns_when_all_of_a_providers_commands_are_escape_shadowed() {
-        use crate::scopes::ProviderCommandsShadowedByEscape;
+    fn escape_shadowing_check_runs_on_the_seed_state_not_at_parse_start() {
+        use crate::scopes::{
+            check_provider_commands_shadowed_by_escape, ProviderCommandsShadowedByEscape,
+        };
 
         // Every Macro definition of `mydefs` begins with the escape character: the
-        // A1 registration trap in bulk. The warning fires at parse initialization —
-        // on any input, even one that never invokes the definitions.
+        // A1 registration trap in bulk. A parse does not report it; the check, run
+        // once on the language's seed state, does — whatever the source.
         let mut package = Package::new("mydefs");
         package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
         package.insert(CallableType::Macro, r"\bye", Arc::new(super::MacroSpec::default()));
         let language = test_support::with_package(crate::error::Recovery::Strict, package);
         let result = language.parse("plain text").unwrap();
-        assert_eq!(result.diagnostics.len(), 1);
-        let diag = result.diagnostics.iter().next().unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let source = Arc::new(crate::source::Source::new("plain text"));
+        let mut diagnostics = crate::error::Diagnostics::new();
+        check_provider_commands_shadowed_by_escape(
+            language.initial_state(),
+            &source,
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.len(), 1);
+        let diag = diagnostics.iter().next().unwrap();
         assert_eq!(diag.severity(), Severity::Warning);
         assert_eq!(diag.identifier(), "core.specs.provider-commands-shadowed-by-escape");
         let condition =
@@ -998,8 +996,13 @@ mod tests {
         package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
         package.insert(CallableType::Macro, "hello", Arc::new(super::MacroSpec::default()));
         let language = test_support::with_package(crate::error::Recovery::Strict, package);
-        let result = language.parse("plain text").unwrap();
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let mut diagnostics = crate::error::Diagnostics::new();
+        check_provider_commands_shadowed_by_escape(
+            language.initial_state(),
+            &source,
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
@@ -1011,6 +1014,14 @@ mod tests {
         let mut package = Package::new("linebreaks");
         package.insert(CallableType::Macro, "\\", Arc::new(super::MacroSpec::default()));
         let language = test_support::with_package(crate::error::Recovery::Strict, package);
+        let source = Arc::new(crate::source::Source::new(r"a\\b"));
+        let mut diagnostics = crate::error::Diagnostics::new();
+        crate::scopes::check_provider_commands_shadowed_by_escape(
+            language.initial_state(),
+            &source,
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let result = language.parse(r"a\\b").unwrap();
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         let invocation = result.tree.root().child(1).unwrap();
@@ -1019,12 +1030,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_init_warning_fires_regardless_of_fallback_providers() {
-        use crate::scopes::{FallbackProvider, ScopeOp};
+    fn escape_shadowing_check_fires_regardless_of_fallback_providers() {
+        use crate::scopes::{check_provider_commands_shadowed_by_escape, FallbackProvider, ScopeOp};
 
         // A fallback provider makes every resolution SUCCEED, so the did-you-mean
-        // miss detail never runs — the init-time check is the defense that still
-        // fires (and the fallback itself, unable to enumerate, is skipped).
+        // miss detail never runs — the escape-shadowing check is the defense that
+        // still fires (and the fallback itself, unable to enumerate, is skipped).
         let mut package = Package::new("mydefs");
         package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
         let mut fallback = FallbackProvider::new("anymacro");
@@ -1041,8 +1052,16 @@ mod tests {
             seed,
         );
         let result = language.parse(r"\greet x").unwrap(); // resolves via the fallback
-        assert_eq!(result.diagnostics.len(), 1);
-        let diag = result.diagnostics.iter().next().unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let source = Arc::new(crate::source::Source::new(r"\greet x"));
+        let mut diagnostics = crate::error::Diagnostics::new();
+        check_provider_commands_shadowed_by_escape(
+            language.initial_state(),
+            &source,
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.len(), 1);
+        let diag = diagnostics.iter().next().unwrap();
         assert_eq!(diag.identifier(), "core.specs.provider-commands-shadowed-by-escape");
         assert_eq!(diag.severity(), Severity::Warning);
     }

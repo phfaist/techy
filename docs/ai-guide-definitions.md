@@ -211,7 +211,7 @@ All documented on the API items; all silent:
 
 | Trap | Fact | Defense |
 |---|---|---|
-| Escape character in a registered name | Command tokens carry the name *without* the escape character; registering `"\\emph"` instead of `"emph"` can never match — the definition is silently unreachable | The unresolved-command diagnostic suggests escape-prefixed near-misses; a parse-initialization check warns when *all* of a provider's commands are escape-shadowed. See [`Package::insert`](crate::core::specs::Package::insert) |
+| Escape character in a registered name | Command tokens carry the name *without* the escape character; registering `"\\emph"` instead of `"emph"` can never match — the definition is silently unreachable | The unresolved-command diagnostic suggests escape-prefixed near-misses; `check_provider_commands_shadowed_by_escape`, run once on the built providers (no parse runs it), warns when *all* of a provider's commands are escape-shadowed. See [`Package::insert`](crate::core::specs::Package::insert) |
 | `m` single-expression fallback | A missing `{…}` group is not diagnosed; the argument silently swallows whatever sibling expression follows | Use the word code `BracedOnly` where arguments are machine-written or config-like |
 | No spec-type/callable-type cross-check | [`insert`](crate::core::specs::Package::insert) accepts a macro-shaped spec under the environment type — deliberately legitimate (its arguments parse after `\begin{name}`, body takes default handling), so no error flags a *mistaken* pairing | Use the one-liners ([`define_macro`](crate::core::specs::Package::define_macro) / [`define_environment`](crate::core::specs::Package::define_environment)); they make the pairing structural |
 

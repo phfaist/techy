@@ -369,14 +369,12 @@ pub trait LatexlikeLang:
     /// registered, as opposed to anything in the document itself. The default checks
     /// nothing.
     ///
-    /// [`Latexlike`](super::Latexlike) overrides it to warn about a provider whose
-    /// commands can never be reached because no escape character in force triggers
-    /// them
-    /// ([`check_provider_commands_shadowed_by_escape`](crate::core::specs::check_provider_commands_shadowed_by_escape)).
-    /// That check enumerates the vocabularies, so a language can adopt it with the
-    /// same one-line override as long as its own vocabularies implement
-    /// [`ClosedVocabulary`](crate::core::ClosedVocabulary); a language whose
-    /// vocabularies are open keeps the default and simply goes without the check.
+    /// [`Latexlike`](super::Latexlike) keeps the default. This hook runs on every
+    /// root parse, so a check whose answer cannot change between parses is better run
+    /// once where the language is built: the check for a provider whose commands
+    /// were registered with their escape character
+    /// ([`check_provider_commands_shadowed_by_escape`](crate::core::specs::check_provider_commands_shadowed_by_escape))
+    /// is one example.
     fn check_parse_start(
         source: &Arc<Source<Self::SourceOrigin>>,
         seed: &Arc<ParsingState<Self>>,

@@ -253,8 +253,10 @@ Two silent traps and one non-check, all documented on the API items:
   `"emph"`, not `"\\emph"`: command tokens carry their name *without* the
   escape character, so an escape-prefixed registration can never match — the
   definition is silently unreachable. techy defends where the mistake happens: an
-  unresolved command's diagnostic suggests escape-prefixed near-misses, and a
-  parse-initialization check warns when all of a provider's commands are
+  unresolved command's diagnostic suggests escape-prefixed near-misses. To catch it
+  before any document uses the commands, run
+  [`check_provider_commands_shadowed_by_escape`](crate::core::specs::check_provider_commands_shadowed_by_escape)
+  once on the built providers: it warns when all of a provider's commands are
   escape-shadowed. See [`Package::insert`](crate::core::specs::Package::insert).
 - **The `m` code's single-expression fallback** can silently consume sibling
   content when a group was intended — see

@@ -517,7 +517,7 @@ Decisions behind this section (full topic: [§dd-dr:specs]): [§dd-dr:unified-ca
 [§dd-dr:no-spec-side-slots], [§dd-dr:slot-terminators], [§dd-dr:emptiness-surface],
 [§dd-dr:registration-ergonomics] (`IntoSpecsProvider` conversion, preset one-liners,
 no insert-time validation — traps caught at the resolution miss's did-you-mean
-detail and the parse-init `check_provider_commands_shadowed_by_escape` instead),
+detail and the opt-in, run-once `check_provider_commands_shadowed_by_escape` instead),
 [§dd-dr:resolution-extraction] (the standalone `resolve_command_in_scopes` in
 `core::specs`; the resolution family beside it),
 [§dd-dr:named-first-constructors] (`new(parser, name)` primary, `new_unnamed`
@@ -975,8 +975,7 @@ reference to the reader that produced it, and answering the three-outcome
 `CommandResolution` ([§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
 [§dd-dr:token-opacity]) — `make_paragraph_break_node`,
 `refine_diagnostic`, `observe_transition`, and the once-per-parse
-`observe_parse_start` — parse-initialization diagnostics, e.g. the preset's
-all-escape-shadowed provider check). Drivers are instances, so behavior carries
+`observe_parse_start` — parse-initialization diagnostics; the preset runs none). Drivers are instances, so behavior carries
 configuration static hooks never could; preset parsers reach preset helper methods
 fully typed. **Every item is defaulted** — `impl ParseDriver<L> for D {}` is a complete
 driver, tokenization included. The parsing-depth guard is engine-fixed, not a driver choice:
@@ -1333,11 +1332,12 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
 - **The definition one-liners** (`Package<LLL>::define_macro`/`define_environment`,
   [§dd-dr:registration-ergonomics]): inherent preset methods pairing callable type
   and spec type correctly by construction — shorthands of `insert`, not a second
-  registration model. The parse-initialization check
-  (`check_provider_commands_shadowed_by_escape` + the
-  `LatexlikeLang::check_parse_start` wiring through
-  `ParseDriver::observe_parse_start`) and the resolution-miss did-you-mean detail
-  are the deliberate replacements for insert-time validation.
+  registration model. The resolution-miss did-you-mean detail and the
+  author-run check `check_provider_commands_shadowed_by_escape` (no parse runs it;
+  `LatexlikeLang::check_parse_start`, called through
+  `ParseDriver::observe_parse_start`, stays as a general start-of-parse hook that
+  the preset leaves empty) are the deliberate replacements for insert-time
+  validation.
 - **Preset spec types** ([§dd-dr:concrete-spec-types]): `MacroSpec`/`SpecialsSpec`
   (declarative, preset traceback vocabulary) and `EnvironmentSpec` — the funnel
   wrapper over a dyn `EnvironmentBehavior` with defaulted

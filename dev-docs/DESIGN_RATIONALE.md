@@ -2049,15 +2049,14 @@ counterpart of `retrieve_spec`'s point queries, closing the earlier deferral. Ke
   preset — **not** a role-trait or `LatexlikeLang` supertrait ("provide, don't
   require", user): no shipped function requires the bound; the did-you-mean miss
   detail needs no vocabulary enumeration (its callable type and mode are already in
-  hand at the miss site, [§dd-dr:resolution-extraction]); and the parse-init
-  escape-char check ([§dd-dr:registration-ergonomics]) ships as a bound-where-used
-  check function, `core::specs::check_provider_commands_shadowed_by_escape` — wired
-  through the defaulted core hook `ParseDriver::observe_parse_start` (once per root
-  parse) plus a defaulted no-op `LatexlikeLang::check_parse_start` behavior method
-  that `Latexlike` overrides with the unconditional call (trait impls cannot state
-  per-method bounds, so each family member opts in monomorphically, where its bound
-  trivially holds), gracefully absent for non-enumerable vocabularies — a
-  best-effort diagnostics nicety, not semantics.
+  hand at the miss site, [§dd-dr:resolution-extraction]); and the escape-char check
+  ([§dd-dr:registration-ergonomics]) ships as a bound-where-used check function the
+  author calls, `core::specs::check_provider_commands_shadowed_by_escape` — gracefully
+  absent for non-enumerable vocabularies, a best-effort diagnostics nicety, not
+  semantics. A language that wants it on every root parse calls it from the defaulted
+  no-op `LatexlikeLang::check_parse_start` (reached through the core hook
+  `ParseDriver::observe_parse_start`): trait impls cannot state per-method bounds, so
+  each family member opts in monomorphically, where its bound trivially holds.
 Rejected alternatives: an `Option`al type filter (generic listing without the vocabulary bound —
 user preferred always-filtered plus statically listable vocabularies); a
 `&ParsingState` parameter (nothing beyond the mode feeds visibility); state-blind
@@ -2108,10 +2107,13 @@ Three rulings on the registration surface:
    without the escape character") and for capped small-edit-distance suggestions
    (accepted
    limitation: an in-stack fallback provider means the miss path never fires);
-   (b) at **parse initialization** — the layering-correct moment: the diagnostics
-   sink is live and the `TokenRules` escape char is known — a warning diagnostic
-   fires when *all* (≥ 1) of a provider's command definitions start with the escape
-   char; (c) a loud normalized-name callout on `Package::insert`. The
+   (b) an **author-run check**, `check_provider_commands_shadowed_by_escape`: one
+   warning per (provider, callable type) table whose *every* (≥ 1) name starts with
+   an escape char and continues past it (a lone escape char — the command `\\` — is
+   legitimate). No parse runs it: its answer depends only on the providers and the
+   seed `TokenRules`, never on the document, so the author calls it once where the
+   packages are built. The scan stops at a table's first clean name; (c) a loud
+   normalized-name callout on `Package::insert`. The
    spec-type/callable-type pairing likewise gets **no cross-check**: a mismatched
    registration is documented-legitimate (the environment composition owns the
    parse; the spec contributes argument structure), and the one-liners make correct
@@ -2121,11 +2123,17 @@ Rejected alternatives: insert-time escape validation (above — also generically
 unimplementable: the escape char is a `TokenRules` fact the author-side layer cannot
 know); a spec/type cross-check (outlaws documented-legitimate combinations and needs
 downcast blacklists); separate conversion traits of different shapes for providers
-vs specs (one idiom, learned once).
+vs specs (one idiom, learned once); running (b) at the start of every root parse via
+`LatexlikeLang::check_parse_start` (it repeats a providers-only answer in every
+parse's diagnostics, anchored at offset 0 of a document it says nothing about, and
+still misses providers loaded mid-parse; for a consumer parsing many fragments its
+full enumeration dominated — a debug FLM call spent about 3 of its 3.3 s there).
 
 Revisit if: the did-you-mean scan measurably slows cold miss paths (bound the
 iteration), or fallback-provider stacks dominate real deployments (the miss detail
-never fires there — the init-time check remains).
+never fires there — only the author-run check remains), or the author-run check
+finds no callers (retire it, its condition and its identifier at a breaking
+release).
 
 #### Command resolution is a standalone `specs` function: `resolve_command_in_scopes` [§dd-dr:resolution-extraction]
 
@@ -6924,7 +6932,7 @@ against *source* resolution, `core.sources.*`; the wire vocabulary tracks the
 public `core::specs` home from [§dd-dr:resolution-extraction]):
 `core.specs.{unresolvable-command, command-resolution-failed,
 callable-defined-as-error, scope-op-failed, provider-commands-shadowed-by-escape}`
-(the last is the parse-init warning, condition type
+(the last is the author-run registration check's warning, condition type
 `ProviderCommandsShadowedByEscape`);
 `core.groups.{unclosed-group, stray-group-close}`;
 `core.environments.{terminator-mismatch, malformed-terminator,

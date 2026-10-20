@@ -511,7 +511,8 @@ impl<O: SourceOrigin> TraceFrame<O> {
 /// recovery entry point are always recorded at [`Error`](Severity::Error); the library's
 /// [`Warning`](Severity::Warning) and [`Note`](Severity::Note) diagnostics come from
 /// places that never abort a parse, such as
-/// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching) or
+/// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching), or
+/// from checks run outside a parse, such as
 /// [`ProviderCommandsShadowedByEscape`](crate::core::specs::ProviderCommandsShadowedByEscape).
 /// Presets and embedders can record diagnostics at any severity through
 /// [`Diagnostic::warning`] and [`Diagnostic::note`].

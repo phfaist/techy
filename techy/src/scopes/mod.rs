@@ -668,7 +668,7 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
     }
 }
 
-// --- the parse-initialization escape-shadowing check -------------------------------------
+// --- the escape-shadowing registration check --------------------------------------------
 
 /// Condition (warning): every definition a provider makes under one callable type
 /// begins with an escape character and is longer than that one character.
@@ -682,8 +682,8 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
 /// the tokenizer reads `\\` as the command whose name is `\`, so `\\` is registered
 /// under the one-character name `"\\"`.
 ///
-/// Recorded by [`check_provider_commands_shadowed_by_escape`] at parse initialization;
-/// the latexlike preset runs that check for every parse.
+/// Recorded by [`check_provider_commands_shadowed_by_escape`], which no parse runs by
+/// default: a language author calls it once, on the providers they have built.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.provider-commands-shadowed-by-escape")]
@@ -741,18 +741,26 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
 /// a package defining that command registers it under the name `"\\"`.
 ///
 /// Nothing is checked when commands are disabled, and providers that cannot list their
-/// definitions (a [`FallbackProvider`]) are skipped: this is a best-effort check on the
-/// way in, not part of the language's semantics. The other half of the defense is the
-/// suggestion attached to a resolution miss
+/// definitions (a [`FallbackProvider`]) are skipped: this is a best-effort check, not
+/// part of the language's semantics. The other half of the defense is the suggestion
+/// attached to a resolution miss
 /// ([`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes)),
 /// which a fallback provider on the stack can silence — this check fires either way.
 ///
+/// **No parse runs this check.** Its answer depends only on the providers and the token
+/// rules of `state`, not on any document, so calling it once where the packages are
+/// built is enough — on the seed state, in a test or at startup. `source` only anchors
+/// the warnings. A language can still run it at the start of every root parse through
+/// [`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
+/// at the price of the same warnings in every parse's diagnostics.
+///
 /// Listing a language's callable types and modes requires [`ClosedVocabulary`] on both,
 /// so that bound sits on this function alone rather than on
-/// [`Lang`](crate::core::Lang). The latexlike preset calls the check at every parse
-/// initialization
-/// ([`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start));
-/// a language whose vocabularies are not listable simply does without it.
+/// [`Lang`](crate::core::Lang); a language whose vocabularies are not listable simply
+/// does without the check.
+///
+/// The scan of a (provider, callable type) table stops at its first name that is not
+/// escape-shadowed, so checking a correctly registered table reads only its first name.
 pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
     state: &ParsingState<L>,
     source: &Arc<Source<L::SourceOrigin>>,
@@ -767,37 +775,38 @@ pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
     }
     let escape_chars: Vec<char> =
         rules.command_rules().iter().map(|rule| rule.escape_char).collect();
+    // A name of exactly one escape character is legitimate: the tokenizer reads `\\` as
+    // the command whose name is `\`, so that command is registered under the
+    // one-character name `"\\"`.
+    let shadowed = |name: &str| {
+        let mut chars = name.chars();
+        chars.next().is_some_and(|first| escape_chars.contains(&first))
+            && chars.next().is_some()
+    };
 
     for provider in state.scopes().providers().iter().rev() {
-        for &callable_type in L::CallableTypeId::ALL {
-            // The provider's advertised names under this type, unioned over every
-            // mode (deduplicated; sorted so the reported example is deterministic).
-            let mut names: Vec<Box<str>> = Vec::new();
+        'tables: for &callable_type in L::CallableTypeId::ALL {
+            // The provider's advertised names under this type, over every mode. One
+            // name that is not escape-shadowed means no warning for this table.
+            let mut names: Vec<&str> = Vec::new();
             for &mode in L::ModeId::ALL {
                 let Some(symbols) = provider.iter_symbols(callable_type, mode) else {
                     continue; // cannot enumerate: gracefully absent
                 };
                 for entry in symbols {
-                    if !names.iter().any(|name| &**name == entry.name) {
-                        names.push(entry.name.into());
+                    if !shadowed(entry.name) {
+                        continue 'tables;
                     }
+                    names.push(entry.name);
                 }
             }
             if names.is_empty() {
                 continue;
             }
+            // Deduplicated across modes; sorted so the reported example is
+            // deterministic.
             names.sort_unstable();
-            // A name of exactly one escape character is legitimate: the tokenizer
-            // reads `\\` as the command whose name is `\`, so that command is
-            // registered under the one-character name `"\\"`.
-            let shadowed = |name: &str| {
-                let mut chars = name.chars();
-                chars.next().is_some_and(|first| escape_chars.contains(&first))
-                    && chars.next().is_some()
-            };
-            if !names.iter().all(|name| shadowed(name)) {
-                continue;
-            }
+            names.dedup();
             let mut offending_escapes: Vec<char> = names
                 .iter()
                 .filter_map(|name| name.chars().next())
@@ -809,7 +818,7 @@ pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
                     provider: provider.name().into(),
                     callable_type: alloc::format!("{callable_type:?}"),
                     count: names.len(),
-                    example: names[0].clone().into(),
+                    example: names[0].into(),
                     escape_chars: offending_escapes.into_iter().collect(),
                 },
                 SourceSpan::new(source, Span::empty(0)),
@@ -1072,8 +1081,8 @@ impl<L: Lang> Package<L> {
     /// The mistake is instead caught where it bites: a resolution miss suggests
     /// escape-prefixed near-misses
     /// ([`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes)),
-    /// and a check at parse initialization warns when *all* of a provider's definitions
-    /// begin with an escape character and continue past it
+    /// and a check you can run once on the built providers warns when *all* of a
+    /// provider's definitions begin with an escape character and continue past it
     /// ([`check_provider_commands_shadowed_by_escape`], which leaves the legitimate
     /// one-character name `"\\"` — the command `\\` — alone).
     ///
