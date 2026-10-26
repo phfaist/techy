@@ -1192,6 +1192,18 @@ mod tests {
     }
 
     #[test]
+    fn marker_scan_state_delta_memoizes_across_fresh_delta_values() {
+        // The marker parsers build the delta anew on every argument parse. It carries
+        // feature gates only, which the memo keys by value, so a fresh value hits.
+        let base: Arc<ParsingState<ObserverLang>> = state();
+        let mut session: ParserSession<ObserverLang> = ParserSession::new();
+        let delta = crate::constructs::marker_scan_state_delta::<ObserverLang>;
+        let first = session.derived_state(&ObserverDriver, &base, &delta()).unwrap();
+        let again = session.derived_state(&ObserverDriver, &base, &delta()).unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+    }
+
+    #[test]
     fn derived_state_keys_payloads_by_arc_identity() {
         let base: Arc<ParsingState<ObserverLang>> = state();
         let rule: Arc<GroupRule<ObserverLang>> =

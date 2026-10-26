@@ -42,12 +42,14 @@
 //!   space-normalized accumulation).
 //! - **Markers are matched against the raw characters**, under the state
 //!   [`marker_scan_state_delta`] derives: a character the argument's state would read
-//!   as a specials trigger, a group delimiter, a comment start or a command escape
-//!   still matches a marker spelled with it — the markers are the spec's own syntax,
-//!   like a verbatim delimiter, and a language's definitions do not switch them off.
-//!   A `'` marker thus matches ahead of the latexlike `''` typography ligature:
-//!   `\op''` is the marker `'` followed by the expression `'`. Only the marker is read
-//!   raw; its expression parses under the argument's state, so a ligature or specials
+//!   as a specials trigger, a group delimiter other than the enclosing group's close,
+//!   or a command escape still matches a marker spelled with it — the markers are the
+//!   spec's own syntax, like a verbatim delimiter, and a language's definitions do not
+//!   switch them off. A `'` marker thus matches ahead of the latexlike `''` typography
+//!   ligature: `\op''` is the marker `'` followed by the expression `'`. Only the
+//!   marker is read raw. The noise ahead of it is scanned under the argument's state
+//!   (a comment there is noise; a token that state cannot read ends the run), and its
+//!   expression parses under the argument's state too, so a ligature or specials
 //!   *inside* the expression (`^{a~b}`) is recognized as usual.
 //!
 //! Absent — no marker matches at the position — is a silent, valid outcome
@@ -84,8 +86,10 @@ use super::{node_text_content, ConstructParserResult, FromInvocation, ParseConte
 ///
 /// Markers are matched against the raw characters of the source, under the state
 /// [`marker_scan_state_delta`] derives: a character the argument's state would read as
-/// a specials trigger or a group delimiter still matches a marker spelled with it. The
-/// expression that follows a marker parses under the argument's own state.
+/// a specials trigger, a group delimiter other than the enclosing group's close, or a
+/// command escape still matches a marker spelled with it. The whitespace and comments
+/// ahead of a marker, and the expression that follows it, parse under the argument's
+/// own state.
 ///
 /// The whole run is recorded as **one argument**. Each matched pair stages one
 /// classless wrapper `Group`
@@ -145,15 +149,23 @@ where
 
         loop {
             // Noise is allowed ahead of each marker; a failed probe rewinds exactly
-            // this scan, keeping previously committed pairs. The scan's stop token is
-            // not used: the marker scan re-reads the position under the scan state.
+            // this scan, keeping previously committed pairs. An unusable stop position
+            // (end of input, or a tolerated token error the enclosing loop will
+            // diagnose) ends the run before any raw re-read; otherwise the stop token
+            // itself is not used — the marker scan re-reads the position under the
+            // scan state.
             let noise = scan_argument_noise(cx)?;
+            if noise.next.is_none() {
+                noise.rewind(cx);
+                break;
+            }
 
-            let Some(marker) = self.scan_marker(cx, &scan_state, &used)? else {
+            let Some(MarkerMatch { index: marker_index, first, span: marker_span }) =
+                self.scan_marker(cx, &scan_state, &used)?
+            else {
                 noise.rewind(cx);
                 break;
             };
-            let MarkerMatch { index: marker_index, first, span: marker_span } = marker;
 
             // The expression follows the marker at most plain whitespace apart: the
             // probed token may carry pre-space, which the expression core stages
@@ -492,7 +504,7 @@ mod tests {
         // `` ` `` marker (the marker-scan state reads it raw); inside the `^`
         // expression, which parses under the argument's state, the same character is
         // the specials invocation.
-        let result = parse_with_specials(&["`", "^"], &["`"], "\\m`{x}^{a`b} `!");
+        let result = parse_with_specials(&["`", "^", "_"], &["`"], "\\m`{x}^{a`b} `!");
         let m = result.tree.root().child(0).unwrap();
         assert_eq!(keys(m), ["`", "^"]);
         let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
@@ -501,10 +513,16 @@ mod tests {
         assert_eq!(sup_value.child(0).unwrap().chars(), Some("a"));
         assert_eq!(sup_value.child(1).unwrap().specials_name(), Some("`"));
         assert_eq!(sup_value.child(2).unwrap().chars(), Some("b"));
-        // After the run, the enclosing content reads `` ` `` as the specials again.
+        // `_` is still available, so the run probes the trailing `` ` `` raw: a used
+        // marker does not match again, and the enclosing content reads it as the
+        // specials.
         let root = result.tree.root();
         assert!((0..root.child_count())
             .any(|i| root.child(i).unwrap().specials_name() == Some("`")));
+
+        // A later character of a multi-character marker is read raw as well.
+        let result = parse_with_specials(&["!`"], &["`"], "\\m!`{x}");
+        assert_eq!(keys(result.tree.root().child(0).unwrap()), ["!`"]);
     }
 
     // --- spec-author contract violations are implementation errors ([§dd-dr:panic-policy]) --

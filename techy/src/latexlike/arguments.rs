@@ -706,15 +706,21 @@ mod tests {
         )
     }
 
-    /// `\m` with `codes`, next to the `minilatex` package (the text-mode `''`
+    /// `\m` with `specs`, next to the `minilatex` package (the text-mode `''`
     /// ligature among its specials) and a zero-argument `*` specials.
-    fn language_with_specials(codes: &str) -> Language<Latexlike> {
-        let specs = argument_specs_from_str(codes).unwrap();
+    fn language_with_specials(
+        recovery: Recovery,
+        specs: Vec<Arc<ArgumentSpec<Latexlike>>>,
+    ) -> Language<Latexlike> {
         let mut package = Package::new("factory-tests");
         package.insert(CallableType::Macro, "m", Arc::new(MacroSpec::new(specs)));
-        package.insert_specials(CallableType::Specials, "*", Arc::new(SpecialsSpec::new(vec![])));
+        package.insert_specials(
+            CallableType::Specials,
+            "*",
+            Arc::new(SpecialsSpec::new(vec![])),
+        );
         Language::new(
-            LatexlikeDriver::new(Recovery::Strict),
+            LatexlikeDriver::new(recovery),
             ParsingState::lang_initial_with_packages([
                 Arc::new(package) as Arc<dyn crate::scopes::SpecsProvider<Latexlike>>,
                 crate::latexlike::minidefs::minilatex_package(),
@@ -1023,7 +1029,8 @@ mod tests {
         // code. Everything else keeps the argument's state — the expression after
         // `'` is the ligature invocation when it is one, and a `*` outside the
         // argument is the specials.
-        let language = language_with_specials("e{'}");
+        let codes = |codes: &str| argument_specs_from_str(codes).unwrap();
+        let language = language_with_specials(Recovery::Strict, codes("e{'}"));
         let result = language.parse(r"\m''x").unwrap();
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         let m = macro_node(&result);
@@ -1038,13 +1045,33 @@ mod tests {
         let wrapper = m.argument_content_nodes(0).unwrap().first().unwrap();
         assert_eq!(wrapper.child(0).unwrap().specials_name(), Some("''"));
 
-        let result = language_with_specials("s").parse(r"\m* *").unwrap();
+        let result = language_with_specials(Recovery::Strict, codes("s")).parse(r"\m* *").unwrap();
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         let m = macro_node(&result);
         assert_eq!(content_chars(m, 0), "*");
         let root = result.tree.root();
         assert!((0..root.child_count())
             .any(|i| root.child(i).unwrap().specials_name() == Some("*")));
+
+        // A later character of a multi-character marker is read raw as well.
+        let marker = Arc::new(ArgumentSpec::new_unnamed(Arc::new(MarkerArgumentParser::new("!*"))));
+        let result = language_with_specials(Recovery::Strict, vec![marker]).parse(r"\m!*").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(content_chars(macro_node(&result), 0), "!*");
+    }
+
+    #[test]
+    fn an_unreadable_first_character_is_not_a_marker() {
+        // The preset forbids `$` inside `\(…\)`. The noise scan, under the argument's
+        // state, cannot read it: the marker is absent and the enclosing loop diagnoses
+        // the character — the raw re-read never gets to swallow the error.
+        let specs = argument_specs_from_str("t$").unwrap();
+        let language = language_with_specials(Recovery::Tolerant, specs);
+        let result = language.parse(r"\(\m$x\)").unwrap();
+        let m = result.tree.root().child(0).unwrap().child(0).unwrap();
+        assert_eq!(m.macro_name(), Some("m"));
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     }
 
     #[test]

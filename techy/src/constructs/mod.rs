@@ -58,8 +58,8 @@ mod terminated_parser;
 mod verbatim_parser;
 
 pub use argument_parsers::{
-    marker_scan_state_delta, peek_adjacent_argument, scan_argument_noise, stage_pre_space, ArgumentNoise,
-    ExpectedExpressionArgument,
+    marker_scan_state_delta, peek_adjacent_argument, scan_argument_noise, stage_pre_space,
+    ArgumentNoise, ExpectedExpressionArgument,
     ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
     OptionalGroupArgumentParser,
 };

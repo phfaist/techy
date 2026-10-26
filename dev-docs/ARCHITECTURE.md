@@ -933,10 +933,10 @@ returns (nodes, StopCause) — the caller interprets the ending.
   that scan — pylatexenc's `allow_pre_space=False` as a parser property, never a
   state delta ([§dd-dr:argument-adjacency]). The literal-marker parsers (marker,
   embellishments) match their markers against the raw characters under the marker-scan
-  state (`marker_scan_state_delta`: every recognizer off except whitespace and paragraph
-  breaks), so a specials trigger, group opener or comment character cannot claim a
-  marker character, while the expression after a marker parses under the argument's own
-  state ([§dd-dr:marker-scan-state]).
+  state (`marker_scan_state_delta`: the specials, command, comment and group gates off,
+  everything else inherited), so a specials trigger, group opener or command escape
+  cannot claim a marker character, while the leading noise and the expression after a
+  marker parse under the argument's own state ([§dd-dr:marker-scan-state]).
 
 Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:parse-context],
 [§dd-dr:no-context-source] (no source handle; spans and positions come from the reader),

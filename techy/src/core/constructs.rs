@@ -66,8 +66,9 @@
 // inclusion read the same wherever they come from.
 
 pub use crate::constructs::{
-    marker_scan_state_delta, parse_declared_arguments, peek_adjacent_argument, read_rigid_name_group,
-    scan_argument_noise, stage_pre_space, verbatim_state_delta, ArgumentNoise, AttachedSourceOutcome, CharsGroupArgumentParser,
+    marker_scan_state_delta, parse_declared_arguments, peek_adjacent_argument,
+    read_rigid_name_group, scan_argument_noise, stage_pre_space, verbatim_state_delta,
+    ArgumentNoise, AttachedSourceOutcome, CharsGroupArgumentParser,
     ChildStateSpec, CommandResolutionFailed, ConstructParser, ConstructParserResult,
     DescentLimitApproaching, DescentLimitExceeded,
     EmbellishmentsArgumentParser, EnvironmentBeginSyntaxData, EnvironmentBody,

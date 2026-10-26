@@ -6361,10 +6361,10 @@ Status: DECIDED (user, embellishments-marker bug report).
 their markers against the **raw characters**, not the tokens of the argument's state: the
 scan is the explicit-state `probe_token(&scan_state)` of [§dd-dr:parse-scoped] (no
 `cx.state` swap; the minted-delimiter probe is the precedent) under the *marker-scan
-state* — the public `marker_scan_state_delta()`, `TokenRulesOverrides::disable_all()` with
-the whitespace and paragraph blocks un-overridden, derived once per argument parse and
-memoized ([§dd-dr:memoized-derivations]). The noise before a marker, the expression after
-it and the staged wrappers keep the argument's own state. The decisive reason: a marker is
+state* — the public `marker_scan_state_delta()`: the specials, command, comment and group
+gates off, everything else inherited, derived once per argument parse and memoized
+([§dd-dr:memoized-derivations]). The noise before a marker, the expression after it and
+the staged wrappers keep the argument's own state. The decisive reason: a marker is
 spec-declared literal syntax, like a verbatim delimiter ([§dd-dr:verbatim-family]);
 matched as tokens, a language's specials *definitions* silently disable a spec's own
 syntax (`` e{`} `` never matches once `` ` `` is a specials trigger; the preset's `''`
@@ -6376,14 +6376,23 @@ character is my syntax here".
   edges under the enclosing whitespace rules, and a paragraph break must still end the run,
   not read as pre-space. The enclosing expected close stays visible regardless of the
   groups gate, so a marker scan never consumes the enclosing closer.
-- *The forbidden set is cleared*: the [§dd-dr:parse-scoped] amendment (widen, never narrow —
-  whatever the scan state rejects, the enclosing loop rejects and diagnoses too, which keeps
-  the tolerant probe sound) and the raw-reading rule alike. Accepted: a multi-character
-  marker may contain a character the argument's state forbids, as a verbatim delimiter may.
-- *A marker outranks any specials at its position*, accepted: `e{'}` on `\m''x` yields
-  marker `'` with the expression `'` (TeX/xparse). The expression keeps the argument's
-  state: `^{a~b}` keeps its specials; `\m'''` is marker `'` with the `''` ligature
-  invocation as the expression.
+- *Only a marker's later characters are fully raw.* The first one is the noise scan's stop
+  token, found under the argument's state: a comment there is noise, and a token that state
+  cannot read takes the absent path (the `ArgumentNoise::next == None` guard every argument
+  parser keeps) — never a raw re-read, which under tolerant recovery would swallow the
+  error strict mode aborts on.
+- *The forbidden set is inherited, not cleared*: the scan state recognizes less and rejects
+  nothing more than the argument's state, so whatever it rejects the enclosing loop rejects
+  and diagnoses too (the [§dd-dr:parse-scoped] amendment, met trivially). Clearing it would
+  also defeat the memo: a cleared set is a fresh `Arc<str>` per call, keyed by identity, so
+  every argument parse would derive and pin a new state. Gates only, memoized by value.
+- *A marker outranks any specials or group opener at its position*, accepted: `e{'}` on
+  `\m''x` yields marker `'` with the expression `'` (TeX/xparse); `e{[}` inside an `[…]`
+  option ends the option at the marker's `]`; a marker spelled with the escape character
+  splits the command token, and strict mode may abort on the leftover where the expression
+  is probed — spec-author footguns, not guarded against. The expression keeps the
+  argument's state: `^{a~b}` keeps its specials; `\m'''` is marker `'` with the `''`
+  ligature invocation as the expression.
 
 Rejected alternatives: *matching token text instead of kind* — granularity: the `''`
 ligature is one token, the marker `'` half of it, and the reader cannot stop inside a token
@@ -6391,7 +6400,8 @@ ligature is one token, the marker `'` half of it, and the reader cannot stop ins
 `ArgumentSpec::with_state_delta` disabling specials* — a delta governs the whole argument,
 so the expression goes blind to specials too, and every spec author must know the trick
 (why adjacency is a parser property, [§dd-dr:argument-adjacency]). *`Char`-token matching
-plus mode-aware specials definitions* — the reported bug itself.
+plus mode-aware specials definitions* — leaves the spec author no way to declare the
+character as syntax.
 
 Revisit if: a language needs a marker that is itself whitespace or a paragraph break, or a
 spec needs a specials trigger to outrank a declared marker at the same position.
