@@ -931,7 +931,12 @@ returns (nodes, StopCause) — the caller interprets the ending.
   its region's leading whitespace and comments (the shared `scan_argument_noise`
   step), which is what lets the group parsers' `require_adjacent()` opt-in decline
   that scan — pylatexenc's `allow_pre_space=False` as a parser property, never a
-  state delta ([§dd-dr:argument-adjacency]).
+  state delta ([§dd-dr:argument-adjacency]). The literal-marker parsers (marker,
+  embellishments) match their markers against the raw characters under the marker-scan
+  state (`marker_scan_state_delta`: every recognizer off except whitespace and paragraph
+  breaks), so a specials trigger, group opener or comment character cannot claim a
+  marker character, while the expression after a marker parses under the argument's own
+  state ([§dd-dr:marker-scan-state]).
 
 Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:parse-context],
 [§dd-dr:no-context-source] (no source handle; spans and positions come from the reader),
@@ -943,7 +948,7 @@ Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:p
 [§dd-dr:parse-scoped], [§dd-dr:descent-guard] (the `parse_construct` funnel, the
 guard, the boxed pass-through delta), [§dd-dr:emptiness-surface],
 [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers], [§dd-dr:expression-fallback],
-[§dd-dr:argument-adjacency], [§dd-dr:terminated-argument].
+[§dd-dr:argument-adjacency], [§dd-dr:terminated-argument], [§dd-dr:marker-scan-state].
 
 ## Engine and sessions [§dd-arch:engine]
 

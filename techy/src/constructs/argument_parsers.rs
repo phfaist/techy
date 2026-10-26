@@ -40,6 +40,12 @@
 //! content is the group's children; where the argument is a single node — the `1` of
 //! `\frac 1 2`, a `*` marker — that node is itself the content.
 //!
+//! A literal marker is the spec's own syntax, and is matched against the raw characters
+//! of the source rather than against the tokens of the argument's state: the parsers
+//! that read one — [`MarkerArgumentParser`] and the embellishments parser — probe it
+//! under the state [`marker_scan_state_delta`] derives, where no specials trigger, group
+//! delimiter, comment or command can claim a marker character.
+//!
 //! # Requiring an adjacent argument
 //!
 //! Because the leading scan is the parser's own step, a parser can decline it. The
@@ -91,7 +97,8 @@ use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{
-    GroupOverrides, Lang, LangHasGroups, ParsingState, ParsingStateDelta, TokenRulesOverrides,
+    FeaturePresence, GroupOverrides, Lang, LangFeatures, LangHasGroups, ParagraphOverrides,
+    ParsingState, ParsingStateDelta, TokenRulesOverrides, WhitespaceOverrides,
 };
 use crate::token::{GroupRule, StreamPosition, Token, TokenEdge, TokenKind};
 
@@ -312,6 +319,51 @@ pub fn stage_pre_space<L: Lang>(
         nodes.push(stage(cx, NodeKind::chars(pre_space.span()), pre_space)?);
     }
     Ok(())
+}
+
+/// The parsing state change under which a spec-declared literal marker — the `*` of
+/// `\section*`, the `^` and `_` of an embellishments argument — is matched against the
+/// raw characters of the source.
+///
+/// Every recognizer that could claim a marker character is turned off: specials,
+/// commands, comments, group delimiters and the forbidden-character set. Whitespace
+/// scanning and paragraph breaks stay as the argument's state has them, so that the
+/// contiguity of a multi-character marker and the whitespace tolerated after a marker
+/// are judged by the enclosing rules, and a paragraph break ahead of a marker still
+/// ends the scan. The expected close of an enclosing group is recognized regardless of
+/// the groups gate ([`scan_group_delimiter`](crate::core::token::scan_group_delimiter)),
+/// so a marker scan never consumes the closer the parser inside the group waits for.
+///
+/// Markers are matched this way because they are the spec's own syntax, like the
+/// delimiters of a verbatim argument: a language's specials definitions — a `''`
+/// typography ligature, a `` ` `` trigger — must not switch off a declared `'` or
+/// `` ` `` marker. Only the marker itself is read under the derived state; whatever
+/// precedes it (the leading whitespace and comments) and whatever follows it (an
+/// embellishment's expression) parses under the argument's own state. Turning the
+/// recognizers off only widens what reads cleanly, which is what keeps the probe
+/// protocol of [`ParseContext::probe_token`] sound under tolerant recovery: a token the
+/// scan state cannot read, the enclosing content loop cannot read either, and it is the
+/// one to diagnose it.
+///
+/// [`MarkerArgumentParser`] and
+/// [`EmbellishmentsArgumentParser`](super::EmbellishmentsArgumentParser) derive their
+/// scan state from this delta with [`ParseContext::derive_state`] and probe under it
+/// with [`ParseContext::probe_token`], once per argument parse; a custom marker-shaped
+/// parser does the same. The delta is rules-only, so the session memoizes the derived
+/// state per base state and the derivation costs a lookup from its second use on.
+pub fn marker_scan_state_delta<L: Lang>() -> ParsingStateDelta<L> {
+    // The two layout blocks spread from the *disabled* overrides as no-override values:
+    // a whole-block field literal replaces what `disable_all()` set up for that block
+    // (the struct-update note on `TokenRulesOverrides`).
+    ParsingStateDelta::new().rules(TokenRulesOverrides {
+        whitespace: <L::Features as LangFeatures>::Whitespace::store_with(
+            WhitespaceOverrides::default,
+        ),
+        paragraphs: <L::Features as LangFeatures>::Paragraphs::store_with(
+            ParagraphOverrides::default,
+        ),
+        ..TokenRulesOverrides::disable_all()
+    })
 }
 
 /// Stage a childless node under the context's current state.
@@ -1183,6 +1235,12 @@ where
 /// and no diagnostic. This is the parser behind the latexlike argument codes `"s"`,
 /// `"*"` and `"t<c>"` (pylatexenc's `LatexOptionalCharsMarkerParser`); the full code
 /// table is on [`argument_specs`](crate::latexlike::argument_specs).
+///
+/// The marker is matched against the raw characters of the source, under the state
+/// [`marker_scan_state_delta`] derives: a character the argument's state would read as
+/// a specials trigger, a group delimiter, a comment start or a command escape still
+/// matches a marker spelled with it. The whitespace and comments ahead of the marker
+/// are scanned under the argument's own state as usual.
 pub struct MarkerArgumentParser {
     marker: Box<str>,
 }
@@ -1215,7 +1273,11 @@ where
             ));
         };
         let mut noise = scan_argument_noise(cx)?;
-        let Some(first) = noise.next.clone() else {
+        // The marker is matched against the raw characters: the noise scan's stop token
+        // is re-read under the marker-scan state ([`marker_scan_state_delta`]), where a
+        // specials trigger or a group opener spelled like the marker is a plain `Char`.
+        let scan_state = cx.derive_state(&marker_scan_state_delta())?;
+        let Some(first) = cx.probe_token(&scan_state)? else {
             noise.rewind(cx);
             return Ok(None);
         };
@@ -1226,9 +1288,8 @@ where
         let start = cx.tokens.position_at(&first, TokenEdge::Start);
         let mut end = cx.tokens.position_at(&first, TokenEdge::EndPastPostSpace);
         cx.tokens.move_to(&first, TokenEdge::EndPastPostSpace);
-        let state = Arc::clone(&cx.state);
         for expected in self.marker.chars().skip(1) {
-            let Some(token) = cx.probe_token(&state)? else {
+            let Some(token) = cx.probe_token(&scan_state)? else {
                 noise.rewind(cx);
                 return Ok(None);
             };

@@ -512,6 +512,7 @@ fn optional_group_parser<LLL: LatexlikeLang>(
 mod tests {
     use super::super::{
         CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec, MathGroupForm,
+        SpecialsSpec,
     };
     use super::*;
     use crate::engine::{Language, ParseResult};
@@ -702,6 +703,23 @@ mod tests {
         Language::new(
             LatexlikeDriver::new(recovery),
             ParsingState::lang_initial_with_packages([package]).expect("seed state"),
+        )
+    }
+
+    /// `\m` with `codes`, next to the `minilatex` package (the text-mode `''`
+    /// ligature among its specials) and a zero-argument `*` specials.
+    fn language_with_specials(codes: &str) -> Language<Latexlike> {
+        let specs = argument_specs_from_str(codes).unwrap();
+        let mut package = Package::new("factory-tests");
+        package.insert(CallableType::Macro, "m", Arc::new(MacroSpec::new(specs)));
+        package.insert_specials(CallableType::Specials, "*", Arc::new(SpecialsSpec::new(vec![])));
+        Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            ParsingState::lang_initial_with_packages([
+                Arc::new(package) as Arc<dyn crate::scopes::SpecsProvider<Latexlike>>,
+                crate::latexlike::minidefs::minilatex_package(),
+            ])
+            .expect("seed state"),
         )
     }
 
@@ -996,6 +1014,37 @@ mod tests {
         let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].group_delimiters(), Some(("_", "")));
+    }
+
+    #[test]
+    fn marker_codes_match_raw_ahead_of_specials() {
+        // Markers are read under the marker-scan state: the `''` ligature does not
+        // hide a `'` marker, and a `*` defined as a specials still matches the `s`
+        // code. Everything else keeps the argument's state — the expression after
+        // `'` is the ligature invocation when it is one, and a `*` outside the
+        // argument is the specials.
+        let language = language_with_specials("e{'}");
+        let result = language.parse(r"\m''x").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let m = macro_node(&result);
+        let wrapper = m.argument_content_nodes(0).unwrap().first().unwrap();
+        assert_eq!(wrapper.group_delimiters(), Some(("'", "")));
+        assert_eq!(wrapper.child(0).unwrap().chars(), Some("'"));
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("x"));
+
+        let result = language.parse(r"\m'''x").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let m = macro_node(&result);
+        let wrapper = m.argument_content_nodes(0).unwrap().first().unwrap();
+        assert_eq!(wrapper.child(0).unwrap().specials_name(), Some("''"));
+
+        let result = language_with_specials("s").parse(r"\m* *").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let m = macro_node(&result);
+        assert_eq!(content_chars(m, 0), "*");
+        let root = result.tree.root();
+        assert!((0..root.child_count())
+            .any(|i| root.child(i).unwrap().specials_name() == Some("*")));
     }
 
     #[test]
