@@ -245,12 +245,17 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
 ///
 /// A command is written with the escape character that starts it, so that `\foo` and
 /// `@foo` are told apart. The content of a long comment is shortened to at most 24
-/// bytes, followed by `…`. The description begins with a lowercase letter, so that it
-/// can be inserted into a message.
+/// bytes, followed by `…`. Control characters, such as a newline, are written as escape
+/// sequences (`\n`). The description begins with a lowercase letter, so that it can be
+/// inserted into a message.
 impl<L: Lang> fmt::Display for TokenKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenKind::Char(c) => write!(f, "character ‘{}’", c.escape_debug()),
+            TokenKind::Char(c) => {
+                f.write_str("character ‘")?;
+                write_visible(f, c.encode_utf8(&mut [0; 4]))?;
+                f.write_str("’")
+            }
             TokenKind::GroupOpen { delim, rule } => write!(
                 f,
                 "opening group delimiter ‘{}’ (group type {:?})",
@@ -263,13 +268,9 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
             TokenKind::Specials { name, .. } => write!(f, "specials ‘{}’", name),
             TokenKind::Comment { start_delim, content } => {
                 let (preview, truncated) = truncate_for_display(content);
-                write!(
-                    f,
-                    "comment ‘{}{}{}’",
-                    start_delim,
-                    preview.escape_debug(),
-                    if truncated { "…" } else { "" }
-                )
+                write!(f, "comment ‘{}", start_delim)?;
+                write_visible(f, preview)?;
+                write!(f, "{}’", if truncated { "…" } else { "" })
             }
             TokenKind::ParagraphBreak => write!(f, "paragraph break"),
             TokenKind::EndOfStream => write!(f, "end of input"),
@@ -733,6 +734,19 @@ impl<L: Lang> fmt::Debug for StdToken<L> {
             .field("pre_space", &self.pre_space)
             .finish()
     }
+}
+
+/// Writes `text` as it is, except that control characters are written as escape
+/// sequences, so that a description of a token stays on one line.
+fn write_visible(f: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
+    for ch in text.chars() {
+        if ch.is_control() {
+            write!(f, "{}", ch.escape_default())?;
+        } else {
+            write!(f, "{}", ch)?;
+        }
+    }
+    Ok(())
 }
 
 /// Longest char-boundary-aligned prefix of `content` within `MAX_DISPLAY_CONTENT`
