@@ -304,24 +304,30 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
     }
 }
 
-/// A terminator shape an environment-syntax record cannot store, returned when the
-/// record is built ([`EnvironmentSyntax::from_parsed`]).
+/// The error that is returned when an environment syntax record cannot store the
+/// terminator of an environment.
 ///
-/// The preset's own parsers never produce one: a latexlike environment ends with
-/// `\end{name}`, which every record here holds. It is reachable through a custom
+/// [`EnvironmentSyntax::from_parsed`] returns this error. The preset's `\begin` parser
+/// then aborts the parse with an
+/// [`ImplementationError`](crate::core::constructs::ImplementationError), under any
+/// recovery policy.
+///
+/// The preset's own parsers never cause this error. It is caused by a custom
 /// [`EnvironmentBehavior::make_body_parser`](super::EnvironmentBehavior::make_body_parser)
-/// reporting a terminator the record has nowhere to keep — a definition that wired a
-/// body parser to a syntax record it does not fit, which is why the parse aborts on it
-/// rather than diagnosing and continuing.
+/// whose body parser reports its terminator in a form that the language's
+/// environment syntax record cannot store. For instance, [`StdEnvironmentSyntax`]
+/// stores only terminators of the form `\end{name}`. A
+/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) with a
+/// [`StopEnvironmentCommand`](crate::core::constructs::VerbatimBodyTerminator::StopEnvironmentCommand)
+/// terminator reports such a terminator, as the preset's verbatim environments do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EnvironmentSyntaxError {
-    /// The body parser reported its terminator as
-    /// [`Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)
-    /// — a bare string, with no command and name group to record — and the record
-    /// holds only `\end{name}`-shaped end sides.
+    /// The body parser reported its terminator as a literal string
+    /// ([`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal)),
+    /// and the record stores only terminators of the form `\end{name}`.
     LiteralTerminator {
-        /// The environment being parsed, as its `\begin` named it.
+        /// The name of the environment, as written in its `\begin`.
         environment: String,
     },
 }
@@ -331,9 +337,9 @@ impl fmt::Display for EnvironmentSyntaxError {
         match self {
             EnvironmentSyntaxError::LiteralTerminator { environment } => write!(
                 f,
-                "the body of environment ‘{environment}’ reported a literal terminator, \
-                 which the environment syntax record cannot store (it holds \
-                 ‘\\end{{name}}’-shaped terminators only)"
+                "Unsupported literal terminator reported by the body parser of environment \
+                 ‘{environment}’: the environment syntax record stores only \
+                 terminators of the form ‘\\end{{name}}’"
             ),
         }
     }
