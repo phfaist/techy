@@ -43,9 +43,11 @@ use super::{LatexlikeGroupType, LatexlikeLang};
 /// The codes are passed as *code strings*: each element of the list that
 /// [`argument_specs`] or [`argument_specs_named`] takes is one code string, and
 /// [`argument_specs_from_str`] takes a single code string that contains all codes.
-/// Each variant locates the error with an `index` and an `offset`. The `index` is the
-/// position of the code string in the list, counting from 0. The `offset` is a byte
-/// offset into that code string.
+/// Each variant locates the error with an `index`, and every variant except
+/// [`EmptyCode`](ArgumentCodeError::EmptyCode) also has an `offset`. The `index` is the
+/// position of the code string in the list, counting from 0, and is `None` for the
+/// code string of [`argument_specs_from_str`]. The `offset` is a byte offset into that
+/// code string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ArgumentCodeError {
@@ -61,9 +63,10 @@ pub enum ArgumentCodeError {
     },
     /// Parameter characters are missing after the argument code at `offset`.
     ///
-    /// The codes `t`, `r`, `d`, `v` and `e` take parameter characters. These must
-    /// follow the code immediately and may not be whitespace, as in `t!`, `r()` or
-    /// `v||`. The braces of `e{<chars>}` must enclose at least one marker character,
+    /// The codes `t`, `r`, `d` and `e` take parameter characters, and `v` takes them
+    /// optionally. Parameter characters must follow the code immediately and may not
+    /// be whitespace, as in `t!`, `r()` or `v||`. A `v` that is directly followed by a
+    /// character other than whitespace must have both delimiter characters. The braces of `e{<chars>}` must enclose at least one marker character,
     /// as in `e{^_}`.
     TruncatedCode {
         /// The position of the code string in the list, or `None` for the code
@@ -74,7 +77,8 @@ pub enum ArgumentCodeError {
         /// The code character, for instance `r`.
         code: char,
     },
-    /// A code string of a list contains more than one argument code.
+    /// A code string of a list contains characters other than whitespace after its
+    /// argument code.
     ///
     /// Each code string that is passed to [`argument_specs`] or
     /// [`argument_specs_named`] must contain exactly one code, with optional whitespace

@@ -149,10 +149,19 @@ impl<LLL: LatexlikeLang> fmt::Debug for SourceRecomposer<LLL> {
 ///
 /// A [`TreeRecomposer`](crate::recompose::TreeRecomposer) that runs a
 /// [`SourceRecomposer`] returns this error wrapped in
-/// [`RecomposeError::Recomposer`](crate::recompose::RecomposeError::Recomposer). A
-/// tree produced by a parse never causes this error. It can occur for a tree built by
-/// hand with [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or for a tree
-/// produced by a restage.
+/// [`RecomposeError::Recomposer`](crate::recompose::RecomposeError::Recomposer).
+///
+/// A parse with the preset's own specs never causes this error. The error can occur
+/// in these cases:
+///
+/// - A tree built by hand with [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder),
+///   or a tree that a restage builds, contains a callable node whose invocation syntax
+///   does not match the role of its callable type.
+/// - A custom spec stages a callable with a callable type whose role does not match
+///   the token that invokes the callable, for instance a specials type for a callable
+///   that is invoked by a command.
+/// - A language that adds callable types beyond macro, environment and specials
+///   stages a callable of such a type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceRecomposeError {

@@ -319,7 +319,10 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
 /// stores only terminators of the form `\end{name}`. A
 /// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) with a
 /// [`StopEnvironmentCommand`](crate::core::constructs::VerbatimBodyTerminator::StopEnvironmentCommand)
-/// terminator reports such a terminator, as the preset's verbatim environments do.
+/// terminator, as in the preset's verbatim environments, reports a terminator of this
+/// form. A [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) with a
+/// [`Literal`](crate::core::constructs::VerbatimBodyTerminator::Literal) terminator
+/// reports its terminator as a literal string, which causes this error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EnvironmentSyntaxError {
@@ -337,8 +340,8 @@ impl fmt::Display for EnvironmentSyntaxError {
         match self {
             EnvironmentSyntaxError::LiteralTerminator { environment } => write!(
                 f,
-                "Unsupported literal terminator reported by the body parser of environment \
-                 ‘{environment}’: the environment syntax record stores only \
+                "Misconfigured environment ‘{environment}’: the body parser reports \
+                 a literal terminator; the environment syntax record stores only \
                  terminators of the form ‘\\end{{name}}’"
             ),
         }
