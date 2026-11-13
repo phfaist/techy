@@ -1437,6 +1437,15 @@ mod tests {
             0..0
         )]);
         let violation = validate_tree(&tree).unwrap_err();
+        assert_eq!(violation.node, Some(tree.make_id(0)));
+        assert_eq!(
+            violation.kind,
+            TreeViolationKind::SpannedContentInvalid {
+                what: "chars content",
+                span: Span::new(0, 99),
+                content_len: 2,
+            }
+        );
         let payload = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
             check_tree_invariants(&tree)
         }))
