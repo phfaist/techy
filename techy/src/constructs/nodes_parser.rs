@@ -5548,6 +5548,11 @@ mod tests {
         assert_eq!(error.frames().len(), 2);
         assert_eq!(error.frames()[0].span().range(), 3..8);
         assert_eq!(error.frames()[1].span().range(), 2..3);
+        // The invocation frame is titled by the failing spec's own hook.
+        assert_eq!(
+            error.frames()[0].title(),
+            BrokenFactorySpec.stack_frame_title(crate::spec::FrameRole::Invocation, "\\fail")
+        );
     }
 
     #[test]
@@ -5801,9 +5806,12 @@ mod tests {
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        // The rendered failure names the provider the op targeted.
+        // The rendered failure is the op's error: no provider named `absent`.
         let detail = &diagnostic.data().downcast_ref::<ScopeOpFailed>().unwrap().detail;
-        assert!(detail.contains("absent"), "unexpected detail: {detail}");
+        assert_eq!(
+            *detail,
+            crate::scopes::ScopeOpError::UnknownProvider { name: "absent".into() }.to_string()
+        );
         assert_partition(&parsed.result, 0..5);
 
         // Strict: the first failing op aborts the parse.
