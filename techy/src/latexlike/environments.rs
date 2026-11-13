@@ -129,80 +129,82 @@ use super::Latexlike;
 
 // --- conditions --------------------------------------------------------------------
 
-/// Condition: the environment-opening command was not followed immediately by its
-/// name group.
+/// The error that is reported when the command that opens an environment is not
+/// followed by a valid name group (id `latexlike.environments.malformed-begin`).
 ///
-/// The name group is rigid, so `\begin [x]` and `\begin{ itemize }` both raise this.
-/// Under tolerant recovery the command alone is staged as a
-/// [`Chars`](crate::core::node::NodeKind::Chars) node — the whitespace the command
-/// token itself consumed included, so that the siblings still partition the source
-/// exactly — and nothing after it is consumed, leaving the rest to parse as ordinary
-/// content.
+/// The command must be followed immediately by a group that contains only the
+/// environment name, as in `\begin{itemize}`. Whitespace between the command and the
+/// group is allowed, as in `\begin {itemize}`.
 ///
-/// The message quotes the command as it was written: the opening command's name is
-/// whatever [`BeginSpec`] was registered under, `\begin` only by convention.
+/// Reported by the invocation parser of [`BeginSpec`]. The span of the diagnostic is
+/// the command.
 ///
-/// Like every condition, it can be constructed outside the crate, for instance to
-/// manufacture a diagnostic in an embedding's own tests:
-///
-/// ```
-/// use techy::latexlike::MalformedBegin;
-///
-/// let condition = MalformedBegin::new("\\begin");
-/// assert_eq!(condition, MalformedBegin::new("\\begin"));
-/// ```
+/// In a tolerant parse, the command and the whitespace after it are parsed as a
+/// [`Chars`](crate::core::node::NodeKind::Chars) node. The source that follows is parsed
+/// as ordinary content. A strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "latexlike.environments.malformed-begin",
-    message = "malformed ‘{command}’: expected the environment's name group \
-               immediately after the command"
+    message = "Malformed ‘{command}’: the command must be followed \
+               immediately by the environment name alone in a group"
 )]
 pub struct MalformedBegin {
-    /// The opening command as written: escape character included, the whitespace
-    /// after it excluded (`\begin`).
+    /// The command as written, with its escape character and without the whitespace
+    /// after it (e.g. `\begin`). The name of the command is the name under which the
+    /// [`BeginSpec`] is registered.
     pub command: String,
 }
 
-/// Condition: `\begin{name}` named an environment that no provider in the scope stack
-/// defines.
+/// The error that is reported when `\begin{name}` refers to an environment that is not
+/// defined (id `latexlike.environments.unknown-environment`).
 ///
-/// Under tolerant recovery the parse continues with a fallback definition that
-/// declares no arguments, so the body is still parsed and still ends at its
-/// `\end{name}` terminator.
+/// An environment is defined when a provider in the scope stack defines it, for instance
+/// a [`Package`](crate::core::specs::Package) that contains its [`EnvironmentSpec`].
+/// Reported by the invocation parser of [`BeginSpec`]. The span of the diagnostic is the
+/// environment name.
+///
+/// In a tolerant parse, the environment is parsed as an environment without arguments:
+/// the body is parsed as content and ends at `\end{name}`. A strict parse stops at this
+/// error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "latexlike.environments.unknown-environment",
-    message = "unknown environment ‘{name}’"
+    message = "Unknown environment ‘{name}’"
 )]
 pub struct UnknownEnvironment {
-    /// The environment name as written in the `\begin` name group.
+    /// The environment name as written in the name group of `\begin`.
     pub name: String,
 }
 
-/// Condition: an environment terminator appeared with no environment open at its
-/// level.
+/// The error that is reported when `\end` appears where no environment is open (id
+/// `latexlike.environments.orphan-end`).
 ///
-/// Inside a body the terminator is consumed by the body parser before any command
-/// resolution happens, so a terminator that reaches its own definition ([`EndSpec`])
-/// is always an orphan. Under tolerant recovery what was consumed — `\end{name}`
-/// whole, or the command alone when no name group followed it — is staged as a
-/// [`Chars`](crate::core::node::NodeKind::Chars) node.
+/// The body parser of an environment consumes the terminator of the environment, e.g.
+/// `\end{itemize}` in `\begin{itemize} … \end{itemize}`. An `\end` that the body
+/// parser does not consume is parsed as a command, by the parser of [`EndSpec`], which
+/// reports this error. This is the case for an `\end` outside of any environment, and
+/// for an `\end` inside a group of the body.
 ///
-/// The message quotes the terminator as it was written. It never spells the *opening*
-/// command, which this site has no way to know: the pairing is recorded by
-/// [`BeginSpec`], and only in the opening direction.
+/// The span of the diagnostic is the command and, if one follows, its name group. In a
+/// tolerant parse, this source is parsed as a
+/// [`Chars`](crate::core::node::NodeKind::Chars) node. A strict parse stops at this
+/// error.
+///
+/// The message quotes the source of the terminator, and names the environment if the
+/// name group could be read. It does not name the command that opens the environment:
+/// [`EndSpec`] does not record which command is paired with it.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "latexlike.environments.orphan-end")]
 pub struct OrphanEnd {
-    /// The environment named by the terminator, when its name group parsed.
+    /// The environment name in the name group after the command, or `None` if no valid
+    /// name group follows the command.
     pub name: Option<String>,
-    /// The terminator as written: the whole consumed extent (`\end{align}`), or, when
-    /// no name group followed, the command alone with the whitespace after it excluded
-    /// (`\end`). A terminator spelled some other way than as a command is always
-    /// quoted with its whole extent.
+    /// The source of the terminator as written, e.g. `\end{align}`. If no valid name
+    /// group follows the command, the source of the command alone, without the
+    /// whitespace after it (e.g. `\end`).
     pub terminator: String,
 }
 
@@ -213,9 +215,9 @@ impl fmt::Display for OrphanEnd {
         let terminator = &self.terminator;
         match &self.name {
             Some(name) => {
-                write!(f, "orphan ‘{terminator}’: no environment ‘{name}’ is open here")
+                write!(f, "Orphan ‘{terminator}’: no environment ‘{name}’ is open here")
             }
-            None => write!(f, "orphan ‘{terminator}’: no environment is open here"),
+            None => write!(f, "Orphan ‘{terminator}’: no environment is open here"),
         }
     }
 }
@@ -903,8 +905,9 @@ where
             cx.tokens.token_kind(trigger)
         else {
             return Err(cx.implementation_error(
-                "the std environment composition requires a Command trigger \
-                 (custom trigger shapes need their own composition and Env type)",
+                "Misconfigured spec ‘BeginSpec’: the invocation must \
+                 begin with a command token (register ‘BeginSpec’ as a \
+                 macro)",
                 cx.tokens.source_span_of(trigger),
             ));
         };
@@ -1048,7 +1051,9 @@ where
         // error, never a panic ([§dd-dr:panic-policy]).
         if passthrough.is_some() {
             return Err(cx.implementation_error(
-                "the environment body parser must return no pass-through state delta",
+                "Invalid state delta returned by the body parser of \
+                 ‘EnvironmentBehavior::make_body_parser’: a body parser \
+                 must return no state delta",
                 trigger_span,
             ));
         }
