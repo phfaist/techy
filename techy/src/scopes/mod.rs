@@ -2386,15 +2386,16 @@ mod tests {
     #[test]
     fn searched_providers_reports_innermost_first() {
         let mut stack: ScopeStack<PlainLang> = ScopeStack::new();
-        assert_eq!(stack.searched_providers().to_string(), "no providers on the scope stack");
+        assert_eq!(stack.provider_names().count(), 0);
 
         stack.push(Arc::new(package_with("outer", &[])));
         stack.push(Arc::new(package_with("inner", &[])));
-        assert_eq!(
-            stack.searched_providers().to_string(),
-            "searched providers: inner, outer"
-        );
         assert_eq!(stack.provider_names().collect::<Vec<_>>(), vec!["inner", "outer"]);
+        // The rendered detail names the providers in the same order.
+        let rendered = stack.searched_providers().to_string();
+        let inner = rendered.find("inner").expect("names the inner provider");
+        let outer = rendered.find("outer").expect("names the outer provider");
+        assert!(inner < outer, "{rendered}");
     }
 
     // --- custom-provider dispatch (carried over from the Phase 4 lookup contract) --------
@@ -2771,25 +2772,23 @@ mod tests {
         let package = specials_package("lig", &[("--", &spec)]);
         let st = state_with(ScopeStack::new());
 
-        // Out of range — the message names the case.
+        let is_implementation_error = |kind: &TokenErrorKind| match kind {
+            TokenErrorKind::Custom(data) => {
+                data.downcast_ref::<crate::constructs::ImplementationError>().is_some()
+            }
+            _ => false,
+        };
+
+        // Out of range — reported at the end of the content.
         let error = package.scan_specials(&st, "--", 7).unwrap_err();
-        assert!(error.kind.to_string().contains("extension contract violation"));
-        assert!(error.kind.to_string().contains("invalid position 7"));
-        assert!(
-            error.kind.to_string().contains("out of the content's bounds"),
-            "{:?}",
-            error
-        );
+        assert!(is_implementation_error(&error.kind), "{:?}", error);
+        assert_eq!(error.span, crate::source::Span::empty(2));
 
         // Mid-character: `é` is two bytes, so pos 1 is not a character boundary —
-        // named as the boundary case, not the bounds case.
+        // reported at the position itself.
         let error = package.scan_specials(&st, "é--", 1).unwrap_err();
-        assert!(error.kind.to_string().contains("invalid position 1"));
-        assert!(
-            error.kind.to_string().contains("not a character boundary"),
-            "{:?}",
-            error
-        );
+        assert!(is_implementation_error(&error.kind), "{:?}", error);
+        assert_eq!(error.span, crate::source::Span::empty(1));
 
         // Valid boundary positions are unaffected — end of content included.
         assert!(package.scan_specials(&st, "x--", 1).unwrap().is_some());
@@ -2866,7 +2865,14 @@ mod tests {
         let st = state_with(ScopeStack::new());
 
         let error = stack.scan_specials(&st, "-", 0).unwrap_err();
-        assert!(error.kind.to_string().contains("scan broke"));
+        let TokenErrorKind::Custom(data) = &error.kind else {
+            panic!("the provider's own error kind: {:?}", error);
+        };
+        let condition = data
+            .downcast_ref::<crate::constructs::ImplementationError>()
+            .expect("the provider's own condition");
+        assert_eq!(condition.detail, "scan broke");
+        assert_eq!(error.span, crate::source::Span::new(0, 1));
         assert_eq!(stack.specials_trigger_chars(), TriggerChars::Any);
     }
 

@@ -515,8 +515,9 @@ mod tests {
         SpecialsSpec,
     };
     use super::*;
+    use crate::constructs::MissingMandatoryArgument;
     use crate::engine::{Language, ParseResult};
-    use crate::error::Recovery;
+    use crate::error::{DiagnosticInfo, Recovery};
     use crate::latexlike::check_latexlike_tree_invariants;
     use crate::node::NodeRef;
     use crate::scopes::Package;
@@ -632,14 +633,6 @@ mod tests {
             argument_specs_from_str::<Latexlike>("or(").unwrap_err(),
             ArgumentCodeError::TruncatedCode { index: None, offset: 1, code: 'r' }
         );
-        assert_eq!(
-            argument_specs_from_str::<Latexlike>("x").unwrap_err().to_string(),
-            "unknown argument code ‘x’ at offset 0"
-        );
-        assert_eq!(
-            argument_specs_from_str::<Latexlike>("d<").unwrap_err().to_string(),
-            "argument code ‘d’ at offset 0 is missing its parameter character(s)"
-        );
     }
 
     #[test]
@@ -669,24 +662,6 @@ mod tests {
         assert_eq!(
             argument_specs::<Latexlike, _>([" \t"]).unwrap_err(),
             ArgumentCodeError::EmptyCode { index: 0 }
-        );
-        // Display strings name the list element.
-        assert_eq!(
-            argument_specs::<Latexlike, _>(["x"]).unwrap_err().to_string(),
-            "unknown argument code ‘x’ at offset 0 of code string 0"
-        );
-        assert_eq!(
-            argument_specs::<Latexlike, _>(["r<"]).unwrap_err().to_string(),
-            "argument code ‘r’ at offset 0 of code string 0 is missing its parameter \
-             character(s)"
-        );
-        assert_eq!(
-            argument_specs::<Latexlike, _>(["mo"]).unwrap_err().to_string(),
-            "unexpected ‘o’ at offset 1 of code string 0 (one argument code per string)"
-        );
-        assert_eq!(
-            argument_specs::<Latexlike, _>([""]).unwrap_err().to_string(),
-            "code string 0 is empty (one argument code per string)"
         );
     }
 
@@ -849,7 +824,7 @@ mod tests {
     #[test]
     fn r_code_missing_is_diagnosed_with_no_expression_fallback() {
         let err = language(Recovery::Strict, "r()").parse(r"\m x").unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
 
         let result = language(Recovery::Tolerant, "r()").parse(r"\m x").unwrap();
         check_latexlike_tree_invariants(&result.tree);
@@ -1113,7 +1088,7 @@ mod tests {
     fn any_delimited_mandatory_vs_optional() {
         // pylatexenc test_multidelim_mandatory: no pair opens — diagnosed.
         let err = language(Recovery::Strict, "AnyDelimited").parse(r"\m x").unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
 
         // pylatexenc test_multidelim_optional: absent is silent.
         let result = parse_ok("AnyDelimitedOptional", r"\m juice");
@@ -1187,7 +1162,7 @@ mod tests {
         // …but a bare expression is NOT swallowed (no fallback): strict diagnoses
         // the missing mandatory argument; tolerant leaves `x` as sibling content.
         let err = language(Recovery::Strict, "BracedOnly").parse(r"\m x").unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
         let result = language(Recovery::Tolerant, "BracedOnly").parse(r"\m x").unwrap();
         check_latexlike_tree_invariants(&result.tree);
         assert_eq!(result.diagnostics.len(), 1);

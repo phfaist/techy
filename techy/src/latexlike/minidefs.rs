@@ -292,6 +292,10 @@ mod tests {
         // …and nowhere else: outside a list body the name does not resolve.
         let language = with_package(Recovery::Strict, minilatex_package());
         let err = language.parse(r"\item x").unwrap_err();
-        assert!(err.to_string().contains("cannot resolve command ‘\\item’"), "{err}");
+        let condition = err
+            .data()
+            .downcast_ref::<crate::constructs::UnresolvableCommand>()
+            .expect("an unresolvable command");
+        assert_eq!(condition.name, "item");
     }
 }

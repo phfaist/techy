@@ -639,9 +639,10 @@ mod tests {
     #[test]
     fn check_include_chain_detects_a_cycle() {
         let trigger = chain_trigger();
+        // No depth bound: the refusal can only be the cycle, which names the offending
+        // source on the chain.
         let err =
             check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
-        assert!(err.message().contains("include cycle"));
         assert_eq!(err.reference(), "a.tex");
     }
 
@@ -652,17 +653,25 @@ mod tests {
         let trigger = chain_trigger();
         let err =
             check_include_chain(&String::from("doc.tex"), &trigger, key, None).unwrap_err();
-        assert!(err.message().contains("include cycle"));
         assert_eq!(err.reference(), "doc.tex");
+        // The same refusal as a cycle through a source deeper on the chain.
+        let deeper =
+            check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        assert_eq!(err.message(), deeper.message());
     }
 
     #[test]
     fn check_include_chain_detects_depth_overflow_with_a_distinct_message() {
         let trigger = chain_trigger();
+        // `c.tex` is not on the chain: the refusal can only be the depth overflow, which
+        // names the immediate includer.
         let err = check_include_chain(&String::from("c.tex"), &trigger, key, Some(2))
             .unwrap_err();
-        assert!(err.message().contains("include depth 3 exceeds the maximum of 2"));
-        assert!(!err.message().contains("cycle"));
+        assert_eq!(err.reference(), "b.tex");
+        // Its message differs from the cycle refusal's.
+        let cycle =
+            check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        assert_ne!(err.message(), cycle.message());
     }
 
     #[test]

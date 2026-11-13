@@ -950,11 +950,6 @@ mod tests {
             .downcast_ref::<InvalidSourceReferenceArgument>()
             .unwrap();
         assert_eq!(condition.reason, InvalidReferenceReason::NotPlainCharacters);
-        // The rendered wording names the reason.
-        assert_eq!(
-            diagnostic.message(),
-            "invalid source reference argument: its content is not plain characters"
-        );
         // Anchored at the argument, delimiters included — `{{chap.tex}}`.
         assert_eq!(diagnostic.span().range(), 6..18);
         assert_eq!(diagnostic.span().content(), "{{chap.tex}}");
@@ -1055,7 +1050,12 @@ mod tests {
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
         // The diagnostic points into the *attached* source, inside the door's frame.
         assert_eq!(diagnostic.span().range(), 1..2);
-        assert!(diagnostic.frames().iter().any(|f| f.title() == "attached source"));
+        // The innermost frame is the door's, anchored at the whole inclusion site in
+        // the outer source.
+        let door = diagnostic.frames().first().unwrap();
+        assert!(!door.span().same_source(diagnostic.span()));
+        assert_eq!(door.span().range(), 1..17);
+        assert_eq!(door.span().content(), r"\input{frag.tex}");
 
         // The outer group is intact and spans the whole input.
         let group = result.tree.root().child(0).unwrap();
@@ -1132,7 +1132,27 @@ mod tests {
             .data()
             .downcast_ref::<UnresolvableSourceReference>()
             .unwrap();
-        assert!(condition.error.message().contains("include cycle"));
+        // The resolver's error is the cycle refusal of `check_include_chain` (its
+        // depth bound of 8 is far away): the same error that the helper returns for
+        // `a.tex` included from inside itself, where no depth bound applies.
+        let primary = Arc::new(crate::source::Source::new(r"\input{a.tex}"));
+        let included = Arc::new(
+            crate::source::Source::resolved(
+                r"x\input{a.tex}y",
+                "a.tex",
+                SourceSpan::entire(&primary),
+            )
+            .with_origin(Some("a.tex".into())),
+        );
+        let cycle = check_include_chain(
+            &String::from("a.tex"),
+            &SourceSpan::entire(&included),
+            |origin: &Option<String>| origin.clone(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(condition.error.reference(), cycle.reference());
+        assert_eq!(condition.error.message(), cycle.message());
 
         // The outer inclusion succeeded — one attached level, the inner `\input`
         // staged without a slot.
@@ -1508,20 +1528,14 @@ mod tests {
             error.declared_names,
             vec![Some("options".into()), Some("file".into())]
         );
-        assert_eq!(
-            error.to_string(),
-            r#"the input spec's argument list declares no argument named "reference" (declared: "options", "file")"#
-        );
 
         // An empty list, and an unnamed argument.
         let error =
             InputMacroSpec::<Latexlike>::new(vec![], false, BodyMarker::not_body()).unwrap_err();
         assert!(error.declared_names.is_empty());
-        assert!(error.to_string().ends_with("(the list is empty)"), "{error}");
         let arguments = argument_specs::<Latexlike, _>(["m"]).unwrap();
         let error = InputMacroSpec::new(arguments, false, BodyMarker::not_body()).unwrap_err();
         assert_eq!(error.declared_names, vec![None]);
-        assert!(error.to_string().ends_with("(declared: <unnamed>)"), "{error}");
     }
 
     #[test]

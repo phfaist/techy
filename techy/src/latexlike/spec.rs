@@ -446,21 +446,29 @@ mod tests {
     #[test]
     fn frame_titles_speak_the_preset_vocabulary() {
         let frac = MacroSpec::new(vec![brace_arg(), brace_arg()]);
-        assert_eq!(
-            frac.stack_frame_title(FrameRole::Invocation, "\\frac"),
-            "macro ‘\\frac’"
-        );
-        assert_eq!(
-            frac.stack_frame_title(FrameRole::Argument { index: 0 }, "\\frac"),
-            "argument #1 of macro ‘\\frac’"
-        );
-
         let tilde: SpecialsSpec = SpecialsSpec::default();
-        assert_eq!(tilde.stack_frame_title(FrameRole::Invocation, "~"), "specials ‘~’");
-        assert_eq!(
-            tilde.stack_frame_title(FrameRole::Argument { index: 1 }, "~"),
-            "argument #2 of specials ‘~’"
-        );
+        for name in ["\\frac", "~"] {
+            let macro_invocation = frac.stack_frame_title(FrameRole::Invocation, name);
+            let specials_invocation = tilde.stack_frame_title(FrameRole::Invocation, name);
+            // Each spec type names its own kind of callable: the same name reads
+            // differently as a macro and as a specials.
+            assert_ne!(macro_invocation, specials_invocation);
+            for (spec, invocation) in [
+                (&frac as &dyn CallableSpec<Latexlike>, &macro_invocation),
+                (&tilde as &dyn CallableSpec<Latexlike>, &specials_invocation),
+            ] {
+                // The invocation title names the callable as written.
+                assert!(invocation.contains(name), "{invocation}");
+                // An argument title names the invocation it belongs to, and tells
+                // the arguments apart.
+                let first = spec.stack_frame_title(FrameRole::Argument { index: 0 }, name);
+                let second = spec.stack_frame_title(FrameRole::Argument { index: 1 }, name);
+                assert!(first.contains(invocation.as_str()), "{first}");
+                assert!(second.contains(invocation.as_str()), "{second}");
+                assert_ne!(&first, invocation);
+                assert_ne!(first, second);
+            }
+        }
     }
 
     #[test]

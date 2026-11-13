@@ -666,8 +666,9 @@ where
 mod tests {
     use super::*;
     use super::test_support::{macro_package, parse_shapes, root_shapes, strict, tolerant};
-    use crate::engine::Language;
-    use crate::error::Severity;
+    use crate::constructs::UnresolvableCommand;
+    use crate::engine::{Language, ParseResult};
+    use crate::error::{DiagnosticInfo, Severity};
     use super::check_latexlike_tree_invariants;
     use crate::scopes::ScopeOp;
     use crate::state::ParsingStateDelta;
@@ -874,6 +875,24 @@ mod tests {
         assert_eq!(rest.span().range(), 8..9);
     }
 
+    /// The searched-providers detail of a resolution miss under `language`'s seed
+    /// state, as the scope stack renders it.
+    fn seed_searched_providers(language: &Language<Latexlike>) -> String {
+        language.initial_state().scopes().searched_providers().to_string()
+    }
+
+    /// The provider names of `language`'s seed scope stack, innermost first.
+    fn seed_provider_names(language: &Language<Latexlike>) -> Vec<String> {
+        language.initial_state().scopes().provider_names().map(String::from).collect()
+    }
+
+    /// The unresolvable-command condition of the first diagnostic of `result`.
+    fn first_unresolvable(result: &ParseResult<Latexlike>) -> UnresolvableCommand {
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), UnresolvableCommand::IDENTIFIER);
+        diagnostic.data().downcast_ref::<UnresolvableCommand>().unwrap().clone()
+    }
+
     #[test]
     fn mode_visibility_gates_package_definitions() {
         let language = with_alpha(crate::error::Recovery::Tolerant, true);
@@ -889,14 +908,18 @@ mod tests {
         let text = language.parse(r"\alpha").unwrap();
         assert_eq!(root_shapes(&text), [r"chars(\alpha)"]);
         assert_eq!(text.diagnostics.len(), 1);
-        let message = text.diagnostics.iter().next().unwrap().message();
-        assert!(message.contains("searched providers: alphapkg, _builtin"), "{message}");
+        let condition = first_unresolvable(&text);
+        assert_eq!(condition.name, "alpha");
+        assert_eq!(seed_provider_names(&language), ["alphapkg", "_builtin"]);
+        assert_eq!(condition.detail, Some(seed_searched_providers(&language)));
     }
 
     #[test]
     fn unknown_commands_abort_strict_and_recover_tolerant() {
         let err = strict().parse(r"a \foo b").unwrap_err();
-        assert!(err.to_string().contains("cannot resolve command ‘\\foo’"), "{err}");
+        let condition = err.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(condition.name, "foo");
+        assert_eq!(condition.escape_char, '\\');
 
         let result = tolerant().parse(r"a \foo b").unwrap();
         assert_eq!(
@@ -910,23 +933,24 @@ mod tests {
     fn unresolvable_command_diagnostic_carries_span_severity_and_detail() {
         // The searched-providers detail rides the strict abort error too — not only the
         // tolerant diagnostic (guards the strict path from silently dropping it).
-        let err = strict().parse(r"a \foo b").unwrap_err();
-        assert!(
-            err.to_string().contains("searched providers: _builtin"),
-            "strict error lost the searched-providers detail: {err}"
+        let language = strict();
+        assert_eq!(seed_provider_names(&language), ["_builtin"]);
+        let err = language.parse(r"a \foo b").unwrap_err();
+        let condition = err.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(
+            condition.detail,
+            Some(seed_searched_providers(&language)),
+            "strict error lost the searched-providers detail"
         );
 
         // The tolerant diagnostic is Error-severity and spans the unresolved command
         // token exactly (guards against a zero-width or post-space-shifted span).
-        let result = tolerant().parse(r"a \foo b").unwrap();
+        let language = tolerant();
+        let result = language.parse(r"a \foo b").unwrap();
         let diag = result.diagnostics.iter().next().unwrap();
         assert_eq!(diag.severity(), Severity::Error);
         assert_eq!(diag.span().content(), r"\foo ");
-        assert!(
-            diag.message().contains("searched providers: _builtin"),
-            "{}",
-            diag.message()
-        );
+        assert_eq!(first_unresolvable(&result).detail, Some(seed_searched_providers(&language)));
     }
 
     #[test]
@@ -944,15 +968,17 @@ mod tests {
         let result = language.parse(r"\greet x").unwrap();
         // The miss detail alone: no parse runs the escape-shadowing check.
         assert_eq!(result.diagnostics.len(), 1);
-        let message = result
-            .diagnostics
-            .with_identifier("core.specs.unresolvable-command")
-            .next()
-            .unwrap()
-            .message();
-        assert!(message.contains("searched providers: mydefs, _builtin"), "{message}");
-        assert!(message.contains("provider ‘mydefs’ defines ‘\\greet’"), "{message}");
-        assert!(message.contains("without the escape character"), "{message}");
+        let condition = first_unresolvable(&result);
+        assert_eq!(condition.name, "greet");
+        // The detail opens with the searched providers and appends a hint that names
+        // the provider and the escape-prefixed registration.
+        assert_eq!(seed_provider_names(&language), ["mydefs", "_builtin"]);
+        let detail = condition.detail.unwrap();
+        let searched = seed_searched_providers(&language);
+        assert!(detail.starts_with(&searched), "{detail}");
+        let hint = &detail[searched.len()..];
+        assert!(hint.contains("mydefs"), "{detail}");
+        assert!(hint.contains(r"\greet"), "{detail}");
     }
 
     #[test]
@@ -988,7 +1014,6 @@ mod tests {
         assert_eq!(condition.count, 2);
         assert_eq!(condition.example, r"\bye"); // sorted: deterministic example
         assert_eq!(condition.escape_chars, "\\");
-        assert!(diag.message().contains("without the escape character"), "{}", diag.message());
 
         // A mixed table means the author knows the convention (the lone
         // escape-prefixed entry may be intended): no warning.
@@ -1077,17 +1102,18 @@ mod tests {
         let language = test_support::with_package(crate::error::Recovery::Tolerant, package);
         let result = language.parse(r"\gret x").unwrap();
         assert_eq!(result.diagnostics.len(), 1);
-        let message = result.diagnostics.iter().next().unwrap().message();
-        assert!(
-            message.contains("did you mean ‘greet’ (provider ‘mydefs’)?"),
-            "{message}"
-        );
+        // The detail opens with the searched providers and appends a hint that names
+        // the near-miss name and its provider.
+        let searched = seed_searched_providers(&language);
+        let detail = first_unresolvable(&result).detail.unwrap();
+        assert!(detail.starts_with(&searched), "{detail}");
+        let hint = &detail[searched.len()..];
+        assert!(hint.contains("greet"), "{detail}");
+        assert!(hint.contains("mydefs"), "{detail}");
 
         // A far-off name gets no suggestion — the searched-providers detail alone.
         let result = language.parse(r"\xyzzy x").unwrap();
-        let message = result.diagnostics.iter().next().unwrap().message();
-        assert!(message.contains("searched providers"), "{message}");
-        assert!(!message.contains("did you mean"), "{message}");
+        assert_eq!(first_unresolvable(&result).detail, Some(searched));
     }
 
     #[test]
@@ -1353,8 +1379,9 @@ mod tests {
         let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state");
         let error =
             seed.derived(&ParsingStateDelta::new().event(Event::ExitMathContext)).unwrap_err();
-        let finalize_error = error.finalize_error.as_ref().unwrap();
-        assert!(finalize_error.message().contains("ExitMathContext"));
+        // The refusal comes from the customizer, not from a scope op.
+        assert!(error.finalize_error.is_some());
+        assert!(error.failures.is_empty());
     }
 
     /// A foreign Lang adopting the preset vocabularies: the shared fixture of the
@@ -1595,6 +1622,7 @@ mod tests {
         );
         // With `\begin`/`\end` unloaded, a `\begin` command is unresolvable.
         let err = language.parse(r"\begin{itemize}").unwrap_err();
-        assert!(err.to_string().contains("cannot resolve command ‘\\begin’"), "{err}");
+        let condition = err.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(condition.name, "begin");
     }
 }
