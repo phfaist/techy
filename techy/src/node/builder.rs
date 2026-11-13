@@ -52,6 +52,14 @@ use super::NodeExt;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BuildId(u32);
 
+impl BuildId {
+    /// Returns the staging number of this id, as the messages of the builder errors
+    /// print it.
+    pub(crate) const fn number(self) -> u32 {
+        self.0
+    }
+}
+
 impl fmt::Debug for BuildId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BuildId({})", self.0)
@@ -882,12 +890,12 @@ impl fmt::Display for NodeBuildError {
                 write!(f, "‘Lang::make_node_ext’ failed: {}", detail)
             }
             NodeBuildError::ChildNotStaged { child } => {
-                write!(f, "Invalid child {:?}: the node is not staged in this builder", child)
+                write!(f, "Invalid child node {}: the node is not staged in this builder", child.0)
             }
             NodeBuildError::ChildAlreadyClaimed { child } => write!(
                 f,
-                "Invalid child {:?}: the node is already the child of another node",
-                child
+                "Invalid child node {}: the node is already the child of another node",
+                child.0
             ),
             NodeBuildError::RegionAlreadyResolved => write!(
                 f,
@@ -919,8 +927,8 @@ impl fmt::Display for NodeBuildError {
             ),
             NodeBuildError::ContentParentNotStaged { parent } => write!(
                 f,
-                "Invalid content parent {:?}: the node is not staged in this builder",
-                parent
+                "Invalid content parent node {}: the node is not staged in this builder",
+                parent.0
             ),
             NodeBuildError::SpannedContentInvalid { what, span, content_len } => write!(
                 f,
@@ -929,27 +937,27 @@ impl fmt::Display for NodeBuildError {
                 span, what, content_len
             ),
             NodeBuildError::RootNotStaged { root } => {
-                write!(f, "Invalid root {:?}: the node is not staged in this builder", root)
+                write!(f, "Invalid root node {}: the node is not staged in this builder", root.0)
             }
             NodeBuildError::RootClaimed { root } => {
-                write!(f, "Invalid root {:?}: the node is the child of another node", root)
+                write!(f, "Invalid root node {}: the node is the child of another node", root.0)
             }
             NodeBuildError::ContentParentUnreachable { parent } => write!(
                 f,
-                "Invalid content parent {:?}: the node is not reachable from the root",
-                parent
+                "Invalid content parent node {}: the node is not reachable from the root",
+                parent.0
             ),
             NodeBuildError::ContentParentOutsideSubtree { parent } => write!(
                 f,
-                "Invalid content parent {:?}: the node is not inside the subtree of its \
-                 callable",
-                parent
+                "Invalid content parent node {}: the node is not inside the subtree of \
+                 its callable",
+                parent.0
             ),
             NodeBuildError::ContentParentOutsideRegion { parent } => write!(
                 f,
-                "Invalid content parent {:?}: the node is not inside its argument or slot \
-                 region",
-                parent
+                "Invalid content parent node {}: the node is not inside its argument or \
+                 slot region",
+                parent.0
             ),
             NodeBuildError::ReplacementsLengthMismatch { children, replacements } => write!(
                 f,
@@ -959,15 +967,15 @@ impl fmt::Display for NodeBuildError {
             ),
             NodeBuildError::ContentParentUnmapped { parent } => write!(
                 f,
-                "Missing mapping for content parent {:?}: the content-parent mapping of \
-                 ‘restage_node’ returned ‘None’",
-                parent
+                "Missing mapping for content parent node {}: the content-parent mapping \
+                 of ‘restage_node’ returned ‘None’",
+                parent.index()
             ),
             NodeBuildError::StagedContentParentUnmapped { parent } => write!(
                 f,
-                "Missing mapping for content parent {:?}: the content-parent mapping of \
-                 ‘restage_staged_node’ returned ‘None’",
-                parent
+                "Missing mapping for content parent node {}: the content-parent mapping \
+                 of ‘restage_staged_node’ returned ‘None’",
+                parent.0
             ),
         }
     }
