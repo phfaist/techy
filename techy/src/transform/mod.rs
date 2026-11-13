@@ -420,7 +420,7 @@ impl<E: fmt::Display> fmt::Display for RestageError<E> {
             }
             RestageError::ArgumentAbsent { node, index } => write!(
                 f,
-                "Argument {} of callable node {} is not provided: only a provided \
+                "Missing argument at index {} of callable node {}: only a provided \
                  argument can receive new content; build the argument with \
                  ‘RestagedArgument::provided’",
                 index,
@@ -429,8 +429,7 @@ impl<E: fmt::Display> fmt::Display for RestageError<E> {
             RestageError::RootNotSingular { count } => write!(
                 f,
                 "Root restaged to {} nodes: the root must be restaged to exactly one \
-                 node; stage a node that contains these nodes and return it with \
-                 ‘Restage::Emit’",
+                 node; return a single node with ‘Restage::Emit’",
                 count
             ),
             RestageError::DescentLimitExceeded { detail } => {

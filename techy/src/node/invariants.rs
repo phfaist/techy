@@ -506,12 +506,12 @@ impl fmt::Display for TreeViolationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TreeViolationKind::Empty => {
-                write!(f, "the tree has no nodes (a tree contains at least its root node)")
+                write!(f, "missing root node")
             }
             TreeViolationKind::ChildrenOutOfBounds { children, node_count } => {
                 write!(
                     f,
-                    "invalid children range {:?} (the tree has {} nodes)",
+                    "children range {:?} out of bounds (the tree has {} nodes)",
                     children, node_count
                 )
             }
@@ -546,7 +546,7 @@ impl fmt::Display for TreeViolationKind {
             }
             TreeViolationKind::ChildrenNotInRegions { unassigned } => write!(
                 f,
-                "children {:?} not in any argument or slot region (the regions must \
+                "children {:?} are not in any argument or slot region (the regions must \
                  cover all children of the callable)",
                 unassigned
             ),

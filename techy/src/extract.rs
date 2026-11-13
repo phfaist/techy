@@ -180,8 +180,10 @@ pub enum ExtractError {
     },
     /// Building the result tree failed. If the variant of [`NodeBuildError`] is
     /// [`ExtMintFailed`](NodeBuildError::ExtMintFailed), [`Lang::make_node_ext`]
-    /// failed for a node of the result tree. Any other variant is caused by a fault in
-    /// the helper, and not by the input.
+    /// failed for a node of the result tree. If it is
+    /// [`TooManyNodes`](NodeBuildError::TooManyNodes), the result tree would contain
+    /// more nodes, or a node more children, than a `u32` can count. Any other variant
+    /// is caused by a fault in the helper, and not by the input.
     Build(NodeBuildError),
 }
 
