@@ -33,53 +33,67 @@ use crate::token::GroupRule;
 
 use super::{LatexlikeGroupType, LatexlikeLang};
 
-/// A malformed argument code, returned when the argument specs are built.
+/// The error that is returned when an argument code is malformed.
 ///
-/// [`argument_specs`], [`argument_specs_named`] and [`argument_specs_from_str`] all
-/// return this. An unusable code is a mistake in a definition, so it is reported
-/// before any document is parsed rather than diagnosed during a parse.
+/// [`argument_specs`], [`argument_specs_named`] and [`argument_specs_from_str`] return
+/// this error when they cannot read one of their argument codes, and they then build
+/// no argument specs. The error reports a mistake in a definition: it is returned
+/// when the definition is built, before any document is parsed.
 ///
-/// Every error locates itself with two coordinates. `index` is the position of the
-/// offending element in the list the codes came in, and is `None` when they came
-/// through [`argument_specs_from_str`]'s single string. `offset` is a byte offset
-/// into that particular string — the element at `index`, or the whole compact string.
+/// The codes are passed as *code strings*: each element of the list that
+/// [`argument_specs`] or [`argument_specs_named`] takes is one code string, and
+/// [`argument_specs_from_str`] takes a single code string that contains all codes.
+/// Each variant locates the error with an `index` and an `offset`. The `index` is the
+/// position of the code string in the list, counting from 0. The `offset` is a byte
+/// offset into that code string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ArgumentCodeError {
-    /// The character at `offset` begins no known argument code.
+    /// The character at `offset` does not begin any argument code.
     UnknownCode {
-        /// The list element holding the code, if the codes came in as a list.
+        /// The position of the code string in the list, or `None` for the code
+        /// string of [`argument_specs_from_str`].
         index: Option<usize>,
-        /// Byte offset into the code string.
+        /// The byte offset of the character in the code string.
         offset: usize,
-        /// The offending character.
+        /// The character.
         code: char,
     },
-    /// The code at `offset` requires delimiter/marker characters that are missing —
-    /// the string ended, or whitespace stood where a parameter character must be
-    /// (whitespace separates codes; it cannot be a parameter).
+    /// Parameter characters are missing after the argument code at `offset`.
+    ///
+    /// The codes `t`, `r`, `d`, `v` and `e` take parameter characters. These must
+    /// follow the code immediately and may not be whitespace, as in `t!`, `r()` or
+    /// `v||`. The braces of `e{<chars>}` must enclose at least one marker character,
+    /// as in `e{^_}`.
     TruncatedCode {
-        /// The list element holding the code, if the codes came in as a list.
+        /// The position of the code string in the list, or `None` for the code
+        /// string of [`argument_specs_from_str`].
         index: Option<usize>,
-        /// Byte offset of the code character itself.
+        /// The byte offset of the code character in the code string.
         offset: usize,
-        /// The code character whose parameters are missing.
+        /// The code character, for instance `r`.
         code: char,
     },
-    /// A list element continues past its single code ([`argument_specs`] only —
-    /// one code per element; in the compact string the next code simply follows).
+    /// A code string of a list contains more than one argument code.
+    ///
+    /// Each code string that is passed to [`argument_specs`] or
+    /// [`argument_specs_named`] must contain exactly one code, with optional whitespace
+    /// around it, as in `["o", " m "]`.
     TrailingCode {
-        /// The list element holding the code.
+        /// The position of the code string in the list.
         index: usize,
-        /// Byte offset of the first unexpected character.
+        /// The byte offset of the first character after the code that is not
+        /// whitespace.
         offset: usize,
-        /// The first unexpected character.
+        /// The first character after the code that is not whitespace.
         trailing: char,
     },
-    /// A list element is empty or whitespace-only ([`argument_specs`] only — an
-    /// empty *list* declares zero arguments; an empty *element* declares nothing).
+    /// A code string of a list is empty or contains only whitespace.
+    ///
+    /// An empty list declares no arguments, but each code string in a list must
+    /// contain one argument code.
     EmptyCode {
-        /// The offending list element.
+        /// The position of the code string in the list.
         index: usize,
     },
 }
@@ -88,27 +102,49 @@ impl fmt::Display for ArgumentCodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn at(f: &mut fmt::Formatter<'_>, index: Option<usize>, offset: usize) -> fmt::Result {
             match index {
-                Some(index) => write!(f, "at offset {offset} of code string {index}"),
-                None => write!(f, "at offset {offset}"),
+                Some(index) => write!(f, "(code string {index}, offset {offset})"),
+                None => write!(f, "(offset {offset})"),
             }
         }
         match self {
             ArgumentCodeError::UnknownCode { index, offset, code } => {
-                write!(f, "unknown argument code ‘{code}’ ")?;
+                write!(f, "Unknown argument code ‘{code}’ ")?;
                 at(f, *index, *offset)
             }
             ArgumentCodeError::TruncatedCode { index, offset, code } => {
-                write!(f, "argument code ‘{code}’ ")?;
+                write!(f, "Missing parameter characters for argument code ‘{code}’ ")?;
                 at(f, *index, *offset)?;
-                write!(f, " is missing its parameter character(s)")
+                match (code, index) {
+                    ('t', _) => write!(f, ": the code must have the form ‘t<c>’"),
+                    ('r' | 'd', _) => {
+                        write!(f, ": the code must have the form ‘{code}<c1><c2>’")
+                    }
+                    ('e', _) => write!(
+                        f,
+                        ": the code must have the form ‘e{{<chars>}}’ with at least \
+                         one marker character"
+                    ),
+                    ('v', Some(_)) => write!(
+                        f,
+                        ": the code must be ‘v’ alone or have the form \
+                         ‘v<c1><c2>’"
+                    ),
+                    ('v', None) => write!(
+                        f,
+                        ": the code must have the form ‘v<c1><c2>’; separate a \
+                         bare ‘v’ from the next code with whitespace"
+                    ),
+                    _ => Ok(()),
+                }
             }
             ArgumentCodeError::TrailingCode { index, offset, trailing } => write!(
                 f,
-                "unexpected ‘{trailing}’ at offset {offset} of code string {index} \
-                 (one argument code per string)"
+                "Unexpected ‘{trailing}’ after the argument code (code string \
+                 {index}, offset {offset}): each code string must contain exactly one \
+                 argument code"
             ),
             ArgumentCodeError::EmptyCode { index } => {
-                write!(f, "code string {index} is empty (one argument code per string)")
+                write!(f, "Missing argument code in code string {index}")
             }
         }
     }
