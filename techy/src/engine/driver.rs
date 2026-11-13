@@ -1087,7 +1087,9 @@ pub enum CommandResolution<L: Lang> {
         /// The description of the failure for the
         /// [`CommandResolutionFailed`](crate::core::constructs::CommandResolutionFailed)
         /// error, or `None`. The message shows the detail after a colon, as in
-        /// `Failed to resolve command ‘\foo’: <detail>`.
+        /// `Failed to resolve command ‘\foo’: <detail>`. The detail is a complete
+        /// message and begins with a capital letter, as in
+        /// `Definition provider ‘user’ failed: <error>`.
         detail: Option<String>,
     },
 }
