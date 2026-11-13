@@ -391,10 +391,18 @@ agent definition.
   instructions for these failures.
 - **Cargo.** Unless `env` shows `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=0`,
   prefix every cargo command with both. Use the checkout's own `target/`. Run every cargo
-  command in the background with all output redirected to a log under
-  `target/msgbuild-logs/`, wait for the completion notification, then grep the log
-  (`test result:`, `error`, `warning`, `FAILED`); never read a whole log, never poll with
-  sleep. One cargo command at a time. Before the first build, check the free disk
+  command in the foreground: one Bash call per command, with the tool's timeout at its
+  maximum (600000 ms), all output redirected to a fresh log under
+  `target/msgbuild-logs/`, and the exit status recorded
+  (`cargo … > <log> 2>&1; echo "exit=$?" > <log>.exit`). Then grep the log
+  (`test result:`, `error`, `warning`, `FAILED`); never read a whole log. Never start a
+  command in the background, and never end your turn to wait for one: a build agent's
+  turn ends only with its result, and ending it kills every command that still runs. If
+  the Bash tool reports that a command ran past the timeout and was moved to the
+  background, wait for it with one foreground call
+  (`until [ -f <log>.exit ]; do sleep 10; done`, maximum timeout) and repeat that call
+  until the file exists; do not poll in any other way. One cargo command at a time.
+  Before the first build, check the free disk
   (`df -h`); below 5 GB, delete `target/debug/incremental`; if still short, stop and
   return status "blocked".
 - **Scoped checks.** During the work packages, every check is scoped to the crates that
