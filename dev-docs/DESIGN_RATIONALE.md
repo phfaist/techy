@@ -6707,15 +6707,16 @@ Every diagnostic message, error `Display` and embedded detail text follows the r
 (VIII) kept in Part 3 of `.claude/agents/documenter.md`: say what is wrong first, name the
 specifics as written, no dependent clauses, one line with a capital letter first and no
 final period, one consolidated template per message. The capital letter holds although
-`Diagnostic`'s `Display` prints the severity before the message (`error: Unclosed group
-…`). A text that is itself a complete message (the `Display` of a wrapped error, the
-`detail` of `HookFailed` or `ImplementationError`) begins with a capital letter as well; a
-fragment inserted into a sentence (the display of a field enum, an expected-value phrase)
-takes the case of its position; a frame title is a noun phrase after a position (`1:5:
-macro ‘\frac’`) and stays lowercase.
-Tests never pin the wording of a library text: a test checks the behavior that matters
-(identifier or condition type, field values, span, severity, frames, the number and order
-of diagnostics, the recovered node tree), and a test that checked only wording is dropped.
+`Diagnostic`'s `Display` prints the severity before the message (`error: Missing closing
+delimiter ‘}’ of the group …`). A text that is itself a complete message (the `Display` of
+a wrapped error, the `detail` of `HookFailed` or `ImplementationError`) begins with a
+capital letter as well; a fragment inserted into a sentence (the display of a field enum,
+an expected-value phrase) takes the case of its position; a frame title is a noun phrase
+after a position (`1:5: macro ‘\frac’`) and stays lowercase.
+Tests never pin the wording of a library text (the user: "Tests should not pin specific
+diagnostic or message wordings."): a test checks the behavior that matters (identifier or
+condition type, field values, span, severity, frames, the number and order of
+diagnostics, the recovered node tree), and a test that checked only wording is dropped.
 Tests of the text machinery itself (report layout, traceback, the `{field}` interpolation
 of the derive) check the structure of the output on a fixture condition whose message the
 test writes; comparing two library outputs with each other (a round trip) pins nothing and
