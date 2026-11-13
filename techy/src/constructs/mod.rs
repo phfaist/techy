@@ -347,8 +347,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             Some(span) => Ok(span),
             None => Err(self.implementation_error(
                 format!(
-                    "the positions {begin:?} and {end:?} do not delimit one range of \
-                     one source (a span must run forward within a single source)"
+                    "Invalid positions {begin:?} and {end:?} passed to \
+                     ‘ParseContext::source_span_within’: the end must not \
+                     precede the beginning, and both positions must lie in one source"
                 ),
                 self.here(),
             )),
@@ -918,10 +919,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         trigger: &SourceSpan<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
         self.implementation_error(
-            "stage_invocation computed an invalid node span: the node's end must \
-             not precede the trigger's start and must lie in the trigger's own \
-             source — check the explicit end position or the staged children's \
-             spans",
+            "Invalid node span computed by \
+             ‘ParseContext::stage_invocation’: the end of the node must \
+             not precede the start of the invocation, and must lie in the source of \
+             the invocation; check the ‘end’ argument or the spans of the \
+             staged children",
             trigger.clone(),
         )
     }
@@ -1630,35 +1632,36 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 }
 
-/// Why [`ParseContext::content_as_plain_chars`] and
-/// [`ParseContext::argument_content_as_plain_chars`] could not answer.
+/// The error that [`ParseContext::content_as_plain_chars`] and
+/// [`ParseContext::argument_content_as_plain_chars`] return when they cannot read the
+/// content as plain characters.
 ///
-/// The two variants are reported differently, and that is the whole point of the
-/// split: [`NotPlainCharacters`](PlainCharsError::NotPlainCharacters) is something the
-/// parsed document did, to diagnose through [`ParseContext::recover`], while
-/// [`MalformedRecord`](PlainCharsError::MalformedRecord) is a contract violation by
-/// the calling parser, to lift with [`ParseContext::implementation_error`] — it aborts
-/// under any recovery policy.
+/// The two variants call for different handling:
+///
+/// - [`NotPlainCharacters`](PlainCharsError::NotPlainCharacters) is caused by the
+///   parsed document. Report it as a diagnostic through [`ParseContext::recover`].
+/// - [`MalformedRecord`](PlainCharsError::MalformedRecord) is caused by a fault in the
+///   calling parser. Report it with [`ParseContext::implementation_error`]; the parse
+///   then stops under every recovery policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PlainCharsError {
-    /// The content holds a node that is anything other than characters: a group, a
-    /// callable, a comment, or a nested list.
+    /// The content contains a node that is not a `Chars` node: a group, a callable, a
+    /// comment, or a nested list.
     ///
-    /// Such a node carries no single text of its own, so there is nothing to read. The
-    /// staged node is named so a diagnostic can be anchored at it (its span is
-    /// [`StagedNodeView::span`](crate::core::node::StagedNodeView::span), through
-    /// [`ParseContext::staged_nodes`]).
+    /// You can place a diagnostic at this node: its span is
+    /// [`StagedNodeView::span`](crate::core::node::StagedNodeView::span) of the node in
+    /// [`ParseContext::staged_nodes`].
     NotPlainCharacters {
-        /// The staged id of the offending node.
+        /// The id of the staged node that is not a `Chars` node.
         node: BuildId,
     },
-    /// A staged record did not resolve: the argument's region, its child offsets, the
-    /// content designation, or a node it names.
+    /// A staged record that designates the content is malformed: for instance the
+    /// region of the argument, its child offsets, or a node that the record refers to.
     ///
-    /// None of this depends on the parsed document — see the
+    /// The parsed document cannot cause this error. The cases are the
     /// [`NodeBuildError`](crate::core::node::NodeBuildError) variants listed on
-    /// [`ParseContext::content_as_tree`], which reports the same set.
+    /// [`ParseContext::content_as_tree`].
     MalformedRecord(NodeBuildError),
 }
 
@@ -1672,10 +1675,15 @@ impl fmt::Display for PlainCharsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PlainCharsError::NotPlainCharacters { node } => {
-                write!(f, "the content node {:?} is not plain characters", node)
+                write!(
+                    f,
+                    "Invalid content node {:?}: plain-character content may contain \
+                     only ‘Chars’ nodes",
+                    node
+                )
             }
             PlainCharsError::MalformedRecord(error) => {
-                write!(f, "the staged content record does not resolve: {}", error)
+                write!(f, "Malformed staged content record: {}", error)
             }
         }
     }
@@ -1690,87 +1698,110 @@ impl core::error::Error for PlainCharsError {
     }
 }
 
-/// Condition: an implementation of an extension point — an argument or construct
-/// parser, a [`Lang`] hook, a spec factory — violated a library contract.
+/// The error that is reported when code that extends the parser violates a requirement
+/// of the library (id `core.constructs.implementation-error`).
 ///
-/// An implementation bug to fix, not a source-input problem: it aborts the parse even
-/// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) (built through
-/// [`ParseContext::implementation_error`], which ignores the recovery policy).
+/// The code concerned belongs to the language or the program built on techy: for
+/// instance a construct parser, an argument parser, a hook of [`Lang`] or
+/// [`ParseDriver`], or a spec factory. A document cannot cause this error: it is caused
+/// by a fault in that code.
+///
+/// Construct parsers report this error with [`ParseContext::implementation_error`]. The
+/// parse stops with this error under every recovery policy, including
+/// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.constructs.implementation-error",
-    message = "implementation error (extension contract violation): {detail}"
+    message = "Implementation error: {detail}"
 )]
 pub struct ImplementationError {
-    /// Description of the violated contract.
+    /// The description of the violated requirement.
+    ///
+    /// The message shows the detail after a colon, as in `Implementation error:
+    /// <detail>`. Write the detail as a complete message that begins with a capital
+    /// letter and names the faulty code, for instance `Invalid state delta returned by
+    /// the nodes parser of ‘ParseDriver::make_nodes_parser’: a nodes parser must return
+    /// no state delta`.
     pub detail: String,
 }
 
-/// Condition: a scope op of an in-parse state delta failed.
+/// The error that is reported when a scope operation of a state delta fails (id
+/// `core.specs.scope-op-failed`).
 ///
-/// The failure ([`ScopeOpError`](crate::core::specs::ScopeOpError)) is rendered into
-/// `detail`, and the condition is reported through the recovery entry point by the
-/// [`ParseContext`] derivation methods: strict parses abort on it; tolerant parses
-/// record it and continue under the ops-skipped state
-/// ([`DeriveError::recovered`](crate::core::DeriveError::recovered)).
+/// A [`ParsingStateDelta`] can contain scope operations
+/// ([`ScopeOp`](crate::core::specs::ScopeOp)), which change the definition providers on
+/// the scope stack of the parsing state. For instance,
+/// [`ScopeOp::Define`](crate::core::specs::ScopeOp::Define) adds a definition to a
+/// scope. An operation fails when it targets a provider that is not on the scope stack,
+/// or when the provider rejects the operation;
+/// [`ScopeOpError`](crate::core::specs::ScopeOpError) lists the cases.
+///
+/// Reported by [`ParseContext::derive_state`] and [`ParseContext::group_interior_state`]
+/// at the current position, once for each failing operation. In a tolerant parse, the
+/// parse continues under the derived state without the failing operations. A strict
+/// parse stops at the first failing operation.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.specs.scope-op-failed",
-    message = "scope op failed: {detail}"
+    message = "Failed to apply scope operation: {detail}"
 )]
 pub struct ScopeOpFailed {
-    /// The rendered failure ([`ScopeOpError`](crate::core::specs::ScopeOpError)'s
-    /// `Display`).
+    /// The error of the failing operation: the `Display` text of its
+    /// [`ScopeOpError`](crate::core::specs::ScopeOpError).
     pub detail: String,
 }
 
-/// Condition: the parse's [`DescentGuard`](crate::core::DescentGuard) refused to
-/// open one more nesting level.
+/// The error that is reported when the input nests more deeply than the parse allows
+/// (id `core.constructs.descent-limit-exceeded`).
 ///
-/// The input nests deeper than the configured (or built-in default) limit allows.
-/// Raised by [`ParseContext::parse_construct`](ParseContext::parse_construct) and
-/// **aborts under any recovery policy**: the limit exists so deeply nested input
-/// cannot crash the process by stack exhaustion, and past it there is no safe way to
-/// continue.
+/// The parser handles each nested construct, such as a group inside a group, by running
+/// another construct parser recursively, and each such step uses call stack. The
+/// [`DescentGuard`](crate::core::DescentGuard) of the parse limits this nesting, so that
+/// deeply nested input cannot crash the process by exhausting the stack. You choose the
+/// limit with
+/// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init)
+/// ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit) describes the options).
+/// Without this configuration, a built-in default stack budget applies.
 ///
-/// The `detail` names the limit that was hit and, when the parse ran on the
-/// unconfigured built-in default, points at
-/// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init).
+/// Reported by [`ParseContext::parse_construct`] when the guard refuses to go one level
+/// deeper. The parse stops with this error under every recovery policy: past the
+/// limit, the parse cannot continue safely.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.constructs.descent-limit-exceeded",
-    message = "the input nests too deeply to parse: {detail}"
+    message = "Input nested too deeply to parse: {detail}"
 )]
 pub struct DescentLimitExceeded {
-    /// The guard's explanation: which limit was hit, and how to configure it.
+    /// The description of the limit that was reached, from
+    /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail).
     pub detail: String,
 }
 
-/// Condition (warning severity): the parse's
-/// [`DescentGuard`](crate::core::DescentGuard) reported the nesting limit as getting
-/// close.
+/// The warning that is reported when the input nests close to the limit of the
+/// built-in default configuration (id `core.constructs.descent-limit-approaching`).
 ///
-/// For the standard guard ([`StdDescentGuard`](crate::core::StdDescentGuard)) that is
-/// the first descent past half of the **unconfigured built-in default** stack budget,
-/// reported once per parse. Recorded immediately by
-/// [`ParseContext::parse_construct`](ParseContext::parse_construct); the parse
-/// continues.
+/// The [`DescentGuard`](crate::core::DescentGuard) of a parse limits how deeply the
+/// input may nest (see [`DescentLimitExceeded`]). If the program chose no limit with
+/// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init),
+/// the standard guard ([`StdDescentGuard`](crate::core::StdDescentGuard)) applies a
+/// built-in default stack budget. This warning tells you that the parse has used half
+/// of this budget and that more deeply nested input will be refused. A limit that the
+/// program configured never causes this warning.
 ///
-/// A configured limit never produces this warning — it exists as the early notice that
-/// no limit was chosen explicitly and that the built-in default will soon refuse deeper
-/// input; choose a limit with
-/// [`Language::with_descent_guard_init`](crate::core::Language::with_descent_guard_init).
+/// Reported by [`ParseContext::parse_construct`], at most once per parse. The parse
+/// continues normally.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.constructs.descent-limit-approaching",
-    message = "the input's nesting approaches the parsing depth limit: {detail}"
+    message = "Input nested close to the parsing limit: {detail}"
 )]
 pub struct DescentLimitApproaching {
-    /// The guard's explanation: how close the limit is, and how to configure it.
+    /// The description of the limit and of how far the parse has come, from
+    /// [`DescentWarning::detail`](crate::core::DescentWarning::detail).
     pub detail: String,
 }
 
