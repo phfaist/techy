@@ -250,8 +250,7 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
         if origin_key(source.origin()).is_some_and(|key| key == *target_key) {
             return Err(ResolveError::new(
                 source.origin().label().unwrap_or_default(),
-                "include cycle detected: this source is already on its own \
-                 include chain",
+                "Refusing recursive inclusion",
             ));
         }
     }
@@ -262,8 +261,8 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
             return Err(ResolveError::new(
                 triggered_at.source().origin().label().unwrap_or_default(),
                 alloc::format!(
-                    "include depth {} exceeds the maximum of {}",
-                    depth, max_depth
+                    "Inclusion depth limit exceeded (maximum depth {})",
+                    max_depth
                 ),
             ));
         }
@@ -334,20 +333,26 @@ impl<O: SourceOrigin> ResolvedContent<O> {
     }
 }
 
-/// Failure to resolve an external source reference, returned by
-/// [`SourceResolver::resolve`].
+/// The error that [`SourceResolver::resolve`] returns when it cannot provide the source
+/// that a reference names.
 ///
-/// The [`reference`](ResolveError::reference) and [`message`](ResolveError::message)
-/// strings are the primary interface, because a failed `\input` is rendered into a
-/// diagnostic as text. An implementation may additionally attach the underlying error with
-/// [`with_cause`](ResolveError::with_cause); it is exposed through
-/// [`core::error::Error::source`], so an embedder can walk the error chain or downcast to
-/// inspect it — the kind of an `io::Error`, for instance.
+/// A `ResolveError` contains the [`reference`](ResolveError::reference) and a
+/// [`message`](ResolveError::message) that describes the failure. When an `\input`-like
+/// construct fails to include a source, the parse reports the
+/// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
+/// error, whose message shows the reference as written in the document followed by
+/// this message, as in `Failed to include ‘chapter1.tex’: Source not found`. Write the
+/// message as a complete message that begins with a capital letter and has no final
+/// period.
 ///
-/// The type is `Clone`, like every error type in this crate, because error values travel
-/// into diagnostics and those are `Clone` throughout. The attached cause comes from
-/// outside the crate and cannot be cloned by value, so it is held behind an `Arc` and
-/// cloned by reference count.
+/// An implementation can also attach the underlying error with
+/// [`with_cause`](ResolveError::with_cause). The cause is available through
+/// [`core::error::Error::source`], so a program can walk the error chain or downcast the
+/// cause, for instance to read the kind of an `io::Error`.
+///
+/// The type is `Clone`, like every error type in this crate, because error values are
+/// stored in diagnostics and diagnostics are `Clone`. The attached cause cannot be cloned
+/// by value, so it is stored behind an `Arc`.
 #[derive(Debug, Clone)]
 pub struct ResolveError {
     reference: String,
@@ -387,12 +392,16 @@ impl ResolveError {
 }
 
 // The wording deliberately differs from the `UnresolvableSourceReference`
-// condition's "cannot resolve source reference ‘…’: …" (which renders this
+// condition's "Failed to include ‘…’: …" (which renders this
 // error's `message()` as its detail): in an error chain that shows both, the
 // two sentences stay distinguishable instead of reading as a duplicated prefix.
 impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "source reference ‘{}’ failed to resolve: {}", self.reference, self.message)
+        write!(
+            f,
+            "Failed to resolve source reference ‘{}’: {}",
+            self.reference, self.message
+        )
     }
 }
 
@@ -456,7 +465,7 @@ impl<O: SourceOrigin + From<String>> SourceResolver<O> for MapResolver {
                 }
                 Ok(resolved)
             }
-            None => Err(ResolveError::new(reference, "no entry for this reference")),
+            None => Err(ResolveError::new(reference, "Source not found")),
         }
     }
 }

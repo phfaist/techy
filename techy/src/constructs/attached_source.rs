@@ -298,48 +298,58 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     }
 }
 
-/// Condition: an `\input`-style construct referenced an external source, but no
-/// [`SourceResolver`](crate::source::SourceResolver) is configured.
+/// The error that is reported when a document includes a source by reference and the
+/// parse driver has no source resolver (id `core.sources.no-resolver`).
 ///
-/// The driver's [`source_resolver`](crate::core::ParseDriver::source_resolver)
-/// accessor returned `None` ("this language resolves nothing"). Raised by
-/// [`ParseContext::attach_source_reference`].
+/// A construct such as `\input{chapter1.tex}` includes the source that its reference
+/// argument names. The reference is looked up with the
+/// [`SourceResolver`](crate::source::SourceResolver) that
+/// [`ParseDriver::source_resolver`](crate::core::ParseDriver::source_resolver) returns.
+/// A driver has no resolver by default. A program that supports inclusion configures
+/// one, for instance with
+/// [`StdParseDriver::with_source_resolver`](crate::core::StdParseDriver::with_source_resolver)
+/// or
+/// [`LatexlikeDriver::with_source_resolver`](crate::latexlike::LatexlikeDriver::with_source_resolver).
 ///
-/// Distinct from [`UnresolvableSourceReference`] (a configured resolver that *failed*)
-/// — the remedies differ: configure a resolver vs. fix the reference/environment.
+/// Reported by [`ParseContext::attach_source_reference`], at the span of the invocation
+/// that includes the source. Nothing is included: the invocation is parsed without the
+/// included content (for `\input`, a callable node without an attached slot).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.sources.no-resolver",
-    message = "cannot resolve source reference ‘{reference}’: no source resolver \
-               is configured on this language’s driver"
+    message = "Unsupported inclusion of ‘{reference}’ (missing source resolver)"
 )]
 pub struct NoSourceResolver {
-    /// The reference that could not be resolved (e.g. the file name), as written.
+    /// The source reference (e.g. a file name), as written in the document.
     pub reference: String,
 }
 
-/// Condition: the configured [`SourceResolver`](crate::source::SourceResolver)
-/// failed to resolve an external source reference.
+/// The error that is reported when the source resolver fails to resolve a source
+/// reference (id `core.sources.unresolvable-reference`).
 ///
-/// Raised by [`ParseContext::attach_source_reference`]; carries the live
-/// [`ResolveError`], so embedders can downcast along its
-/// [`Error::source`](core::error::Error::source) chain (e.g. to an `io::Error`)
-/// — the serialized projection renders the reference, the message, and the cause
-/// chain. Distinct from [`NoSourceResolver`] (no resolver configured at all).
+/// A construct such as `\input{chapter1.tex}` includes the source that its reference
+/// argument names. The [`SourceResolver`](crate::source::SourceResolver) of the parse
+/// driver returns a [`ResolveError`] when it cannot provide that source, for instance
+/// because no file of that name exists. The message contains the reference as written
+/// in the document, followed by the [`message`](ResolveError::message) of the
+/// [`ResolveError`].
 ///
-/// The rendered message names the reference **as written in the document**
-/// (`reference`), with the resolver's own [`message`](ResolveError::message) as
-/// the detail — a resolver may spell the reference differently in its error
-/// (e.g. a canonicalized path), and that spelling stays available on the
-/// structured `error` field.
+/// Reported by [`ParseContext::attach_source_reference`], at the span of the invocation
+/// that includes the source. Nothing is included: the invocation is parsed without the
+/// included content (for `\input`, a callable node without an attached slot).
 #[derive(Debug, Clone, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.sources.unresolvable-reference")]
 pub struct UnresolvableSourceReference {
-    /// The reference that failed to resolve, as written.
+    /// The source reference, as written in the document.
     pub reference: String,
-    /// The resolver's failure ([`Clone`] — the cause sits behind an `Arc`).
+    /// The error that the source resolver returned.
+    ///
+    /// Its [`reference`](ResolveError::reference) can differ from the `reference`
+    /// field, for instance when the resolver reports a canonical path. A program can
+    /// inspect the underlying error (for instance an `io::Error`) through
+    /// [`Error::source`](core::error::Error::source).
     pub error: ResolveError,
 }
 
@@ -350,48 +360,38 @@ impl fmt::Display for UnresolvableSourceReference {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "cannot resolve source reference ‘{}’: {}",
+            "Failed to include ‘{}’: {}",
             self.reference,
             self.error.message()
         )
     }
 }
 
-/// Condition: the reference argument of an `\input`-style construct does not carry
-/// plain text.
+/// The error that is reported when the reference argument of an `\input`-style
+/// construct does not consist of plain text (id
+/// `core.sources.invalid-reference-argument`).
 ///
-/// The argument's content must be plain characters: the reference drives source
-/// resolution, so it is read off the argument's content nodes — their character
-/// payloads, exactly as read. Content that is anything else (a nested group, a
-/// callable, a comment) carries no such text, and no reference is read from it.
+/// The source reference is read from the characters of the argument's content. The
+/// content must therefore consist of characters only, as in `\input{chapter1.tex}`.
 ///
-/// Raised by the invocation parser that reads the argument — the preset's `\input`
-/// ([`input_macro_spec`](crate::latexlike::input_macro_spec)) and any `\input`-variant
-/// spec — at the argument's span, through the same recovery entry point as the two
-/// conditions of [`ParseContext::attach_source_reference`]: under
-/// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) the failure is recorded and
-/// the callable is staged **without** an attached slot; under
-/// [`Recovery::Strict`](crate::error::Recovery::Strict) recovery aborts.
-///
-/// Distinct from its two siblings, and the remedies differ: here the *document* must
-/// spell the reference as plain text, whereas [`UnresolvableSourceReference`] means a
-/// reference was read and the resolver failed on it, and [`NoSourceResolver`] means no
-/// resolver is configured at all.
+/// Reported by the invocation parser that reads the argument, for instance the parser
+/// of the preset's [`input_macro_spec`](crate::latexlike::input_macro_spec), at the span
+/// of the argument. Nothing is resolved or included: the invocation is parsed without
+/// the included content (for `\input`, a callable node without an attached slot).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.sources.invalid-reference-argument")]
 pub struct InvalidSourceReferenceArgument {
-    /// Why the argument cannot be read as a source reference.
+    /// The reason why the argument cannot be read as a source reference.
     pub reason: InvalidReferenceReason,
 }
 
-/// Why an [`InvalidSourceReferenceArgument`] argument cannot be read as a source
-/// reference.
+/// The reason why the argument of an [`InvalidSourceReferenceArgument`] cannot be read
+/// as a source reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum InvalidReferenceReason {
-    /// The argument's content is not plain characters — it holds a group, a callable
-    /// or a comment node, none of which carries reference text.
+    /// The content of the argument contains nodes other than character nodes.
     NotPlainCharacters,
 }
 
@@ -401,9 +401,10 @@ pub enum InvalidReferenceReason {
 impl fmt::Display for InvalidSourceReferenceArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.reason {
-            InvalidReferenceReason::NotPlainCharacters => {
-                f.write_str("invalid source reference argument: its content is not plain characters")
-            }
+            InvalidReferenceReason::NotPlainCharacters => f.write_str(
+                "Invalid source reference argument: the argument must contain only plain \
+                 text",
+            ),
         }
     }
 }
