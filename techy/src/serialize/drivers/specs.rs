@@ -206,7 +206,7 @@ impl<L: Lang> KnownProviders<L> {
                 let provider = recipe.build()?;
                 if provider.name() != name {
                     return Err(DeserializeError::failed(format!(
-                        "Misconfigured recipe of provider ‘{name}’: The recipe built a provider \
+                        "Misconfigured recipe of provider ‘{name}’: the recipe built a provider \
                          named ‘{}’",
                         provider.name()
                     )));

@@ -365,7 +365,7 @@ impl fmt::Display for SerializeError {
             }
             SerializeError::UnexpectedIdentifier { table, expected, found } => write!(
                 f,
-                "Misconfigured driver of table ‘{table}’: The driver produced an \
+                "Misconfigured driver of table ‘{table}’: the driver produced an \
                  entry with identifier ‘{found}’ (expected ‘{expected}’)"
             ),
             SerializeError::MissingProvenance { spec } => write!(
@@ -374,8 +374,8 @@ impl fmt::Display for SerializeError {
             ),
             SerializeError::ProviderDropped { callable_type, key } => write!(
                 f,
-                "Provider of the spec with {key} (callable type \
-                 ‘{callable_type}’) no longer exists"
+                "Missing definition provider of the spec with {key} (callable \
+                 type ‘{callable_type}’)"
             ),
             SerializeError::InTable { table, cause } => {
                 write!(f, "Failed to serialize an object into table ‘{table}’: {cause}")
@@ -1185,7 +1185,7 @@ impl fmt::Display for RegistrationError {
             ),
             RegistrationError::EmptyHomogeneousIdentifier { table } => write!(
                 f,
-                "Misconfigured driver of table ‘{table}’: The homogeneous \
+                "Misconfigured driver of table ‘{table}’: the homogeneous \
                  identifier may not be empty; return ‘None’ for a table with \
                  objects of several kinds"
             ),

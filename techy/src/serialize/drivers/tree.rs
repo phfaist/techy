@@ -258,7 +258,7 @@ fn codec_by_type<L: SerializableLang>(
         .registry_mut::<TreeRegistry<L>>(ordinal)
         .ok_or_else(|| {
             SerializeError::failed(alloc::format!(
-                "Misconfigured table ‘{TREES_TABLE}’: The table is not registered with the tree driver"
+                "Misconfigured table ‘{TREES_TABLE}’: the table is not registered with the tree driver"
             ))
         })?;
     registry.by_type.get(&type_id).cloned().ok_or_else(|| {
@@ -276,8 +276,8 @@ fn codec_by_identifier<L: SerializableLang>(
 ) -> Result<TreeCodec<L>, DeserializeError> {
     let ordinal = cx.session_mut().table_ordinal_by_name(TREES_TABLE).ok_or_else(|| {
         DeserializeError::failed(alloc::format!(
-            "Misconfigured driver of table ‘{TREES_TABLE}’: The session of the context has \
-             no table ‘{TREES_TABLE}’"
+            "Missing table ‘{TREES_TABLE}’: no table of this name is registered in the \
+             session of the context"
         ))
     })?;
     let registry = cx
@@ -285,7 +285,7 @@ fn codec_by_identifier<L: SerializableLang>(
         .registry_mut::<TreeRegistry<L>>(ordinal)
         .ok_or_else(|| {
             DeserializeError::failed(alloc::format!(
-                "Misconfigured table ‘{TREES_TABLE}’: The table is not registered with the tree driver"
+                "Misconfigured table ‘{TREES_TABLE}’: the table is not registered with the tree driver"
             ))
         })?;
     registry.by_identifier.get(identifier).cloned().ok_or_else(|| DeserializeError::UnknownIdentifier {
@@ -930,7 +930,7 @@ fn wire_position_of(build_id_of: &[Option<BuildId>], id: BuildId) -> Option<usiz
 fn builder_failure(error: NodeBuildError, build_id_of: &[Option<BuildId>]) -> DeserializeError {
     let node = |id: BuildId| match wire_position_of(build_id_of, id) {
         Some(position) => alloc::format!("node #{position}"),
-        None => alloc::format!("node {id:?}"),
+        None => alloc::format!("node {}", id.number()),
     };
     let detail = match &error {
         NodeBuildError::ChildNotStaged { child } => {
@@ -956,7 +956,7 @@ fn builder_failure(error: NodeBuildError, build_id_of: &[Option<BuildId>]) -> De
             node(*parent)
         ),
         NodeBuildError::ContentParentOutsideRegion { parent } => alloc::format!(
-            "Invalid content parent {}: the node lies outside its argument or slot region",
+            "Invalid content parent {}: the node is not inside its argument or slot region",
             node(*parent)
         ),
         other => other.to_string(),
