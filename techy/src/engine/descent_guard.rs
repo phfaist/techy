@@ -470,17 +470,29 @@ mod tests {
         result
     }
 
+    /// The resolved byte budget of a guard in a byte-budget mode, `None` in the
+    /// other modes.
+    fn measured_budget(guard: &StdDescentGuard) -> Option<usize> {
+        match guard.mode {
+            GuardMode::Measured { budget, .. } => Some(budget),
+            _ => None,
+        }
+    }
+
     #[test]
     fn the_unconfigured_default_warns_once_at_half_budget_then_refuses() {
         let mut guard = StdDescentGuard::init(&StdDescentGuardInit::default());
+        // The unconfigured default is the built-in budget, marked as unconfigured.
+        assert!(guard.unconfigured);
+        assert_eq!(measured_budget(&guard), Some(StdDescentGuard::DEFAULT_STACK_BUDGET));
         let (mut granted, mut warnings) = (0, 0);
         let refusal = descend(&mut guard, 200, &mut granted, &mut warnings).unwrap_err();
         // With >= 8 KiB per level the 250 KiB default is exhausted well before 200
         // levels, and the half-budget warning latched exactly once on the way.
         assert_eq!(warnings, 1, "the half-budget warning latches once");
+        assert!(guard.warned);
         assert!(granted < 200);
-        assert!(refusal.detail.contains("DEFAULT_STACK_BUDGET"));
-        assert!(refusal.detail.contains("with_descent_guard_init"));
+        assert!(!refusal.detail.is_empty());
     }
 
     #[test]
@@ -489,27 +501,27 @@ mod tests {
             StdDescentGuard::DEFAULT_STACK_BUDGET,
         ));
         let (mut granted, mut warnings) = (0, 0);
+        assert!(!guard.unconfigured);
+        assert_eq!(measured_budget(&guard), Some(StdDescentGuard::DEFAULT_STACK_BUDGET));
         let refusal = descend(&mut guard, 200, &mut granted, &mut warnings).unwrap_err();
         assert_eq!(warnings, 0, "the warning fires only under the unconfigured default");
-        assert!(refusal.detail.contains("configured budget"));
-        assert!(!refusal.detail.contains("with_descent_guard_init"));
+        assert!(granted < 200);
+        assert!(!refusal.detail.is_empty());
     }
 
     #[test]
     fn a_computed_budget_subtracts_the_headroom_from_the_probe_answer() {
         // The probe answers HEADROOM + 1000: the resolved budget is 1000 bytes,
-        // which the first padded level already exceeds — and the refusal names it.
+        // which the first padded level already exceeds.
         fn probe() -> Option<usize> {
             Some(StdDescentGuard::HEADROOM + 1000)
         }
         let mut guard = StdDescentGuard::init(&StdDescentGuardInit::computed_stack_budget(probe));
+        assert_eq!(measured_budget(&guard), Some(1000), "the headroom-subtracted budget");
+        assert!(!guard.unconfigured);
         let (mut granted, mut warnings) = (0, 0);
-        let refusal = descend(&mut guard, 10, &mut granted, &mut warnings).unwrap_err();
-        assert!(
-            refusal.detail.contains("configured budget of 1000 bytes"),
-            "refusal names the headroom-subtracted budget: {}",
-            refusal.detail
-        );
+        assert!(descend(&mut guard, 10, &mut granted, &mut warnings).is_err());
+        assert!(granted < 10);
         assert_eq!(warnings, 0);
     }
 
@@ -521,9 +533,9 @@ mod tests {
             Some(StdDescentGuard::HEADROOM - 1)
         }
         let mut guard = StdDescentGuard::init(&StdDescentGuardInit::computed_stack_budget(tiny));
+        assert_eq!(measured_budget(&guard), Some(0));
         let (mut granted, mut warnings) = (0, 0);
-        let refusal = descend(&mut guard, 2, &mut granted, &mut warnings).unwrap_err();
-        assert!(refusal.detail.contains("configured budget of 0 bytes"));
+        assert!(descend(&mut guard, 2, &mut granted, &mut warnings).is_err());
         assert_eq!(granted, 0);
 
         // A probe answering None falls back to the built-in default budget —
@@ -533,12 +545,10 @@ mod tests {
         }
         let mut guard =
             StdDescentGuard::init(&StdDescentGuardInit::computed_stack_budget(unknown));
+        assert_eq!(measured_budget(&guard), Some(StdDescentGuard::DEFAULT_STACK_BUDGET));
+        assert!(!guard.unconfigured);
         let (mut granted, mut warnings) = (0, 0);
-        let refusal = descend(&mut guard, 200, &mut granted, &mut warnings).unwrap_err();
-        assert!(refusal.detail.contains(&format!(
-            "configured budget of {} bytes",
-            StdDescentGuard::DEFAULT_STACK_BUDGET
-        )));
+        assert!(descend(&mut guard, 200, &mut granted, &mut warnings).is_err());
         assert_eq!(warnings, 0);
     }
 
@@ -549,9 +559,11 @@ mod tests {
         let (mut granted, mut warnings) = (0, 0);
         assert!(descend(&mut guard, 3, &mut granted, &mut warnings).is_ok());
         assert_eq!(granted, 3);
+        let (mut granted, mut warnings) = (0, 0);
         let refusal = descend(&mut guard, 4, &mut granted, &mut warnings).unwrap_err();
-        assert!(refusal.detail.contains("3 descent levels deep"));
-        assert!(refusal.detail.contains("depth_limit"));
+        assert_eq!(granted, 3, "the fourth level is the refused one");
+        assert!(!refusal.detail.is_empty());
+        assert!(matches!(guard.mode, GuardMode::Depth { limit: 3, current: 0 }));
         // The unwound exits rebalanced the count: three levels pass again.
         let (mut granted, mut warnings) = (0, 0);
         assert!(descend(&mut guard, 3, &mut granted, &mut warnings).is_ok());

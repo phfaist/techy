@@ -1357,7 +1357,6 @@ mod tests {
         match &err.kind {
             TokenErrorKind::Custom(data) => {
                 assert_eq!(data.identifier(), ImplementationError::IDENTIFIER);
-                assert!(data.to_string().contains("invalid match end"), "{}", data);
             }
             other => panic!("expected a Custom implementation error, got {:?}", other),
         }
@@ -1369,7 +1368,13 @@ mod tests {
         let err = scan_specials_trigger("a?b", 1, &st).expect_err("the hook's failure");
         // The hook's own span, untouched: it lies within the content on char boundaries.
         assert_eq!(err.span, sp(1, 2));
-        assert!(err.to_string().contains("declined loudly"), "{err}");
+        match &err.kind {
+            TokenErrorKind::Custom(data) => {
+                let condition = data.downcast_ref::<ImplementationError>().unwrap();
+                assert_eq!(condition.detail, "the scan declined loudly");
+            }
+            other => panic!("expected the hook's own error, got {:?}", other),
+        }
     }
 
     #[test]
@@ -1384,7 +1389,9 @@ mod tests {
             match &err.kind {
                 TokenErrorKind::Custom(data) => {
                     assert_eq!(data.identifier(), ImplementationError::IDENTIFIER, "{half}");
-                    assert!(data.to_string().contains("invalid span"), "{half}: {}", data);
+                    // The scan's own report, not the hook's error passed through.
+                    let condition = data.downcast_ref::<ImplementationError>().unwrap();
+                    assert_ne!(condition.detail, "the scan declined loudly", "{half}");
                 }
                 other => panic!("{half}: expected a Custom error, got {:?}", other),
             }

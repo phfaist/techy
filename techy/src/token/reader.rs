@@ -2108,11 +2108,11 @@ mod tests {
                         crate::constructs::ImplementationError::IDENTIFIER,
                         "{trigger}"
                     );
-                    assert!(
-                        data.to_string().contains("Lang::scan_specials"),
-                        "{trigger}: {}",
-                        data
-                    );
+                    // The reader's own report, not the hook's error passed through.
+                    let condition = data
+                        .downcast_ref::<crate::constructs::ImplementationError>()
+                        .unwrap();
+                    assert_ne!(condition.detail, "the scan declined loudly", "{trigger}");
                 }
                 other => panic!("{trigger}: expected a Custom error, got {:?}", other),
             }
@@ -2448,7 +2448,7 @@ mod tests {
         reader.move_to(&token, TokenEdge::Start);
         let copy = kind;
         assert_eq!(kind, copy);
-        assert_eq!(kind.to_string(), "Command(\\vec)");
+        assert_eq!(kind, TokenKind::Command { name: "vec", escape_char: '\\' });
     }
 
     // --- positions, edges, spans -----------------------------------------------------

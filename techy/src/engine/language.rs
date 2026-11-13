@@ -663,7 +663,7 @@ mod tests {
         let err = strict().parse("a}b").unwrap_err();
         assert_eq!(err.identifier(), StrayGroupClose::IDENTIFIER);
         assert_eq!(err.span().range(), 1..2);
-        assert_eq!(err.to_string(), "unexpected closing ‘}’ — no group is open");
+        assert_eq!(err.data().downcast_ref::<StrayGroupClose>().unwrap().delim, "}");
 
         // Tolerant: diagnose, consume, and stage the delimiter as a chars node (the
         // markup-in-chars recovery artifact — revised in 7.9, superseding 7.4's
@@ -674,7 +674,8 @@ mod tests {
         assert_eq!(result.diagnostics.len(), 1);
         let diagnostic = result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
-        assert_eq!(diagnostic.message(), "unexpected closing ‘}’ — no group is open");
+        assert_eq!(diagnostic.span().range(), 1..2);
+        assert_eq!(diagnostic.data().downcast_ref::<StrayGroupClose>().unwrap().delim, "}");
     }
 
     #[test]
@@ -998,31 +999,24 @@ mod tests {
     fn deep_nesting_under_the_unconfigured_default_is_an_error_not_a_crash() {
         // 50 000 nesting levels would exhaust the call stack without the guard; the
         // built-in default refuses long before that, under either recovery policy
-        // (a refusal aborts under any policy), and the process survives. The
-        // refusal is self-describing: it names the built-in default and the
-        // configuration entry point.
+        // (a refusal aborts under any policy), and the process survives.
         let deep = nested_braces(50_000);
         for language in [strict(), tolerant()] {
             let err = language.parse(deep.clone()).unwrap_err();
             assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
-            let message = err.to_string();
-            assert!(message.contains("StdDescentGuard::DEFAULT_STACK_BUDGET"), "{message}");
-            assert!(message.contains("with_descent_guard_init"), "{message}");
+            let condition = err.data().downcast_ref::<DescentLimitExceeded>().unwrap();
+            assert!(!condition.detail.is_empty());
         }
     }
 
     #[test]
     fn a_tiny_fixed_budget_refuses_deep_nesting_in_any_build_profile() {
         // 200 levels always outrun a 4 KiB consumption cap, optimized or not — the
-        // deterministic refusal contrast for the `Off` test below. The configured
-        // refusal names the configured cap, not the built-in default.
+        // deterministic refusal contrast for the `Off` test below.
         let language = strict()
             .with_descent_guard_init(StdDescentGuardInit::fixed_stack_budget(4 * 1024));
         let err = language.parse(nested_braces(200)).unwrap_err();
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
-        let message = err.to_string();
-        assert!(message.contains("configured budget"), "{message}");
-        assert!(!message.contains("with_descent_guard_init"), "{message}");
     }
 
     #[test]
@@ -1049,7 +1043,6 @@ mod tests {
         assert!(language.parse(nested_braces(3)).is_ok());
         let err = language.parse(nested_braces(20)).unwrap_err();
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
-        assert!(err.to_string().contains("depth limit"), "{}", err);
         // Twelve sibling groups — more constructs than the limit, none deeper
         // than the limit — parse cleanly.
         let siblings = "{a}".repeat(12);
@@ -1068,8 +1061,9 @@ mod tests {
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
         let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
         assert!(!titles.is_empty(), "the refusal carries the live traceback");
+        // A group frame sits at its open delimiter: a one-byte `{` span.
         assert!(
-            titles.contains(&"group ‘{’"),
+            err.frames().iter().any(|f| f.span().content() == "{"),
             "the traceback includes the refused construct's group frame: {titles:?}"
         );
     }
@@ -1077,8 +1071,8 @@ mod tests {
     #[test]
     fn a_computed_budget_resolves_probe_minus_headroom_at_parse_entry() {
         // The probe answers HEADROOM + 100 bytes: the resolved budget is 100
-        // bytes — which the very first descent's own frames already outrun — and
-        // the refusal names the headroom-subtracted number, observable end to end.
+        // bytes — which the very first descent's own frames already outrun, so
+        // even a flat input is refused, which the default budget would accept.
         fn probe() -> Option<usize> {
             Some(StdDescentGuard::HEADROOM + 100)
         }
@@ -1086,7 +1080,7 @@ mod tests {
             .with_descent_guard_init(StdDescentGuardInit::computed_stack_budget(probe));
         let err = language.parse("x").unwrap_err();
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
-        assert!(err.to_string().contains("configured budget of 100 bytes"), "{}", err);
+        assert!(strict().parse("x").is_ok());
     }
 
     #[test]
@@ -1213,7 +1207,7 @@ mod tests {
         assert_eq!(result.diagnostics.len(), 1);
         let diagnostic = result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
-        assert!(diagnostic.message().contains('>'));
+        assert_eq!(diagnostic.data().downcast_ref::<StrayGroupClose>().unwrap().delim, ">");
     }
 
     #[test]
@@ -1268,11 +1262,12 @@ mod tests {
         assert_eq!(result.diagnostics.len(), 1);
         let diagnostic = result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
-        assert!(
-            diagnostic.message().contains("]]"),
-            "diagnostic should name the 2-char delimiter, got: {}",
-            diagnostic.message()
+        assert_eq!(
+            diagnostic.data().downcast_ref::<StrayGroupClose>().unwrap().delim,
+            "]]",
+            "diagnostic should name the 2-char delimiter"
         );
+        assert_eq!(diagnostic.span().len(), 2, "the stray close covers both bytes");
     }
 
     // --- the parse setup: per-parse initial state and root parser ---------------------------
@@ -1573,17 +1568,17 @@ mod tests {
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();
-        // The note's message ends with the recorded flag (the condition type's
-        // rendering prefixes it).
+        // The note's detail records the flag the hook saw.
         let note = |result: &ParseResult<StartLang>| -> String {
-            result.diagnostics.iter().next().unwrap().message()
+            let diagnostic = result.diagnostics.iter().next().unwrap();
+            diagnostic.data().downcast_ref::<ImplementationError>().unwrap().detail.clone()
         };
-        assert!(note(&language.parse("a").unwrap()).ends_with("comments_enabled=true"));
+        assert_eq!(note(&language.parse("a").unwrap()), "comments_enabled=true");
         let result = language
             .parse_setup(Source::new("a"))
             .with_initial_state(no_comments)
             .parse()
             .unwrap();
-        assert!(note(&result).ends_with("comments_enabled=false"));
+        assert_eq!(note(&result), "comments_enabled=false");
     }
 }

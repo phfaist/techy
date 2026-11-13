@@ -1011,14 +1011,26 @@ mod tests {
     #[test]
     fn the_views_display_renders_the_written_spelling() {
         use alloc::string::ToString;
+        // A command shows the escape character that fired with its name, so two
+        // escapes of the same name display differently.
         let command: TokenKind<'_, PlainLang> =
             TokenKind::Command { name: "vec", escape_char: '@' };
-        assert_eq!(command.to_string(), "Command(@vec)");
-        let comment: TokenKind<'_, PlainLang> = TokenKind::Comment {
-            start_delim: "%",
-            content: "0123456789012345678901234567890",
-        };
-        assert_eq!(comment.to_string(), "Comment(\"012345678901234567890123\"…)");
+        let backslash: TokenKind<'_, PlainLang> =
+            TokenKind::Command { name: "vec", escape_char: '\\' };
+        assert!(command.to_string().contains("@vec"));
+        assert!(backslash.to_string().contains("\\vec"));
+        assert_ne!(command.to_string(), backslash.to_string());
+        // A long comment shows only its truncated preview; a short one in full.
+        let long = "0123456789012345678901234567890";
+        let comment: TokenKind<'_, PlainLang> =
+            TokenKind::Comment { start_delim: "%", content: long };
+        let (preview, truncated) = truncate_for_display(long);
+        assert!(truncated);
+        assert!(comment.to_string().contains(preview));
+        assert!(!comment.to_string().contains(long));
+        let short: TokenKind<'_, PlainLang> =
+            TokenKind::Comment { start_delim: "%", content: "short" };
+        assert!(short.to_string().contains("short"));
     }
 
     #[test]

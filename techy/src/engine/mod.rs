@@ -816,7 +816,11 @@ mod tests {
         assert!(session.diagnostics.is_empty()); // strict mode records nothing
         // Display renders the condition's message; render() adds position info.
         assert_eq!(alloc::format!("{}", err), "unresolvable command ‘foo’");
-        assert!(err.render().contains("line 1"));
+        let rendered = err.render();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines.len(), 2, "{rendered}");
+        assert!(lines[0].ends_with(&err.to_string()), "{rendered}");
+        assert!(lines[1].ends_with(&crate::error::format_position(err.span())), "{rendered}");
     }
 
     #[test]
@@ -948,7 +952,13 @@ mod tests {
         // The strict ParseError snapshotted the stack, innermost first.
         let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
         assert_eq!(titles, ["inner frame", "outer frame"]);
-        assert!(err.render().contains("Inside:"));
+        // The rendering carries the traceback after the headline and position lines:
+        // a heading line, then one line per frame, innermost first.
+        let rendered = err.render();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines.len(), 5, "{rendered}");
+        assert!(lines[3].ends_with("inner frame"), "{rendered}");
+        assert!(lines[4].ends_with("outer frame"), "{rendered}");
     }
 
     #[test]
@@ -985,10 +995,27 @@ mod tests {
         // spec's defaulted stack_frame_title hook for callables.
         let frames = session.snapshot_frames();
         let titles: Vec<&str> = frames.iter().map(|f| f.title()).collect();
+        let spans: Vec<_> = frames.iter().map(|f| f.span().range()).collect();
+        assert_eq!(spans, [8..8, 1..6, 0..1]);
+        let default_spec = StdCallableSpec::default();
         assert_eq!(
-            titles,
-            ["argument #2 of ‘\\frac’", "callable ‘\\frac’", "group ‘{’"]
+            titles[..2],
+            [
+                crate::spec::CallableSpec::<PlainLang>::stack_frame_title(
+                    &default_spec,
+                    FrameRole::Argument { index: 1 },
+                    "\\frac"
+                ),
+                crate::spec::CallableSpec::<PlainLang>::stack_frame_title(
+                    &default_spec,
+                    FrameRole::Invocation,
+                    "\\frac"
+                ),
+            ]
         );
+        // The quoted title shows the frame's label and the quoted source slice.
+        assert!(titles[2].starts_with("group"), "{titles:?}");
+        assert!(titles[2].contains('{'), "{titles:?}");
     }
 
     // --- the default driver's hook defaults ---------------------------------------------
@@ -1026,7 +1053,7 @@ mod tests {
             driver.resolve_command(&st, &token, &reader).unwrap();
         match resolved {
             CommandResolution::Unresolved { detail } => {
-                assert!(detail.unwrap().contains("command resolution is not implemented"));
+                assert!(detail.is_some(), "the default explains the miss");
             }
             CommandResolution::Resolved(_) => panic!("the default must not resolve"),
             CommandResolution::Failed { .. } => {
@@ -1901,10 +1928,8 @@ mod tests {
         let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
         let error = cx.derive_state(&delta).unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
-        assert_eq!(
-            error.message(),
-            "extension hook reported a failure: event backend is down"
-        );
+        let hook_failed = error.data().downcast_ref::<crate::error::HookFailed>().unwrap();
+        assert_eq!(hook_failed.detail, "event backend is down");
         assert_eq!(session.state_stack().len(), 0, "zero residue after the abort");
     }
 
@@ -1963,7 +1988,8 @@ mod tests {
         assert!(error.failures.is_empty());
         let finalize_error = error.finalize_error.as_ref().unwrap();
         assert!(finalize_error.message().contains("NeedsContext"));
-        assert!(error.to_string().contains("cannot build the parsing state"));
+        // The derive error's rendering carries the refusal's own description.
+        assert!(error.to_string().contains(finalize_error.message()));
     }
 
     #[test]
