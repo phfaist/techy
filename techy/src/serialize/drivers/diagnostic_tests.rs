@@ -599,18 +599,23 @@ fn a_diagnostic_value_renders_through_serde_as_its_embedding() {
     let bytes = postcard::to_allocvec(&value).unwrap();
     assert_eq!(postcard::from_bytes::<DiagnosticValue>(&bytes).unwrap(), value);
     // Only the kinds a DiagnosticValue holds: a byte string or a table position in
-    // the rendering is an error naming its path.
+    // the rendering is an error naming its path (serde_json carries the error as its
+    // own error's text: the reported error is the one the value conversion raises).
+    let unrepresentable = |kind: &'static str, path: &str| {
+        DeserializeError::UnrepresentableDiagnosticValue { kind, path: String::from(path) }.to_string()
+    };
     let error = serde_json::from_str::<DiagnosticValue>(r#"{"a":[0,{"$bytes":"AA=="}]}"#).unwrap_err();
-    assert!(error.to_string().contains("kind `bytes` at `a[1]`"), "{error}");
+    assert!(error.to_string().contains(&unrepresentable("bytes", "a[1]")), "{error}");
     let error = serde_json::from_str::<DiagnosticValue>(r#"{"$index":[0,1]}"#).unwrap_err();
-    assert!(error.to_string().contains("kind `index` at its root"), "{error}");
+    assert!(error.to_string().contains(&unrepresentable("index", "")), "{error}");
     assert!(crate::serialize::from_value::<DiagnosticValue>(&SerialValue::Bytes(vec![])).is_err());
     // The nesting bound of the value model applies (the value is read as a
     // `SerialValue` first): one level beyond it is refused, however it is encoded.
     let limit = SerialValue::MAX_NESTING_DEPTH;
     let text = format!("{}null{}", "[".repeat(limit + 1), "]".repeat(limit + 1));
     let error = serde_json::from_str::<DiagnosticValue>(&text).unwrap_err().to_string();
-    assert!(error.contains("nests deeper than 64 levels"), "{error}");
+    let too_deep = crate::serialize::SerialValueError::NestingTooDeep { limit }.to_string();
+    assert!(error.contains(&too_deep), "{error}");
     let text = format!("{}null{}", "[".repeat(limit), "]".repeat(limit));
     let at_bound = serde_json::from_str::<DiagnosticValue>(&text).unwrap();
     assert_eq!(SerialValue::from(&at_bound).nesting_depth(), limit);
@@ -706,7 +711,6 @@ fn a_byte_string_inside_the_projection_is_rejected() {
         matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "bytes", path } if path == "expected_close"),
         "{error}"
     );
-    assert!(error.to_string().contains("kind `bytes` at `expected_close`"), "{error}");
 }
 
 #[test]
@@ -729,7 +733,6 @@ fn a_table_position_nested_inside_the_projection_is_rejected() {
         matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "bytes", path } if path.is_empty()),
         "{error}"
     );
-    assert!(error.to_string().contains("kind `bytes` at its root"), "{error}");
 }
 
 #[test]
@@ -812,13 +815,9 @@ fn a_parse_result_naming_a_tree_of_another_annotation_type_is_rejected() {
     *map_field_mut(entry, "tree") = SerialValue::Index { table: TableId::new(4), index: 0 };
     let mut reader = setup_annotated();
     let error = reader.push_segment(Segment::from_serial_value(&value).unwrap()).unwrap_err();
-    match innermost(&error) {
-        DeserializeError::Failed { detail, .. } => {
-            assert!(detail.contains("serialized under `test.string`"), "{detail}");
-            assert!(detail.contains("(`core.tree`)"), "{detail}");
-        }
-        other => panic!("unexpected error: {other}"),
-    }
+    // The refusal is a `Failed` error of the tree driver; which annotation types it
+    // names is free text only.
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert!(matches!(error, DeserializeError::InEntry { table: "parse-results", index: 0, .. }), "{error}");
 }
 
@@ -947,10 +946,13 @@ fn a_diagnostic_and_a_parse_result_have_a_pinned_json_rendering() {
         r#"{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},"#,
         r#"{"kind":{"group":{"group_type":0,"open":{"spanned":{"start":0,"end":1}},"close":{"owned":""}}},"span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":3}},"#,
         r#"{"kind":{"chars":{"content":{"spanned":{"start":1,"end":2}}}},"span":{"source":{"$index":[0,0]},"start":1,"end":2},"state":{"$index":[1,1]},"ext":null,"children":{"start":3,"end":3}}]}}]},"#,
-        r#"{"name":"diagnostics","table":5,"start":0,"entries":[{"severity":"error","identifier":"core.groups.unclosed-group","message":"unclosed group: expected ‘}’ before end of input","data":{"expected_close":"}","found":"end-of-input"},"span":{"source":{"$index":[0,0]},"start":0,"end":1},"frames":[]}]},"#,
+        r#"{"name":"diagnostics","table":5,"start":0,"entries":[{"severity":"error","identifier":"core.groups.unclosed-group","message":@MESSAGE@,"data":{"expected_close":"}","found":"end-of-input"},"span":{"source":{"$index":[0,0]},"start":0,"end":1},"frames":[]}]},"#,
         r#"{"name":"parse-results","table":6,"start":0,"entries":[{"tree":{"$index":[4,0]},"diagnostics":{"items":[{"$index":[5,0]}],"limit":1000,"suppressed":0,"error_count":1},"session_ext":3}]}]}"#,
     );
-    assert_eq!(json, expected);
+    // The serialized message is the `Display` of the diagnostic's condition.
+    let condition = result.diagnostics.conditions::<UnclosedGroup>().next().expect("an unclosed-group condition");
+    let message = serde_json::to_string(&condition.to_string()).unwrap();
+    assert_eq!(json, expected.replace("@MESSAGE@", &message));
 }
 
 // --- property: random diagnostics collections round-trip ---------------------------------

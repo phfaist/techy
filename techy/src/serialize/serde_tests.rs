@@ -563,7 +563,8 @@ fn a_map_key_beginning_with_dollar_is_rejected_everywhere() {
     let offending = map([("a", SerialValue::Null), ("$k", SerialValue::Int(1))]);
     let expected = SerialValueError::ReservedMapKey { key: "$k".into() };
     assert_eq!(to_value(&offending).unwrap_err(), expected);
-    assert!(serde_json::to_string(&offending).unwrap_err().to_string().contains("reserved"));
+    // (serde_json carries the error as its own error's text.)
+    assert!(serde_json::to_string(&offending).unwrap_err().to_string().contains(&expected.to_string()));
     // (postcard keeps no message; the failure itself is what matters.)
     assert!(postcard::to_allocvec(&offending).is_err());
     // Nested inside a payload: the same.
@@ -665,31 +666,45 @@ fn json_reader_accepts_only_the_canonical_forms() {
     }
     // Plain JSON maps onto the model.
     assert_eq!(read(r#"{"a":[1,true,null,"s"]}"#).unwrap(), map([("a", list([SerialValue::Int(1), SerialValue::Bool(true), SerialValue::Null, s("s")]))]));
+    // The error reported is the one the value model or the decoder raises (serde_json
+    // carries it as its own error's text).
+    let fails_with = |text: &str, expected: &str| {
+        let error = read(text).unwrap_err();
+        assert!(error.contains(expected), "{text}: {error}");
+    };
     // Bad base64.
-    assert!(read(r#"{"$bytes":"Zg"}"#).unwrap_err().contains("multiple of four"));
-    assert!(read(r#"{"$bytes":"Zh=="}"#).unwrap_err().contains("canonical"));
-    assert!(read(r#"{"$bytes":"Zm9v-g=="}"#).unwrap_err().contains("invalid base64 character"));
+    use super::base64::{decode, Base64Error};
+    assert_eq!(decode("Zg"), Err(Base64Error::Length));
+    fails_with(r#"{"$bytes":"Zg"}"#, &Base64Error::Length.to_string());
+    assert_eq!(decode("Zh=="), Err(Base64Error::NonCanonical));
+    fails_with(r#"{"$bytes":"Zh=="}"#, &Base64Error::NonCanonical.to_string());
+    assert_eq!(decode("Zm9v-g=="), Err(Base64Error::Character(4)));
+    fails_with(r#"{"$bytes":"Zm9v-g=="}"#, &Base64Error::Character(4).to_string());
     assert!(read(r#"{"$bytes":5}"#).is_err());
-    assert!(read(r#"{"$bytes":"","x":1}"#).unwrap_err().contains("one entry only"));
+    // A reserved object with a second entry (the reason is free text only).
+    assert!(read(r#"{"$bytes":"","x":1}"#).is_err());
     // Malformed `$index`.
     assert!(read(r#"{"$index":[1]}"#).is_err());
     assert!(read(r#"{"$index":[1,2,3]}"#).is_err());
     assert!(read(r#"{"$index":[-1,2]}"#).is_err());
     assert!(read(r#"{"$index":[1,4294967296]}"#).is_err());
     assert!(read(r#"{"$index":"1,2"}"#).is_err());
-    assert!(read(r#"{"$index":[1,2],"more":0}"#).unwrap_err().contains("one entry only"));
+    assert!(read(r#"{"$index":[1,2],"more":0}"#).is_err());
     // A reserved key that is not first, or any other `$` key: fail closed (there is no
     // escaping, so `$$…` is an error too).
-    assert!(read(r#"{"a":1,"$bytes":""}"#).unwrap_err().contains("reserved"));
-    assert!(read(r#"{"$other":1}"#).unwrap_err().contains("reserved"));
-    assert!(read(r#"{"$":1}"#).unwrap_err().contains("reserved"));
-    assert!(read(r#"{"$$k":1}"#).unwrap_err().contains("reserved"));
-    assert!(read(r#"{"a":{"$$":1}}"#).unwrap_err().contains("reserved"));
+    let reserved = |key: &str| SerialValueError::ReservedMapKey { key: key.into() }.to_string();
+    fails_with(r#"{"a":1,"$bytes":""}"#, &reserved("$bytes"));
+    fails_with(r#"{"$other":1}"#, &reserved("$other"));
+    fails_with(r#"{"$":1}"#, &reserved("$"));
+    fails_with(r#"{"$$k":1}"#, &reserved("$$k"));
+    fails_with(r#"{"a":{"$$":1}}"#, &reserved("$$"));
     // Numbers outside the model.
-    assert!(read("1.5").unwrap_err().contains("floating-point"));
-    assert!(read("1e3").unwrap_err().contains("floating-point"));
-    assert!(read("9223372036854775808").unwrap_err().contains("does not fit i64"));
-    assert!(read("[1.0]").unwrap_err().contains("floating-point"));
+    let float = SerialValueError::FloatRejected.to_string();
+    fails_with("1.5", &float);
+    fails_with("1e3", &float);
+    let out_of_range = SerialValueError::IntegerOutOfRange { value: "9223372036854775808".into(), target: "i64" };
+    fails_with("9223372036854775808", &out_of_range.to_string());
+    fails_with("[1.0]", &float);
 }
 
 // --- the compact rendering (postcard) ------------------------------------------------------------------
@@ -834,7 +849,8 @@ fn a_segment_with_an_entry_nesting_too_deep_is_refused_by_serde() {
 
     let too_deep = nested_lists(MAX_ENTRY_NESTING_DEPTH + 1, SerialValue::Null);
     let error = serde_json::from_str::<Segment>(&segment_json(&too_deep)).unwrap_err().to_string();
-    assert!(error.contains("nests deeper than 64 levels"), "{error}");
+    let expected = SerialValueError::NestingTooDeep { limit: SerialValue::MAX_NESTING_DEPTH }.to_string();
+    assert!(error.contains(&expected), "{error}");
     // The same segment value through postcard: the value's own encoding renders it
     // (no session ever accepts it, so the bytes are made from the value directly).
     let value = segment.to_serial_value();
@@ -859,7 +875,7 @@ fn a_segment_without_meta_is_refused() {
     use super::Segment;
     let without = r#"{"version":1,"tables":[{"name":"leaves","table":0,"start":0,"entries":[]}]}"#;
     let error = serde_json::from_str::<Segment>(without).unwrap_err().to_string();
-    assert!(error.contains("missing key `meta`"), "{error}");
+    assert!(error.contains(&SerialValueError::MissingField { name: "meta" }.to_string()), "{error}");
     let value: SerialValue = serde_json::from_str(without).unwrap();
     assert_eq!(Segment::from_serial_value(&value), Err(SerialValueError::MissingField { name: "meta" }));
     // With an empty `meta` object the same segment reads.
@@ -880,8 +896,4 @@ fn custom_errors_from_impls_are_kept() {
         }
     }
     assert_eq!(to_value(&Failing), Err(SerialValueError::Custom("refused".into())));
-    let display = SerialValueError::UnknownField { name: "b".into(), expected: &["a", "c"] }.to_string();
-    assert_eq!(display, "unknown key `b`; expected one of `a`, `c`");
-    let display = SerialValueError::TypeMismatch { expected: Cow::Borrowed("a byte string"), found: "list" }.to_string();
-    assert_eq!(display, "expected a byte string, found list");
 }

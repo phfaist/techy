@@ -11,6 +11,13 @@
 //! one-line renderings). Reading a golden file back into a fresh session is part of
 //! every test: the files double as pinned readable inputs.
 //!
+//! A golden file records the severity, identifier, data, span and frames of every
+//! diagnostic, never its message: before a segment is written to a golden file or
+//! compared with one, the `message` value of every diagnostic entry is replaced with a
+//! fixed placeholder (`mask_messages`), so that a reworded message changes no golden
+//! file. The read-back checks compare everything but the message, and a separate
+//! check ties each serialized message to the `Display` of its condition.
+//!
 //! **Regenerating** after an intended wire change: run the tests with the
 //! environment variable `UPDATE_GOLDEN` set to exactly `1` (any other value leaves the
 //! files alone; a banner on standard error announces each regeneration) —
@@ -32,13 +39,13 @@ use std::sync::Arc;
 use techy::core::node::display_tree;
 use techy::core::specs::{Package, SpecsProvider};
 use techy::core::{Language, ParseResult, ParsingState};
-use techy::error::Recovery;
+use techy::error::{Diagnostics, Recovery};
 use techy::latexlike::minidefs::{self, minilatex_package};
 use techy::latexlike::serialize::{register, register_package_recipes};
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 use techy::serialize::{
     KnownProviders, ParseResultSerialization, SerdeSession, Segment, StandardTableInterning,
-    StandardTableReading, TableId,
+    SerialValue, StandardTableReading, TableId,
 };
 use techy::source::Source;
 
@@ -47,6 +54,107 @@ use techy::source::Source;
 /// The directory of the golden files.
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden").join("serialize")
+}
+
+/// The name of the table holding the serialized diagnostics.
+const DIAGNOSTICS_TABLE: &str = "diagnostics";
+
+/// What every serialized diagnostic message reads in a golden file.
+const MASKED_MESSAGE: &str = "<message not recorded in golden files>";
+
+/// The `entries` of every table named `table` in `segment`'s serialized form, mutably.
+fn table_entries_mut<'a>(value: &'a mut SerialValue, table: &str) -> Vec<&'a mut Vec<SerialValue>> {
+    let mut found = Vec::new();
+    let SerialValue::Map(fields) = value else { panic!("a segment serializes to a map") };
+    for (key, tables) in fields.iter_mut() {
+        if key != "tables" {
+            continue;
+        }
+        let SerialValue::List(tables) = tables else { panic!("a segment's tables are a list") };
+        for table_value in tables.iter_mut() {
+            let SerialValue::Map(table_fields) = table_value else { panic!("a segment table is a map") };
+            let is_wanted = table_fields.iter().any(|(k, v)| k == "name" && *v == SerialValue::Str(String::from(table)));
+            if !is_wanted {
+                continue;
+            }
+            for (k, v) in table_fields.iter_mut() {
+                if k == "entries" {
+                    let SerialValue::List(entries) = v else { panic!("a table's entries are a list") };
+                    found.push(entries);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The serialized messages of the diagnostic entries of `segments`, in order.
+fn serialized_messages(segments: &[Segment]) -> Vec<String> {
+    let mut messages = Vec::new();
+    for segment in segments {
+        let mut value = segment.to_serial_value();
+        for entries in table_entries_mut(&mut value, DIAGNOSTICS_TABLE) {
+            for entry in entries.iter() {
+                let SerialValue::Map(fields) = entry else { panic!("a diagnostic entry is a map") };
+                let message = fields.iter().find(|(k, _)| k == "message").map(|(_, v)| v);
+                let Some(SerialValue::Str(message)) = message else { panic!("a diagnostic entry has a string message") };
+                messages.push(message.clone());
+            }
+        }
+    }
+    messages
+}
+
+/// `segment` with the `message` value of every diagnostic entry replaced with
+/// [`MASKED_MESSAGE`], through the segment's own serialized form (whose maps keep their
+/// key order, so the golden files keep pinning it).
+fn mask_messages(segment: &Segment) -> Segment {
+    let mut value = segment.to_serial_value();
+    for entries in table_entries_mut(&mut value, DIAGNOSTICS_TABLE) {
+        for entry in entries.iter_mut() {
+            let SerialValue::Map(fields) = entry else { panic!("a diagnostic entry is a map") };
+            let mut masked = false;
+            for (key, message) in fields.iter_mut() {
+                if key == "message" {
+                    *message = SerialValue::Str(String::from(MASKED_MESSAGE));
+                    masked = true;
+                }
+            }
+            assert!(masked, "every diagnostic entry has a message");
+        }
+    }
+    Segment::from_serial_value(&value).expect("a masked segment is still a segment")
+}
+
+/// Each serialized diagnostic message of `segments` is the `Display` of its condition:
+/// the diagnostics of `originals`, in order, are the diagnostic entries of the stream.
+fn assert_messages_are_the_conditions_display(segments: &[Segment], originals: &[&Diagnostics]) {
+    let expected: Vec<String> =
+        originals.iter().flat_map(|diagnostics| diagnostics.iter()).map(|diagnostic| diagnostic.message()).collect();
+    assert_eq!(serialized_messages(segments), expected);
+}
+
+/// The read-back diagnostics agree with the originals on everything but the message
+/// (which the golden files mask): severity, identifier, data, span, frames.
+fn assert_diagnostics_match(back: &Diagnostics, original: &Diagnostics) {
+    assert_eq!(back.len(), original.len());
+    assert_eq!(back.error_count(), original.error_count());
+    assert_eq!(back.suppressed(), original.suppressed());
+    for (back, original) in back.iter().zip(original.iter()) {
+        assert_eq!(back.severity(), original.severity());
+        assert_eq!(back.identifier(), original.identifier());
+        assert_eq!(back.data().serializable_data(), original.data().serializable_data());
+        assert_eq!((back.span().start(), back.span().end()), (original.span().start(), original.span().end()));
+        assert_eq!(back.span().source().content(), original.span().source().content());
+        assert_eq!(back.frames().len(), original.frames().len());
+        for (b, o) in back.frames().iter().zip(original.frames()) {
+            assert_eq!(b.title(), o.title());
+            assert_eq!((b.span().start(), b.span().end()), (o.span().start(), o.span().end()));
+            assert_eq!(b.span().source().content(), o.span().source().content());
+        }
+        // The read-back message is the placeholder the golden file holds.
+        assert_eq!(back.message(), MASKED_MESSAGE);
+    }
 }
 
 /// The golden file's content for `segments`: pretty-printed documents, blank-line
@@ -68,10 +176,13 @@ fn parse_golden(content: &str) -> Vec<Segment> {
         .expect("every document of a golden file is a segment")
 }
 
-/// Compare `segments` with the golden file `name` (or rewrite it under
-/// `UPDATE_GOLDEN`), and return the golden segments as read back from the file.
+/// Compare `segments`, with their diagnostic messages masked, with the golden file
+/// `name` (or rewrite it under `UPDATE_GOLDEN`), and return the golden segments as read
+/// back from the file.
 fn check_golden(name: &str, segments: &[Segment]) -> Vec<Segment> {
     let path = golden_dir().join(name);
+    let masked: Vec<Segment> = segments.iter().map(mask_messages).collect();
+    let segments = masked.as_slice();
     let rendered = render_golden(segments);
     if std::env::var("UPDATE_GOLDEN").ok().as_deref() == Some("1") {
         eprintln!("=== UPDATE_GOLDEN=1: regenerating the golden file {} ===", path.display());
@@ -204,6 +315,7 @@ fn golden_schema_example() {
     assert!(result.diagnostics.has_errors(), "the unclosed group is diagnosed");
     let mut writer = session(&language);
     let segment = emit(&mut writer, &result);
+    assert_messages_are_the_conditions_display(std::slice::from_ref(&segment), &[&result.diagnostics]);
 
     let golden = check_golden("schema_example.json", std::slice::from_ref(&segment));
 
@@ -212,7 +324,7 @@ fn golden_schema_example() {
     let main = reader.push_segment(golden.into_iter().next().unwrap()).unwrap();
     let back = main_parse_result(&mut reader, main);
     assert_eq!(display_tree(back.tree.root()), display_tree(result.tree.root()));
-    assert_eq!(back.diagnostics.render_all(), result.diagnostics.render_all());
+    assert_diagnostics_match(&back.diagnostics, &result.diagnostics);
 }
 
 // --- (iii) a multi-segment read-then-append stream ----------------------------------------------
@@ -240,6 +352,7 @@ fn golden_read_then_append_stream() {
     appender.push_segment(second.clone()).unwrap();
     let third = emit(&mut appender, &c);
     let stream = [first, second, third];
+    assert_messages_are_the_conditions_display(&stream, &[&a.diagnostics, &b.diagnostics, &c.diagnostics]);
 
     let golden = check_golden("read_then_append.json", &stream);
 
@@ -249,7 +362,7 @@ fn golden_read_then_append_stream() {
     let back: Vec<Arc<ParseResult<Latexlike>>> = mains.into_iter().map(|main| main_parse_result(&mut reader, main)).collect();
     for (original, rebuilt) in [&a, &b, &c].into_iter().zip(&back) {
         assert_eq!(display_tree(rebuilt.tree.root()), display_tree(original.tree.root()));
-        assert_eq!(rebuilt.diagnostics.render_all(), original.diagnostics.render_all());
+        assert_diagnostics_match(&rebuilt.diagnostics, &original.diagnostics);
     }
     // A and B were parsed and written by one session and share their seed state; C
     // was appended by another session, whose parse holds its own state objects.

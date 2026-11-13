@@ -1373,7 +1373,7 @@
         {
           "severity": "error",
           "identifier": "core.groups.unclosed-group",
-          "message": "unclosed group: expected ‘}’ before end of input",
+          "message": "<message not recorded in golden files>",
           "data": {
             "expected_close": "}",
             "found": "end-of-input"

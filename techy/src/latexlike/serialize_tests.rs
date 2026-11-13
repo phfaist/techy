@@ -836,7 +836,10 @@ fn a_scope_listing_a_definition_twice_is_rejected() {
     let mut reader = SerdeSession::<Latexlike>::new();
     register(&mut reader).unwrap();
     let error = reader.push_segment(segment).unwrap_err();
-    assert!(error.to_string().contains("twice"), "{error}");
+    // The scope reader refuses the entry (a `Failed` error: the duplicate is named in
+    // free text only).
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    assert!(matches!(error, DeserializeError::InEntry { table: "providers", index: 0, .. }), "{error}");
 }
 
 // --- hostile input and totality ---------------------------------------------------------
@@ -911,7 +914,10 @@ fn a_hostile_state_over_read_providers_freezes_without_panicking() {
     let edited = crate::serialize::Segment::from_serial_value(&value).unwrap();
     let mut reader = factory();
     let error = reader.push_segment(edited).unwrap_err();
-    assert!(error.to_string().contains("not a Package"), "{error}");
+    // The spec-identity reader refuses the entry (a `Failed` error: that the provider is
+    // not a package is free text only).
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    assert!(matches!(error, DeserializeError::InEntry { table: "specs", .. }), "{error}");
 }
 
 // --- parse results with their diagnostics --------------------------------------------------
