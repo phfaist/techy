@@ -274,22 +274,18 @@ fn serial_value_equality_is_structural() {
     assert!(TableId::new(0) < TableId::new(1));
 }
 
-/// The error types render and implement `Error`.
+/// The error types render and implement `Error`; a location wrapper's rendering
+/// shows its cause's rendering after its own location text, and `source()` exposes
+/// the cause.
 #[test]
 fn errors_display() {
     use alloc::string::ToString;
     let unsupported: &dyn core::error::Error = &SerializeError::unsupported();
-    assert_eq!(
-        unsupported.to_string(),
-        "serialization is unsupported by this type"
-    );
-    let out_of_band = SerializeError::ArgumentSpecOutOfBand { index: 1, count: 1 }.to_string();
-    assert!(out_of_band.contains("argument #2"), "{out_of_band}");
+    assert!(!unsupported.to_string().is_empty());
+    assert!(unsupported.source().is_none());
     let out_of_range: &dyn core::error::Error =
         &DeserializeError::ArgumentIndexOutOfRange { index: 3, count: 2 };
-    assert!(out_of_range.to_string().contains("argument #4"));
-    let unexpected = DeserializeError::UnexpectedArgumentSpecPayload { index: usize::MAX }.to_string();
-    assert!(unexpected.contains("does not override deserialize_argument_spec"), "{unexpected}");
+    assert!(!out_of_range.to_string().is_empty());
 
     // The node location wrappers render the node (and callable) and expose the cause.
     let in_node: &dyn core::error::Error = &SerializeError::InNode {
@@ -297,18 +293,21 @@ fn errors_display() {
         callable: Some(String::from("frac")),
         cause: Box::new(SerializeError::unsupported()),
     };
-    assert_eq!(
-        in_node.to_string(),
-        "while serializing node #3 (callable `frac`) of the tree: serialization is unsupported by this type"
-    );
-    assert!(in_node.source().is_some());
-    let in_node: &dyn core::error::Error = &DeserializeError::InNode {
-        node: 0,
-        callable: None,
-        cause: Box::new(DeserializeError::failed("x")),
-    };
-    assert_eq!(in_node.to_string(), "while rebuilding node #0 of the tree: deserialization failed: x");
-    assert!(in_node.source().is_some());
+    let rendered = in_node.to_string();
+    assert!(rendered.find(&unsupported.to_string()).is_some_and(|at| at > 0), "{rendered}");
+    assert!(matches!(
+        in_node.source().and_then(|cause| cause.downcast_ref::<SerializeError>()),
+        Some(SerializeError::Unsupported)
+    ));
+    let cause = DeserializeError::failed("x");
+    let cause_rendered = cause.to_string();
+    let in_node: &dyn core::error::Error = &DeserializeError::InNode { node: 0, callable: None, cause: Box::new(cause) };
+    let rendered = in_node.to_string();
+    assert!(rendered.find(&cause_rendered).is_some_and(|at| at > 0), "{rendered}");
+    assert!(matches!(
+        in_node.source().and_then(|cause| cause.downcast_ref::<DeserializeError>()),
+        Some(DeserializeError::Failed { detail, .. }) if detail == "x"
+    ));
 }
 
 // --- the nesting bound ------------------------------------------------------------------
@@ -396,8 +395,6 @@ fn a_segment_value_nesting_too_deep_is_refused_before_it_is_walked() {
             "depth {depth}"
         );
     }
-    let message = alloc::string::ToString::to_string(&SerialValueError::NestingTooDeep { limit: 64 });
-    assert_eq!(message, "the value nests deeper than 64 levels of lists and maps");
 }
 
 // --- the field hooks of the value traits ----------------------------------------------

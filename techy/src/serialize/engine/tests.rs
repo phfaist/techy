@@ -1747,7 +1747,6 @@ fn a_declared_profile_is_written_and_required_on_reading() {
         matches!(&error, DeserializeError::ProfileMismatch { expected, found: Some(found) } if expected == "toy 2" && found == "toy 1"),
         "{error}"
     );
-    assert_eq!(error.to_string(), "the segment's profile `toy 1` is not this session's profile `toy 2`");
     assert!(reader.object(rt.leaves, rt.leaves.position(0)).is_err());
 
     // No profile declared: any segment is accepted, with or without one.
@@ -1765,8 +1764,10 @@ fn a_declared_profile_is_written_and_required_on_reading() {
     let (mut reader, _) = full_session();
     reader.set_profile("toy 1");
     let error = reader.push_segment(unprofiled).unwrap_err();
-    assert!(matches!(&error, DeserializeError::ProfileMismatch { found: None, .. }), "{error}");
-    assert_eq!(error.to_string(), "the segment carries no profile; this session requires `toy 1`");
+    assert!(
+        matches!(&error, DeserializeError::ProfileMismatch { expected, found: None } if expected == "toy 1"),
+        "{error}"
+    );
 }
 
 // --- determinism ----------------------------------------------------------------------

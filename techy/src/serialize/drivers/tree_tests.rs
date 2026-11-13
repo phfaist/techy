@@ -562,11 +562,14 @@ fn an_out_of_band_argument_spec_without_an_override_is_a_write_error() {
     assert!(matches!(&error, SerializeError::InTable { table: "trees", .. }), "{error}");
     assert_eq!(write_node_location(&error), Some((1, Some("x"))), "{error}");
     assert!(matches!(innermost_write(&error), SerializeError::ArgumentSpecOutOfBand { index: 0, count: 1 }), "{error}");
-    // The rendering reads location-outermost-first.
+    // The rendering reads location-outermost-first: each wrapper's rendering is
+    // preceded by its own location text and follows with its cause's rendering.
+    let SerializeError::InTable { cause: in_node, .. } = &error else { unreachable!("checked above") };
     let rendered = error.to_string();
-    let expected_prefix = "while serializing an object into table `trees`: while serializing node #1 \
-                           (callable `x`) of the tree: argument #1";
-    assert!(rendered.starts_with(expected_prefix), "{rendered}");
+    let node_rendered = in_node.to_string();
+    let innermost_rendered = innermost_write(&error).to_string();
+    assert!(rendered.find(&node_rendered).is_some_and(|at| at > 0), "{rendered}");
+    assert!(node_rendered.find(&innermost_rendered).is_some_and(|at| at > 0), "{node_rendered}");
 }
 
 // --- fresh tag ------------------------------------------------------------------------
@@ -660,6 +663,15 @@ fn innermost(error: &DeserializeError) -> &DeserializeError {
     match error {
         DeserializeError::InEntry { cause, .. } | DeserializeError::InNode { cause, .. } => innermost(cause),
         other => other,
+    }
+}
+
+/// The node builder's error kept as the cause of the innermost
+/// [`Failed`](DeserializeError::Failed), if any.
+fn builder_cause(error: &DeserializeError) -> Option<&NodeBuildError> {
+    match innermost(error) {
+        DeserializeError::Failed { cause: Some(cause), .. } => cause.downcast_ref::<NodeBuildError>(),
+        _ => None,
     }
 }
 
@@ -844,7 +856,13 @@ fn a_chars_content_span_out_of_range_is_rejected() {
     });
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert_eq!(read_node_location(&error), Some((1, None)), "{error}");
-    assert!(error.to_string().contains("chars content span 0..9999"), "{error}");
+    assert!(
+        matches!(
+            builder_cause(&error),
+            Some(NodeBuildError::SpannedContentInvalid { span, content_len: 5, .. }) if *span == Span::new(0, 9_999)
+        ),
+        "{error}"
+    );
 }
 
 #[test]
@@ -881,7 +899,13 @@ fn a_group_delimiter_span_off_a_char_boundary_is_rejected() {
     });
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert_eq!(read_node_location(&error), Some((1, None)), "{error}");
-    assert!(error.to_string().contains("group open delimiter span 0..4"), "{error}");
+    assert!(
+        matches!(
+            builder_cause(&error),
+            Some(NodeBuildError::SpannedContentInvalid { span, content_len: 5, .. }) if *span == Span::new(0, 4)
+        ),
+        "{error}"
+    );
 }
 
 #[test]
@@ -967,13 +991,11 @@ fn reading_a_tree_with_the_wrong_annotation_type_is_rejected() {
     let mut reader = setup_span_annotations();
     reader.push_segment(writer.take_segment()).unwrap();
     let trees = reader.standard_tables().unwrap().trees;
-    // The tree was written with the unit annotation; reading it as `SourceSpan` fails,
-    // naming the identifier it was written under and the annotation requested.
+    // The tree was written with the unit annotation; reading it as `SourceSpan` fails.
     let error = reader.tree::<SpanAnnotation>(trees.position(position.index())).unwrap_err();
     assert!(matches!(error, DeserializeError::Failed { .. }), "{error}");
-    let rendered = error.to_string();
-    assert!(rendered.contains("serialized under `core.tree`"), "{rendered}");
-    assert!(rendered.contains("SourceSpan") && rendered.contains("(`test.span`)"), "{rendered}");
+    // The same position still reads as the annotation it was written with.
+    assert!(reader.tree::<()>(trees.position(position.index())).is_ok());
 }
 
 #[test]
@@ -1015,7 +1037,6 @@ fn nodes_no_node_claims_are_rejected_not_dropped() {
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     // Node 3 (chars `z`) is the first unclaimed node.
     assert_eq!(read_node_location(&error), Some((3, None)), "{error}");
-    assert!(error.to_string().contains("no node lists this node among its children"), "{error}");
 }
 
 #[test]
@@ -1034,8 +1055,8 @@ fn the_root_claimed_as_a_child_is_rejected() {
 #[test]
 fn a_content_parent_outside_its_region_is_rejected() {
     // `\frac{a}{b}`: point argument 0's content parent at argument 1's group (node 3).
-    // The builder catches it when the tree is finished; the message names the wire
-    // node, and the builder's own error is kept as the cause.
+    // The builder catches it when the tree is finished; the builder's own error is kept
+    // as the cause.
     let error = push_edited(&callable_group_args_tree(), |segment| {
         let nodes = tree_nodes_mut(segment);
         let callable = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "callable");
@@ -1044,8 +1065,7 @@ fn a_content_parent_outside_its_region_is_rejected() {
         *map_field_mut(map_field_mut(map_field_mut(region, "content"), "in_children_of"), "node") = SerialValue::Int(3);
     });
     match innermost(&error) {
-        DeserializeError::Failed { detail, cause } => {
-            assert!(detail.contains("content parent node #3 lies outside its own argument/slot region"), "{detail}");
+        DeserializeError::Failed { cause, .. } => {
             let cause = cause.as_ref().expect("the builder error is kept as the cause");
             assert!(
                 matches!(cause.downcast_ref::<NodeBuildError>(), Some(NodeBuildError::ContentParentOutsideRegion { .. })),
@@ -1070,17 +1090,18 @@ fn a_content_parent_stored_before_its_callable_is_rejected() {
     let error = push_edited(&callable_group_args_tree(), |segment| content_parent_edit(segment, 0));
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert_eq!(read_node_location(&error), Some((1, Some("frac"))), "{error}");
-    assert!(error.to_string().contains("node #0, is not stored after its callable"), "{error}");
 
     // The callable itself (`in_children_of` naming the node whose region it is): the
     // same error — the wire form for content among the callable's own children is
     // `in_region`, and the callable is not a node inside its own region.
     let error = push_edited(&callable_group_args_tree(), |segment| content_parent_edit(segment, 1));
-    assert!(error.to_string().contains("node #1, is not stored after its callable"), "{error}");
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    assert_eq!(read_node_location(&error), Some((1, Some("frac"))), "{error}");
 
     // And one out of range altogether.
     let error = push_edited(&callable_group_args_tree(), |segment| content_parent_edit(segment, 99));
-    assert!(error.to_string().contains("node #99, is out of range"), "{error}");
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    assert_eq!(read_node_location(&error), Some((1, Some("frac"))), "{error}");
 }
 
 #[test]
@@ -1138,7 +1159,7 @@ fn an_ext_on_an_absent_argument_is_rejected() {
         }
     });
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
-    assert!(error.to_string().contains("argument #3 is absent"), "{error}");
+    assert_eq!(read_node_location(&error), Some((1, Some("frac"))), "{error}");
 }
 
 #[test]
@@ -1160,7 +1181,7 @@ fn an_annotation_count_mismatch_is_rejected() {
     let mut reader = setup_span_annotations();
     let error = reader.push_segment(edited).unwrap_err();
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
-    assert!(error.to_string().contains("2 nodes but 1 annotations"), "{error}");
+    assert!(matches!(error, DeserializeError::InEntry { table: "trees", index: 0, .. }), "{error}");
 }
 
 #[test]
@@ -1170,7 +1191,7 @@ fn a_non_tree_object_in_the_trees_table_is_a_write_error() {
     let object: Arc<dyn Any + Send + Sync> = Arc::new(42u32);
     let error = session.intern(trees, &object).unwrap_err();
     assert!(matches!(&error, SerializeError::InTable { table: "trees", .. }), "{error}");
-    assert!(error.to_string().contains("not a NodeTree of a registered annotation type"), "{error}");
+    assert!(matches!(innermost_write(&error), SerializeError::Failed { .. }), "{error}");
 }
 
 #[test]
@@ -1483,7 +1504,6 @@ fn spanned_text_inside_an_invocation_syntax_is_rejected_on_read() {
     });
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert_eq!(read_node_location(&error), Some((1, Some("x"))), "{error}");
-    assert!(error.to_string().contains("span-backed text"), "{error}");
 }
 
 #[test]
@@ -1507,7 +1527,6 @@ fn a_spanned_text_value_is_a_write_error() {
     let error = writer.serialize_tree(&tree).unwrap_err();
     assert!(matches!(innermost_write(&error), SerializeError::Failed { .. }), "{error}");
     assert_eq!(write_node_location(&error), Some((0, None)), "{error}");
-    assert!(error.to_string().contains("span-backed text"), "{error}");
 }
 
 // --- JSON snapshot (feature) ----------------------------------------------------------

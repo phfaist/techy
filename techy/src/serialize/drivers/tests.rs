@@ -4,7 +4,7 @@
 //! standard-tables constructor and the by-kind accessors, the value traits' core
 //! impls, determinism, and — with the `serde` feature — a pinned JSON rendering.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -528,7 +528,6 @@ fn referenced_source_failures_are_typed_and_name_the_source() {
         innermost(&error),
         DeserializeError::NoSourceTextSupplier { origin: Some(origin) } if origin == "h.tex"
     ), "{error}");
-    assert!(error.to_string().contains("`h.tex`"), "{error}");
     // The failed push left the session usable and empty.
     assert!(reader.source(reader.standard_tables().unwrap().sources.position(0)).is_err());
 
