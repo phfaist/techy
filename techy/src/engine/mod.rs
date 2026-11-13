@@ -154,24 +154,22 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
     }
 }
 
-/// Why a state derivation made through the session failed
-/// ([`ParserSession::derived_state`], [`ParserSession::group_interior_state`]).
+/// The error that [`ParserSession::derived_state`] and
+/// [`ParserSession::group_interior_state`] return when the derivation of a parsing
+/// state fails.
 ///
-/// Either the derivation itself failed, or the driver's transition observation hook
-/// asked for the parse to end. The two arms stay separate because a caller can do
-/// different things with them: a derivation failure comes with a structured
-/// [`DeriveError`] naming the operations that failed and offering a recovered state
-/// to continue under, while an observation abort is already the [`ParseError`] that
-/// ends the parse (see [`ParseDriver::observe_transition`]).
+/// The two variants call for different handling. A [`DeriveError`] lists the
+/// operations that failed and contains a recovered state, with which a tolerant caller
+/// can continue. A [`ParseError`] returned by [`ParseDriver::observe_transition`] ends
+/// the parse. The `Display` text of this error is the text of the error that it
+/// contains.
 #[allow(clippy::large_enum_variant)] // large `Derive` arm by design — see `DeriveError`
 #[non_exhaustive]
 pub enum SessionDeriveError<L: Lang> {
-    /// The derivation failed ([`ParsingState::derived`]'s error): failing scope
-    /// ops and/or a finalize refusal, with the recovered state for tolerant
-    /// continuation.
+    /// The derivation failed, with the error that [`ParsingState::derived`] returns.
     Derive(DeriveError<L>),
-    /// [`ParseDriver::observe_transition`] answered its abort channel; the
-    /// transition was not committed.
+    /// [`ParseDriver::observe_transition`] returned an error. The session returns no
+    /// state and memoizes nothing for this transition.
     Observe(ParseError<L::SourceOrigin>),
 }
 

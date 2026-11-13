@@ -471,65 +471,66 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
     }
 }
 
-/// The error of [`ParsingState::derived`]: the delta contained a failing
-/// [scope op](ParsingStateDelta::scope_ops), or [`Lang::finalize_transition`] refused
-/// the transition, or both.
+/// The error that [`ParsingState::derived`] returns when the derivation of a state
+/// fails.
 ///
-/// It reports what went wrong without judging how serious it is — whether a failure
-/// is a bug in an extension or bad input to an embedding depends on the caller's
-/// situation. Along with the failures it holds everything needed to carry on:
+/// A derivation fails when a [scope operation](ParsingStateDelta::scope_ops) of the
+/// delta fails, when [`Lang::finalize_transition`] returns an error, or both. Therefore
+/// [`failures`](DeriveError::failures) is not empty, or
+/// [`finalize_error`](DeriveError::finalize_error) is `Some`, or both.
 ///
-/// - [`failures`](DeriveError::failures) — one record per failing scope op, in the
-///   order the delta listed them;
-/// - [`finalize_error`](DeriveError::finalize_error) — the customizer's refusal, when
-///   [`Lang::finalize_transition`] returned `Err` (usually a context-dependent event
-///   that reached [`ParsingState::derived`] untranslated; see [`Lang::Event`]);
-/// - [`recovered`](DeriveError::recovered) — the fully derived state with just the
-///   failing ops skipped, finalized and frozen like any other state, so a tolerant
-///   caller can continue with it (after a refusal from the customizer, the data as
-///   the hook left it);
-/// - [`delta`](DeriveError::delta) — the delta as applied, which a recovering caller
-///   needs in order to report the true transition to
-///   [`ParseDriver::observe_transition`](crate::core::ParseDriver::observe_transition):
-///   deriving a group interior applies a *merged* delta the caller never sees.
+/// The error also contains what a caller needs to continue: the
+/// [`recovered`](DeriveError::recovered) state, which a tolerant caller can use in place
+/// of the state that failed, and the [`delta`](DeriveError::delta) that was applied. The
+/// error does not say how serious the failure is. Depending on the caller, a failing
+/// scope operation is a bug in an extension or a problem in the input of an embedding.
 ///
-/// At least one of [`failures`](DeriveError::failures) (non-empty) and
-/// [`finalize_error`](DeriveError::finalize_error) (`Some`) is always present.
-///
-/// This type is not `Clone`, because a [`ParsingState`] is not: a state is identified
-/// by its address, and the recovered state is a state.
-///
-/// The `Err` value is large by design — it owns a whole state plus the applied delta,
-/// which is the point of the type — so the functions returning it allow
-/// `clippy::result_large_err` instead of boxing.
+/// `DeriveError` is not `Clone`, because a [`ParsingState`] is not: a state is
+/// identified by its address, and the recovered state is a state. The error is large,
+/// since it contains a whole state and a delta. The functions that return it allow
+/// `clippy::result_large_err` instead of boxing it.
 pub struct DeriveError<L: Lang> {
-    /// One record per failing scope op, in the order the delta listed them. Empty
+    /// The errors of the scope operations that failed, in the order of the delta. Empty
     /// only when [`finalize_error`](DeriveError::finalize_error) is `Some`.
     pub failures: Vec<ScopeOpError>,
-    /// [`Lang::finalize_transition`]'s refusal, if the customizer returned `Err`.
+    /// The error that [`Lang::finalize_transition`] returned, if any.
+    ///
+    /// The usual cause is a context-dependent event that reached
+    /// [`ParsingState::derived`] untranslated (see [`Lang::Event`]).
     pub finalize_error: Option<FinalizeError>,
-    /// The derived state with the failing ops skipped and everything else applied.
+    /// The derived state, with the failing scope operations skipped and everything else
+    /// applied.
+    ///
+    /// The state is finalized and frozen like any other state. When
+    /// [`Lang::finalize_transition`] returned an error, the state contains the data as
+    /// the hook left it.
     pub recovered: ParsingState<L>,
-    /// The delta the derivation applied, cloned into the error.
+    /// The delta that the derivation applied.
+    ///
+    /// A caller that continues with the [`recovered`](DeriveError::recovered) state
+    /// needs this delta to report the transition to
+    /// [`ParseDriver::observe_transition`](crate::core::ParseDriver::observe_transition).
+    /// The derivation of a group interior, for instance, applies a merged delta that the
+    /// caller does not see otherwise.
     pub delta: ParsingStateDelta<L>,
 }
 
 impl<L: Lang> fmt::Display for DeriveError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to derive a parsing state: ")?;
+        write!(f, "Failed to derive the parsing state: ")?;
         let mut first = true;
         for failure in &self.failures {
             if !first {
                 write!(f, "; ")?;
             }
             first = false;
-            write!(f, "scope op failed: {failure}")?;
+            write!(f, "{failure}")?;
         }
         if let Some(finalize_error) = &self.finalize_error {
             if !first {
                 write!(f, "; ")?;
             }
-            write!(f, "{finalize_error}")?;
+            write!(f, "‘Lang::finalize_transition’ failed: {}", finalize_error.message())?;
         }
         Ok(())
     }
@@ -548,39 +549,41 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
 
 impl<L: Lang> core::error::Error for DeriveError<L> {}
 
-/// A language hook's refusal to produce parsing state data.
+/// The error that a hook of [`Lang`] returns when it cannot produce the data of a
+/// parsing state.
 ///
-/// Either of the two hooks that build state data can return one:
+/// Two hooks return this error:
 ///
-/// - [`Lang::finalize_transition`] refusing a **transition** — "this delta cannot be
-///   applied here". The usual case is a context-dependent event that reached
-///   [`ParsingState::derived`] untranslated, outside any driven parse or under a
-///   driver that did not translate it (see [`Lang::Event`]).
-///   [`derived()`](ParsingState::derived) reports it as
+/// - [`Lang::finalize_transition`] returns it when a delta cannot be applied to a
+///   state. The usual cause is a context-dependent event that reached
+///   [`ParsingState::derived`] untranslated, outside a parse or under a driver that
+///   does not translate it (see [`Lang::Event`]).
+///   [`derived()`](ParsingState::derived) reports the error as
 ///   [`DeriveError::finalize_error`].
-/// - [`Lang::initial_state_data`] refusing to assemble the **seed** data, which can
-///   happen when the seed is built from configuration or from external definition
-///   data. The [`lang_initial()`](ParsingState::lang_initial) family returns it
-///   unchanged.
+/// - [`Lang::initial_state_data`] returns it when it cannot assemble the initial state
+///   data, for instance from configuration or from external definition data. The
+///   [`lang_initial()`](ParsingState::lang_initial) family of constructors returns the
+///   error unchanged.
 ///
-/// The message says which hook refused and why; [`message()`](FinalizeError::message)
-/// reads it back.
+/// The error contains a description of the failure, which
+/// [`message()`](FinalizeError::message) returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalizeError {
     message: String,
 }
 
 impl FinalizeError {
-    /// A refusal with the given description, meant to be read by a person.
+    /// Creates the error with the given description of the failure.
     ///
-    /// Name the event, invariant, or seed input at fault and what the caller should
-    /// have done instead — for example, "derive through a parse context so the driver
-    /// can translate the event".
+    /// Write the description as a complete message that begins with a capital letter.
+    /// Name the event, the rule or the input at fault, and say what the caller should
+    /// do, for instance `"Event ‘ExitMathContext’ needs the enclosing states: derive the
+    /// state through a parse context"`.
     pub fn new(message: impl Into<String>) -> FinalizeError {
         FinalizeError { message: message.into() }
     }
 
-    /// The refusal's description.
+    /// Returns the description of the failure.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -590,7 +593,7 @@ impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Neutral over the two producers (transition refusal, seed refusal): the
         // message names the specific hook and cause.
-        write!(f, "cannot build the parsing state: {}", self.message)
+        write!(f, "Failed to build the parsing state: {}", self.message)
     }
 }
 
