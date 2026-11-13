@@ -536,7 +536,8 @@ where
             .find(|argument| argument.name() == Some(InputMacroSpec::<LLL>::REFERENCE_ARGUMENT_NAME))
             .ok_or_else(|| {
                 cx.implementation_error(
-                    "the input spec declares no argument named \"reference\"",
+                    "Missing argument ‘reference’ in the argument list of \
+                     ‘InputMacroSpec’",
                     at.clone(),
                 )
             })?;
@@ -660,12 +661,13 @@ fn argument_span<LLL: LatexlikeLang>(
     Some(SourceSpan::new(first.source(), first.start()..last.end()))
 }
 
-/// The argument list handed to [`InputMacroSpec::new`] declares no argument named
-/// [`REFERENCE_ARGUMENT_NAME`](InputMacroSpec::REFERENCE_ARGUMENT_NAME), so the spec
-/// would have no argument to read the reference from.
+/// The error that [`InputMacroSpec::new`] returns when its argument list contains no
+/// argument named [`REFERENCE_ARGUMENT_NAME`](InputMacroSpec::REFERENCE_ARGUMENT_NAME)
+/// (`"reference"`).
 ///
-/// A mistake in a definition, reported when the spec is built rather than diagnosed
-/// during a parse.
+/// An invocation of an [`InputMacroSpec`] reads the source reference from the argument
+/// of that name. The argument list must therefore contain it, as in the example of
+/// [`InputMacroSpec::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NoReferenceArgumentError {
@@ -677,20 +679,21 @@ impl fmt::Display for NoReferenceArgumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the input spec's argument list declares no argument named {:?}",
+            "Missing argument ‘{}’ in the argument list of \
+             ‘InputMacroSpec’",
             InputMacroSpec::<Latexlike>::REFERENCE_ARGUMENT_NAME
         )?;
         if self.declared_names.is_empty() {
-            return write!(f, " (the list is empty)");
+            return write!(f, " (no arguments declared)");
         }
-        write!(f, " (declared: ")?;
+        write!(f, " (declared arguments: ")?;
         for (i, name) in self.declared_names.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
             match name {
-                Some(name) => write!(f, "{name:?}")?,
-                None => write!(f, "<unnamed>")?,
+                Some(name) => write!(f, "‘{name}’")?,
+                None => write!(f, "unnamed")?,
             }
         }
         write!(f, ")")
