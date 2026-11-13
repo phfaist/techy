@@ -719,143 +719,155 @@ fn check_spanned_contents<L: Lang>(
     }
 }
 
-/// The error of [`NodeTreeBuilder`]: staged input broke the builder's contract.
+/// The error that [`NodeTreeBuilder`] returns when the staged nodes violate one of the
+/// rules of the builder.
 ///
-/// It reports an implementation bug in the code doing the staging — an argument or
-/// construct parser, or a transform — not a condition in the parsed document. A parse
-/// lifts it into a `ParseError` that aborts even under tolerant recovery, and the
-/// builder that returned it is poisoned, so the build must be abandoned. The contract
-/// itself, and the one exception to the poisoning rule, are documented on
-/// [`NodeTreeBuilder`] and below.
+/// The rules are listed in the section "Contract" of [`NodeTreeBuilder`]. A violation is
+/// caused by a fault in the code that stages the nodes, for instance an argument
+/// parser, a construct parser or a transform; the parsed document cannot cause it. A
+/// parse reports the error as an
+/// [`ImplementationError`](crate::core::constructs::ImplementationError), and the parse
+/// stops under every recovery policy. After [`add`](NodeTreeBuilder::add) returns an
+/// error, the builder is poisoned and the build must be abandoned.
 ///
-/// One variant reports a failure rather than a violated contract:
-/// [`ExtMintFailed`](NodeBuildError::ExtMintFailed) is the error channel of
-/// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext). Minting is part of
-/// staging, and the hook also runs for consumer-built trees, where no parse-side error
-/// type exists. That variant comes out of the mint call itself and never out of
-/// [`add`](NodeTreeBuilder::add), so no children have been claimed and the builder
-/// stays usable. Inside a parse it aborts like every other value of this type, but it
-/// is raised as a [`HookFailed`](crate::error::HookFailed) condition — an operational
-/// failure in consumer-supplied hook code — rather than an implementation error.
+/// The variant [`ExtMintFailed`](NodeBuildError::ExtMintFailed) is an exception: it
+/// reports a failure of [`Lang::make_node_ext`](crate::core::Lang::make_node_ext), which
+/// computes the extension data of a node before the node is staged. This method
+/// returns a `NodeBuildError` because it also runs when a program builds a tree by
+/// hand, outside of any parse. [`add`](NodeTreeBuilder::add) never returns this
+/// variant, so the builder stays usable. A parse reports this variant as a
+/// [`HookFailed`](crate::error::HookFailed) error, and the parse stops under every
+/// recovery policy.
+///
+/// The `Display` text is a complete message that begins with a capital letter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NodeBuildError {
-    /// Staging would exceed the `u32` id space.
+    /// The tree would contain more nodes, or a node more children, than a `u32` can
+    /// count.
     TooManyNodes,
-    /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) reported a failure
-    /// while minting a node's ext. `detail` is the implementation's own description of
-    /// what went wrong; an implementation with an underlying error chain renders it
-    /// into that string, which keeps this variant plain data so the enum can derive
-    /// `PartialEq`/`Eq`.
+    /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) failed to compute the
+    /// extension data of a node.
     ExtMintFailed {
-        /// The mint's description of the failure.
+        /// The description of the failure, written by the implementation of
+        /// `make_node_ext`. An implementation that has an underlying error converts
+        /// this error into the string.
         detail: String,
     },
-    /// A child id was never staged in this builder.
+    /// A child id is not the id of a node staged in this builder.
     ChildNotStaged {
-        /// The offending child id.
+        /// The child id.
         child: BuildId,
     },
-    /// A child is already another staged node's child.
+    /// A child is already the child of another staged node.
     ChildAlreadyClaimed {
-        /// The offending child id.
+        /// The child id.
         child: BuildId,
     },
-    /// A callable was staged with an already-resolved argument/slot region: parsed
-    /// argument/slot records must be built fresh for the tree being staged.
+    /// A callable has argument or slot records that were read back from a finished
+    /// tree. The records of a staged callable must be built for the tree being staged.
     RegionAlreadyResolved,
-    /// An argument/slot region lies outside the callable's child list.
+    /// An argument or slot region is not a valid range of the child list of the
+    /// callable.
     RegionOutOfBounds {
-        /// The offending region's child-offset range.
+        /// The child offsets of the region.
         region: Range<u32>,
-        /// The callable's child count.
+        /// The number of children of the callable.
         n_children: u32,
     },
-    /// An argument/slot region does not start where the previous one ended: the regions
-    /// must tile the child list exactly, in order (arguments, then slots).
+    /// An argument or slot region does not start where the previous region ends. The
+    /// regions must cover the child list of the callable in order and without gaps:
+    /// first the arguments, then the slots.
     RegionNotTiling {
-        /// The offending region's child-offset range.
+        /// The child offsets of the region.
         region: Range<u32>,
-        /// Where the region was expected to start.
+        /// The child offset at which the region must start.
         expected_start: u32,
     },
-    /// Children after the last argument/slot region belong to no region (the regions
-    /// must tile the child list exactly).
+    /// Children of a callable that follow the last argument or slot region are not in
+    /// any region. The regions must cover all children of the callable.
     ChildrenNotInRegions {
-        /// The child offsets no region accounts for.
+        /// The child offsets of the children that are not in any region.
         unassigned: Range<u32>,
     },
-    /// A region's content range lies outside its containing child list.
+    /// The content range of a region is not a valid range of the node list that it
+    /// refers to: the nodes of the region, or the children of the content parent.
     ContentOutOfBounds {
-        /// The offending content range.
+        /// The content range.
         content: Range<u32>,
-        /// The containing child list's length.
+        /// The length of the node list.
         available: u32,
     },
-    /// A `ContentNodes::InChildrenOf` parent id was never staged in this builder.
+    /// The parent node of a [`ContentNodes::InChildrenOf`] designation is not staged in
+    /// this builder.
     ContentParentNotStaged {
-        /// The offending content-parent id.
+        /// The id of the content parent.
         parent: BuildId,
     },
-    /// A `Spanned` text payload is not a valid range of the node's own source.
+    /// A `Spanned` text of a node is not a range of the source of the node on
+    /// character boundaries.
     SpannedContentInvalid {
-        /// Which payload (e.g. `"chars content"`, `"group open delimiter"`).
+        /// The text concerned, for instance `"chars content"` or
+        /// `"group open delimiter"`.
         what: &'static str,
-        /// The offending span.
+        /// The span of the text.
         span: Span,
-        /// The node's source content length.
+        /// The length of the source content of the node, in bytes.
         content_len: usize,
     },
-    /// [`finish`](NodeTreeBuilder::finish)'s root was never staged in this builder.
+    /// The root passed to [`finish`](NodeTreeBuilder::finish) is not staged in this
+    /// builder.
     RootNotStaged {
-        /// The offending root id.
+        /// The id of the root.
         root: BuildId,
     },
-    /// [`finish`](NodeTreeBuilder::finish)'s root is another staged node's child.
+    /// The root passed to [`finish`](NodeTreeBuilder::finish) is the child of another
+    /// staged node.
     RootClaimed {
-        /// The offending root id.
+        /// The id of the root.
         root: BuildId,
     },
     /// A content parent is not reachable from the root passed to
     /// [`finish`](NodeTreeBuilder::finish).
     ContentParentUnreachable {
-        /// The offending content-parent id.
+        /// The id of the content parent.
         parent: BuildId,
     },
-    /// A content parent is not inside its callable's subtree.
+    /// A content parent is not inside the subtree of its callable.
     ContentParentOutsideSubtree {
-        /// The offending content-parent id.
+        /// The id of the content parent.
         parent: BuildId,
     },
-    /// A content parent lies outside its own argument/slot region's subtree.
+    /// A content parent is not inside the subtree of its argument or slot region.
     ContentParentOutsideRegion {
-        /// The offending content-parent id.
+        /// The id of the content parent.
         parent: BuildId,
     },
-    /// [`restage_node`](NodeTreeBuilder::restage_node)'s replacement list does not
-    /// have exactly one entry per child of the input node.
+    /// The list of replacements passed to [`restage_node`](NodeTreeBuilder::restage_node)
+    /// or [`restage_staged_node`](NodeTreeBuilder::restage_staged_node) does not have
+    /// exactly one entry for each child of the input node.
     ReplacementsLengthMismatch {
-        /// The input node's child count.
+        /// The number of children of the input node.
         children: usize,
-        /// The number of replacement entries supplied.
+        /// The number of replacements.
         replacements: usize,
     },
-    /// [`restage_node`](NodeTreeBuilder::restage_node)'s content-parent mapping
-    /// answered `None` for a content parent the input node's argument/slot records
-    /// designate.
+    /// The content-parent mapping passed to
+    /// [`restage_node`](NodeTreeBuilder::restage_node) returned `None` for a content
+    /// parent of an argument or slot record of the input node.
     ContentParentUnmapped {
-        /// The old tree's id of the unmapped content parent.
+        /// The id of the content parent in the input tree.
         parent: super::NodeId,
     },
-    /// [`restage_staged_node`](NodeTreeBuilder::restage_staged_node)'s content-parent
-    /// mapping answered `None` for a content parent the input node's argument/slot
-    /// records designate.
+    /// The content-parent mapping passed to
+    /// [`restage_staged_node`](NodeTreeBuilder::restage_staged_node) returned `None` for
+    /// a content parent of an argument or slot record of the input node.
     ///
-    /// The staged-side twin of
-    /// [`ContentParentUnmapped`](NodeBuildError::ContentParentUnmapped), which carries
-    /// a finished tree's [`NodeId`](super::NodeId) instead.
+    /// This variant corresponds to
+    /// [`ContentParentUnmapped`](NodeBuildError::ContentParentUnmapped) for an input
+    /// node that is staged in a builder and not part of a finished tree.
     StagedContentParentUnmapped {
-        /// The input builder's id of the unmapped content parent.
+        /// The id of the content parent in the input builder.
         parent: BuildId,
     },
 }
@@ -863,84 +875,98 @@ pub enum NodeBuildError {
 impl fmt::Display for NodeBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NodeBuildError::TooManyNodes => write!(f, "node tree too large"),
+            NodeBuildError::TooManyNodes => {
+                write!(f, "Node tree too large (node and child counts must fit in 32 bits)")
+            }
             NodeBuildError::ExtMintFailed { detail } => {
-                write!(f, "the node-ext mint (Lang::make_node_ext) reported a failure: {}", detail)
+                write!(f, "‘Lang::make_node_ext’ failed: {}", detail)
             }
             NodeBuildError::ChildNotStaged { child } => {
-                write!(f, "child {:?} has not been staged", child)
+                write!(f, "Invalid child {:?}: the node is not staged in this builder", child)
             }
-            NodeBuildError::ChildAlreadyClaimed { child } => {
-                write!(f, "child {:?} already has a parent", child)
-            }
+            NodeBuildError::ChildAlreadyClaimed { child } => write!(
+                f,
+                "Invalid child {:?}: the node is already the child of another node",
+                child
+            ),
             NodeBuildError::RegionAlreadyResolved => write!(
                 f,
-                "callable staged with an already-resolved region: parsed argument/slot \
-                 records must be built fresh for the tree being staged"
+                "Invalid argument or slot records: records read back from a finished \
+                 tree may not be staged again"
             ),
             NodeBuildError::RegionOutOfBounds { region, n_children } => write!(
                 f,
-                "argument/slot region {:?} out of bounds ({} children)",
+                "Argument or slot region {:?} out of bounds (the callable has {} \
+                 children)",
                 region, n_children
             ),
             NodeBuildError::RegionNotTiling { region, expected_start } => write!(
                 f,
-                "argument/slot regions must tile the child list exactly, in order \
-                 (region {:?} where offset {} was expected)",
+                "Argument or slot region {:?} must start at child offset {} (the \
+                 regions must cover the children in order, without gaps)",
                 region, expected_start
             ),
             NodeBuildError::ChildrenNotInRegions { unassigned } => write!(
                 f,
-                "argument/slot regions must tile the child list exactly \
-                 (children {:?} belong to no region)",
+                "Children {:?} not in any argument or slot region (the regions must \
+                 cover all children of the callable)",
                 unassigned
             ),
             NodeBuildError::ContentOutOfBounds { content, available } => write!(
                 f,
-                "content range {:?} out of bounds ({} nodes available)",
+                "Content range {:?} out of bounds (the node list has {} nodes)",
                 content, available
             ),
-            NodeBuildError::ContentParentNotStaged { parent } => {
-                write!(f, "content parent {:?} has not been staged", parent)
-            }
+            NodeBuildError::ContentParentNotStaged { parent } => write!(
+                f,
+                "Invalid content parent {:?}: the node is not staged in this builder",
+                parent
+            ),
             NodeBuildError::SpannedContentInvalid { what, span, content_len } => write!(
                 f,
-                "{} span {:?} is not a valid range of the node's source (len {})",
-                what, span, content_len
+                "Invalid span {:?} of the {}: the span must lie within the source of \
+                 the node ({} bytes) on character boundaries",
+                span, what, content_len
             ),
             NodeBuildError::RootNotStaged { root } => {
-                write!(f, "root {:?} has not been staged", root)
+                write!(f, "Invalid root {:?}: the node is not staged in this builder", root)
             }
             NodeBuildError::RootClaimed { root } => {
-                write!(f, "root {:?} is another node's child", root)
+                write!(f, "Invalid root {:?}: the node is the child of another node", root)
             }
-            NodeBuildError::ContentParentUnreachable { parent } => {
-                write!(f, "content parent {:?} is not reachable from the root", parent)
-            }
-            NodeBuildError::ContentParentOutsideSubtree { parent } => {
-                write!(f, "content parent {:?} is not inside the callable's subtree", parent)
-            }
+            NodeBuildError::ContentParentUnreachable { parent } => write!(
+                f,
+                "Invalid content parent {:?}: the node is not reachable from the root",
+                parent
+            ),
+            NodeBuildError::ContentParentOutsideSubtree { parent } => write!(
+                f,
+                "Invalid content parent {:?}: the node is not inside the subtree of its \
+                 callable",
+                parent
+            ),
             NodeBuildError::ContentParentOutsideRegion { parent } => write!(
                 f,
-                "content parent {:?} lies outside its own argument/slot region",
+                "Invalid content parent {:?}: the node is not inside its argument or slot \
+                 region",
                 parent
             ),
             NodeBuildError::ReplacementsLengthMismatch { children, replacements } => write!(
                 f,
-                "restage_node needs exactly one replacement entry per child \
-                 ({} children, {} entries)",
+                "Wrong number of replacements: one replacement per child is required \
+                 ({} children, {} replacements)",
                 children, replacements
             ),
             NodeBuildError::ContentParentUnmapped { parent } => write!(
                 f,
-                "restage_node's content-parent mapping has no staged counterpart \
-                 for content parent {:?}",
+                "Missing mapping for content parent {:?}: the content-parent mapping of \
+                 ‘restage_node’ returned ‘None’",
                 parent
             ),
             NodeBuildError::StagedContentParentUnmapped { parent } => write!(
                 f,
-                "restage_staged_node's content-parent mapping has no staged counterpart \
-                 for content parent {:?}",
+                "Missing mapping for content parent {:?}: the content-parent mapping of \
+                 ‘restage_staged_node’ returned ‘None’",
                 parent
             ),
         }
