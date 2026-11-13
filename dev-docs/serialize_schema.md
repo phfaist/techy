@@ -256,8 +256,11 @@ cargo test --features serde -p techy --lib schema_worked_example -- --ignored --
 at the first two levels (one node per line for a tree) and is compact below that. The
 same parse, pretty-printed in full (profile `techy golden files` instead), is the golden
 file `techy/tests/golden/serialize/schema_example.json`, which
-`cargo test --features serde -p techy --test serialize_golden` pins byte for byte — so
-this document, the generator, and the test suite cannot silently disagree.
+`cargo test --features serde -p techy --test serialize_golden` pins byte for byte, with
+one exception: the golden files replace the `message` value of every diagnostic with a
+fixed placeholder, since message wording is not part of the contract
+([§dd-dr:message-wording]). Apart from the messages, this document, the generator, and the
+test suite cannot silently disagree.
 
 The generator's envelope summary of the example, verbatim:
 

@@ -169,6 +169,15 @@ exceptions okay if reader is highly likely to know the acronym AND is easily
 guessed from context, e.g. "JPEG image", "MD file".)
 
 
+### Diagnostic messages
+
+Output strings and messages obey the same clarity rules as all user-facing documentation.
+Diagnostic messages and error messages, including the detail texts they embed, follow the
+rules of Part 3 of `.claude/agents/documenter.md`.  Tests never pin the wording of a
+message; they check the condition, its data, its span and its frames instead
+(`[§dd-dr:message-wording]`).
+
+
 ### Document cross-referencing
 
 User-facing documents are generated with rustdoc using `cargo docs` (an alias for

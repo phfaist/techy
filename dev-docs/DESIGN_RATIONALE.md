@@ -1055,7 +1055,8 @@ implementations:
    `peek`/`next` returns the `Result`, and the inline payload put the hot type at 104
    bytes for a 72-byte token; boxing lands the allocation on the cold error path only
    (public accessors unchanged). Also: `Display for TokenKind` renders written spellings
-   (`Command(\foo)` with the escape char that actually fired; comment content truncated).
+   as a phrase that fits into a message (`command ‘\foo’` with the escape char that
+   actually fired; comment content truncated).
    And `'\r'` receives **no special treatment anywhere in the tokenizer** (user,
    follow-up): `'\n'` is the sole line terminator; feeding text-mode-normalized content
    is the embedder's job (the `no_std` core never reads files). pylatexenc's CRLF
@@ -1935,7 +1936,7 @@ customization kept easy. `Library`/`LibraryStack`/`SpecLookup` become:
   definitions, and the redesign removes that hazard structurally instead of
   re-mitigating it. Exhausting the stack is
   a structured miss carrying the searched provider names (feeding the
-  `UnresolvableCommand` "searched: …" detail).
+  `UnresolvableCommand` detail "no definition in providers ‘…’, ‘…’").
 - **No `Masked` outcome** (user): "undefined on purpose" is an ordinary definition — an
   `ErrorCallableSpec` whose invocation parser diagnoses, with a better message than a
   mask could carry. Shadowing with it suppresses lower entries *and* the fallback purely
@@ -1996,7 +1997,7 @@ cached filter and its scan declines instead (conservative superset).
 *(c) Shapes:* `ProviderError` is a `#[non_exhaustive]` structured enum (`NotMutable`,
 `UndefinedName{name}`, `Failed(message)` — the `NodeBuildError` precedent);
 `ScopeStackError { provider, error }` attributes in-stack failures; a resolution miss
-is plain `Ok(None)` with the "searched: …" detail composed via
+is plain `Ok(None)` with the "no definition in providers ‘…’" detail composed via
 `ScopeStack::searched_providers()` (a `Display` adapter) — the stack is
 visibility-blind, so a miss always searched the *whole* stack and the searched set is a
 property of the stack, not of one miss (no per-miss allocation).
@@ -4272,10 +4273,10 @@ implemented often know why a name failed and had nowhere to say it ("searched li
 x, y, z"; "load the {amsmath} library for this command"). Decided: the hook's return type
 is `CommandResolution` — `Resolved(ResolvedCallable)` or `Unresolved { detail:
 Option<String> }` — and the dispatch sites hand the detail to the `UnresolvableCommand`
-condition (field `detail`, serialized; hand-written `Display` appends it parenthetically).
-The trait default answers `Unresolved` with a core-provided detail ("command resolution is
-not implemented by this language's driver — implement `ParseDriver::resolve_command` or use
-a preset"), so the forgot-the-hook wall names its own cause; `From<Option<ResolvedCallable>>` maps
+condition (field `detail`, serialized; hand-written `Display` appends it after a colon).
+The trait default answers `Unresolved` with a core-provided detail ("missing command
+resolver in the parse driver; implement ‘ParseDriver::resolve_command’, give
+‘StdParseDriver’ a ‘CommandResolver’, or use a preset"), so the forgot-the-hook wall names its own cause; `From<Option<ResolvedCallable>>` maps
 lookup misses to detail-less `Unresolved`, so implemented resolvers stay bare unless they
 opt in. The detail ships in **all** builds — it is precise by construction (only the
 answering resolver produces it), so debug-gating buys nothing.
@@ -4472,7 +4473,8 @@ loop re-reads it and applies its own recovery, no double report.
 Status: DECIDED (user).
 
 `\begin{A}…\begin{B}…\end{A}`: B's body parser stops at `\end`,
-reads the name, sees the mismatch → diagnostic ("missing `\end{B}`"), closes B **without
+reads the name, sees the mismatch → diagnostic ("Missing terminator of environment ‘B’:
+found the terminator of ‘A’ instead"), closes B **without
 consuming** the terminator, and returns; the unwinding lets A's parser find and consume its
 own `\end{A}`. An orphan `\end` eventually reaches the root nodes parser as an ordinary
 command and takes the unresolvable-command recovery ([§dd-dr:errors]). A *malformed* terminator
@@ -4845,8 +4847,8 @@ re-reads it, reads it fine, and nobody ever reports the failure. Found in
 left the forbidden-character block inherited.
 In the preset `$` is forbidden inside math mode, so `$\m$x$$` with a `v`-coded `\m`
 lost its verbatim argument silently under tolerant recovery (the only diagnostic came
-from the display-math group the stray `$$` then opened) and aborted with "character is
-forbidden here" under strict. Fixed by clearing the forbidden set in the probe delta too
+from the display-math group the stray `$$` then opened) and aborted with a
+`ForbiddenChar` error under strict. Fixed by clearing the forbidden set in the probe delta too
 — which is also what the raw-reading rule demands independently: a `\verb` delimiter is
 read raw, exactly like the content it opens (`verbatim_state_delta`'s `disable_all()`).
 Any future probe delta gets the same reading: subtract recognizers, never add rejections.
@@ -5561,7 +5563,7 @@ Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
   keep its underscore, and `\input{\jobname.tex}` reads as the literal text. The
   spec first shipped with the general `GroupArgumentParser`, which turned an
   underscore or tilde inside the braces into a specials node and a command into a
-  callable node, all diagnosed as "not plain characters" (user ruling: an oversight,
+  callable node, all diagnosed with the reason `NotPlainCharacters` (user ruling: an oversight,
   corrected). Not a fully verbatim read: `%` still opens a comment inside the braces,
   as in LaTeX and pylatexenc, and is diagnosed. No single-token fallback — `\input a`
   is a missing mandatory argument (pylatexenc's chars-group parser requires the
@@ -6696,6 +6698,38 @@ proposal — layering and extension flaws above); a `Lang(L::ErrorKind)` static 
 `L` into `Diagnostic`/`ParseError`, blocking cross-language aggregation, and callables need
 dyn anyway since specs live as `Arc<dyn CallableSpec<L>>`); a message-override `String` on
 `Diagnostic` (two truths: prose drifts from data, and re-renderers must ignore one of them).
+
+#### Message wording: one rule set, never pinned by tests [§dd-dr:message-wording]
+
+Status: DECIDED (user-led).
+
+Every diagnostic message, error `Display` and embedded detail text follows the rules (I) to
+(VIII) kept in Part 3 of `.claude/agents/documenter.md`: say what is wrong first, name the
+specifics as written, no dependent clauses, one line with a capital letter first and no
+final period, one consolidated template per message. The capital letter holds although
+`Diagnostic`'s `Display` prints the severity before the message (`error: Unclosed group
+…`). A text that is itself a complete message (the `Display` of a wrapped error, the
+`detail` of `HookFailed` or `ImplementationError`) begins with a capital letter as well; a
+fragment inserted into a sentence (the display of a field enum, an expected-value phrase)
+takes the case of its position; a frame title is a noun phrase after a position (`1:5:
+macro ‘\frac’`) and stays lowercase.
+Tests never pin the wording of a library text: a test checks the behavior that matters
+(identifier or condition type, field values, span, severity, frames, the number and order
+of diagnostics, the recovered node tree), and a test that checked only wording is dropped.
+Tests of the text machinery itself (report layout, traceback, the `{field}` interpolation
+of the derive) check the structure of the output on a fixture condition whose message the
+test writes; comparing two library outputs with each other (a round trip) pins nothing and
+stays. The serialization goldens record severity, identifier, data, span and frames, with
+every serialized `message` replaced by a placeholder; one test checks that a serialized
+`message` equals the `Display` of its condition. Where only a message told two cases
+apart, the missing structured field is tracked as a follow-up rather than kept as a
+wording assertion.
+Rejected alternatives: lowercase messages in the style of rustc (the user: "Capital letter
+first."); wording assertions kept as regression guards (message wording is not part of the
+contract, [§dd-dr:wire-identifier-stability], so such assertions only block improvements).
+
+Revisit if: a consumer needs a case distinction that only a message shows — the answer is
+a field of the condition, not a stable message.
 
 #### `DiagnosticInfo` (implementor) / `DiagnosticData` (dyn facade) split [§dd-dr:diagnostic-info-data-split]
 
