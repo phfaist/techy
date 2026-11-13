@@ -330,7 +330,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// `()`, whose detail reports that command resolution is not implemented. A
     /// missing implementation has no compile-time signal — a language that enables
     /// commands but never overrides this hook would otherwise see every command fail
-    /// with a bare "cannot resolve", nothing pointing at the actual cause.
+    /// with a bare "Unknown command", nothing pointing at the actual cause.
     /// ([`StdParseDriver`] does not use this default: it routes the hook through its
     /// pluggable [`CommandResolver`] strategy.)
     ///
@@ -824,7 +824,7 @@ pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
 
 /// The no-op resolver: resolves nothing, with a detail reporting that command
 /// resolution is not implemented (so a language that enables commands without
-/// configuring resolution sees the actual cause, not a bare "cannot resolve").
+/// configuring resolution sees the actual cause, not a bare "Unknown command").
 impl<L: Lang> CommandResolver<L> for () {
     fn resolve_command(
         &self,
@@ -835,8 +835,9 @@ impl<L: Lang> CommandResolver<L> for () {
         let _ = (state, token, tokens);
         Ok(CommandResolution::Unresolved {
             detail: Some(
-                "command resolution is not implemented by this language’s driver — \
-                 implement ‘ParseDriver::resolve_command’ or use a preset"
+                "missing command resolver in the parse driver; implement \
+                 ‘ParseDriver::resolve_command’, give ‘StdParseDriver’ a \
+                 ‘CommandResolver’, or use a preset"
                     .into(),
             ),
         })
@@ -1138,7 +1139,9 @@ pub fn resolve_command_in_scopes<L: Lang>(
             }
             CommandResolution::Unresolved { detail: Some(detail) }
         }
-        Err(error) => CommandResolution::Failed { detail: Some(error.to_string()) },
+        Err(error) => CommandResolution::Failed {
+            detail: Some(format!("{} (provider ‘{}’)", error.error, error.provider)),
+        },
     }
 }
 
@@ -1185,8 +1188,8 @@ fn did_you_mean_hint<L: Lang>(
     let mut hint = String::new();
     if let Some(provider) = escape_trap {
         hint.push_str(&format!(
-            "provider ‘{provider}’ defines ‘{escape_spelling}’ — command names are \
-             registered without the escape character"
+            "provider ‘{provider}’ registers the name ‘{escape_spelling}’ (command \
+             names must be registered without the escape character)"
         ));
     }
     if !suggestions.is_empty() {
@@ -1198,7 +1201,9 @@ fn did_you_mean_hint<L: Lang>(
             if i > 0 {
                 hint.push_str(" or ");
             }
-            hint.push_str(&format!("‘{suggested}’ (provider ‘{provider}’)"));
+            hint.push_str(&format!(
+                "‘{escape_char}{suggested}’ (provider ‘{provider}’)"
+            ));
         }
         hint.push('?');
     }

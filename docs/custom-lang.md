@@ -489,7 +489,7 @@ resolve under. The ready-made driver
 ([`StdParseDriver`](crate::core::StdParseDriver)) makes it a plug-in
 strategy ([`CommandResolver`](crate::core::CommandResolver)): `()` resolves
 nothing (right for test languages and languages without commands — and its
-failure detail says so, rather than leaving a bare "cannot resolve"), and
+failure detail says so, rather than leaving a bare "Unknown command"), and
 [`ScopesCommandResolver`](crate::core::specs::ScopesCommandResolver)
 resolves every command through the state's scope stack under one fixed
 callable type — the standard shape, packaged from

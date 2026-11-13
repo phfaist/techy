@@ -47,7 +47,7 @@ use syn::{parse_macro_input, DeriveInput};
 /// #[non_exhaustive]
 /// #[diagnostic(
 ///     id = "core.specs.unresolvable-command",
-///     message = "cannot resolve command ‘{escape_char}{name}’"
+///     message = "Unknown command ‘{escape_char}{name}’"
 /// )]
 /// pub struct UnresolvableCommand {
 ///     /// The command name, as written (without the escape character).
@@ -58,7 +58,7 @@ use syn::{parse_macro_input, DeriveInput};
 /// ```
 ///
 /// `UnresolvableCommand::new("world", '\\')` then builds the condition, it displays as
-/// `cannot resolve command ‘\world’`, and its serializable payload is the two-entry map
+/// `Unknown command ‘\world’`, and its serializable payload is the two-entry map
 /// `{"name": "world", "escape_char": "\\"}`.
 ///
 /// # Attributes

@@ -1867,10 +1867,13 @@ impl<L: Lang> ScopeStack<L> {
         self.entries().iter().rev().map(|provider| provider.name())
     }
 
-    /// A [`Display`](fmt::Display) adapter rendering the searched-provider detail for
-    /// resolution misses (the `UnresolvableCommand` "searched: …" detail): exhausting
-    /// the stack always searched *every* provider (the stack is visibility-blind), so
-    /// the searched set is a property of the stack itself.
+    /// Returns a [`Display`](fmt::Display) adapter that lists the providers of this
+    /// stack, innermost first, as the detail of an
+    /// [`UnresolvableCommand`](crate::core::constructs::UnresolvableCommand) error: for
+    /// instance `no definition in providers ‘user’, ‘base’`.
+    ///
+    /// A lookup that finds no definition searches every provider of the stack, so the
+    /// list of searched providers is the list of all providers.
     pub fn searched_providers(&self) -> SearchedProviders<'_, L> {
         SearchedProviders { stack: self }
     }
@@ -2105,14 +2108,15 @@ pub struct SearchedProviders<'a, L: Lang> {
 impl<L: Lang> fmt::Display for SearchedProviders<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.stack.is_empty() {
-            return write!(f, "no providers on the scope stack");
+            return write!(f, "the scope stack has no definition providers");
         }
-        write!(f, "searched providers: ")?;
+        let noun = if self.stack.len() == 1 { "provider" } else { "providers" };
+        write!(f, "no definition in {noun} ")?;
         for (i, name) in self.stack.provider_names().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{name}")?;
+            write!(f, "‘{name}’")?;
         }
         Ok(())
     }
