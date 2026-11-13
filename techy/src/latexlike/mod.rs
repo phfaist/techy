@@ -495,9 +495,10 @@ impl Lang for Latexlike {
             match event {
                 Event::ExitMathContext => {
                     return Err(FinalizeError::new(
-                        "the ExitMathContext event needs the enclosing-state stack: \
-                         derive through a parse context (cx.derive_state), where the \
-                         driver lowers it via exit_math_context_delta",
+                        "Unresolved state event ‘ExitMathContext’: derive the \
+                         state with ‘ParseContext::derive_state’ and resolve \
+                         the event in ‘ParseDriver::resolve_state_event’ (as \
+                         ‘LatexlikeDriver’ does)",
                     ));
                 }
             }
