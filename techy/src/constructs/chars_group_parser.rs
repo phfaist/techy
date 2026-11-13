@@ -419,11 +419,18 @@ mod tests {
     #[test]
     fn missing_group_is_diagnosed_with_nothing_consumed() {
         let err = language(parser(), Recovery::Strict).parse(r"\label x").unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        assert!(err.data().is::<crate::constructs::MissingMandatoryArgument>(), "{err:?}");
 
         let result = language(parser(), Recovery::Tolerant).parse(r"\label x").unwrap();
         check_tree_invariants(&result.tree);
         assert_eq!(result.diagnostics.len(), 1);
+        assert!(result
+            .diagnostics
+            .iter()
+            .next()
+            .unwrap()
+            .data()
+            .is::<crate::constructs::MissingMandatoryArgument>());
         let label = label_node(&result);
         assert!(!label.arguments().unwrap().get(0).unwrap().is_provided());
         assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("x"));

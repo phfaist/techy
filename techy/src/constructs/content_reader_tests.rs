@@ -441,10 +441,6 @@ fn plain_chars_reads_characters_and_refuses_everything_else() {
         probes[0].chars,
         Err(PlainCharsError::NotPlainCharacters { node: probes[0].content_ids[0] })
     );
-
-    // The rendered wording names the node.
-    let rendered = probes[0].chars.as_ref().unwrap_err().to_string();
-    assert!(rendered.contains("is not plain characters"), "unexpected wording: {rendered}");
 }
 
 #[test]

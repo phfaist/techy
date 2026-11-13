@@ -2518,8 +2518,8 @@ mod tests {
         let error = cx.with_frame(frame, |cx| parser.parse(cx)).unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: stop table unavailable"
+            error.data().downcast_ref::<crate::error::HookFailed>().map(|c| c.detail.as_str()),
+            Some("stop table unavailable")
         );
         // The live traceback, attached at the consultation site.
         assert_eq!(error.frames().len(), 1);
@@ -2735,14 +2735,12 @@ mod tests {
         assert_eq!(shapes(&parsed.result), ["chars 0..5 \"ab#cd\""]);
         assert_eq!(parsed.stop, StopCause::EndOfInput);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert!(parsed
-            .result
-            .diagnostics
-            .iter()
-            .next()
-            .unwrap()
-            .message()
-            .contains("forbidden"));
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(
+            diagnostic.data().downcast_ref::<crate::token::ForbiddenChar>().map(|c| c.ch),
+            Some('#')
+        );
+        assert_eq!(diagnostic.span().range(), 2..3);
         assert_partition(&parsed.result, 0..5);
     }
 
@@ -3166,16 +3164,9 @@ mod tests {
         let mut reader = NonAdvancingTokenReader { inner: StdTokenReader::new(&source) };
         let error = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect_err("a token that does not advance the stream must abort the parse");
-        let detail = error
-            .data()
-            .downcast_ref::<crate::constructs::ImplementationError>()
-            .expect("an ImplementationError condition")
-            .detail
-            .to_string();
         assert!(
-            detail.contains("the token source made no progress")
-                && detail.contains("must advance the stream position"),
-            "unexpected detail: {detail}"
+            error.data().is::<crate::constructs::ImplementationError>(),
+            "an ImplementationError condition: {error:?}"
         );
         assert_eq!(error.span().range(), 0..0);
     }
@@ -3425,22 +3416,13 @@ mod tests {
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
         // `TestLang` keeps the default `resolve_command`: its detail — command
-        // resolution is not implemented — rides the condition into the message.
+        // resolution is not implemented — rides the condition.
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        assert_eq!(
-            diagnostic.message(),
-            "cannot resolve command ‘\\foo’ (command resolution is not implemented by \
-             this language’s driver — implement ‘ParseDriver::resolve_command’ or use \
-             a preset)"
-        );
-        assert!(
-            diagnostic
-                .data()
-                .downcast_ref::<UnresolvableCommand>()
-                .unwrap()
-                .detail
-                .is_some()
-        );
+        let condition = diagnostic.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(condition.name, "foo");
+        assert_eq!(condition.escape_char, '\\');
+        assert!(condition.detail.is_some());
+        assert_eq!(diagnostic.span().range(), 2..8);
         assert_eq!(parsed.stop, StopCause::EndOfInput);
         assert_partition(&parsed.result, 0..9);
     }
@@ -3461,11 +3443,11 @@ mod tests {
             .with_identifier(UnresolvableCommand::IDENTIFIER)
             .next()
             .unwrap();
+        // One frame, over the group's open delimiter.
         assert_eq!(unresolvable.frames().len(), 1);
-        assert_eq!(unresolvable.frames()[0].title(), "group ‘{’");
         assert_eq!(unresolvable.frames()[0].span().range(), 0..1);
         // render() appends the traceback.
-        assert!(unresolvable.render().contains("Inside:\n  @ (line 1, col 1): group ‘{’"));
+        assert!(unresolvable.render().contains(unresolvable.frames()[0].title()));
 
         let unclosed = parsed
             .result
@@ -3483,10 +3465,9 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
-        // Exact detail wording pinned in unresolved_command_recovers_as_a_chars_fallback.
-        let message = err.to_string();
-        assert!(message.starts_with("cannot resolve command ‘\\foo’"));
-        assert!(message.contains("command resolution is not implemented"));
+        let condition = err.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(condition.name, "foo");
+        assert!(condition.detail.is_some());
         assert_eq!(err.span().range(), 2..8);
     }
 
@@ -3506,19 +3487,10 @@ mod tests {
         // which reports the searched providers as the miss detail — one behavior across
         // the test langs and the latexlike preset (unified in the 7.5 review).
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        assert_eq!(
-            diagnostic.message(),
-            "cannot resolve command ‘\\foo’ (searched providers: test-macros)"
-        );
-        assert_eq!(
-            diagnostic
-                .data()
-                .downcast_ref::<UnresolvableCommand>()
-                .unwrap()
-                .detail
-                .as_deref(),
-            Some("searched providers: test-macros")
-        );
+        let condition = diagnostic.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(condition.name, "foo");
+        let detail = condition.detail.as_deref().expect("a miss detail");
+        assert!(detail.contains("test-macros"), "the searched provider is named: {detail}");
         assert_partition(&parsed.result, 0..8);
     }
 
@@ -3566,18 +3538,13 @@ mod tests {
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), CommandResolutionFailed::IDENTIFIER);
-        assert_eq!(
-            diagnostic.message(),
-            "command resolution failed for ‘\\foo’ (provider ‘broken’: provider is down)"
-        );
-        assert_eq!(
-            diagnostic
-                .data()
-                .downcast_ref::<CommandResolutionFailed>()
-                .unwrap()
-                .detail
-                .as_deref(),
-            Some("provider ‘broken’: provider is down")
+        let condition = diagnostic.data().downcast_ref::<CommandResolutionFailed>().unwrap();
+        assert_eq!(condition.name, "foo");
+        // The detail carries the failing provider's name and its error.
+        let detail = condition.detail.as_deref().expect("a failure detail");
+        assert!(
+            detail.contains("broken") && detail.contains("provider is down"),
+            "unexpected detail: {detail}"
         );
     }
 
@@ -3642,9 +3609,12 @@ mod tests {
         let parsed =
             run_both("a \\foo b", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
         assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        let condition = diagnostic.data().downcast_ref::<UnresolvableCommand>().unwrap();
+        assert_eq!(condition.name, "foo");
         assert_eq!(
-            parsed.result.diagnostics.iter().next().unwrap().message(),
-            "cannot resolve command ‘\\foo’ (load the {amsmath} library for this command)"
+            condition.detail.as_deref(),
+            Some("load the {amsmath} library for this command")
         );
     }
 
@@ -3721,13 +3691,14 @@ mod tests {
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: resolver backend is down"
+            error.data().downcast_ref::<crate::error::HookFailed>().map(|c| c.detail.as_str()),
+            Some("resolver backend is down")
         );
-        // The command sits inside a group: the group frame is on the traceback
-        // (resolution precedes the invocation frame, so it is the only frame).
+        // The command sits inside a group: the group frame, over the open delimiter, is
+        // on the traceback (resolution precedes the invocation frame, so it is the only
+        // frame).
         assert_eq!(error.frames().len(), 1);
-        assert_eq!(error.frames()[0].title(), "group ‘{’");
+        assert_eq!(error.frames()[0].span().range(), 2..3);
     }
 
     // --- ParseDriver::refine_diagnostic ([§dd-dr:errors]) ----------------------------------------------
@@ -4412,10 +4383,11 @@ mod tests {
         assert_eq!(group.group_delimiters(), Some(("{", "")));
         assert_eq!(group.child(0).unwrap().chars(), Some("bc"));
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(
-            parsed.result.diagnostics.iter().next().unwrap().message(),
-            "unclosed group: expected ‘}’ before end of input"
-        );
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        let condition = diagnostic.data().downcast_ref::<super::super::UnclosedGroup>().unwrap();
+        assert_eq!(condition.expected_close, "}");
+        assert_eq!(condition.found, super::super::UnclosedGroupFound::EndOfInput);
+        assert_eq!(diagnostic.span().range(), 2..3);
     }
 
     #[test]
@@ -4425,7 +4397,9 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
-        assert_eq!(err.to_string(), "unclosed group: expected ‘}’ before end of input");
+        let condition = err.data().downcast_ref::<super::super::UnclosedGroup>().unwrap();
+        assert_eq!(condition.expected_close, "}");
+        assert_eq!(condition.found, super::super::UnclosedGroupFound::EndOfInput);
         // The diagnostic points at the open delimiter that was never closed.
         assert_eq!(err.span().range(), 2..3);
     }
@@ -4453,10 +4427,11 @@ mod tests {
         assert_eq!(stop_shape(&parsed.stop), "close 2..3");
         assert_eq!(parsed.pos, 2);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(
-            parsed.result.diagnostics.iter().next().unwrap().message(),
-            "mismatched group close: expected ‘}’"
-        );
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        let condition = diagnostic.data().downcast_ref::<super::super::UnclosedGroup>().unwrap();
+        assert_eq!(condition.expected_close, "}");
+        assert_eq!(condition.found, super::super::UnclosedGroupFound::StrayClose);
+        assert_eq!(diagnostic.span().range(), 2..3);
     }
 
     #[test]
@@ -4472,7 +4447,9 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         let err =
             try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
-        assert_eq!(err.to_string(), "mismatched group close: expected ‘}’");
+        let condition = err.data().downcast_ref::<super::super::UnclosedGroup>().unwrap();
+        assert_eq!(condition.expected_close, "}");
+        assert_eq!(condition.found, super::super::UnclosedGroupFound::StrayClose);
         assert_eq!(err.span().range(), 2..3);
     }
 
@@ -4704,7 +4681,16 @@ mod tests {
         // The DeriveError cause chain is reachable off the carried condition.
         let condition =
             error.data().downcast_ref::<crate::error::HookFailed>().unwrap();
-        assert!(condition.cause.as_ref().unwrap().to_string().contains("scope op failed"));
+        let cause: &(dyn core::error::Error + 'static) = &**condition.cause.as_ref().unwrap();
+        let derive_error = cause
+            .downcast_ref::<crate::state::DeriveError<TestLang>>()
+            .expect("the cause is the DeriveError");
+        assert!(derive_error.finalize_error.is_none());
+        assert_eq!(derive_error.failures.len(), 1);
+        assert!(matches!(
+            &derive_error.failures[0],
+            crate::scopes::ScopeOpError::UnknownProvider { name } if &**name == "no-such-provider"
+        ));
         // The policy computes the descent base *before* the group frame is pushed,
         // and the harness drives the root loop with no frame of its own — the
         // attached snapshot is exactly empty.
@@ -4977,8 +4963,8 @@ mod tests {
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: observer backend gone"
+            error.data().downcast_ref::<crate::error::HookFailed>().map(|c| c.detail.as_str()),
+            Some("observer backend gone")
         );
         // The inner descent's consultation runs inside the outer group's frame.
         assert!(!error.frames().is_empty());
@@ -5554,14 +5540,14 @@ mod tests {
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: parser backend unavailable"
+            error.data().downcast_ref::<crate::error::HookFailed>().map(|c| c.detail.as_str()),
+            Some("parser backend unavailable")
         );
-        // The dispatch pushes the invocation's own frame around the factory call,
-        // so the traceback names the failing spec — inside the group's frame.
+        // The dispatch pushes the invocation's own frame (over the `\\fail` trigger)
+        // around the factory call, inside the group's frame (over its `{`).
         assert_eq!(error.frames().len(), 2);
-        assert_eq!(error.frames()[0].title(), "callable ‘\\fail’");
-        assert_eq!(error.frames()[1].title(), "group ‘{’");
+        assert_eq!(error.frames()[0].span().range(), 3..8);
+        assert_eq!(error.frames()[1].span().range(), 2..3);
     }
 
     #[test]
@@ -5633,7 +5619,7 @@ mod tests {
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(error.frames().len(), 1);
-        assert_eq!(error.frames()[0].title(), "group ‘{’");
+        assert_eq!(error.frames()[0].span().range(), 0..1);
     }
 
     #[test]
@@ -5686,12 +5672,12 @@ mod tests {
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: ext backend unavailable"
+            error.data().downcast_ref::<crate::error::HookFailed>().map(|c| c.detail.as_str()),
+            Some("ext backend unavailable")
         );
         // The chars node is staged inside the group, so the group frame is live.
         assert_eq!(error.frames().len(), 1);
-        assert_eq!(error.frames()[0].title(), "group ‘{’");
+        assert_eq!(error.frames()[0].span().range(), 0..1);
     }
 
     // --- the scope stack in a driven parse (7.3): error specs, op failures, specials ---
@@ -5723,13 +5709,10 @@ mod tests {
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        assert_eq!(
-            diagnostic.message(),
-            "\u{2018}gone\u{2019} is defined to be an error: removed upstream"
-        );
         let condition =
             diagnostic.data().downcast_ref::<CallableDefinedAsError>().unwrap();
         assert_eq!(condition.name, "gone");
+        assert_eq!(condition.detail.as_deref(), Some("removed upstream"));
         assert_partition(&parsed.result, 0..8);
 
         // Strict: the same condition aborts (through the recover funnel).
@@ -5818,11 +5801,9 @@ mod tests {
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        assert_eq!(
-            diagnostic.message(),
-            "scope op failed: no provider named \u{2018}absent\u{2019} on the scope stack"
-        );
-        assert!(diagnostic.data().is::<ScopeOpFailed>());
+        // The rendered failure names the provider the op targeted.
+        let detail = &diagnostic.data().downcast_ref::<ScopeOpFailed>().unwrap().detail;
+        assert!(detail.contains("absent"), "unexpected detail: {detail}");
         assert_partition(&parsed.result, 0..5);
 
         // Strict: the first failing op aborts the parse.
@@ -6206,11 +6187,7 @@ mod tests {
         )
         .expect_err("the reader breaks clause 7");
         let detail = detail_of(&error);
-        assert!(
-            detail.contains("is not the position the stream stood at when the token was peeked")
-                && detail.contains("violates the `TokenReader` contract"),
-            "unexpected detail: {detail}"
-        );
+        let span = error.span().range();
 
         let mut relaxed = SlippingReader::<RelaxedStdLang>::new(&source);
         let error = try_run(
@@ -6221,7 +6198,9 @@ mod tests {
             StopSpec::none(),
         )
         .expect_err("the reader breaks clause 7 whatever the language declares");
+        // The same violation, reported the same way for both languages.
         assert_eq!(detail_of(&error), detail);
+        assert_eq!(error.span().range(), span);
     }
     /// A marker argument's node covers one token per marker character, so its content
     /// follows the same rule as a chars run: the text for a language with

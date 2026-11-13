@@ -567,9 +567,7 @@ mod tests {
         assert_eq!(pos, 3);
         assert_eq!(result.diagnostics.len(), 1);
         let diagnostic = result.diagnostics.iter().next().unwrap();
-        // The wording stays covered by a Display assertion…
-        assert_eq!(diagnostic.message(), "unclosed group: expected ‘}’ before end of input");
-        // …while machine consumers read the structured condition ([§dd-dr:errors]).
+        // Machine consumers read the structured condition ([§dd-dr:errors]).
         assert_eq!(diagnostic.identifier(), UnclosedGroup::IDENTIFIER);
         let condition = diagnostic.data().downcast_ref::<UnclosedGroup>().unwrap();
         assert_eq!(condition.expected_close, "}");

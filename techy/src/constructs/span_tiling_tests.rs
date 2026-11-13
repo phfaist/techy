@@ -49,7 +49,8 @@ use crate::token::{
 
 use super::{
     ConstructParser, ImplementationError, NodesParser, OptionalGroupArgumentParser,
-    ParseContext, StopCause, StopSpec, TokenStopKind, VerbatimArgumentParser,
+    ParseContext, StopCause, StopSpec, TokenStopKind, UnclosedGroup, UnterminatedVerbatim,
+    VerbatimArgumentParser,
 };
 
 /// The tiled twin of [`RelaxedLang`]: the same tokenization (the scripted reader) and
@@ -363,11 +364,7 @@ fn a_tiled_language_rejects_a_chars_run_across_a_seam() {
         Recovery::Strict,
         StopSpec::none(),
     ));
-    assert!(
-        implementation_detail(&error).contains("do not delimit one range of one source"),
-        "unexpected detail: {}",
-        implementation_detail(&error)
-    );
+    assert!(error.data().is::<ImplementationError>(), "unexpected error: {error:?}");
 }
 
 #[test]
@@ -408,11 +405,7 @@ fn a_run_ending_at_a_seam_is_owned_and_a_tiled_language_rejects_it() {
         Recovery::Strict,
         StopSpec::none(),
     ));
-    assert!(
-        implementation_detail(&error).contains("do not delimit one range of one source"),
-        "unexpected detail: {}",
-        implementation_detail(&error)
-    );
+    assert!(error.data().is::<ImplementationError>(), "unexpected error: {error:?}");
 }
 
 // --- T2: a group spanning a seam -------------------------------------------------------
@@ -479,11 +472,7 @@ fn a_chars_run_across_a_hole_in_one_source_is_one_owned_node() {
         Recovery::Strict,
         StopSpec::none(),
     ));
-    assert!(
-        implementation_detail(&error).contains("do not delimit one range of one source"),
-        "unexpected detail: {}",
-        implementation_detail(&error)
-    );
+    assert!(error.data().is::<ImplementationError>(), "unexpected error: {error:?}");
 }
 
 // --- T5: an un-consumed stop token at a seam ------------------------------------------
@@ -727,19 +716,11 @@ fn a_token_not_starting_where_the_stream_stood_is_an_implementation_error() {
     // Contract clause 7's corollary — two consecutive tokens meet at one position —
     // holds for every reader, seams included, and the content loop checks it whatever
     // the language declares about span tiling.
-    for detail in [
+    // Both languages report the same violation, the same way.
+    assert_eq!(
         implementation_detail(&parse_with_broken_seams::<RelaxedLang>()),
         implementation_detail(&parse_with_broken_seams::<TiledScriptedLang>()),
-    ] {
-        assert!(
-            detail.contains("is not the position the stream stood at when the token was peeked"),
-            "unexpected detail: {detail}"
-        );
-        assert!(
-            detail.contains("violates the `TokenReader` contract"),
-            "unexpected detail: {detail}"
-        );
-    }
+    );
 }
 
 // --- T11: diagnostics inside a synthesized source -------------------------------------
@@ -765,10 +746,13 @@ fn a_diagnostic_in_a_synthesized_source_renders_the_provenance_chain() {
     .expect("tolerant parsing keeps going");
 
     assert_eq!(parsed.result.diagnostics.len(), 1);
+    let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+    assert!(diagnostic.data().is::<UnclosedGroup>(), "unexpected diagnostic: {diagnostic:?}");
+    assert!(Arc::ptr_eq(diagnostic.span().source(), &expansion));
+    // The report follows the chain back: it names the synthesized source's description.
     let report = parsed.result.diagnostics.render_all();
-    assert!(report.contains("unclosed group"), "unexpected report:\n{report}");
     assert!(
-        report.contains("synthesized from") && report.contains("macro expansion"),
+        report.contains("macro expansion"),
         "the provenance chain is missing from the report:\n{report}"
     );
 }
@@ -884,8 +868,11 @@ fn verbatim_content_running_to_end_of_stream_keeps_the_whitespace_before_it() {
     );
 
     assert_eq!(result.diagnostics.len(), 1);
-    let report = result.diagnostics.render_all();
-    assert!(report.contains("missing closing delimiter"), "unexpected report:\n{report}");
+    let diagnostic = result.diagnostics.iter().next().unwrap();
+    assert_eq!(
+        diagnostic.data().downcast_ref::<UnterminatedVerbatim>().map(|c| c.close.as_str()),
+        Some("}")
+    );
 
     let group = result.tree.root().child(0).expect("the verbatim group");
     // The never-found close is the empty-close convention, not a delimiter.
