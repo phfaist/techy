@@ -1010,8 +1010,10 @@ impl<O: SourceOrigin> Diagnostics<O> {
                 out.push_str("\n\n");
             }
             out.push_str(&format!(
-                "… and {} more diagnostics (retention limit of {} reached)",
-                self.suppressed, self.limit,
+                "… and {} more {} (retention limit of {} reached)",
+                self.suppressed,
+                if self.suppressed == 1 { "diagnostic" } else { "diagnostics" },
+                self.limit,
             ));
         }
         out
@@ -1045,31 +1047,32 @@ impl<'a, O: SourceOrigin> IntoIterator for &'a Diagnostics<O> {
     }
 }
 
-/// The failure of [`Diagnostics::from_parts`]: the parts given contradict one another,
-/// so no collection filled through [`Diagnostics::push`] could have produced them.
+/// The error that [`Diagnostics::from_parts`] returns when the parts it is given are
+/// inconsistent.
 ///
-/// The fields report the parts as they were given: `retained` diagnostics were supplied,
-/// `retained_errors` of them of error severity, under a retention cap of `limit`, with
-/// `suppressed` pushes dropped beyond the cap and `error_count` error-severity pushes in
-/// all. The invariants they must satisfy are listed on
-/// [`from_parts`](Diagnostics::from_parts).
+/// The parts are inconsistent when no collection filled through [`Diagnostics::push`]
+/// could report them, for instance when more diagnostics are supplied than the
+/// retention limit allows. The rules that the parts must follow are listed on
+/// [`from_parts`](Diagnostics::from_parts). The fields contain the parts as they were
+/// given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct InconsistentDiagnosticCounts {
     /// The number of diagnostics supplied.
     pub retained: usize,
-    /// How many of them have error severity.
+    /// The number of supplied diagnostics with error severity.
     pub retained_errors: usize,
-    /// The retention cap supplied.
+    /// The retention limit supplied.
     pub limit: usize,
-    /// The supplied number of pushes dropped beyond the cap.
+    /// The number of suppressed diagnostics supplied.
     pub suppressed: usize,
-    /// The supplied number of error-severity pushes.
+    /// The error count supplied: the number of diagnostics with error severity,
+    /// retained and suppressed together.
     pub error_count: usize,
 }
 
-// Hand-written wording: the counts need number agreement, which a message format
-// string cannot express, and the closing clause names the invariant that failed.
+// Hand-written wording: the message states the rule that the counts break, and the
+// counts need number agreement.
 impl fmt::Display for InconsistentDiagnosticCounts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let InconsistentDiagnosticCounts {
@@ -1079,30 +1082,25 @@ impl fmt::Display for InconsistentDiagnosticCounts {
             suppressed,
             error_count,
         } = *self;
+        let rule = if retained > limit {
+            "the supplied diagnostics may not exceed the retention limit"
+        } else if suppressed > 0 && retained != limit {
+            "suppressed diagnostics require the supplied diagnostics to reach the \
+             retention limit"
+        } else if retained_errors > error_count {
+            "the error count may not be lower than the number of supplied errors"
+        } else {
+            "the error count may not exceed the supplied errors plus the suppressed \
+             diagnostics"
+        };
         write!(
             f,
-            "the diagnostics collection's counts are inconsistent: {retained} diagnostic{} \
-             supplied ({retained_errors} of error severity) under a retention limit of \
-             {limit}, with {suppressed} suppressed and {error_count} error{} in all — ",
+            "Inconsistent diagnostic counts: {rule} ({retained} diagnostic{} supplied, \
+             {retained_errors} error{} among them; {suppressed} suppressed; error count \
+             {error_count}; retention limit {limit})",
             if retained == 1 { "" } else { "s" },
-            if error_count == 1 { "" } else { "s" },
-        )?;
-        if retained > limit {
-            write!(f, "more diagnostics were supplied than the retention limit allows")
-        } else if suppressed > 0 && retained != limit {
-            write!(
-                f,
-                "diagnostics were suppressed although the retention limit was not reached"
-            )
-        } else if retained_errors > error_count {
-            write!(f, "more of the supplied diagnostics are errors than were reported in all")
-        } else {
-            write!(
-                f,
-                "more errors were reported in all than the supplied errors plus the \
-                 suppressed diagnostics can account for"
-            )
-        }
+            if retained_errors == 1 { "" } else { "s" },
+        )
     }
 }
 
@@ -1275,66 +1273,64 @@ impl<O: SourceOrigin> fmt::Display for ParseError<O> {
 
 impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 
-/// Condition: consumer-supplied code the library called reported that it failed to do
-/// its own work.
+/// Error raised when a hook fails to do its work (`core.hooks.hook-failed`).
 ///
-/// The code in question is a hook — a [`ParseDriver`](crate::core::ParseDriver) method, a
-/// [`Lang`](crate::core::Lang) hook, a descent-state callback such as
-/// [`GroupChildState::Compute`](crate::core::constructs::GroupChildState::Compute) — and
-/// the failure is operational: an input/output failure, or a runtime failure inside an
-/// embedding, such as an exception raised by code behind a language binding. The hook
-/// returns it on a [`ParseError`], and the parse aborts whatever the recovery policy is.
+/// A *hook* is code that a language or an embedding provides and that the library calls
+/// during a parse: a [`ParseDriver`](crate::core::ParseDriver) method, a
+/// [`Lang`](crate::core::Lang) hook, or a descent-state callback such as
+/// [`GroupChildState::Compute`](crate::core::constructs::GroupChildState::Compute). This
+/// condition reports an operational failure of the hook's own code, for instance an
+/// input/output failure, or an exception raised by code behind a language binding.
+///
+/// The hook returns the condition inside a [`ParseError`], and the parse aborts under
+/// every recovery policy. The library itself reports this condition when
+/// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) fails while the parser
+/// builds a node.
 ///
 /// # Choosing this condition
 ///
-/// A failing hook has three distinct things it can say, and this is one of them:
+/// A hook that fails reports one of three kinds of condition:
 ///
-/// - **`HookFailed`** — the hook's own code failed while doing its work. It says nothing
-///   about the document, and nothing about library contracts.
-/// - [`ImplementationError`](crate::core::constructs::ImplementationError) — the
-///   extension violated a library contract. That is a bug to fix in the extension, not an
-///   operational failure.
-/// - Any other condition type — a problem **in the parsed document**. Report it through
-///   the recovery entry point,
-///   [`ParseContext::recover`](crate::core::constructs::ParseContext::recover), wherever
-///   the hook's signature allows, so that a tolerant parse can record it and continue.
+/// - `HookFailed`, when the hook's own code fails. The failure concerns neither the
+///   document nor a contract of the library.
+/// - [`ImplementationError`](crate::core::constructs::ImplementationError), when the
+///   hook violates a contract of the library. Such an error is a bug in the hook.
+/// - Any other condition, when the parsed document contains a problem. Report it through
+///   [`ParseContext::recover`](crate::core::constructs::ParseContext::recover) wherever
+///   the signature of the hook allows, so that a tolerant parse records the problem and
+///   continues.
 ///
 /// # The underlying error
 ///
-/// [`cause`](HookFailed::cause) optionally holds the error that caused the failure,
-/// shared behind an `Arc` — the same shape
-/// [`ResolveError`](crate::source::ResolveError) uses. The `Arc` is what keeps this
-/// condition `Clone`: clones share one cause by reference count.
-///
-/// A consumer can walk the chain from that field, through
-/// [`Error::source`](core::error::Error::source), or downcast it to the concrete error
-/// type. The serialized projection renders the `detail` string and the cause chain as
-/// text.
+/// The field [`cause`](HookFailed::cause) can contain the error that caused the failure.
+/// This error is shared behind an `Arc`, so that the condition stays `Clone`, as
+/// [`ResolveError`](crate::source::ResolveError) does. You can walk the chain of causes
+/// from this field with [`Error::source`](core::error::Error::source), or downcast the
+/// error to its concrete type. The serialized form of the condition contains the
+/// `detail` string and the chain of causes as text.
 #[derive(Debug, Clone, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.hooks.hook-failed",
-    message = "extension hook reported a failure: {detail}"
+    message = "Hook failed: {detail}"
 )]
 pub struct HookFailed {
-    /// Human-readable description of the failure.
+    /// The description of the failure, as a complete message that begins with a capital
+    /// letter, for instance `"Failed to read the definition file ‘defs.json’"`.
     pub detail: String,
-    /// The underlying error, if the hook has one to attach.
+    /// The underlying error, if the hook has one.
     ///
-    /// `None` when the `detail` string says everything. Attach one through
-    /// [`new`](HookFailed::new)'s second argument, or with
+    /// Pass it as the second argument of [`new`](HookFailed::new), or attach it with
     /// [`with_cause`](HookFailed::with_cause).
     pub cause: Option<Arc<dyn core::error::Error + Send + Sync + 'static>>,
 }
 
 impl HookFailed {
-    /// Attaches the underlying error, storing it on the
+    /// Attaches the underlying error, storing it in the
     /// [`cause`](HookFailed::cause) field.
     ///
-    /// The `detail` string stays the rendered summary. Unlike
-    /// [`new`](HookFailed::new)'s second argument, this takes the concrete error by value
-    /// and wraps it in the `Arc` itself, which is what a not-yet-shared error value
-    /// needs.
+    /// This method takes the error by value and wraps it in an `Arc`. The second
+    /// argument of [`new`](HookFailed::new) takes an error that is already shared.
     pub fn with_cause(
         mut self,
         cause: impl core::error::Error + Send + Sync + 'static,
@@ -1395,7 +1391,7 @@ fn render_report<O: SourceOrigin>(
 ///
 /// When line and column information is unavailable for the position — the content lies
 /// past the [`LineIndexCache`] scan cap, for instance — the result falls back to the raw
-/// byte position, as `@ char pos 42 (no line info)`.
+/// byte position, as `@ byte 42 (no line information)`.
 ///
 /// This builds a [`LineIndexCache`] for the call and drops it again. Pass a persistent one
 /// to [`format_position_with`], or render a whole collection with
@@ -1414,7 +1410,7 @@ pub fn format_position_with<O: SourceOrigin>(
     let source = span.source();
     let pos_str = match line_cols.line_col(source, span.start()) {
         Some((line, col)) => format!("@ (line {}, col {})", line, col),
-        None => format!("@ char pos {} (no line info)", span.start()),
+        None => format!("@ byte {} (no line information)", span.start()),
     };
 
     match source.origin().label() {
@@ -1439,8 +1435,8 @@ pub fn format_position_with<O: SourceOrigin>(
 ///
 /// ```text
 /// Inside:
-///   @ (line 8, col 1): environment ‘document’
-///   @ (line 5, col 3): argument #1 of ‘\section’
+///   @ (line 5, col 10): argument #1 of macro ‘\section’
+///   @ (line 2, col 1): environment ‘document’
 /// ```
 pub fn format_traceback<O: SourceOrigin>(frames: &[TraceFrame<O>]) -> String {
     format_traceback_with(frames, &mut LineIndexCache::new())
