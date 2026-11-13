@@ -115,21 +115,23 @@ use syn::{parse_macro_input, DeriveInput};
 ///
 /// # Compile errors
 ///
-/// Every rejection is reported at the offending item:
+/// The derive reports each rejection at the item concerned. The main cases are these:
 ///
-/// - `does not support generic types`, `does not support "where" clauses` — the type is
-///   not concrete.
-/// - `requires named fields` — the type is a tuple struct.
-/// - `supports structs only` — the type is an enum or a union. A field-less enum used as
-///   a condition *field* wants the [`ToDiagnosticValue`](macro@ToDiagnosticValue) derive
-///   instead.
-/// - `missing "#[diagnostic(id = …)]"`, `the identifier must be a namespaced dotted
-///   name` — the `id` key is absent or malformed.
-/// - `message references unknown field`, and the unclosed- or unmatched-brace errors —
-///   the `message` format string does not match the struct.
-/// - An unsatisfied `ToDiagnosticValue` bound, reported at a field's type — that field
-///   cannot be serialized. Serializability of the payload is checked by the compiler,
-///   not by the macro.
+/// - `does not support generic types`, `does not support ‘where’ clauses`: the type
+///   has generic parameters or a `where` clause.
+/// - `requires a struct with named fields or a unit struct`: the type is a tuple
+///   struct.
+/// - `supports structs only`: the type is an enum or a union. For a field-less enum
+///   that is the type of a condition field, use the
+///   [`ToDiagnosticValue`](macro@ToDiagnosticValue) derive.
+/// - `Missing ‘#[diagnostic(id = "…")]’`, `Invalid condition identifier`: the `id` key
+///   is absent or malformed.
+/// - `Unknown field`, `Invalid placeholder`, `Positional placeholder`, `Unclosed ‘{’`,
+///   `Unmatched ‘}’`: the `message` format string does not match the fields of the
+///   struct.
+/// - An unsatisfied `ToDiagnosticValue` bound, reported at the type of a field: the
+///   field type has no `ToDiagnosticValue` implementation. The compiler checks this
+///   bound, not the derive.
 #[proc_macro_derive(DiagnosticInfo, attributes(diagnostic))]
 pub fn derive_diagnostic_info(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -378,30 +380,37 @@ pub fn derive_from_serial_value(input: TokenStream) -> TokenStream {
         .into()
 }
 
-// Why the two diagnostic derives reject generic types: `DiagnosticInfo` requires `Any`,
-// hence `'static`, and a generic payload has no single wire identity.
-pub(crate) const DIAGNOSTIC_NO_GENERICS_REASON: &str =
-    "diagnostic payloads are concrete data structs, because the trait requires `Any` \
-     (hence `'static`) and a generic payload has no single wire identifier";
+// The two diagnostic derives reject generic types because `DiagnosticInfo` requires
+// `Any`, hence `'static`, and a generic payload has no single wire identity. The
+// rejection offers no fix, so the text that completes its message is empty.
+pub(crate) const DIAGNOSTIC_NO_GENERICS_REASON: &str = "";
 
-// Rejects a generic type or a `where` clause on the derived type; `reason` completes
-// the error message (each derive supplies its own).
+// Rejects a generic type or a `where` clause on the derived type. A non-empty `reason`
+// is the fix that each derive supplies; it follows the message after a semicolon.
 pub(crate) fn ensure_no_generics(
     generics: &syn::Generics,
     derive_name: &str,
     reason: &str,
 ) -> syn::Result<()> {
     if !generics.params.is_empty() {
+        let fix = if reason.is_empty() { String::new() } else { format!("; {reason}") };
         return Err(syn::Error::new_spanned(
             &generics.params,
-            format!("#[derive({derive_name})] does not support generic types: {reason}"),
+            format!("‘#[derive({derive_name})]’ does not support generic types{fix}"),
         ));
     }
     if let Some(where_clause) = &generics.where_clause {
         return Err(syn::Error::new_spanned(
             where_clause,
-            format!("#[derive({derive_name})] does not support `where` clauses"),
+            format!(
+                "‘#[derive({derive_name})]’ does not support ‘where’ clauses"
+            ),
         ));
     }
     Ok(())
+}
+
+// The text of an attribute key such as `id` or `a::b`, for the error messages.
+pub(crate) fn path_text(path: &syn::Path) -> String {
+    path.segments.iter().map(|segment| segment.ident.to_string()).collect::<Vec<_>>().join("::")
 }

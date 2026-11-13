@@ -13,16 +13,16 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
         Data::Struct(_) | Data::Union(_) => {
             return Err(syn::Error::new(
                 input.ident.span(),
-                "#[derive(ToDiagnosticValue)] supports field-less enums only; condition \
-                 structs get their serialization from #[derive(DiagnosticInfo)], and \
-                 other types implement `ToDiagnosticValue` by hand",
+                "‘#[derive(ToDiagnosticValue)]’ supports field-less enums only; use \
+                 ‘#[derive(DiagnosticInfo)]’ for a condition struct, or implement \
+                 ‘ToDiagnosticValue’ by hand",
             ));
         }
     };
     if data.variants.is_empty() {
         return Err(syn::Error::new(
             input.ident.span(),
-            "#[derive(ToDiagnosticValue)] requires at least one variant",
+            "‘#[derive(ToDiagnosticValue)]’ requires at least one variant",
         ));
     }
 
@@ -33,8 +33,11 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
             if !matches!(variant.fields, Fields::Unit) {
                 return Err(syn::Error::new_spanned(
                     variant,
-                    "#[derive(ToDiagnosticValue)] supports field-less variants only; a \
-                     variant carrying data needs a hand-written `ToDiagnosticValue` impl",
+                    format!(
+                        "‘#[derive(ToDiagnosticValue)]’ supports field-less variants only (‘{}’ has \
+                         fields); implement ‘ToDiagnosticValue’ by hand for an enum with data",
+                        variant.ident
+                    ),
                 ));
             }
             let ident = &variant.ident;

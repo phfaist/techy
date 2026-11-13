@@ -44,8 +44,8 @@ pub(crate) enum VariantKind {
     Struct(Vec<NamedField>),
 }
 
-const NO_GENERICS_REASON: &str = "wire structs are concrete: a language-dependent part is \
-                                  carried as an already-encoded `SerialValue` field";
+const NO_GENERICS_REASON: &str = "store a language-dependent part as an already encoded \
+                                  ‘SerialValue’ field";
 
 /// What a `serial` attribute on the derived type itself may contain.
 pub(crate) enum TypeAttributePolicy {
@@ -67,8 +67,8 @@ pub(crate) struct ParsedType {
 
 /// Parses the derived type into its wire model, checking the attribute grammar and
 /// the supported shapes; `derive_name` names the derive in the error messages,
-/// `generics_reason` completes the rejection of a generic type, and `type_attributes`
-/// says what the type itself may contain.
+/// `generics_reason` is the fix that the rejection of a generic type suggests, and
+/// `type_attributes` says what the type itself may contain.
 pub(crate) fn parse_model(
     input: &DeriveInput,
     derive_name: &str,
@@ -81,8 +81,8 @@ pub(crate) fn parse_model(
             if let Some(attr) = input.attrs.iter().find(|attr| attr.path().is_ident("serial")) {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    format!("#[derive({derive_name})] takes no `serial` attribute on the type itself; \
-                             `#[serial(name = \"…\")]` goes on every field and variant"),
+                    format!("‘#[derive({derive_name})]’ takes no ‘serial’ attribute on the type; \
+                             put ‘#[serial(name = \"…\")]’ on every field and variant"),
                 ));
             }
             None
@@ -95,8 +95,7 @@ pub(crate) fn parse_model(
             Fields::Unnamed(_) | Fields::Unit => {
                 return Err(syn::Error::new(
                     input.ident.span(),
-                    format!("#[derive({derive_name})] supports structs with named fields only \
-                             (each field carries its wire name)"),
+                    format!("‘#[derive({derive_name})]’ supports structs with named fields only"),
                 ))
             }
         },
@@ -104,29 +103,36 @@ pub(crate) fn parse_model(
             if data.variants.is_empty() {
                 return Err(syn::Error::new(
                     input.ident.span(),
-                    format!("#[derive({derive_name})] requires at least one variant"),
+                    format!("‘#[derive({derive_name})]’ requires at least one variant"),
                 ));
             }
             let mut variants = Vec::with_capacity(data.variants.len());
             for variant in &data.variants {
-                let name = wire_name(&variant.attrs, variant.ident.span(), "variant", derive_name)?;
+                let what = format!("variant ‘{}’", variant.ident);
+                let name = wire_name(&variant.attrs, variant.ident.span(), &what, derive_name)?;
                 let kind = match &variant.fields {
                     Fields::Unit => VariantKind::Unit,
                     Fields::Unnamed(unnamed) => {
                         if unnamed.unnamed.len() != 1 {
                             return Err(syn::Error::new_spanned(
                                 unnamed,
-                                format!("#[derive({derive_name})] supports unit variants, newtype \
-                                         variants (one unnamed field), and variants with named \
-                                         fields; use named fields for several values"),
+                                format!(
+                                    "‘#[derive({derive_name})]’ does not support the tuple variant \
+                                     ‘{}’ with several fields; use named fields for \
+                                     several values",
+                                    variant.ident
+                                ),
                             ));
                         }
                         let field = &unnamed.unnamed[0];
                         if field.attrs.iter().any(|attr| attr.path().is_ident("serial")) {
                             return Err(syn::Error::new_spanned(
                                 field,
-                                "the payload of a newtype variant carries no wire name of its own \
-                                 (the variant's name is its key)",
+                                format!(
+                                    "The payload of the newtype variant ‘{}’ may not have \
+                                     a ‘serial’ attribute",
+                                    variant.ident
+                                ),
                             ));
                         }
                         VariantKind::Newtype(field.ty.clone())
@@ -141,7 +147,7 @@ pub(crate) fn parse_model(
         Data::Union(data) => {
             return Err(syn::Error::new(
                 data.union_token.span,
-                format!("#[derive({derive_name})] supports structs and enums only"),
+                format!("‘#[derive({derive_name})]’ supports structs and enums only"),
             ))
         }
     };
@@ -159,16 +165,20 @@ fn type_lang(attrs: &[syn::Attribute]) -> syn::Result<Option<Type>> {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("lang") {
                 if lang.is_some() {
-                    return Err(meta.error("duplicate `lang`"));
+                    return Err(meta.error("Duplicate key ‘lang’ in ‘#[serial(…)]’"));
                 }
                 lang = Some(meta.value()?.parse()?);
                 Ok(())
             } else if meta.path.is_ident("name") {
                 Err(meta.error(
-                    "`name` goes on fields and variants; the type-level attribute takes `lang = …` only",
+                    "Key ‘name’ may not be used in ‘#[serial(…)]’ on the type (expected ‘lang’); \
+                     put wire names on fields and variants",
                 ))
             } else {
-                Err(meta.error("unknown `serial` key on the type; expected `lang`"))
+                Err(meta.error(format!(
+                    "Unknown key ‘{}’ in ‘#[serial(…)]’ on the type (expected ‘lang’)",
+                    crate::path_text(&meta.path)
+                )))
             }
         })?;
     }
@@ -179,14 +189,16 @@ fn parse_named_fields(named: &syn::FieldsNamed, derive_name: &str) -> syn::Resul
     let mut fields = Vec::with_capacity(named.named.len());
     for field in &named.named {
         let ident = field.ident.clone().expect("named field has an ident");
-        let name = wire_name(&field.attrs, ident.span(), "field", derive_name)?;
+        let what = format!("field ‘{ident}’");
+        let name = wire_name(&field.attrs, ident.span(), &what, derive_name)?;
         fields.push(NamedField { ident, name, ty: field.ty.clone() });
     }
     check_distinct(fields.iter().map(|f| &f.name), "field")?;
     Ok(fields)
 }
 
-// The mandatory `#[serial(name = "…")]` of a field or variant.
+// The mandatory `#[serial(name = "…")]` of a field or variant; `what` describes the
+// field or variant in the error messages (as in `field ‘width’`).
 fn wire_name(
     attrs: &[syn::Attribute],
     span: proc_macro2::Span,
@@ -201,24 +213,31 @@ fn wire_name(
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("name") {
                 if name.is_some() {
-                    return Err(meta.error("duplicate `name`"));
+                    return Err(meta.error(format!(
+                        "Duplicate key ‘name’ in ‘#[serial(…)]’ of {what}"
+                    )));
                 }
                 let lit: LitStr = meta.value()?.parse()?;
                 if lit.value().is_empty() {
-                    return Err(syn::Error::new(lit.span(), "the wire name must not be empty"));
+                    return Err(syn::Error::new(lit.span(), format!("Empty wire name for {what}")));
                 }
                 name = Some(lit);
                 Ok(())
             } else {
-                Err(meta.error("unknown `serial` key; expected `name`"))
+                Err(meta.error(format!(
+                    "Unknown key ‘{}’ in ‘#[serial(…)]’ of {what} (expected ‘name’)",
+                    crate::path_text(&meta.path)
+                )))
             }
         })?;
     }
     name.ok_or_else(|| {
         syn::Error::new(
             span,
-            format!("#[derive({derive_name})]: every {what} needs `#[serial(name = \"…\")]` — \
-                     wire names are chosen deliberately, never taken from Rust identifiers"),
+            format!(
+                "Missing ‘#[serial(name = \"…\")]’ on {what} (required by \
+                 ‘#[derive({derive_name})]’)"
+            ),
         )
     })
 }
@@ -230,7 +249,7 @@ fn check_distinct<'a>(names: impl Iterator<Item = &'a LitStr>, what: &str) -> sy
         if seen.contains(&value) {
             return Err(syn::Error::new(
                 name.span(),
-                format!("wire name `{value}` is used by another {what} of the same type"),
+                format!("Duplicate wire name ‘{value}’ among the {what}s"),
             ));
         }
         seen.push(value);

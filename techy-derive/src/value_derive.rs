@@ -26,9 +26,9 @@ use syn::{DeriveInput, Ident};
 
 use crate::serial_value::{parse_model, Model, NamedField, ParsedType, TypeAttributePolicy, VariantKind};
 
-const NO_GENERICS_REASON: &str = "a derived type is concrete; a value whose type depends on the \
-                                  language is held as an already converted `SerialValue`, or the \
-                                  language is named with `#[serial(lang = …)]`";
+const NO_GENERICS_REASON: &str = "store a language-dependent value as an already \
+                                  converted ‘SerialValue’, or name the language with \
+                                  ‘#[serial(lang = …)]’";
 
 // The language the generated impl is for. Either every language — a type parameter
 // `__L` bounded by `Lang`, with the method bounded by `SerializableLang` as the trait's

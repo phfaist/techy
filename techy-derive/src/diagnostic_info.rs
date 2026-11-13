@@ -16,22 +16,23 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
             Fields::Unnamed(unnamed) => {
                 return Err(syn::Error::new_spanned(
                     unnamed,
-                    "#[derive(DiagnosticInfo)] requires named fields (or a unit struct): \
-                     field names are the payload's serialization keys",
+                    "‘#[derive(DiagnosticInfo)]’ requires a struct with named fields or a \
+                     unit struct",
                 ));
             }
         },
         Data::Enum(data) => {
             return Err(syn::Error::new(
                 data.enum_token.span,
-                "#[derive(DiagnosticInfo)] supports structs only: a condition is one \
-                 plain data struct describing the problem",
+                "‘#[derive(DiagnosticInfo)]’ supports structs only; use \
+                 ‘#[derive(ToDiagnosticValue)]’ for a field-less enum that is the \
+                 type of a condition field",
             ));
         }
         Data::Union(data) => {
             return Err(syn::Error::new(
                 data.union_token.span,
-                "#[derive(DiagnosticInfo)] supports structs only",
+                "‘#[derive(DiagnosticInfo)]’ supports structs only",
             ));
         }
     };
@@ -43,7 +44,10 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
         if ident.to_string().starts_with("r#") {
             return Err(syn::Error::new(
                 ident.span(),
-                "#[derive(DiagnosticInfo)] does not support raw-identifier fields",
+                format!(
+                    "‘#[derive(DiagnosticInfo)]’ does not support the raw-identifier field \
+                     ‘{ident}’"
+                ),
             ));
         }
     }
@@ -89,26 +93,29 @@ impl DiagnosticAttrs {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("id") {
                     if id.is_some() {
-                        return Err(meta.error("duplicate `id`"));
+                        return Err(meta.error("Duplicate key ‘id’ in ‘#[diagnostic(…)]’"));
                     }
                     let lit: LitStr = meta.value()?.parse()?;
                     validate_identifier(&lit)?;
                     id = Some(lit);
                 } else if meta.path.is_ident("message") {
                     if message.is_some() {
-                        return Err(meta.error("duplicate `message`"));
+                        return Err(meta.error("Duplicate key ‘message’ in ‘#[diagnostic(…)]’"));
                     }
                     message = Some(meta.value()?.parse()?);
                 } else if meta.path.is_ident("no_constructor") {
                     if no_constructor {
-                        return Err(meta.error("duplicate `no_constructor`"));
+                        return Err(meta.error(
+                            "Duplicate key ‘no_constructor’ in ‘#[diagnostic(…)]’",
+                        ));
                     }
                     no_constructor = true;
                 } else {
-                    return Err(meta.error(
-                        "unknown `diagnostic` key; expected `id`, `message`, or \
-                         `no_constructor`",
-                    ));
+                    return Err(meta.error(format!(
+                        "Unknown key ‘{}’ in ‘#[diagnostic(…)]’ (expected ‘id’, \
+                         ‘message’ or ‘no_constructor’)",
+                        crate::path_text(&meta.path)
+                    )));
                 }
                 Ok(())
             })?;
@@ -117,9 +124,7 @@ impl DiagnosticAttrs {
         let id = id.ok_or_else(|| {
             syn::Error::new(
                 input.ident.span(),
-                "missing `#[diagnostic(id = \"…\")]`: the wire identifier is mandatory \
-                 and never derived from the type name, so that renaming the type cannot \
-                 change the serialized form",
+                format!("Missing ‘#[diagnostic(id = \"…\")]’ on ‘{}’", input.ident),
             )
         })?;
 
@@ -139,20 +144,29 @@ fn serialization_key(field: &Field) -> syn::Result<String> {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("key") {
                 if key.is_some() {
-                    return Err(meta.error("duplicate `key`"));
+                    return Err(meta.error(format!(
+                        "Duplicate key ‘key’ in ‘#[diagnostic(…)]’ of field ‘{ident}’"
+                    )));
                 }
                 let lit: LitStr = meta.value()?.parse()?;
                 let value = lit.value();
                 if value.is_empty() || value.contains(char::is_whitespace) {
                     return Err(syn::Error::new(
                         lit.span(),
-                        "the serialization key must be a non-empty string without whitespace",
+                        format!(
+                            "Invalid serialization key ‘{value}’: keys must be non-empty \
+                             and contain no whitespace"
+                        ),
                     ));
                 }
                 key = Some(value);
                 Ok(())
             } else {
-                Err(meta.error("unknown `diagnostic` key on a field; expected `key`"))
+                Err(meta.error(format!(
+                    "Unknown key ‘{}’ in ‘#[diagnostic(…)]’ of field ‘{ident}’ \
+                     (expected ‘key’)",
+                    crate::path_text(&meta.path)
+                )))
             }
         })?;
     }
@@ -171,8 +185,10 @@ fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
     {
         return Err(syn::Error::new(
             lit.span(),
-            "the identifier must be a namespaced dotted name like \
-             `core.area.condition`",
+            format!(
+                "Invalid condition identifier ‘{value}’: identifiers must be dotted names \
+                 without whitespace, as in ‘core.area.condition’"
+            ),
         ));
     }
     Ok(())
@@ -232,14 +248,18 @@ fn expand_display_impl(
         if !field_names.contains(reference) {
             return Err(syn::Error::new(
                 message.span(),
-                format!(
-                    "message references unknown field `{reference}`; {}",
-                    if field_names.is_empty() {
-                        "the struct has no fields".to_string()
-                    } else {
-                        format!("available fields: `{}`", field_names.join("`, `"))
-                    }
-                ),
+                if field_names.is_empty() {
+                    format!(
+                        "Unknown field ‘{reference}’ in ‘message’; \
+                         ‘{name}’ has no fields"
+                    )
+                } else {
+                    format!(
+                        "Unknown field ‘{reference}’ in ‘message’; \
+                         ‘{name}’ has fields ‘{}’",
+                        field_names.join("’, ‘")
+                    )
+                },
             ));
         }
     }
@@ -298,13 +318,15 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
                     }
                 }
                 if !closed {
-                    return Err(err("unclosed `{` in message"));
+                    return Err(err(
+                        "Unclosed ‘{’ in ‘message’; use ‘{{’ for a literal brace",
+                    ));
                 }
                 if name.is_empty() || name.chars().all(|c| c.is_ascii_digit()) {
-                    return Err(err(
-                        "message interpolation uses named fields only (`{field}`); \
-                         positional `{}` / `{0}` placeholders are not supported",
-                    ));
+                    return Err(err(&format!(
+                        "Positional placeholder ‘{{{name}}}’ in ‘message’: placeholders \
+                         must name a field, as in ‘{{field}}’"
+                    )));
                 }
                 let valid_start =
                     name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
@@ -312,7 +334,8 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
                     name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
                 if !valid_start || !valid_rest {
                     return Err(err(&format!(
-                        "`{{{name}}}` is not a valid field reference"
+                        "Invalid placeholder ‘{{{name}}}’ in ‘message’: \
+                         ‘{name}’ is not a field name"
                     )));
                 }
                 if !names.contains(&name) {
@@ -323,7 +346,9 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
                 if chars.peek() == Some(&'}') {
                     chars.next();
                 } else {
-                    return Err(err("unmatched `}` in message (use `}}` for a literal)"));
+                    return Err(err(
+                        "Unmatched ‘}’ in ‘message’; use ‘}}’ for a literal brace",
+                    ));
                 }
             }
             _ => {}
