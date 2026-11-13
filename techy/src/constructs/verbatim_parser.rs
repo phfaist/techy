@@ -82,35 +82,47 @@ use super::environment_parser::{
 };
 use super::{node_text_content, push_pre_space_text, push_token_text, ConstructParser, ConstructParserResult, ParseContext};
 
-/// Condition: a delimited verbatim region ended before its closing delimiter appeared.
+/// The error that is reported when the verbatim content of a [`VerbatimArgumentParser`]
+/// argument has no closing delimiter (id `core.verbatim.unterminated-verbatim`).
 ///
-/// Raised at the end of the input, and when a token the reader could not read was
-/// tolerated. Tolerant recovery keeps the content read so far and records an **empty**
-/// close on the group node — the [`GroupData::close`] convention for a delimiter that
-/// was never found.
+/// Reported by [`VerbatimArgumentParser`] when the input ends before the closing
+/// delimiter, and when the token reader fails to read a token of the content and the
+/// parse tolerates that error. The span of the diagnostic is the opening delimiter.
+///
+/// In a tolerant parse, the argument contains the content read up to the position of the
+/// error, and its group node records an empty closing delimiter ([`GroupData::close`]). A
+/// strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.verbatim.unterminated-verbatim",
-    message = "missing closing delimiter ‘{close}’ of the verbatim content"
+    message = "Missing closing delimiter ‘{close}’ of the verbatim content"
 )]
 pub struct UnterminatedVerbatim {
-    /// The closing delimiter that never appeared.
+    /// The closing delimiter that the verbatim content must end with.
     pub close: String,
 }
 
-/// Condition: no opening delimiter could be read where a delimited verbatim argument
-/// was mandatory.
+/// The error that is reported when the opening delimiter of a [`VerbatimArgumentParser`]
+/// argument is missing (id `core.verbatim.expected-verbatim-delimiter`).
 ///
-/// Raised at the end of the input, and — when the parser prescribes a fixed pair — when
-/// a different character stands at that position. Recovery reports the argument absent,
-/// consuming nothing.
+/// The argument begins with an opening delimiter, possibly after whitespace, as the `|`
+/// in `\verb|x|`. A parser configured with
+/// [`with_delimiters`](VerbatimArgumentParser::with_delimiters) accepts only its own
+/// opening delimiter; otherwise, any character is an opening delimiter.
+///
+/// Reported by [`VerbatimArgumentParser`] when the input ends at the position of the
+/// argument, and, for a parser with a fixed opening delimiter, when another character
+/// stands there. The span of the diagnostic is that character, or the end of the input.
+///
+/// In a tolerant parse, the argument is absent and the parser consumes nothing. A strict
+/// parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.verbatim.expected-verbatim-delimiter")]
 pub struct ExpectedVerbatimDelimiter {
-    /// The expected opening delimiter, when the parser prescribes one (`None` = any
-    /// character would have done, but none was there).
+    /// The opening delimiter that the parser requires, or `None` if the parser accepts
+    /// any character.
     pub expected: Option<char>,
 }
 
@@ -120,9 +132,12 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expected {
             Some(open) => {
-                write!(f, "expected opening delimiter ‘{open}’ for verbatim content")
+                write!(f, "Missing opening delimiter ‘{open}’ of the verbatim content")
             }
-            None => write!(f, "expected a verbatim opening delimiter"),
+            None => write!(
+                f,
+                "Missing opening delimiter of the verbatim content at the end of the input"
+            ),
         }
     }
 }
@@ -312,7 +327,9 @@ fn read_raw_content<L: Lang>(
                 // misbehaving custom reader can produce these kinds here.
                 return Err(cx.implementation_error(
                     format_args!(
-                        "token reader produced a {} token under a verbatim state",
+                        "Unexpected {} returned by the token reader under a verbatim \
+                         parsing state (under this state, a token reader must return only \
+                         characters, the closing delimiter and the end of the input)",
                         other
                     ),
                     cx.tokens.source_span_of(&token),
