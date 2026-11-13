@@ -68,29 +68,31 @@ impl<L: Lang> fmt::Debug for SpecialsMatch<L> {
     }
 }
 
-/// A failed specials scan, in the scanned content's own coordinates.
+/// An error that the `Lang::scan_specials` hook returns when it fails to scan a specials
+/// trigger.
 ///
-/// The scan hook detects a trigger in a `&str`. It knows neither the reader's token
-/// type nor the reader's stream positions, so it cannot describe how to carry on past
-/// the failure — recovery is the reader's business. A scan failure is therefore a plain
-/// condition plus a byte range: the reader turns it into a
-/// [`TokenError`](super::TokenError) qualified by its own source, with no recovery, and
-/// that error aborts the parse even under tolerant recovery.
+/// A specials scan error contains the condition that describes the error
+/// ([`kind`](Self::kind)) and the byte range of the scanned content where the error
+/// occurred ([`span`](Self::span)). The token reader converts it into a
+/// [`TokenError`](super::TokenError) for the reader's own source. The hook does not know
+/// the tokens and the stream positions of the reader, so it cannot describe how to
+/// continue past the error. Therefore the token error has no
+/// [`TokenRecovery`](super::TokenRecovery), and it stops the parse, also in a tolerant
+/// parse.
 ///
-/// A document-level condition the scan *can* carry on from is expressed the way the
-/// hook expresses everything else — as a match to a spec whose parser diagnoses it.
+/// To report a problem in the document that the parse can continue past, the hook returns
+/// a [`SpecialsMatch`] whose spec has a parser that reports the problem.
 #[derive(Debug, Clone)]
 pub struct SpecialsScanError {
-    /// What went wrong.
+    /// The condition that describes the error.
     pub kind: TokenErrorKind,
-    /// Where in the scanned content it went wrong.
+    /// The byte range of the scanned content where the error occurred.
     pub span: Span,
 }
 
 impl fmt::Display for SpecialsScanError {
-    /// The condition's own wording, followed by the byte range it was reported at —
-    /// the range is the only locating information this error carries (it names no
-    /// source: the scanned content is the reader's, not the hook's).
+    /// Writes the message of the condition, followed by the byte range of the scanned
+    /// content where the error occurred.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} (at bytes {}..{})", self.kind, self.span.start(), self.span.end())
     }

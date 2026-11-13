@@ -25,30 +25,46 @@ use super::tokenization::{StreamPosition, Token};
 /// Result of a tokenization operation: `T`, or a [`TokenError`] for the language `L`.
 pub type TokenResult<L, T> = core::result::Result<T, TokenError<L>>;
 
-/// Condition: the input ended immediately after a command escape character, before any
-/// name.
+/// The error that is reported when the input ends directly after an escape character
+/// (id `core.token.end-of-stream-after-escape`).
 ///
-/// Like every token-layer condition, it is a plain [`DiagnosticInfo`] data struct, which
-/// [`TokenErrorKind`] wraps for the recovery protocol.
+/// An escape character starts a command and must be followed by the command name, as in
+/// `\alpha` or `\&`. The escape characters of a language are those of its
+/// [`CommandRule`](super::CommandRule)s.
+///
+/// Reported by the standard token reader ([`StdTokenReader`](super::StdTokenReader)) when
+/// the escape character is the last character of its input. In a tolerant parse, the
+/// escape character is parsed as an ordinary character of the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.token.end-of-stream-after-escape",
-    message = "expected command name after escape character ‘{escape_char}’ but reached \
-               end of input"
+    message = "Missing command name after ‘{escape_char}’ at the end of the \
+               input"
 )]
 pub struct EndOfStreamAfterEscape {
-    /// The escape character that was read.
+    /// The escape character that ends the input.
     pub escape_char: char,
 }
 
-/// Condition: a character listed in
-/// [`ForbiddenCharsRules::chars`](super::ForbiddenCharsRules::chars) appeared as content.
+/// The error that is reported when a character that the language forbids appears in the
+/// text (id `core.token.forbidden-char`).
+///
+/// A language lists the characters that may not appear as ordinary characters of the
+/// text in [`ForbiddenCharsRules::chars`](super::ForbiddenCharsRules::chars). The list is
+/// part of the parsing state, so a character can be forbidden in one part of a document
+/// and allowed in another, e.g. in math mode and in text mode.
+///
+/// Reported by the standard token reader ([`StdTokenReader`](super::StdTokenReader)) when
+/// it reads a forbidden character as an ordinary character. Whitespace and the characters
+/// that start a group delimiter, a command, a comment or a specials trigger are read as
+/// such and are not checked. In a tolerant parse, the forbidden character is parsed as
+/// an ordinary character of the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.token.forbidden-char")]
 pub struct ForbiddenChar {
-    /// The forbidden character encountered (serialization key `char`).
+    /// The forbidden character (serialization key `char`).
     #[diagnostic(key = "char")]
     pub ch: char,
 }
@@ -57,21 +73,25 @@ pub struct ForbiddenChar {
 // message format string cannot express.
 impl fmt::Display for ForbiddenChar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "character is forbidden here: ‘{}’ (U+{:04X})", self.ch, self.ch as u32)
+        write!(
+            f,
+            "Character ‘{}’ (U+{:04X}) may not be used here",
+            self.ch,
+            self.ch as u32
+        )
     }
 }
 
-/// What went wrong while reading a token: the condition carried by a [`TokenError`].
+/// The condition of a [`TokenError`]: the description of what went wrong while reading a
+/// token.
 ///
-/// The built-in variants wrap plain condition structs, each of them a
-/// [`DiagnosticInfo`] implementation, and [`Custom`](Self::Custom) carries a
-/// language-defined payload — so a token error becomes a structured diagnostic like any
-/// other, while the token layer keeps a concrete enum to match on.
+/// Each variant contains a condition that implements [`DiagnosticInfo`], so that a token
+/// error is reported as a [`Diagnostic`](crate::error::Diagnostic) like any other
+/// condition. The [`Custom`](Self::Custom) variant contains a condition that a language or
+/// a custom token reader defines. To inspect a `Custom` condition, downcast it to its
+/// type.
 ///
-/// More variants may be added for conditions the tokenizer learns to detect, which is
-/// what `#[non_exhaustive]` reserves; match with a catch-all arm. The type is neither
-/// `Copy` (a custom payload is boxed) nor `PartialEq`: match the variants, or downcast
-/// the payload.
+/// Variants may be added in a minor release; a `match` needs a catch-all arm.
 #[derive(Debug, Clone)]
 // `Custom` and `#[non_exhaustive]` serve different extension axes: `Custom` lets third
 // parties define new condition *payloads*, while `non_exhaustive` reserves *our* right to
@@ -79,15 +99,14 @@ impl fmt::Display for ForbiddenChar {
 // without it, adding any variant breaks every exhaustive downstream `match` (semver).
 #[non_exhaustive]
 pub enum TokenErrorKind {
-    /// The input ended immediately after a command escape character, before any name.
+    /// The input ends directly after an escape character.
     EndOfStreamAfterEscape(EndOfStreamAfterEscape),
-    /// A character listed in
-    /// [`ForbiddenCharsRules::chars`](super::ForbiddenCharsRules::chars) appeared as
-    /// content.
+    /// A character that the language forbids appears in the text.
     ForbiddenChar(ForbiddenChar),
-    /// A language-defined condition, reported by an extension point that takes part in
-    /// the recovery protocol: `Lang::scan_specials`, or a custom
-    /// [`TokenReader`](super::TokenReader).
+    /// A condition reported by the `Lang::scan_specials` hook of the language or by a
+    /// custom [`TokenReader`](super::TokenReader). The token layer also uses this variant
+    /// for an [`ImplementationError`](crate::core::constructs::ImplementationError) when
+    /// such a hook or reader violates its contract.
     Custom(Box<dyn DiagnosticData>),
 }
 
@@ -103,17 +122,21 @@ impl TokenErrorKind {
     }
 }
 
-/// An error encountered while reading a token, with an optional recovery possibility.
+/// An error that a [`TokenReader`](super::TokenReader) returns when it fails to read a
+/// token.
 ///
-/// Returned by the reading methods of [`TokenReader`](super::TokenReader). It carries
-/// what went wrong ([`kind`](TokenError::kind)), where
-/// ([`span`](TokenError::span) — already source-qualified, so it is a diagnostic anchor
-/// as it stands), and, when the reader could describe how to carry on, a
-/// [`TokenRecovery`] ([`recovery`](TokenError::recovery)).
+/// A token error contains the condition that describes the error
+/// ([`kind`](TokenError::kind)), the span of the source where the error occurred
+/// ([`span`](TokenError::span)), and optionally a [`TokenRecovery`]
+/// ([`recovery`](TokenError::recovery)). The recovery describes how a parse can continue
+/// past the error: it contains a placeholder token to use in place of the token that
+/// could not be read, and the position at which to resume reading.
 ///
-/// The reader applies no policy of its own: whether the parse stops here or continues
-/// with the recovery token is the session's [`Recovery`](crate::error::Recovery)
-/// decision.
+/// The token reader always returns the error. The [`Recovery`](crate::error::Recovery)
+/// policy of the parse decides what happens next. A strict parse stops with the error. A
+/// tolerant parse reports the condition as a [`Diagnostic`](crate::error::Diagnostic) and
+/// continues with the placeholder token. A token error without a recovery stops the
+/// parse in both cases.
 // The recovery payload is boxed: every `peek`/`next` returns a `Result` sized by its
 // error variant, and the error path is cold by construction — boxing keeps the hot
 // `Result` at payload-plus-tag size.
