@@ -241,7 +241,7 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
 }
 
 /// Writes a short description of the token, with its text as written in the source, e.g.
-/// `command ‘\foo’`, `character ‘a’`, `paragraph break` or `end of input`.
+/// `command ‘\foo’`, `character ‘a’`, `paragraph break` or `end of the input`.
 ///
 /// A command is written with the escape character that starts it, so that `\foo` and
 /// `@foo` are told apart. The content of a long comment is shortened to at most 24
@@ -273,7 +273,7 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
                 write!(f, "{}’", if truncated { "…" } else { "" })
             }
             TokenKind::ParagraphBreak => write!(f, "paragraph break"),
-            TokenKind::EndOfStream => write!(f, "end of input"),
+            TokenKind::EndOfStream => write!(f, "end of the input"),
         }
     }
 }

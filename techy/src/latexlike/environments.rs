@@ -1048,7 +1048,7 @@ where
         // error, never a panic ([§dd-dr:panic-policy]).
         if passthrough.is_some() {
             return Err(cx.implementation_error(
-                "Invalid state delta returned by the body parser of \
+                "Invalid state delta returned by the body parser from \
                  ‘EnvironmentBehavior::make_body_parser’: a body parser \
                  must return no state delta",
                 trigger_span,

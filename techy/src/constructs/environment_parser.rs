@@ -955,7 +955,7 @@ where
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
             return Err(cx.implementation_error(
-                "Invalid state delta returned by the nodes parser of \
+                "Invalid state delta returned by the nodes parser from \
                  ‘ParseDriver::make_nodes_parser’: a nodes parser must \
                  return no state delta",
                 cx.here(),
@@ -1007,7 +1007,7 @@ where
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
                     "Invalid stop cause ‘NodeCondition’ returned by the \
-                     nodes parser of ‘ParseDriver::make_nodes_parser’: \
+                     nodes parser from ‘ParseDriver::make_nodes_parser’: \
                      the stop specification of an environment body sets no node \
                      condition",
                     cx.here(),

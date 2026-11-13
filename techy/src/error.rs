@@ -1273,7 +1273,8 @@ impl<O: SourceOrigin> fmt::Display for ParseError<O> {
 
 impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 
-/// Error raised when a hook fails to do its work (`core.hooks.hook-failed`).
+/// The error that is reported when a hook fails to do its work (id
+/// `core.hooks.hook-failed`).
 ///
 /// A *hook* is code that a language or an embedding provides and that the library calls
 /// during a parse: a [`ParseDriver`](crate::core::ParseDriver) method, a

@@ -1305,7 +1305,7 @@ where
         let Some(first_char) = self.marker.chars().next() else {
             return Err(cx.implementation_error(
                 "Misconfigured argument parser ‘MarkerArgumentParser’: the marker \
-                 must not be empty",
+                 may not be empty",
                 cx.here(),
             ));
         };

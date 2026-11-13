@@ -1199,7 +1199,7 @@ fn did_you_mean_hint<L: Lang>(
     if let Some(provider) = escape_trap {
         hint.push_str(&format!(
             "invalid registration ‘{escape_spelling}’ in provider ‘{provider}’ \
-             (command names must be registered without the escape character)"
+             (names must be registered without their escape character)"
         ));
     }
     if !suggestions.is_empty() {

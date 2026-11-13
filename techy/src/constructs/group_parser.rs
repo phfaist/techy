@@ -137,7 +137,8 @@ impl fmt::Display for UnclosedGroup {
             UnclosedGroupFound::StrayClose => {
                 write!(
                     f,
-                    "Mismatched closing delimiter: the group must be closed with ‘{}’",
+                    "Missing closing delimiter ‘{}’ of the group before a mismatched \
+                     closing delimiter",
                     self.expected_close
                 )
             }

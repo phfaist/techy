@@ -138,7 +138,7 @@ where
         if self.markers.iter().any(|marker| marker.is_empty()) {
             return Err(cx.implementation_error(
                 "Misconfigured argument parser ‘EmbellishmentsArgumentParser’: \
-                 the markers must not be empty",
+                 the markers may not be empty",
                 cx.here(),
             ));
         }

@@ -154,7 +154,7 @@ where
                 StopCause::TokenCondition { span, .. } => {
                     return Err(cx.implementation_error(
                         "Invalid stop cause ‘TokenCondition’ returned by the \
-                         nodes parser of ‘ParseDriver::make_nodes_parser’: \
+                         nodes parser from ‘ParseDriver::make_nodes_parser’: \
                          the stop specification of the root sets no token condition",
                         span,
                     ));
@@ -162,7 +162,7 @@ where
                 StopCause::NodeCondition => {
                     return Err(cx.implementation_error(
                         "Invalid stop cause ‘NodeCondition’ returned by the \
-                         nodes parser of ‘ParseDriver::make_nodes_parser’: \
+                         nodes parser from ‘ParseDriver::make_nodes_parser’: \
                          the stop specification of the root sets no node condition",
                         cx.here(),
                     ));
