@@ -67,25 +67,29 @@ use crate::token::{TokenEdge, TokenKind};
 use super::argument_parsers::{scan_argument_noise, stage_pre_space};
 use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
 
-/// Condition: a non-repeatable tack-on information field was specified more than once.
+/// The error that is reported when a tack-on field that may appear only once appears
+/// several times (id `core.arguments.repeated-tack-on-field`).
 ///
-/// An example is `\section{x}\label{a}\label{b}` with `label` registered through
-/// [`with_field`](TackOnFieldsArgumentParser::with_field); the condition is detected by
-/// [`TackOnFieldsArgumentParser`].
+/// A field registered with [`with_field`](TackOnFieldsArgumentParser::with_field) may
+/// appear at most once after the arguments of an invocation, as in `\section{x}\label{a}`.
+/// A field registered with
+/// [`with_repeatable_field`](TackOnFieldsArgumentParser::with_repeatable_field) may appear
+/// any number of times.
 ///
-/// Tolerant recovery keeps the repeated field parsed in the argument's region — techy
-/// trees keep every byte, so nothing is discarded: consumers see both the diagnostic
-/// and the record. Strict parses abort.
+/// Reported by [`TackOnFieldsArgumentParser`] for each repetition of such a field. The span
+/// of the diagnostic is the command of the repeated field. In a tolerant parse, the
+/// repeated field is parsed as usual and is part of the argument. A strict parse stops at
+/// this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.arguments.repeated-tack-on-field",
-    message = "information field ‘{escape_char}{name}’ cannot be specified more than once"
+    message = "Duplicate ‘{escape_char}{name}’: this command may be used only once here"
 )]
 pub struct RepeatedTackOnField {
-    /// The field command's name (without escape character).
+    /// The name of the command of the field, without the escape character.
     pub name: String,
-    /// The escape character the command was written with.
+    /// The escape character that the command is written with.
     pub escape_char: char,
 }
 
@@ -179,8 +183,8 @@ where
         }) {
             return Err(cx.implementation_error(
                 format!(
-                    "TackOnFieldsArgumentParser field names must be distinct \
-                     (duplicate registration of ‘{duplicate}’)"
+                    "Misconfigured argument parser ‘TackOnFieldsArgumentParser’: \
+                     duplicate field ‘{duplicate}’ (field names must be distinct)"
                 ),
                 cx.here(),
             ));
