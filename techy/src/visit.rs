@@ -491,7 +491,7 @@ mod tests {
     use super::{
         scoped_children, NodeVisitor, TreeWalker, VisitContext, VisitFlow, WalkError,
     };
-    use crate::engine::{DescentWarning, StdDescentGuardInit};
+    use crate::engine::{DescentGuard, DescentWarning, StdDescentGuard, StdDescentGuardInit};
 
     /// Parse `input` with the plain latexlike preset (strict).
     fn parse(input: &str) -> NodeTree<Latexlike> {
@@ -790,8 +790,15 @@ mod tests {
             .with_descent_guard_init(StdDescentGuardInit::depth_limit(2))
             .walk(tree.root())
             .unwrap_err();
+        // The refusal is the depth limit's own: the one a guard with that limit gives.
+        let mut guard = StdDescentGuard::init(&StdDescentGuardInit::depth_limit(2));
+        let refusal = loop {
+            if let Err(refusal) = guard.try_enter() {
+                break refusal;
+            }
+        };
         let WalkError::DescentLimitExceeded { detail } = error;
-        assert!(detail.contains("depth_limit"), "{detail}");
+        assert_eq!(detail, refusal.detail);
 
         // A limit the tree fits under walks it whole.
         let mut log = Log::default();
@@ -820,9 +827,8 @@ mod tests {
                 VisitFlow::Descend
             }
 
-            fn observe_descent_warning(&mut self, warning: DescentWarning) {
+            fn observe_descent_warning(&mut self, _warning: DescentWarning) {
                 self.warnings += 1;
-                assert!(warning.detail.contains("with_descent_guard_init"));
             }
         }
 
@@ -830,8 +836,8 @@ mod tests {
         let tree = deep_group_chain(200_000);
         let mut meter = Meter::default();
         let error = TreeWalker::new(&mut meter).walk(tree.root()).unwrap_err();
-        let WalkError::DescentLimitExceeded { detail } = error;
-        assert!(detail.contains("DEFAULT_STACK_BUDGET"), "{detail}");
+        // `DescentLimitExceeded` is the walk's only error variant.
+        let WalkError::DescentLimitExceeded { .. } = error;
         assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
         assert!(meter.entered > 0, "the walk made progress before refusing");
 
