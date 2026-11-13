@@ -495,78 +495,80 @@ impl<P: fmt::Debug, S: fmt::Debug> fmt::Debug for ConcatPieces<P, S> {
     }
 }
 
-/// Why a [`TreeRecomposer`] run failed, generic over the recomposer's own error
-/// type `E`.
+/// The error that a [`TreeRecomposer`] run returns, where `E` is the error type of the
+/// recomposer.
 ///
-/// A failure of the recomposer itself is returned unchanged as
-/// [`Recomposer`](RecomposeError::Recomposer). The other variants report a tree
-/// nested deeper than the run's descent guard allows
-/// ([`DescentLimitExceeded`](RecomposeError::DescentLimitExceeded)) or misuse of a
-/// [`RecomposeContext`] operation — violating a documented contract returns an
-/// `Err` here, it never panics. The variants match those of
-/// [`RestageError`](crate::transform::RestageError) wherever the two modules can
-/// fail the same way.
+/// An error of the recomposer itself is returned unchanged as
+/// [`Recomposer`](RecomposeError::Recomposer). The other variants report that the tree
+/// is nested too deeply
+/// ([`DescentLimitExceeded`](RecomposeError::DescentLimitExceeded)), or that a
+/// [`RecomposeContext`] operation was called with invalid input. A call that violates
+/// the documented requirements of an operation returns an error; it does not panic. The
+/// variants that [`RestageError`](crate::transform::RestageError) also has report the
+/// same errors.
 ///
 /// `Clone`, `PartialEq`, and `Eq` are implemented when `E` implements them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecomposeError<E> {
-    /// The recomposer itself failed; its error, verbatim.
+    /// The recomposer returned an error.
     Recomposer(E),
-    /// [`recompose_argument_named`](RecomposeContext::recompose_argument_named)
-    /// (or its `_content` sibling) was given a name that matches none of the
-    /// callable's argument specs.
+    /// [`recompose_argument_named`](RecomposeContext::recompose_argument_named) or
+    /// [`recompose_argument_content_named`](RecomposeContext::recompose_argument_content_named)
+    /// was called with a name that the spec of the callable does not declare.
     UnknownArgumentName {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The unmatched argument name.
+        /// The requested name.
         name: String,
     },
-    /// An argument index beyond the callable's argument record.
+    /// An argument operation was called with an index that is not less than the number
+    /// of arguments of the callable.
     ArgumentIndexOutOfRange {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The out-of-range index.
+        /// The requested index.
         index: usize,
-        /// The callable's argument count.
+        /// The number of arguments of the callable.
         count: usize,
     },
-    /// A slot index beyond the callable's slot record.
+    /// A slot operation was called with an index that is not less than the number of
+    /// slots of the callable.
     SlotIndexOutOfRange {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The out-of-range index.
+        /// The requested index.
         index: usize,
-        /// The callable's slot count.
+        /// The number of slots of the callable.
         count: usize,
     },
-    /// An argument/slot/body op was applied to a node that is not a
-    /// `Callable`.
+    /// An argument, slot or body operation was called on a node that is not a
+    /// `Callable` node.
     NotACallable {
-        /// The offending node.
+        /// The node.
         node: NodeId,
     },
     /// [`recompose_slot_content_named`](RecomposeContext::recompose_slot_content_named)
-    /// was given a name that matches none of the callable's slots.
+    /// was called with a name that is not the name of a slot of the callable.
     UnknownSlotName {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The unmatched slot name.
+        /// The requested name.
         name: String,
     },
-    /// [`recompose_body`](RecomposeContext::recompose_body) was applied to a
-    /// callable no slot of which is marked as its body
-    /// ([`BodySlotExt::is_body`](crate::core::node::BodySlotExt::is_body)).
+    /// [`recompose_body`](RecomposeContext::recompose_body) was called on a callable
+    /// that has no body slot. A body slot is a slot whose ext returns `true` from
+    /// [`BodySlotExt::is_body`](crate::core::node::BodySlotExt::is_body).
     NoBodySlot {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
     },
-    /// The tree is nested more deeply than the run's descent guard allows, so the
-    /// guard refused to go one level deeper and the run is abandoned.
+    /// The tree is nested more deeply than the descent guard of the run allows.
     ///
-    /// Configure the limit with [`TreeRecomposer::with_descent_guard_init`].
+    /// To configure the limit, use [`TreeRecomposer::with_descent_guard_init`].
     DescentLimitExceeded {
-        /// Which limit was hit and how to configure it.
+        /// The description of the limit that was reached, as a complete message (see
+        /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail)).
         detail: String,
     },
 }
@@ -574,31 +576,42 @@ pub enum RecomposeError<E> {
 impl<E: fmt::Display> fmt::Display for RecomposeError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RecomposeError::Recomposer(error) => write!(f, "recomposer failed: {}", error),
-            RecomposeError::UnknownArgumentName { node, name } => {
-                write!(f, "callable {:?} has no argument named {:?}", node, name)
-            }
+            RecomposeError::Recomposer(error) => write!(f, "Recomposer failed: {}", error),
+            RecomposeError::UnknownArgumentName { node, name } => write!(
+                f,
+                "Unknown argument name ‘{}’ for callable node {}",
+                name,
+                node.index()
+            ),
             RecomposeError::ArgumentIndexOutOfRange { node, index, count } => write!(
                 f,
-                "callable {:?} has no argument #{} ({} arguments)",
-                node, index, count
+                "Invalid argument index {} for callable node {} (the callable has {} \
+                 arguments)",
+                index,
+                node.index(),
+                count
             ),
-            RecomposeError::SlotIndexOutOfRange { node, index, count } => {
-                write!(f, "callable {:?} has no slot #{} ({} slots)", node, index, count)
-            }
-            RecomposeError::NotACallable { node } => {
-                write!(f, "node {:?} is not a callable", node)
-            }
-            RecomposeError::UnknownSlotName { node, name } => {
-                write!(f, "callable {:?} has no slot named {:?}", node, name)
-            }
-            RecomposeError::NoBodySlot { node } => write!(
+            RecomposeError::SlotIndexOutOfRange { node, index, count } => write!(
                 f,
-                "callable {:?} has no body slot (no slot ext reports is_body)",
-                node
+                "Invalid slot index {} for callable node {} (the callable has {} slots)",
+                index,
+                node.index(),
+                count
             ),
+            RecomposeError::NotACallable { node } => {
+                write!(f, "Node {} is not a callable", node.index())
+            }
+            RecomposeError::UnknownSlotName { node, name } => write!(
+                f,
+                "Unknown slot name ‘{}’ for callable node {}",
+                name,
+                node.index()
+            ),
+            RecomposeError::NoBodySlot { node } => {
+                write!(f, "Missing body slot in callable node {}", node.index())
+            }
             RecomposeError::DescentLimitExceeded { detail } => {
-                write!(f, "recompose descent limit exceeded: {}", detail)
+                write!(f, "Tree nested too deeply: {}", detail)
             }
         }
     }

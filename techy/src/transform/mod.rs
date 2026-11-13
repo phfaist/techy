@@ -259,106 +259,111 @@ where
     }
 }
 
-/// Why a [`TreeRestager`] run failed, generic over the visitor's own error type
-/// `E`.
+/// The error that a [`TreeRestager`] run returns, where `E` is the error type of the
+/// visitor.
 ///
-/// A failure of the visitor itself is returned unchanged as
-/// [`Visitor`](RestageError::Visitor). The other variants report a violation of
-/// the output builder's contract ([`Build`](RestageError::Build)), an edit the
-/// driver cannot apply
-/// ([`ContentParentDropped`](RestageError::ContentParentDropped)), a tree nested
-/// deeper than the run's descent guard allows
-/// ([`DescentLimitExceeded`](RestageError::DescentLimitExceeded)), or misuse of a
-/// [`RestageContext`] operation — violating a documented contract returns an
-/// `Err` here, it never panics.
+/// An error of the visitor itself is returned unchanged as
+/// [`Visitor`](RestageError::Visitor). The other variants report an error of the driver
+/// or of a [`RestageContext`] operation: the output builder rejected the staged nodes
+/// ([`Build`](RestageError::Build)), the visitor made a change that the driver cannot
+/// apply to an argument or slot record
+/// ([`ContentParentDropped`](RestageError::ContentParentDropped)), the input tree is
+/// nested too deeply ([`DescentLimitExceeded`](RestageError::DescentLimitExceeded)), or
+/// a [`RestageContext`] operation was called with invalid input. A call that violates
+/// the documented requirements of an operation returns an error; it does not panic.
+/// The run stops at the first error.
 ///
 /// `Clone`, `PartialEq`, and `Eq` are implemented when `E` implements them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RestageError<E> {
-    /// Staging a node into the output builder failed because the staged input
-    /// violated the builder's contract ([`NodeBuildError`]); the run is abandoned.
+    /// The output builder rejected the nodes that the run staged.
     Build(NodeBuildError),
-    /// A restaged callable's argument or slot record designates its content
-    /// inside a node ([`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf))
-    /// that the pass dropped, or replaced with something other than exactly one
-    /// node.
+    /// An argument or slot record of a restaged callable has its content in the
+    /// children of a node
+    /// ([`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf)), and the
+    /// visitor did not restage this node to exactly one node: it dropped the node,
+    /// replaced it with several nodes, or replaced an ancestor of the node with
+    /// [`Restage::Emit`].
     ///
-    /// There is no defined node to re-anchor the designation onto, so the driver
-    /// refuses rather than silently change what the record means. Take the
-    /// callable over instead: `Emit` its replacement, staged with
-    /// [`restage_invocation`](RestageContext::restage_invocation) or the raw
+    /// The driver cannot tell which node of the output should then contain the content
+    /// of the record. To change such a node, replace the whole callable with
+    /// [`Restage::Emit`], and stage the replacement with
+    /// [`restage_invocation`](RestageContext::restage_invocation) or with the
     /// [`builder()`](RestageContext::builder).
     ContentParentDropped {
-        /// The callable whose record lost its anchor.
+        /// The callable, in the input tree.
         callable: NodeId,
-        /// The content-parent node (in the input tree) the record designates.
+        /// The content parent of the record, in the input tree.
         parent: NodeId,
-        /// How many staged nodes replaced the parent: `Some(0)` = dropped,
-        /// `Some(2)`… = multiplied; `None` = never individually restaged (an
-        /// ancestor was taken over via `Emit`, so no per-node replacement was
-        /// recorded).
+        /// The number of nodes that replaced the content parent: `Some(0)` if the
+        /// visitor dropped it, `Some(n)` with `n` ≥ 2 if the visitor replaced it with
+        /// `n` nodes. `None` if the content parent was not restaged on its own,
+        /// because the visitor replaced one of its ancestors with [`Restage::Emit`].
         replaced_by: Option<usize>,
     },
-    /// The visitor itself failed; its error, verbatim.
+    /// The visitor returned an error.
     Visitor(E),
-    /// [`restage_argument_named`](RestageContext::restage_argument_named) was
-    /// given a name that matches none of the callable's argument specs.
+    /// [`restage_argument_named`](RestageContext::restage_argument_named) was called
+    /// with a name that the spec of the callable does not declare.
     UnknownArgumentName {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The unmatched argument name.
+        /// The requested name.
         name: String,
     },
-    /// An argument index beyond the callable's argument record.
+    /// An argument operation was called with an index that is not less than the number
+    /// of arguments of the callable.
     ArgumentIndexOutOfRange {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The out-of-range index.
+        /// The requested index.
         index: usize,
-        /// The callable's argument count.
+        /// The number of arguments of the callable.
         count: usize,
     },
-    /// A slot index beyond the callable's slot record.
+    /// A slot operation was called with an index that is not less than the number of
+    /// slots of the callable.
     SlotIndexOutOfRange {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The out-of-range index.
+        /// The requested index.
         index: usize,
-        /// The callable's slot count.
+        /// The number of slots of the callable.
         count: usize,
     },
-    /// An argument/slot/invocation op was applied to a node that is not a
-    /// `Callable`.
+    /// An argument, slot or invocation operation was called on a node that is not a
+    /// `Callable` node.
     NotACallable {
-        /// The offending node.
+        /// The node.
         node: NodeId,
     },
     /// [`restage_argument_with_content`](RestageContext::restage_argument_with_content)
-    /// was applied to an argument that was not provided: an absent argument has
-    /// no wrapper syntax to restage a new content into — construct the bundle
-    /// explicitly via [`RestagedArgument::provided`] instead.
+    /// was called for an argument that the source does not provide. Such an argument
+    /// has no wrapper syntax that could contain the content. To build a provided
+    /// argument from its parts, use [`RestagedArgument::provided`].
     ArgumentAbsent {
-        /// The callable that was queried.
+        /// The callable.
         node: NodeId,
-        /// The absent argument's index.
+        /// The index of the argument.
         index: usize,
     },
-    /// The root's replacement was not exactly one staged node.
+    /// The visitor did not restage the root to exactly one node.
     ///
-    /// [`TreeRestager::restage`] returns a tree, and a wrapper node invented by
-    /// the driver would need an annotation only the visitor can supply, so wrap
-    /// the replacement in a node of your own and `Emit` that.
+    /// [`TreeRestager::restage`] returns a tree, which has exactly one root. The driver
+    /// does not create a wrapper node itself, since only the visitor can provide the
+    /// annotation of a node. To return several nodes for the root, stage a node of
+    /// your own that contains them, and return it with [`Restage::Emit`].
     RootNotSingular {
-        /// How many staged nodes the visitor produced for the root.
+        /// The number of nodes to which the visitor restaged the root.
         count: usize,
     },
-    /// The input tree is nested more deeply than the run's descent guard allows,
-    /// so the guard refused to go one level deeper and the run is abandoned.
+    /// The input tree is nested more deeply than the descent guard of the run allows.
     ///
-    /// Configure the limit with [`TreeRestager::with_descent_guard_init`].
+    /// To configure the limit, use [`TreeRestager::with_descent_guard_init`].
     DescentLimitExceeded {
-        /// Which limit was hit and how to configure it.
+        /// The description of the limit that was reached, as a complete message (see
+        /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail)).
         detail: String,
     },
 }
@@ -367,69 +372,69 @@ impl<E: fmt::Display> fmt::Display for RestageError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RestageError::Build(error) => {
-                write!(f, "staging the restaged tree failed: {}", error)
+                write!(f, "Failed to build the restaged tree: {}", error)
             }
             RestageError::ContentParentDropped { callable, parent, replaced_by } => {
+                write!(
+                    f,
+                    "Content parent node {} of callable node {} ",
+                    parent.index(),
+                    callable.index()
+                )?;
                 match replaced_by {
-                    Some(0) => write!(
-                        f,
-                        "content parent {:?} of callable {:?}'s argument/slot record was \
-                         dropped",
-                        parent, callable
-                    )?,
-                    Some(n) => write!(
-                        f,
-                        "content parent {:?} of callable {:?}'s argument/slot record was \
-                         replaced by {} nodes",
-                        parent, callable, n
-                    )?,
-                    None => write!(
-                        f,
-                        "content parent {:?} of callable {:?}'s argument/slot record has \
-                         no recorded one-to-one replacement",
-                        parent, callable
-                    )?,
+                    Some(0) => write!(f, "was dropped")?,
+                    Some(1) => write!(f, "was replaced by 1 node")?,
+                    Some(n) => write!(f, "was replaced by {} nodes", n)?,
+                    None => write!(f, "was not restaged on its own")?,
                 }
                 write!(
                     f,
-                    " — re-anchoring the record is ill-defined; take over the callable \
-                     (Emit its replacement, staged via restage_invocation or the raw \
-                     builder)"
+                    ": a content parent must be restaged to exactly one node; replace the \
+                     whole callable with ‘Restage::Emit’"
                 )
             }
-            RestageError::Visitor(error) => write!(f, "restage visitor failed: {}", error),
+            RestageError::Visitor(error) => write!(f, "Restage visitor failed: {}", error),
             RestageError::UnknownArgumentName { node, name } => write!(
                 f,
-                "callable {:?} has no argument named {:?}",
-                node, name
+                "Unknown argument name ‘{}’ for callable node {}",
+                name,
+                node.index()
             ),
             RestageError::ArgumentIndexOutOfRange { node, index, count } => write!(
                 f,
-                "callable {:?} has no argument #{} ({} arguments)",
-                node, index, count
+                "Invalid argument index {} for callable node {} (the callable has {} \
+                 arguments)",
+                index,
+                node.index(),
+                count
             ),
             RestageError::SlotIndexOutOfRange { node, index, count } => write!(
                 f,
-                "callable {:?} has no slot #{} ({} slots)",
-                node, index, count
+                "Invalid slot index {} for callable node {} (the callable has {} slots)",
+                index,
+                node.index(),
+                count
             ),
             RestageError::NotACallable { node } => {
-                write!(f, "node {:?} is not a callable", node)
+                write!(f, "Node {} is not a callable", node.index())
             }
             RestageError::ArgumentAbsent { node, index } => write!(
                 f,
-                "argument #{} of callable {:?} is absent: there is no wrapper syntax to \
-                 restage new content into (construct RestagedArgument::provided instead)",
-                index, node
+                "Argument {} of callable node {} is not provided: only a provided \
+                 argument can receive new content; build the argument with \
+                 ‘RestagedArgument::provided’",
+                index,
+                node.index()
             ),
             RestageError::RootNotSingular { count } => write!(
                 f,
-                "the root restaged to {} nodes; a tree needs exactly one root (wrap the \
-                 replacement in a node of your own via Emit)",
+                "Root restaged to {} nodes: the root must be restaged to exactly one \
+                 node; stage a node that contains these nodes and return it with \
+                 ‘Restage::Emit’",
                 count
             ),
             RestageError::DescentLimitExceeded { detail } => {
-                write!(f, "restage descent limit exceeded: {}", detail)
+                write!(f, "Input tree nested too deeply: {}", detail)
             }
         }
     }

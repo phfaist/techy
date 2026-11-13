@@ -339,19 +339,21 @@ impl<V: ?Sized> fmt::Debug for TreeWalker<'_, V> {
     }
 }
 
-/// The reason a [`TreeWalker`] run failed.
+/// The error that a [`TreeWalker`] run returns.
 ///
-/// A [`NodeVisitor`] has no way to report an error, so this has the single
-/// variant below: a run fails only by hitting its nesting-depth limit.
+/// A [`NodeVisitor`] cannot report an error, so a walk fails only when the tree is
+/// nested too deeply.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WalkError {
-    /// The subtree is nested deeper than the run's descent guard allows, so
-    /// the guard refused to go one level further and the walk was abandoned
-    /// partway through. Raise or remove the limit with
+    /// The subtree is nested more deeply than the descent guard of the run allows. The
+    /// walk stops at the node where the guard refused to go one level deeper.
+    ///
+    /// To configure the limit, use
     /// [`with_descent_guard_init`](TreeWalker::with_descent_guard_init).
     DescentLimitExceeded {
-        /// Which limit was hit and how to configure it.
+        /// The description of the limit that was reached, as a complete message (see
+        /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail)).
         detail: String,
     },
 }
@@ -360,7 +362,7 @@ impl fmt::Display for WalkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WalkError::DescentLimitExceeded { detail } => {
-                write!(f, "walk descent limit exceeded: {}", detail)
+                write!(f, "Tree nested too deeply: {}", detail)
             }
         }
     }
