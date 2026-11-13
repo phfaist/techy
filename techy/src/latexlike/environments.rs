@@ -132,12 +132,12 @@ use super::Latexlike;
 /// The error that is reported when the command that opens an environment is not
 /// followed by a valid name group (id `latexlike.environments.malformed-begin`).
 ///
-/// The command must be followed immediately by a group that contains only the
-/// environment name, as in `\begin{itemize}`. Whitespace between the command and the
-/// group is allowed, as in `\begin {itemize}`.
+/// The command must be followed by a group that contains only the environment name, as
+/// in `\begin{itemize}`. Only whitespace may stand between the command and the group, as
+/// in `\begin {itemize}`.
 ///
 /// Reported by the invocation parser of [`BeginSpec`]. The span of the diagnostic is
-/// the command.
+/// the command and the whitespace after it.
 ///
 /// In a tolerant parse, the command and the whitespace after it are parsed as a
 /// [`Chars`](crate::core::node::NodeKind::Chars) node. The source that follows is parsed
@@ -178,23 +178,21 @@ pub struct UnknownEnvironment {
     pub name: String,
 }
 
-/// The error that is reported when `\end` appears where no environment is open (id
+/// The error that is reported when an `\end` does not end an open environment (id
 /// `latexlike.environments.orphan-end`).
 ///
-/// The body parser of an environment consumes the terminator of the environment, e.g.
-/// `\end{itemize}` in `\begin{itemize} … \end{itemize}`. An `\end` that the body
-/// parser does not consume is parsed as a command, by the parser of [`EndSpec`], which
-/// reports this error. This is the case for an `\end` outside of any environment, and
-/// for an `\end` inside a group of the body.
+/// An environment ends only at an `\end` with the name of the environment, at the level
+/// of its body, as in `\begin{itemize} … \end{itemize}`. Any other `\end` is parsed as a
+/// command by the parser of [`EndSpec`], which reports this error. This is the case for
+/// an `\end` outside of any environment, for an `\end` inside a group of the body, and
+/// for an `\end` with the name of an environment that is not open. In the last case, the
+/// body parser of the enclosing environment also reports an
+/// [`EnvironmentTerminatorMismatch`](crate::core::constructs::EnvironmentTerminatorMismatch).
 ///
 /// The span of the diagnostic is the command and, if one follows, its name group. In a
 /// tolerant parse, this source is parsed as a
 /// [`Chars`](crate::core::node::NodeKind::Chars) node. A strict parse stops at this
 /// error.
-///
-/// The message quotes the source of the terminator, and names the environment if the
-/// name group could be read. It does not name the command that opens the environment:
-/// [`EndSpec`] does not record which command is paired with it.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "latexlike.environments.orphan-end")]
@@ -905,9 +903,8 @@ where
             cx.tokens.token_kind(trigger)
         else {
             return Err(cx.implementation_error(
-                "Misconfigured spec ‘BeginSpec’: the invocation must \
-                 begin with a command token (register ‘BeginSpec’ as a \
-                 macro)",
+                "Misconfigured spec ‘BeginSpec’: it must be invoked by a \
+                 command token; register it as a ‘Macro’ entry",
                 cx.tokens.source_span_of(trigger),
             ));
         };

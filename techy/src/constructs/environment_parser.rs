@@ -48,11 +48,12 @@ pub struct EnvironmentTerminatorMismatch {
 /// The error that is reported when the command that ends an environment body is not
 /// followed by a valid name group (id `core.environments.malformed-terminator`).
 ///
-/// The command must be followed immediately by a group that contains only the
-/// environment name, as in `\end{itemize}`. Whitespace between the command and the group
-/// is allowed, as in `\end {itemize}`.
+/// The command must be followed by a group that contains only the environment name, as
+/// in `\end{itemize}`. Only whitespace may stand between the command and the group, as
+/// in `\end {itemize}`.
 ///
-/// Reported by [`EnvironmentBodyParser`]. The span of the diagnostic is the command.
+/// Reported by [`EnvironmentBodyParser`]. The span of the diagnostic is the command and
+/// the whitespace after it.
 ///
 /// In a tolerant parse, the parser consumes the command alone, and the body ends there.
 /// The source that follows the command is parsed as content of the enclosing level. A
@@ -71,6 +72,10 @@ pub struct MalformedEnvironmentTerminator {
 
 /// The error that is reported when the terminator of an environment is missing (id
 /// `core.environments.missing-terminator`).
+///
+/// The *terminator* of an environment is the command that ends the body, followed by a
+/// group that contains the environment name, e.g. `\end{itemize}` in the LaTeX-like
+/// preset.
 ///
 /// Reported by [`EnvironmentBodyParser`] and by
 /// [`VerbatimBodyParser`](super::VerbatimBodyParser) in three cases, which
@@ -101,8 +106,8 @@ pub struct MissingEnvironmentTerminator {
     pub found: MissingTerminatorFound,
 }
 
-/// What a parser found in place of a missing terminator, in the conditions
-/// [`MissingEnvironmentTerminator`] and
+/// This enum describes what a parser found in place of a missing terminator. It is used
+/// by the conditions [`MissingEnvironmentTerminator`] and
 /// [`MissingArgumentTerminator`](super::MissingArgumentTerminator).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
@@ -113,8 +118,9 @@ pub enum MissingTerminatorFound {
     /// The parser does not consume this closing delimiter.
     StrayGroupClose,
     /// The token reader fails to read a token, and the parse driver tolerates the
-    /// failure. The input continues after this token: the body ends before the token,
-    /// and the enclosing content loop reads the token again and handles the failure.
+    /// failure. The body ends before this token. The enclosing level then reads the
+    /// token again after the environment, and reports the error of the token reader
+    /// there.
     ///
     /// Only [`VerbatimBodyParser`](super::VerbatimBodyParser) reports this case, and
     /// only with a custom token reader: the standard token reader does not fail under
