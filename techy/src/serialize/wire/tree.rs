@@ -65,7 +65,7 @@ impl FromSerialValue for Span {
         let end: usize = reader.field("end")?;
         if start > end {
             return Err(SerialValueError::Custom(alloc::format!(
-                "byte range start {start} is after end {end}"
+                "Invalid byte range: start {start} is after end {end}"
             )));
         }
         // Validated: `start <= end`, so the constructor's precondition holds.

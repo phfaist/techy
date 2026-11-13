@@ -206,7 +206,8 @@ impl<L: Lang> KnownProviders<L> {
                 let provider = recipe.build()?;
                 if provider.name() != name {
                     return Err(DeserializeError::failed(format!(
-                        "the recipe registered for provider `{name}` built a provider named `{}`",
+                        "Misconfigured recipe of provider ‘{name}’: The recipe built a provider \
+                         named ‘{}’",
                         provider.name()
                     )));
                 }
@@ -371,9 +372,8 @@ impl<L: SerializableLang> DeserializableObject<L> for SpecProvenance<L> {
         };
         let Some(package) = (&*provider as &dyn Any).downcast_ref::<Package<L>>() else {
             return Err(DeserializeError::failed(format!(
-                "the spec's identity names the provider `{}`, which is not a Package: the \
-                 crate resolves spec identities in packages only (a custom provider type \
-                 registers its own reader for its specs' entries)",
+                "Invalid provider ‘{}’ of a spec identity: spec identities can only refer \
+                 to a ‘Package’",
                 provider.name()
             )));
         };
@@ -520,9 +520,10 @@ impl<L: SerializableLang> DeserializableObject<L> for Scope<L> {
             let spec = cx.spec(definition.spec)?;
             if scope.insert(callable_type, definition.name.as_str(), spec).is_some() {
                 return Err(DeserializeError::failed(format!(
-                    "the scope `{}` lists the definition of `{}` under {callable_type:?} twice",
-                    scope.name(),
-                    definition.name
+                    "Duplicate definition of ‘{}’ (callable type {callable_type:?}) in \
+                     scope ‘{}’",
+                    definition.name,
+                    scope.name()
                 )));
             }
         }
@@ -572,7 +573,8 @@ impl<L: SerializableLang> DeserializableObject<L> for FallbackProvider<L> {
             let spec = cx.spec(fallback.spec)?;
             if provider.set(callable_type, spec).is_some() {
                 return Err(DeserializeError::failed(format!(
-                    "the fallback provider `{}` lists a fallback for {callable_type:?} twice",
+                    "Duplicate fallback for callable type {callable_type:?} in fallback \
+                     provider ‘{}’",
                     provider.name()
                 )));
             }

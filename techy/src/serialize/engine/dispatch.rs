@@ -252,8 +252,8 @@ fn find_reader<L: SerializableLang, T: ?Sized + Send + Sync + 'static>(
     let unknown = || DeserializeError::UnknownIdentifier { table: table_name, identifier: String::from(identifier) };
     let Some(ordinal) = cx.session_mut().table_ordinal_by_name(table_name) else {
         return Err(DeserializeError::failed(alloc::format!(
-            "the driver of table `{table_name}` was called with a context of a session that has \
-             no table of that name"
+            "Misconfigured driver of table ‘{table_name}’: The driver was called with the \
+             context of a session that has no table of this name"
         )));
     };
     let candidates: Vec<Arc<dyn IdentifierResolver<L, T>>> = {

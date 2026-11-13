@@ -391,7 +391,8 @@ fn expect_end<'de, A: MapAccess<'de>>(map: &mut A, key: &str) -> Result<(), A::E
     match map.next_key::<de::IgnoredAny>()? {
         None => Ok(()),
         Some(_) => Err(de::Error::custom(format_args!(
-            "an object with the reserved key `{key}` must have that one entry only"
+            "Invalid ‘{key}’ object: an object with the key ‘{key}’ must have exactly \
+             one entry"
         ))),
     }
 }

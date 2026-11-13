@@ -192,32 +192,38 @@ impl<L: SerializableLang> DeserializableObject<L> for Diagnostic<L::SourceOrigin
 
 // --- the deserialized condition -------------------------------------------------------
 
-/// The condition of a diagnostic read back from serialized data: the written condition's
-/// identifier, serialization projection, and rendered message, held as plain values.
+/// The condition of a diagnostic that was read back from serialized data.
 ///
-/// It implements [`DiagnosticInfo`] as an adapter type, using the exceptional
-/// per-instance [`identifier()`](DiagnosticInfo::identifier) override that trait
-/// documents: the instance answers the identifier it holds, the written condition's,
-/// while the type's own [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER),
-/// `core.serialization.deserialized-condition`, names the adapter itself for type-keyed
-/// uses.
+/// Serialization writes the identifier, the serializable data (see
+/// [`serializable_data`](DiagnosticInfo::serializable_data)) and the message of a
+/// diagnostic as plain values. When [`DiagnosticSerdeDriver`] reads the diagnostic
+/// back, it stores these three values in a `DeserializedCondition` and uses it as the
+/// condition of the rebuilt [`Diagnostic`]. The rebuilt diagnostic, for instance one
+/// returned by [`DiagnosticSerialization::diagnostic`] or one inside a deserialized
+/// [`ParseResult`](crate::core::ParseResult), therefore has the same
+/// [`identifier()`](Diagnostic::identifier), the same serializable data and the same
+/// [`message()`](Diagnostic::message) as the diagnostic that was written.
+/// [`Diagnostics::with_identifier`](crate::error::Diagnostics::with_identifier) finds it
+/// by its identifier.
 ///
-/// So a diagnostic read back ([`DiagnosticSerialization::diagnostic`], or inside a
-/// deserialized [`ParseResult`](crate::core::ParseResult)) answers the same
-/// [`identifier()`](Diagnostic::identifier), the same
-/// [`serializable_data()`](crate::error::DiagnosticData::serializable_data), and the
-/// same [`message()`](Diagnostic::message) as the diagnostic that was written, and
-/// [`Diagnostics::with_identifier`](crate::error::Diagnostics::with_identifier) finds
-/// it — but its condition is a `DeserializedCondition`, not the concrete condition
-/// type that was written: [`downcast_ref`](../error/trait.DiagnosticData.html#method.downcast_ref)
-/// to that type answers `None`, and
-/// [`Diagnostics::conditions`](crate::error::Diagnostics::conditions) over it yields
-/// nothing. Consumers on the far side of a serialization boundary work from the
-/// identifier and the projection (the contract of [`DiagnosticInfo::IDENTIFIER`]).
+/// The `Display` implementation prints the stored message unchanged. The message is not
+/// composed again from the data, so it has the wording of the techy version that wrote
+/// it. The wording of a message is not part of techy's stable interface; the identifier
+/// and the keys of the serializable data are.
 ///
-/// The message is the written diagnostic's rendering at the time it was written; it
-/// is not re-rendered (the condition type's `Display` wording is not part of the
-/// stable contract, the identifier and the projection's keys are).
+/// The type of the original condition is not restored.
+/// [`downcast_ref`](../error/trait.DiagnosticData.html#method.downcast_ref) to that
+/// type returns `None`, and
+/// [`Diagnostics::conditions`](crate::error::Diagnostics::conditions) for that type
+/// does not return the diagnostic. Code that handles diagnostics read back from
+/// serialized data therefore identifies a diagnostic by its identifier and reads its
+/// serializable data with [`data`](Self::data).
+///
+/// `DeserializedCondition` overrides [`identifier()`](DiagnosticInfo::identifier) to
+/// return the stored identifier, as the documentation of that method allows for such
+/// adapter types. The [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) constant of the type,
+/// `core.serialization.deserialized-condition`, identifies the type itself, for
+/// instance for `Diagnostics::conditions::<DeserializedCondition>()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeserializedCondition {
     identifier: String,
@@ -226,14 +232,15 @@ pub struct DeserializedCondition {
 }
 
 impl DeserializedCondition {
-    /// A condition answering `identifier`, projecting `data`, and rendering `message`
-    /// — what the diagnostic driver builds from a diagnostic's entry.
+    /// Creates a condition with the identifier `identifier`, the serializable data
+    /// `data` and the message `message`. [`DiagnosticSerdeDriver`] calls this function
+    /// with the values that it reads from the entry of a diagnostic.
     pub fn new(identifier: impl Into<String>, data: DiagnosticValue, message: impl Into<String>) -> DeserializedCondition {
         DeserializedCondition { identifier: identifier.into(), data, message: message.into() }
     }
 
-    /// The written condition's serialization projection (what
-    /// [`serializable_data`](DiagnosticInfo::serializable_data) answers, borrowed).
+    /// Returns the serializable data of the original condition, the value that
+    /// [`serializable_data`](DiagnosticInfo::serializable_data) returns a copy of.
     pub fn data(&self) -> &DiagnosticValue {
         &self.data
     }
@@ -246,16 +253,17 @@ impl fmt::Display for DeserializedCondition {
 }
 
 impl DiagnosticInfo for DeserializedCondition {
-    /// The adapter type's own identity; a stored instance answers the written
-    /// condition's identifier instead (see [`identifier`](DiagnosticInfo::identifier)).
+    /// The identifier of the type `DeserializedCondition` itself. The
+    /// [`identifier`](DiagnosticInfo::identifier) method of an instance returns the
+    /// identifier of the original condition.
     const IDENTIFIER: &'static str = "core.serialization.deserialized-condition";
 
-    /// The written condition's identifier.
+    /// Returns the identifier of the original condition.
     fn identifier(&self) -> &str {
         &self.identifier
     }
 
-    /// The written condition's projection.
+    /// Returns a copy of the serializable data of the original condition.
     fn serializable_data(&self) -> DiagnosticValue {
         self.data.clone()
     }

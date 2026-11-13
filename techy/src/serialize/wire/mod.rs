@@ -375,7 +375,7 @@ impl<'a> FieldReader<'a> {
             SerialValue::Map(entries) => entries.as_slice(),
             other => {
                 return Err(SerialValueError::TypeMismatch {
-                    expected: Cow::Owned(alloc::format!("a map ({what})")),
+                    expected: Cow::Owned(alloc::format!("a map (‘{what}’)")),
                     found: other.kind_name(),
                 })
             }
@@ -444,8 +444,8 @@ pub fn read_variant<'a>(
 fn enum_mismatch(what: &'static str, found: &SerialValue) -> SerialValueError {
     SerialValueError::TypeMismatch {
         expected: Cow::Owned(alloc::format!(
-            "an enum value ({what}: a string naming a unit variant, or a one-entry map from \
-             the variant name to its data)"
+            "an enum value of ‘{what}’ (a variant name, or a one-entry map from a variant \
+             name to its data)"
         )),
         found: found.kind_name(),
     }
@@ -466,7 +466,7 @@ pub fn expect_unit_variant(name: &str, payload: Option<&SerialValue>) -> Result<
     match payload {
         None => Ok(()),
         Some(_) => Err(SerialValueError::TypeMismatch {
-            expected: Cow::Owned(alloc::format!("the string `{name}` (a unit variant carries no data)")),
+            expected: Cow::Owned(alloc::format!("the string ‘{name}’ (a unit variant has no data)")),
             found: "map",
         }),
     }
@@ -484,7 +484,7 @@ pub fn expect_data_variant<'a>(
     match payload {
         Some(payload) => Ok(payload),
         None => Err(SerialValueError::TypeMismatch {
-            expected: Cow::Owned(alloc::format!("a one-entry map from `{name}` to the variant's data")),
+            expected: Cow::Owned(alloc::format!("a one-entry map from ‘{name}’ to the data of the variant")),
             found: "str",
         }),
     }

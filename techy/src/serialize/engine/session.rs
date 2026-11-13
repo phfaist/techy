@@ -145,7 +145,7 @@ use super::segment::{check_entry_nesting, Segment, SegmentMeta, SegmentTable, Wi
 ///     {
 ///         match &entry.data {
 ///             SerialValue::Str(text) => Ok(Arc::new(Label(text.clone()))),
-///             _ => Err(DeserializeError::failed("a label is a string")),
+///             _ => Err(DeserializeError::failed("Invalid label entry: the data must be a string")),
 ///         }
 ///     }
 /// }
@@ -848,7 +848,8 @@ impl<L: SerializableLang> SerdeSession<L> {
             if let Some(offset) = table.slots[old_len..].iter().position(|slot| !slot.is_materialized()) {
                 return Err(DeserializeError::Internal {
                     detail: alloc::format!(
-                        "entry #{} of table `{}` was left unrebuilt after the segment's entries were processed",
+                        "Entry #{} of table ‘{}’ was not rebuilt while processing the entries \
+                         of the segment",
                         old_len.saturating_add(offset),
                         table.name
                     ),

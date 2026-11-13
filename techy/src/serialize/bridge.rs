@@ -592,7 +592,7 @@ impl SerializeMap for MapSerializer {
         let key = self
             .pending_key
             .take()
-            .ok_or_else(|| ser::Error::custom("serialize_value called before serialize_key"))?;
+            .ok_or_else(|| ser::Error::custom("‘serialize_value’ must be called after ‘serialize_key’"))?;
         let value = value.serialize(ValueSerializer { human_readable: self.human_readable })?;
         self.entries.push((key, value));
         Ok(())
@@ -849,8 +849,8 @@ impl<'de> Deserializer<'de> for &'de SerialValue {
             SerialValue::List(items) => visit_list(items, visitor),
             SerialValue::Map(entries) => visit_entries(entries, visitor),
             SerialValue::Index { .. } => Err(mismatch(
-                "a value that is not a table position (a table position is read only \
-                 into a type made for one)",
+                "a value other than a table position (a table position can only be read \
+                 with ‘deserialize_index’)",
                 self,
             )),
         }
@@ -900,14 +900,14 @@ impl<'de> Deserializer<'de> for &'de SerialValue {
                     visitor.visit_enum(EnumReader { variant, payload: Some(payload) })
                 }
                 _ => Err(mismatch(
-                    "an enum value (a string naming a unit variant, or a one-entry map \
-                     from the variant name to its data)",
+                    "an enum value (a variant name, or a one-entry map from a variant name \
+                     to its data)",
                     self,
                 )),
             },
             _ => Err(mismatch(
-                "an enum value (a string naming a unit variant, or a one-entry map from \
-                 the variant name to its data)",
+                "an enum value (a variant name, or a one-entry map from a variant name to \
+                 its data)",
                 self,
             )),
         }
@@ -946,7 +946,7 @@ impl<'de> Deserializer<'de> for &'de SerialValue {
         match self {
             SerialValue::Map(entries) => visit_entries(entries, visitor),
             _ => Err(SerialValueError::TypeMismatch {
-                expected: Cow::Owned(alloc::format!("a map (struct {name})")),
+                expected: Cow::Owned(alloc::format!("a map (struct ‘{name}’)")),
                 found: self.kind_name(),
             }),
         }
@@ -1045,7 +1045,7 @@ impl<'de> MapAccess<'de> for MapReader<'de> {
         let value = self
             .pending_value
             .take()
-            .ok_or_else(|| de::Error::custom("next_value called before next_key"))?;
+            .ok_or_else(|| de::Error::custom("‘next_value’ must be called after ‘next_key’"))?;
         seed.deserialize(value)
     }
 
@@ -1215,7 +1215,7 @@ impl<'de> VariantAccess<'de> for ValueAsVariant<'de> {
     }
 
     fn tuple_variant<V: Visitor<'de>>(self, _len: usize, _visitor: V) -> Result<V::Value, SerialValueError> {
-        Err(de::Error::custom("the compact form of a serialized value has no tuple variant"))
+        Err(de::Error::custom("Unsupported tuple variant in the compact form of a serialized value"))
     }
 
     fn struct_variant<V: Visitor<'de>>(
@@ -1223,7 +1223,7 @@ impl<'de> VariantAccess<'de> for ValueAsVariant<'de> {
         _fields: &'static [&'static str],
         _visitor: V,
     ) -> Result<V::Value, SerialValueError> {
-        Err(de::Error::custom("the compact form of a serialized value has no struct variant"))
+        Err(de::Error::custom("Unsupported struct variant in the compact form of a serialized value"))
     }
 }
 

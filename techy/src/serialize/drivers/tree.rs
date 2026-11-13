@@ -256,13 +256,16 @@ fn codec_by_type<L: SerializableLang>(
     let registry = cx
         .session_mut()
         .registry_mut::<TreeRegistry<L>>(ordinal)
-        .ok_or_else(|| SerializeError::failed("the trees table registry is of the wrong type"))?;
+        .ok_or_else(|| {
+            SerializeError::failed(alloc::format!(
+                "Misconfigured table ‘{TREES_TABLE}’: The table is not registered with the tree driver"
+            ))
+        })?;
     registry.by_type.get(&type_id).cloned().ok_or_else(|| {
-        SerializeError::failed(
-            "the object is not a NodeTree of a registered annotation type (the trees table \
-             accepts NodeTree<L, A> values only, for an annotation type A registered with \
-             TableHandle::register_annotation; the unit annotation is pre-registered)",
-        )
+        SerializeError::failed(alloc::format!(
+            "Unsupported object for table ‘{TREES_TABLE}’: the table accepts only node trees \
+             of an annotation type registered with ‘TableHandle::register_annotation’"
+        ))
     })
 }
 
@@ -272,12 +275,19 @@ fn codec_by_identifier<L: SerializableLang>(
     identifier: &str,
 ) -> Result<TreeCodec<L>, DeserializeError> {
     let ordinal = cx.session_mut().table_ordinal_by_name(TREES_TABLE).ok_or_else(|| {
-        DeserializeError::failed("the tree driver was called with a context of a session that has no trees table")
+        DeserializeError::failed(alloc::format!(
+            "Misconfigured driver of table ‘{TREES_TABLE}’: The driver was called with the \
+             context of a session that has no table of this name"
+        ))
     })?;
     let registry = cx
         .session_mut()
         .registry_mut::<TreeRegistry<L>>(ordinal)
-        .ok_or_else(|| DeserializeError::failed("the trees table registry is of the wrong type"))?;
+        .ok_or_else(|| {
+            DeserializeError::failed(alloc::format!(
+                "Misconfigured table ‘{TREES_TABLE}’: The table is not registered with the tree driver"
+            ))
+        })?;
     registry.by_identifier.get(identifier).cloned().ok_or_else(|| DeserializeError::UnknownIdentifier {
         table: TREES_TABLE,
         identifier: identifier.to_string(),
@@ -358,11 +368,14 @@ fn deserialize_annotations<L: SerializableLang, A>(
 ) -> Result<(Vec<WireNode>, Vec<A>), DeserializeError> {
     let node_count = wire.nodes.len();
     let list = wire.annotations.take().ok_or_else(|| {
-        DeserializeError::failed("the tree entry carries no annotations, but its annotation type is not the unit type")
+        DeserializeError::failed(
+            "Missing annotations in a tree entry (only trees with the unit annotation type have no \
+             annotations)",
+        )
     })?;
     if list.len() != node_count {
         return Err(DeserializeError::failed(alloc::format!(
-            "the tree has {node_count} nodes but {} annotations",
+            "Wrong number of annotations in a tree entry ({} annotations for {node_count} nodes)",
             list.len()
         )));
     }
@@ -384,7 +397,12 @@ fn downcast_tree<L: SerializableLang, A: 'static>(
 ) -> Result<&NodeTree<L, A>, SerializeError> {
     (**object)
         .downcast_ref::<NodeTree<L, A>>()
-        .ok_or_else(|| SerializeError::failed("the tree codec was called on a tree of another annotation type"))
+        .ok_or_else(|| {
+            SerializeError::failed(
+                "Annotation type mismatch: the tree codec was called on a tree of another \
+                 annotation type",
+            )
+        })
 }
 
 // --- registration ---------------------------------------------------------------------
@@ -602,14 +620,19 @@ pub(crate) fn tree_of_object<L: SerializableLang, A: Clone + Send + Sync + 'stat
         Err(object) => {
             // The stored tree's codec is registered (it was read through it); the
             // requested type may not be.
-            let stored =
-                registered_identifier(session, (*object).type_id()).unwrap_or_else(|| String::from("(unregistered)"));
+            let stored = registered_identifier(session, (*object).type_id()).map_or_else(
+                || String::from("an unregistered identifier"),
+                |identifier| alloc::format!("‘{identifier}’"),
+            );
             let requested = core::any::type_name::<A>();
             let requested_identifier = registered_identifier(session, TypeId::of::<NodeTree<L, A>>())
-                .map_or_else(|| String::from("unregistered"), |identifier| alloc::format!("`{identifier}`"));
+                .map_or_else(
+                    || String::from("unregistered"),
+                    |identifier| alloc::format!("identifier ‘{identifier}’"),
+                );
             Err(DeserializeError::failed(alloc::format!(
-                "the tree at this position was serialized under `{stored}` and cannot be read as \
-                 annotation type `{requested}` ({requested_identifier})"
+                "Annotation type mismatch: a tree serialized as {stored} is read with annotation type \
+                 ‘{requested}’ ({requested_identifier})"
             )))
         }
     }
@@ -782,14 +805,17 @@ fn rebuild_tree<L: SerializableLang, A>(
 ) -> Result<NodeTree<L, A>, DeserializeError> {
     let node_count = wire_nodes.len();
     if node_count == 0 {
-        return Err(DeserializeError::failed("a node tree has at least one node (the root)"));
+        return Err(DeserializeError::failed("Missing root node: a node tree must have at least one node"));
     }
     if u32::try_from(node_count).is_err() {
-        return Err(DeserializeError::failed("a node tree has at most u32::MAX nodes"));
+        return Err(DeserializeError::failed("Too many nodes in a node tree (at most u32::MAX nodes)"));
     }
     // `node_count == annotations.len()` by the codec; guard anyway.
     if annotations.len() != node_count {
-        return Err(DeserializeError::failed("the number of annotations does not match the number of nodes"));
+        return Err(DeserializeError::failed(alloc::format!(
+            "Wrong number of annotations in a tree entry ({} annotations for {node_count} nodes)",
+            annotations.len()
+        )));
     }
 
     let mut builder = NodeTreeBuilder::<L, A>::new();
@@ -812,8 +838,7 @@ fn rebuild_tree<L: SerializableLang, A>(
     // range reaching position 0 fails the stored-after-its-parent check in `stage_node`).
     if let Some(unclaimed) = (1..node_count).find(|&index| claimed_by[index].is_none()) {
         return Err(DeserializeError::failed(
-            "no node lists this node among its children (the serialized node list must be \
-             exactly the nodes reachable from the root)",
+            "Unreachable node: no node lists this node among its children",
         )
         .in_node(unclaimed as u32, wire_callable_name(&wire_nodes[unclaimed])));
     }
@@ -824,15 +849,14 @@ fn rebuild_tree<L: SerializableLang, A>(
     // Defense in depth: the builder enforces the all-trees law, but the reader is a
     // total validator of untrusted input.
     validate_tree(&tree).map_err(|violation| {
-        DeserializeError::failed(alloc::format!("the rebuilt tree is invalid: {violation}")).with_cause(violation)
+        DeserializeError::failed(alloc::format!("Invalid node tree: {violation}")).with_cause(violation)
     })?;
     // Every node was claimed once, so the builder reached every node from the root; a
     // shorter tree would be a bug in this reader or in the builder.
     if tree.node_count() != node_count {
         return Err(DeserializeError::Internal {
             detail: alloc::format!(
-                "the rebuilt tree has {} nodes, but the entry lists {node_count} and every one was \
-                 checked reachable from the root",
+                "Wrong number of nodes in a rebuilt tree: {} nodes (expected {node_count})",
                 tree.node_count()
             ),
         });
@@ -857,26 +881,26 @@ fn stage_node<L: SerializableLang, A>(
     let (child_start, child_end) = (wire.children.start, wire.children.end);
     if child_start > child_end || child_end as usize > node_count {
         return Err(DeserializeError::failed(alloc::format!(
-            "children range {child_start}..{child_end} is out of bounds ({node_count} nodes)"
+            "Invalid children range {child_start}..{child_end} ({node_count} nodes in the tree)"
         )));
     }
     if child_start != child_end && child_start <= index {
         return Err(DeserializeError::failed(alloc::format!(
-            "children range {child_start}..{child_end} does not lie after the node (a node's \
-             children are stored after it)"
+            "Invalid children range {child_start}..{child_end}: the children of a node must be \
+             stored after the node"
         )));
     }
     let mut children = Vec::with_capacity((child_end - child_start) as usize);
     for child in child_start..child_end {
         if let Some(other) = claimed_by[child as usize] {
             return Err(DeserializeError::failed(alloc::format!(
-                "node #{child} is already listed among the children of node #{other}"
+                "Node #{child} has two parents (node #{other} and this node)"
             )));
         }
         claimed_by[child as usize] = Some(index);
         // Stored after this node, hence staged before it (staging runs in reverse).
         let build_id = build_id_of[child as usize].ok_or_else(|| DeserializeError::Internal {
-            detail: alloc::format!("child node #{child} of node #{index} was not staged before its parent"),
+            detail: alloc::format!("Child node #{child} of node #{index} was not staged before its parent"),
         })?;
         children.push(build_id);
     }
@@ -907,28 +931,38 @@ fn wire_position_of(build_id_of: &[Option<BuildId>], id: BuildId) -> Option<usiz
 fn builder_failure(error: NodeBuildError, build_id_of: &[Option<BuildId>]) -> DeserializeError {
     let node = |id: BuildId| match wire_position_of(build_id_of, id) {
         Some(position) => alloc::format!("node #{position}"),
-        None => alloc::format!("a node the reader never staged ({id:?})"),
+        None => alloc::format!("node {id:?}"),
     };
     let detail = match &error {
-        NodeBuildError::ChildNotStaged { child } => alloc::format!("child {} was not staged", node(*child)),
-        NodeBuildError::ChildAlreadyClaimed { child } => alloc::format!("child {} already has a parent", node(*child)),
+        NodeBuildError::ChildNotStaged { child } => {
+            alloc::format!("Invalid child {}: the node was not staged before its parent", node(*child))
+        }
+        NodeBuildError::ChildAlreadyClaimed { child } => {
+            alloc::format!("Invalid child {}: the node is already the child of another node", node(*child))
+        }
         NodeBuildError::ContentParentNotStaged { parent } => {
-            alloc::format!("content parent {} was not staged", node(*parent))
+            alloc::format!("Invalid content parent {}: the node was not staged before its callable", node(*parent))
         }
-        NodeBuildError::RootNotStaged { root } => alloc::format!("root {} was not staged", node(*root)),
-        NodeBuildError::RootClaimed { root } => alloc::format!("root {} is another node's child", node(*root)),
+        NodeBuildError::RootNotStaged { root } => {
+            alloc::format!("Invalid root {}: the node was not staged", node(*root))
+        }
+        NodeBuildError::RootClaimed { root } => {
+            alloc::format!("Invalid root {}: the node is the child of another node", node(*root))
+        }
         NodeBuildError::ContentParentUnreachable { parent } => {
-            alloc::format!("content parent {} is not reachable from the root", node(*parent))
+            alloc::format!("Invalid content parent {}: the node is not reachable from the root", node(*parent))
         }
-        NodeBuildError::ContentParentOutsideSubtree { parent } => {
-            alloc::format!("content parent {} is not inside the callable's subtree", node(*parent))
-        }
-        NodeBuildError::ContentParentOutsideRegion { parent } => {
-            alloc::format!("content parent {} lies outside its own argument/slot region", node(*parent))
-        }
+        NodeBuildError::ContentParentOutsideSubtree { parent } => alloc::format!(
+            "Invalid content parent {}: the node is not inside the subtree of its callable",
+            node(*parent)
+        ),
+        NodeBuildError::ContentParentOutsideRegion { parent } => alloc::format!(
+            "Invalid content parent {}: the node lies outside its argument or slot region",
+            node(*parent)
+        ),
         other => other.to_string(),
     };
-    DeserializeError::failed(alloc::format!("the node builder rejected the tree: {detail}")).with_cause(error)
+    DeserializeError::failed(detail).with_cause(error)
 }
 
 fn rebuild_kind<L: SerializableLang>(
@@ -998,7 +1032,7 @@ fn rebuild_argument<L: SerializableLang>(
             // An absent argument has no ext: one on the wire is not silently dropped.
             if wire.ext.is_some() {
                 return Err(DeserializeError::failed(alloc::format!(
-                    "argument #{} is absent (it has no region) but carries an ext",
+                    "Unexpected ext on absent argument #{} (an absent argument has no ext)",
                     arg_index.saturating_add(1)
                 )));
             }
@@ -1034,14 +1068,14 @@ fn staged_region(wire: &WireRegion, build_id_of: &[Option<BuildId>]) -> Result<C
             let build_id = match build_id_of.get(parent as usize) {
                 None => {
                     return Err(DeserializeError::failed(alloc::format!(
-                        "a region's content parent, node #{parent}, is out of range ({} nodes)",
+                        "Content parent node #{parent} of a region is out of range ({} nodes in the tree)",
                         build_id_of.len()
                     )))
                 }
                 Some(None) => {
                     return Err(DeserializeError::failed(alloc::format!(
-                        "a region's content parent, node #{parent}, is not stored after its callable (a \
-                         content parent is a node inside the region, stored after the callable)"
+                        "Invalid content parent node #{parent} of a region: the content parent must be a \
+                         node inside the region, stored after its callable"
                     )))
                 }
                 Some(Some(build_id)) => *build_id,
@@ -1077,9 +1111,8 @@ impl<L: Lang> SerializableValue<L> for TextContent {
         match self {
             TextContent::Owned(_) => Ok(self.to_serial_value()?),
             TextContent::Spanned(span) => Err(SerializeError::failed(alloc::format!(
-                "span-backed text ({span:?}) inside a language payload cannot be serialized: \
-                 the payload's value conversion receives no node, so the text must be \
-                 materialized against the node's source first (TextContent::materialized)"
+                "Unsupported span-backed text ({span:?}) in a language payload: convert the text \
+                 with ‘TextContent::materialized’ before serializing the payload"
             ))),
         }
     }
@@ -1095,9 +1128,8 @@ impl<L: Lang> DeserializableValue<L> for TextContent {
         match TextContent::from_serial_value(value)? {
             owned @ TextContent::Owned(_) => Ok(owned),
             TextContent::Spanned(span) => Err(DeserializeError::failed(alloc::format!(
-                "span-backed text ({span:?}) inside a language payload is not accepted: the \
-                 payload's value conversion receives no node to validate the range against \
-                 (text inside a language payload is owned on the wire)"
+                "Invalid span-backed text ({span:?}) in a language payload: text in a language \
+                 payload must be owned text"
             ))),
         }
     }

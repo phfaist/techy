@@ -44,13 +44,14 @@ pub(crate) fn encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Why a text is not valid base64 in the strict form this module produces.
+/// The error that [`decode`] returns for a text that is not valid base64 in the strict
+/// form that this module produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Base64Error {
-    /// The text's length is not a multiple of four.
+    /// The length of the text is not a multiple of four.
     Length,
-    /// A character outside the alphabet (or a `=` before the final padding position),
-    /// at this byte offset.
+    /// The text contains a character outside the base64 alphabet, or a `=` before the
+    /// padding positions at the end. The field is the byte offset of the character.
     Character(usize),
     /// The bits left over before the padding are not zero: the text is not the
     /// canonical encoding of any byte string.
@@ -60,12 +61,17 @@ pub(crate) enum Base64Error {
 impl fmt::Display for Base64Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Base64Error::Length => write!(f, "base64 text length is not a multiple of four"),
+            Base64Error::Length => {
+                write!(f, "Invalid base64 text: the length must be a multiple of four")
+            }
             Base64Error::Character(offset) => {
-                write!(f, "invalid base64 character at offset {offset}")
+                write!(f, "Invalid base64 character at offset {offset}")
             }
             Base64Error::NonCanonical => {
-                write!(f, "base64 text is not the canonical encoding of any byte string")
+                write!(
+                    f,
+                    "Non-canonical base64 text: the unused bits before the padding must be zero"
+                )
             }
         }
     }
