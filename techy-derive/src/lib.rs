@@ -299,7 +299,8 @@ pub fn derive_to_diagnostic_value(input: TokenStream) -> TokenStream {
 /// Every rejection is reported at the offending item: a missing, empty, or repeated
 /// wire name; a wire name on a newtype variant's payload; a `serial` key other than
 /// `name` on a field or variant, or other than `lang` on the type; a tuple struct, a
-/// unit struct, a tuple variant with several fields, a union, or an empty enum; and a
+/// unit struct, a tuple variant with no field or several fields, a union, or an empty
+/// enum; and a
 /// generic type or a `where` clause. An unsatisfied `SerializableValue` bound reported
 /// at a field's type means that field type has no conversion for the language in
 /// question.

@@ -91,7 +91,10 @@ pub(crate) fn parse_model(
     };
     let model = match &input.data {
         Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => Model::Struct(parse_named_fields(named, derive_name)?),
+            Fields::Named(named) => {
+                let owner = format!("‘{}’", input.ident);
+                Model::Struct(parse_named_fields(named, &owner, derive_name)?)
+            }
             Fields::Unnamed(_) | Fields::Unit => {
                 return Err(syn::Error::new(
                     input.ident.span(),
@@ -117,10 +120,11 @@ pub(crate) fn parse_model(
                             return Err(syn::Error::new_spanned(
                                 unnamed,
                                 format!(
-                                    "‘#[derive({derive_name})]’ does not support the tuple variant \
-                                     ‘{}’ with several fields; use named fields for \
-                                     several values",
-                                    variant.ident
+                                    "‘#[derive({derive_name})]’ does not support the \
+                                     tuple variant ‘{}’ with {} fields; use a unit \
+                                     variant, a newtype variant or named fields",
+                                    variant.ident,
+                                    unnamed.unnamed.len()
                                 ),
                             ));
                         }
@@ -137,11 +141,14 @@ pub(crate) fn parse_model(
                         }
                         VariantKind::Newtype(field.ty.clone())
                     }
-                    Fields::Named(named) => VariantKind::Struct(parse_named_fields(named, derive_name)?),
+                    Fields::Named(named) => {
+                        VariantKind::Struct(parse_named_fields(named, &what, derive_name)?)
+                    }
                 };
                 variants.push(Variant { ident: variant.ident.clone(), name, kind });
             }
-            check_distinct(variants.iter().map(|v| &v.name), "variant")?;
+            let owner = format!("variants of ‘{}’", input.ident);
+            check_distinct(variants.iter().map(|v| &v.name), &owner)?;
             Model::Enum(variants)
         }
         Data::Union(data) => {
@@ -185,7 +192,13 @@ fn type_lang(attrs: &[syn::Attribute]) -> syn::Result<Option<Type>> {
     Ok(lang)
 }
 
-fn parse_named_fields(named: &syn::FieldsNamed, derive_name: &str) -> syn::Result<Vec<NamedField>> {
+// `owner` describes the struct or the struct variant that has the fields, in the error
+// messages (as in `‘Size’` or `variant ‘Fixed’`).
+fn parse_named_fields(
+    named: &syn::FieldsNamed,
+    owner: &str,
+    derive_name: &str,
+) -> syn::Result<Vec<NamedField>> {
     let mut fields = Vec::with_capacity(named.named.len());
     for field in &named.named {
         let ident = field.ident.clone().expect("named field has an ident");
@@ -193,7 +206,7 @@ fn parse_named_fields(named: &syn::FieldsNamed, derive_name: &str) -> syn::Resul
         let name = wire_name(&field.attrs, ident.span(), &what, derive_name)?;
         fields.push(NamedField { ident, name, ty: field.ty.clone() });
     }
-    check_distinct(fields.iter().map(|f| &f.name), "field")?;
+    check_distinct(fields.iter().map(|f| &f.name), &format!("fields of {owner}"))?;
     Ok(fields)
 }
 
@@ -242,6 +255,7 @@ fn wire_name(
     })
 }
 
+// `what` describes the set of names in the error message (as in `fields of ‘Size’`).
 fn check_distinct<'a>(names: impl Iterator<Item = &'a LitStr>, what: &str) -> syn::Result<()> {
     let mut seen: Vec<String> = Vec::new();
     for name in names {
@@ -249,7 +263,7 @@ fn check_distinct<'a>(names: impl Iterator<Item = &'a LitStr>, what: &str) -> sy
         if seen.contains(&value) {
             return Err(syn::Error::new(
                 name.span(),
-                format!("Duplicate wire name ‘{value}’ among the {what}s"),
+                format!("Duplicate wire name ‘{value}’ among the {what}"),
             ));
         }
         seen.push(value);

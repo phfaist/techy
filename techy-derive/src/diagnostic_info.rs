@@ -335,7 +335,7 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
                 if !valid_start || !valid_rest {
                     return Err(err(&format!(
                         "Invalid placeholder ‘{{{name}}}’ in ‘message’: \
-                         ‘{name}’ is not a field name"
+                         placeholders must be field names, as in ‘{{field}}’"
                     )));
                 }
                 if !names.contains(&name) {
