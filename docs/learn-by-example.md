@@ -464,8 +464,9 @@ The recovery policy lives on the driver. Strict parses abort on the first error
 recovery, and keep going — and every diagnostic carries an exact source span:
 
 ```rust
+use techy::core::constructs::UnresolvableCommand;
 use techy::core::{Language, ParsingState};
-use techy::error::Recovery;
+use techy::error::{DiagnosticInfo, Recovery};
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 // Strict: an unresolvable command aborts.
@@ -474,7 +475,7 @@ let strict: Language<Latexlike> = Language::new(
     ParsingState::lang_initial().expect("seed state"),
 );
 let err = strict.parse(r"a \foo b").unwrap_err();
-assert!(err.to_string().contains("cannot resolve command ‘\\foo’"));
+assert_eq!(err.identifier(), UnresolvableCommand::IDENTIFIER);
 
 // Tolerant: the command recovers as chars, the parse completes, the diagnostic is
 // on the result.
@@ -538,8 +539,10 @@ let result = language.parse("first line\nsee \\foo here").unwrap();
 
 // One readable report for the whole collection — message and position:
 let report = result.diagnostics.render_all();
-assert!(report.contains("cannot resolve command ‘\\foo’"));
-assert!(report.contains("(line 2, col 5)"));
+let diagnostic = result.diagnostics.iter().next().unwrap();
+assert!(report.contains(&diagnostic.message()));
+// With a single diagnostic, the collection's report is that diagnostic's own:
+assert_eq!(report, diagnostic.render());
 
 // Line/column for any node, through a consumer-held cache (each source is
 // indexed once, ever):

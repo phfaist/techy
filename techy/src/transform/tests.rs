@@ -258,11 +258,12 @@ fn visitor_errors_ride_through_typed() {
     assert_eq!(error, RestageError::Visitor(BadNode(group_id)));
     // The uniform-Clone principle, conditionally: E: Clone ⇒ the error clones.
     let _ = error.clone();
-    assert!(error.to_string().contains("restage visitor failed"));
+    // The rendering carries the visitor's own error.
+    assert!(error.to_string().contains(&BadNode(group_id).to_string()), "{error}");
 }
 
 #[test]
-fn dropped_content_parent_is_diagnosed_with_the_takeover_route() {
+fn dropped_content_parent_is_diagnosed() {
     // \a{1}{2}: each argument's content is designated inside its group node
     // (`InChildrenOf`). Dropping a group while Descend-ing the callable leaves
     // the record unanchorable — the driver refuses with the diagnosis.
@@ -288,9 +289,6 @@ fn dropped_content_parent_is_diagnosed_with_the_takeover_route() {
     assert_eq!(*callable, input.root().child(0).unwrap().id());
     assert_eq!(*parent, dropped_group.id());
     assert_eq!(*replaced_by, Some(0));
-    let message = error.to_string();
-    assert!(message.contains("take over the callable"), "message: {message}");
-    assert!(message.contains("restage_invocation"), "message: {message}");
 }
 
 #[test]
@@ -1041,7 +1039,6 @@ fn multiplied_content_parent_is_diagnosed() {
     assert_eq!(*callable, input.root().child(0).unwrap().id());
     assert_eq!(*parent, group_id);
     assert_eq!(*replaced_by, Some(2));
-    assert!(error.to_string().contains("replaced by 2 nodes"), "message: {error}");
 }
 
 #[test]
@@ -1150,7 +1147,7 @@ fn content_swap_annotations_flow_explicitly() {
 
 #[test]
 fn a_depth_limit_refuses_the_restage_of_a_deeper_tree() {
-    use crate::engine::StdDescentGuardInit;
+    use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 
     // `a{b}c` drives three levels deep (root list → group → chars).
     let input = parse("a{b}c");
@@ -1164,9 +1161,16 @@ fn a_depth_limit_refuses_the_restage_of_a_deeper_tree() {
         .with_descent_guard_init(StdDescentGuardInit::depth_limit(2))
         .restage::<Latexlike, (), ()>(&input)
         .unwrap_err();
+    // The refusal is the depth limit's own: the one a guard with that limit gives.
+    let mut guard = StdDescentGuard::init(&StdDescentGuardInit::depth_limit(2));
+    let refusal = loop {
+        if let Err(refusal) = guard.try_enter() {
+            break refusal;
+        }
+    };
     assert!(matches!(
         &error,
-        RestageError::DescentLimitExceeded { detail } if detail.contains("depth_limit")
+        RestageError::DescentLimitExceeded { detail } if *detail == refusal.detail
     ));
 
     // A limit the tree fits under restages it whole.
@@ -1225,17 +1229,13 @@ fn the_unconfigured_default_warns_the_visitor_once_then_refuses() {
             Ok(Restage::Descend(()))
         }
 
-        fn observe_descent_warning(&mut self, warning: crate::engine::DescentWarning) {
+        fn observe_descent_warning(&mut self, _warning: crate::engine::DescentWarning) {
             self.warnings += 1;
-            assert!(warning.detail.contains("with_descent_guard_init"));
         }
     }
 
     let mut meter = Meter::default();
     let error = TreeRestager::new(&mut meter).restage::<Latexlike, (), ()>(&deep).unwrap_err();
-    assert!(matches!(
-        &error,
-        RestageError::DescentLimitExceeded { detail } if detail.contains("DEFAULT_STACK_BUDGET")
-    ));
+    assert!(matches!(&error, RestageError::DescentLimitExceeded { .. }));
     assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
 }

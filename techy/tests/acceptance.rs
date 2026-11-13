@@ -357,6 +357,8 @@ mod optional_args {
 
 mod environments {
     use super::support::*;
+    use techy::error::DiagnosticInfo;
+    use techy::latexlike::UnknownEnvironment;
 
     // pylatexenc: test_get_latex_environment — the `enumerate` block with an
     // optional argument, `\item` invocations, and an interleaved comment.
@@ -409,7 +411,9 @@ mod environments {
     fn unknown_environment_aborts_strict_and_recovers_tolerant() {
         let input = r"\begin{nosuchenv} x \end{nosuchenv}";
         let err = strict().parse(input).unwrap_err();
-        assert!(err.to_string().contains("unknown environment"), "{err}");
+        assert_eq!(err.identifier(), UnknownEnvironment::IDENTIFIER);
+        let condition = err.data().downcast_ref::<UnknownEnvironment>().unwrap();
+        assert_eq!(condition.name, "nosuchenv");
 
         let result = tolerant().parse(input).unwrap();
         techy::core::node::validate_tree(&result.tree).unwrap();
@@ -838,8 +842,10 @@ mod errors {
     use super::support::*;
     use std::sync::Arc;
     use techy::error::Recovery;
-    use techy::latexlike::{CallableType, SpecialsSpec};
+    use techy::latexlike::{CallableType, MalformedBegin, SpecialsSpec};
+    use techy::core::constructs::MissingMandatoryArgument;
     use techy::core::node::validate_tree;
+    use techy::error::DiagnosticInfo;
     use techy::core::specs::Package;
 
     /// pylatexenc's `get_test_latex_data_with_possible_inconsistencies()`: a
@@ -940,7 +946,7 @@ This is a final sentence. { <-- this brace is not closed.
     fn dangling_macro_missing_its_argument() {
         let input = r"Test \textbf";
         let err = strict().parse(input).unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
 
         // pylatexenc left the tolerant shape an open question (its 0b test is
         // commented out); techy's is defined: the macro stages with the argument
@@ -986,7 +992,7 @@ This is a final sentence. { <-- this brace is not closed.
         };
 
         let err = language_for(Recovery::Strict).parse("Test _").unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
 
         let result = language_for(Recovery::Tolerant).parse("Test _").unwrap();
         validate_tree(&result.tree).unwrap();
@@ -1007,7 +1013,9 @@ This is a final sentence. { <-- this brace is not closed.
     fn begin_without_a_name_group() {
         let input = r"\begin \item stuff\end{itemize}";
         let err = strict().parse(input).unwrap_err();
-        assert!(err.to_string().contains("malformed ‘\\begin’"), "{err}");
+        assert_eq!(err.identifier(), MalformedBegin::IDENTIFIER);
+        let condition = err.data().downcast_ref::<MalformedBegin>().unwrap();
+        assert_eq!(condition.command, r"\begin");
 
         // Tolerant: the `\begin` trigger (post-space included) recovers as chars,
         // the rest parses normally, and the now-orphan `\end{itemize}` recovers as

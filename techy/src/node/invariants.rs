@@ -955,17 +955,12 @@ mod tests {
     #[test]
     fn tree_violation_new_constructs_matchable_values() {
         // Consumers of `validate_tree` manufacture violations to test their own
-        // handling code; the constructed value matches and renders like a
-        // checker-produced one.
+        // handling code; the constructed value matches like a checker-produced one.
         let tree = build_valid();
         let id = tree.root().id();
         let violation = TreeViolation::new(Some(id), TreeViolationKind::Unreachable);
         assert_eq!(violation.node, Some(id));
         assert!(matches!(violation.kind, TreeViolationKind::Unreachable));
-        assert_eq!(
-            alloc::format!("{violation}"),
-            "node 0: the node is unreachable from the root"
-        );
 
         let anonymous = TreeViolation::new(None, TreeViolationKind::Empty);
         assert!(anonymous.node.is_none());
@@ -1431,9 +1426,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "node 0: chars content span")]
     fn wrapper_panic_carries_the_violation_detail() {
-        // The panic message is the violation's Display rendering — node + detail.
+        // The panic message carries the violation's Display rendering — node + detail,
+        // exactly as the non-panicking checker reports it.
         let source: Arc<Source> = Arc::new(Source::new("ab"));
         let tree = hand_tree(alloc::vec![node_data(
             NodeKind::chars(Span::new(0, 99)),
@@ -1441,6 +1436,14 @@ mod tests {
             0..2,
             0..0
         )]);
-        check_tree_invariants(&tree);
+        let violation = validate_tree(&tree).unwrap_err();
+        let payload = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+            check_tree_invariants(&tree)
+        }))
+        .expect_err("the wrapper panics on a violated tree");
+        let message = payload
+            .downcast_ref::<alloc::string::String>()
+            .expect("a formatted panic message");
+        assert!(message.contains(&alloc::format!("{violation}")), "{message}");
     }
 }

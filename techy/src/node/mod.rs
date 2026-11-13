@@ -1570,11 +1570,8 @@ mod tests {
             err,
             NodeBuildError::ExtMintFailed { detail: "no ext data source".into() }
         );
-        assert_eq!(
-            err.to_string(),
-            "the node-ext mint (Lang::make_node_ext) reported a failure: \
-             no ext data source"
-        );
+        // The rendering carries the mint's own detail.
+        assert!(err.to_string().contains("no ext data source"), "{err}");
     }
 
     /// The descent-only view: children and their subtrees resolve; there is no

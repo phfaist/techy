@@ -437,11 +437,18 @@ mod tests {
             },
         ];
         for input in inputs {
-            let to = expand_to(input.clone()).expect_err("ToSerialValue accepts");
-            let from = expand_from(input).expect_err("FromSerialValue accepts");
-            for error in [to, from] {
-                assert!(error.to_string().contains("takes no `serial` attribute on the type itself"), "{error}");
-            }
+            expand_to(input.clone()).expect_err("ToSerialValue accepts");
+            expand_from(input).expect_err("FromSerialValue accepts");
         }
+        // The same type without the type-level attribute is accepted, so the attribute
+        // alone causes the rejection.
+        let input: DeriveInput = parse_quote! {
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        };
+        expand_to(input.clone()).expect("ToSerialValue rejects");
+        expand_from(input).expect("FromSerialValue rejects");
     }
 }

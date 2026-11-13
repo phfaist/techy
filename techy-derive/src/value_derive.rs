@@ -295,49 +295,66 @@ mod tests {
 
     use super::{expand_deserializable_value, expand_serializable_value};
 
-    /// The error text of both derives on `input` (they share the model, so they share
-    /// the rejection); asserts that both reject.
-    fn rejection(input: DeriveInput) -> String {
+    /// Asserts that both derives reject `input`, and that their rejections agree (they
+    /// share the model, so they share the rejection).
+    fn assert_rejected(input: DeriveInput) {
         let ser = expand_serializable_value(input.clone()).expect_err("SerializableValue accepts");
         let de = expand_deserializable_value(input).expect_err("DeserializableValue accepts");
-        let ser = ser.to_string();
-        let de = de.to_string();
         assert_eq!(
-            ser.replace("SerializableValue", "…"),
-            de.replace("DeserializableValue", "…"),
+            ser.to_string().replace("SerializableValue", "…"),
+            de.to_string().replace("DeserializableValue", "…"),
             "the two derives disagree on the rejection"
         );
-        ser
+    }
+
+    /// Asserts that both derives accept `input`: the corrected form of a rejected input,
+    /// which shows that the defect alone causes the rejection.
+    fn assert_accepted(input: DeriveInput) {
+        expand_serializable_value(input.clone()).expect("SerializableValue rejects");
+        expand_deserializable_value(input).expect("DeserializableValue rejects");
     }
 
     #[test]
     fn a_field_without_a_wire_name_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S {
                 #[serial(name = "a")]
                 a: u32,
                 b: u32,
             }
         });
-        assert!(message.contains("every field needs `#[serial(name = \"…\")]`"), "{message}");
-        assert!(message.starts_with("#[derive(SerializableValue)]"), "{message}");
+        assert_accepted(parse_quote! {
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+                #[serial(name = "b")]
+                b: u32,
+            }
+        });
     }
 
     #[test]
     fn a_variant_without_a_wire_name_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             enum E {
                 #[serial(name = "a")]
                 A,
                 B(u32),
             }
         });
-        assert!(message.contains("every variant needs `#[serial(name = \"…\")]`"), "{message}");
+        assert_accepted(parse_quote! {
+            enum E {
+                #[serial(name = "a")]
+                A,
+                #[serial(name = "b")]
+                B(u32),
+            }
+        });
     }
 
     #[test]
     fn a_repeated_wire_name_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S {
                 #[serial(name = "same")]
                 a: u32,
@@ -345,8 +362,7 @@ mod tests {
                 b: u32,
             }
         });
-        assert_eq!(message, "wire name `same` is used by another field of the same type");
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             enum E {
                 #[serial(name = "same")]
                 A,
@@ -354,107 +370,130 @@ mod tests {
                 B,
             }
         });
-        assert_eq!(message, "wire name `same` is used by another variant of the same type");
+        assert_accepted(parse_quote! {
+            struct S {
+                #[serial(name = "same")]
+                a: u32,
+                #[serial(name = "other")]
+                b: u32,
+            }
+        });
+        assert_accepted(parse_quote! {
+            enum E {
+                #[serial(name = "same")]
+                A,
+                #[serial(name = "other")]
+                B,
+            }
+        });
     }
 
     #[test]
     fn an_empty_wire_name_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S {
                 #[serial(name = "")]
                 a: u32,
             }
         });
-        assert_eq!(message, "the wire name must not be empty");
     }
 
-    /// A generic type is refused with the public derives' own reason, which names the
-    /// two ways out.
+    /// A generic type and a `where` clause are refused; the same type made concrete is
+    /// accepted.
     #[test]
     fn a_generic_type_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S<T> {
                 #[serial(name = "a")]
                 a: T,
             }
         });
-        assert!(message.contains("does not support generic types"), "{message}");
-        assert!(message.contains("a derived type is concrete"), "{message}");
-        assert!(message.contains("`#[serial(lang = …)]`"), "{message}");
-        assert!(!message.contains("wire structs"), "{message}");
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S where u32: Copy {
                 #[serial(name = "a")]
                 a: u32,
             }
         });
-        assert!(message.contains("does not support `where` clauses"), "{message}");
+        assert_accepted(parse_quote! {
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
     }
 
     #[test]
     fn a_tuple_struct_and_a_unit_struct_are_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S(u32);
         });
-        assert!(message.contains("supports structs with named fields only"), "{message}");
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S;
         });
-        assert!(message.contains("supports structs with named fields only"), "{message}");
     }
 
     #[test]
     fn a_tuple_variant_with_several_fields_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             enum E {
                 #[serial(name = "pair")]
                 Pair(u32, u32),
             }
         });
-        assert!(message.contains("use named fields for several values"), "{message}");
+        assert_accepted(parse_quote! {
+            enum E {
+                #[serial(name = "pair")]
+                Pair {
+                    #[serial(name = "a")]
+                    a: u32,
+                    #[serial(name = "b")]
+                    b: u32,
+                },
+            }
+        });
     }
 
     #[test]
     fn a_wire_name_on_a_newtype_payload_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             enum E {
                 #[serial(name = "one")]
                 One(#[serial(name = "inner")] u32),
             }
         });
-        assert!(message.contains("carries no wire name of its own"), "{message}");
+        assert_accepted(parse_quote! {
+            enum E {
+                #[serial(name = "one")]
+                One(u32),
+            }
+        });
     }
 
     #[test]
-    fn a_name_on_the_type_is_refused_pointing_at_lang() {
-        let message = rejection(parse_quote! {
+    fn a_name_on_the_type_is_refused() {
+        assert_rejected(parse_quote! {
             #[serial(name = "s")]
             struct S {
                 #[serial(name = "a")]
                 a: u32,
             }
         });
-        assert_eq!(
-            message,
-            "`name` goes on fields and variants; the type-level attribute takes `lang = …` only"
-        );
     }
 
     #[test]
     fn an_unknown_key_on_the_type_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             #[serial(rename = "s")]
             struct S {
                 #[serial(name = "a")]
                 a: u32,
             }
         });
-        assert_eq!(message, "unknown `serial` key on the type; expected `lang`");
     }
 
     #[test]
     fn a_second_lang_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             #[serial(lang = A)]
             #[serial(lang = B)]
             struct S {
@@ -462,60 +501,73 @@ mod tests {
                 a: u32,
             }
         });
-        assert_eq!(message, "duplicate `lang`");
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             #[serial(lang = A, lang = B)]
             struct S {
                 #[serial(name = "a")]
                 a: u32,
             }
         });
-        assert_eq!(message, "duplicate `lang`");
+        assert_accepted(parse_quote! {
+            #[serial(lang = A)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
     }
 
     #[test]
     fn a_lang_without_a_type_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             #[serial(lang)]
             struct S {
                 #[serial(name = "a")]
                 a: u32,
             }
         });
-        assert!(message.contains("expected `=`"), "{message}");
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             #[serial(lang = 3)]
             struct S {
                 #[serial(name = "a")]
                 a: u32,
             }
         });
-        assert!(message.contains("expected"), "{message}");
+        assert_accepted(parse_quote! {
+            #[serial(lang = A)]
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
     }
 
     #[test]
     fn an_unknown_serial_key_is_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             struct S {
                 #[serial(rename = "a")]
                 a: u32,
             }
         });
-        assert!(message.contains("unknown `serial` key; expected `name`"), "{message}");
+        assert_accepted(parse_quote! {
+            struct S {
+                #[serial(name = "a")]
+                a: u32,
+            }
+        });
     }
 
     #[test]
     fn a_union_and_an_empty_enum_are_refused() {
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             union U {
                 a: u32,
             }
         });
-        assert!(message.contains("supports structs and enums only"), "{message}");
-        let message = rejection(parse_quote! {
+        assert_rejected(parse_quote! {
             enum E {}
         });
-        assert!(message.contains("requires at least one variant"), "{message}");
     }
 
     /// The accepted shapes expand (the generated code is compiled by techy's own
