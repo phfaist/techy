@@ -240,28 +240,39 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
     }
 }
 
-/// The `Display` form shows each kind's *written* spelling: `Command(\foo)` renders the
-/// escape character that actually fired (so `\foo` and `@foo` are distinguishable),
-/// delimiters and specials appear as matched, and comment content is truncated to a
-/// preview.
+/// Writes a short description of the token, with its text as written in the source, e.g.
+/// `command ‘\foo’`, `character ‘a’`, `paragraph break` or `end of input`.
+///
+/// A command is written with the escape character that starts it, so that `\foo` and
+/// `@foo` are told apart. The content of a long comment is shortened to at most 24
+/// bytes, followed by `…`. The description begins with a lowercase letter, so that it
+/// can be inserted into a message.
 impl<L: Lang> fmt::Display for TokenKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenKind::Char(c) => write!(f, "Char({:?})", c),
-            TokenKind::GroupOpen { delim, rule } => {
-                write!(f, "GroupOpen({}, {:?})", delim, rule.group_type)
-            }
-            TokenKind::GroupClose { delim } => write!(f, "GroupClose({})", delim),
+            TokenKind::Char(c) => write!(f, "character ‘{}’", c.escape_debug()),
+            TokenKind::GroupOpen { delim, rule } => write!(
+                f,
+                "opening group delimiter ‘{}’ (group type {:?})",
+                delim, rule.group_type
+            ),
+            TokenKind::GroupClose { delim } => write!(f, "closing group delimiter ‘{}’", delim),
             TokenKind::Command { name, escape_char } => {
-                write!(f, "Command({}{})", escape_char, name)
+                write!(f, "command ‘{}{}’", escape_char, name)
             }
-            TokenKind::Specials { name, .. } => write!(f, "Specials({})", name),
-            TokenKind::Comment { content, .. } => {
+            TokenKind::Specials { name, .. } => write!(f, "specials ‘{}’", name),
+            TokenKind::Comment { start_delim, content } => {
                 let (preview, truncated) = truncate_for_display(content);
-                write!(f, "Comment({:?}{})", preview, if truncated { "…" } else { "" })
+                write!(
+                    f,
+                    "comment ‘{}{}{}’",
+                    start_delim,
+                    preview.escape_debug(),
+                    if truncated { "…" } else { "" }
+                )
             }
-            TokenKind::ParagraphBreak => write!(f, "ParagraphBreak"),
-            TokenKind::EndOfStream => write!(f, "EndOfStream"),
+            TokenKind::ParagraphBreak => write!(f, "paragraph break"),
+            TokenKind::EndOfStream => write!(f, "end of input"),
         }
     }
 }
