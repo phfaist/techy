@@ -653,7 +653,6 @@ mod tests {
         ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
     };
     use alloc::format;
-    use alloc::string::ToString;
     use alloc::vec::Vec;
 
     const GT_BRACE: u32 = 0;
@@ -1041,11 +1040,11 @@ mod tests {
     #[test]
     fn a_run_that_is_the_whole_terminator_needs_one_copy() {
         let err = try_parse(&plus_run_language(Recovery::Strict), r"\c a").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("expected ‘+’ to open the argument"),
-            "{err}"
-        );
+        let condition = err
+            .data()
+            .downcast_ref::<ExpectedArgumentOpener>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.expected, "+");
 
         let result = parse(&plus_run_language(Recovery::Tolerant), r"\c a");
         let condition: ExpectedArgumentOpener = only_condition(&result);
@@ -1134,11 +1133,11 @@ mod tests {
     #[test]
     fn a_missing_opener_reports_the_argument_absent() {
         let err = try_parse(&rust_raw_language(Recovery::Strict), r"\r##x").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("expected ‘\"’ to open the argument"),
-            "{err}"
-        );
+        let condition = err
+            .data()
+            .downcast_ref::<ExpectedArgumentOpener>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.expected, "\"");
 
         let result = parse(&rust_raw_language(Recovery::Tolerant), r"\r##x");
         let condition: ExpectedArgumentOpener = only_condition(&result);
@@ -1403,11 +1402,12 @@ mod tests {
             )
         };
         let err = try_parse(&lang(Recovery::Strict), r"\m abc").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains(r"missing terminator ‘\endm’ of the argument before end of input"),
-            "{err}"
-        );
+        let condition = err
+            .data()
+            .downcast_ref::<MissingArgumentTerminator>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.terminator, r"\endm");
+        assert_eq!(condition.found, MissingTerminatorFound::EndOfInput);
 
         let result = parse(&lang(Recovery::Tolerant), r"\m abc");
         let condition: MissingArgumentTerminator = only_condition(&result);
@@ -1448,16 +1448,12 @@ mod tests {
             )
         };
         let err = try_parse(&lang(Recovery::Strict), r"{\m a}b").unwrap_err();
-        assert_eq!(
-            err.identifier(),
-            MissingArgumentTerminator::IDENTIFIER,
-            "{err}"
-        );
-        assert!(
-            err.to_string()
-                .contains(r"missing terminator ‘\endm’ of the argument"),
-            "{err}"
-        );
+        let condition = err
+            .data()
+            .downcast_ref::<MissingArgumentTerminator>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.terminator, r"\endm");
+        assert_eq!(condition.found, MissingTerminatorFound::StrayGroupClose);
 
         // Tolerant: one diagnostic, at the `}`; the `}` is left for the enclosing group,
         // which it closes.
@@ -1526,10 +1522,6 @@ mod tests {
             );
             let err = try_parse(&lang, r"\m abc").unwrap_err();
             assert_eq!(err.identifier(), ImplementationError::IDENTIFIER, "{err}");
-            assert!(
-                err.to_string().contains("TerminatedArgumentParser"),
-                "{err}"
-            );
         }
     }
 

@@ -1396,7 +1396,7 @@ mod tests {
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::node::NodeRef;
     use crate::source::Source;
-    use crate::spec::{CallableSpec, StdCallableSpec};
+    use crate::spec::{CallableSpec, FrameRole, StdCallableSpec};
     use crate::state::{ParsingState, StateData};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
@@ -1796,17 +1796,14 @@ mod tests {
         assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
         assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        let message = parsed.result.diagnostics.iter().next().unwrap().message().to_string();
-        assert!(
-            message.contains("missing mandatory argument"),
-            "unexpected message: {message}"
-        );
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), MissingMandatoryArgument::IDENTIFIER);
 
         // Strict aborts on the same shape.
         let source: Arc<Source> = Arc::new(Source::new(r"\m x"));
         let mut reader = StdTokenReader::new(&source);
         let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"));
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
     }
 
     #[test]
@@ -2185,14 +2182,14 @@ mod tests {
         assert!(root_child(&parsed, 2).is_group());
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        assert!(diagnostic.message().to_string().contains("missing mandatory argument"));
+        assert_eq!(diagnostic.identifier(), MissingMandatoryArgument::IDENTIFIER);
         // Reported where the argument should have begun: right after `{a}`.
         assert_eq!(diagnostic.span().range(), 5..5);
 
         let source: Arc<Source> = Arc::new(Source::new(r"\m{a} {b}"));
         let mut reader = StdTokenReader::new(&source);
         let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"));
+        assert_eq!(err.identifier(), MissingMandatoryArgument::IDENTIFIER);
     }
 
     #[test]
@@ -2422,17 +2419,23 @@ mod tests {
         assert!(args.get(0).unwrap().is_provided());
         assert!(!args.get(1).unwrap().is_provided());
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        let message = parsed.result.diagnostics.iter().next().unwrap().message().to_string();
-        assert!(
-            message.contains("missing mandatory argument") && message.contains("denominator"),
-            "unexpected message: {message}"
-        );
+        let condition = parsed
+            .result
+            .diagnostics
+            .iter()
+            .next()
+            .unwrap()
+            .data()
+            .downcast_ref::<MissingMandatoryArgument>()
+            .unwrap();
+        assert_eq!(condition.argument_name.as_deref(), Some("denominator"));
 
         // Strict mode aborts instead.
         let source: Arc<Source> = Arc::new(Source::new(r"\frac{a}"));
         let mut reader = StdTokenReader::new(&source);
         let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
-        assert!(err.to_string().contains("missing mandatory argument"));
+        let condition = err.data().downcast_ref::<MissingMandatoryArgument>().unwrap();
+        assert_eq!(condition.argument_name.as_deref(), Some("denominator"));
     }
 
     #[test]
@@ -2577,6 +2580,11 @@ mod tests {
         // frames — the argument's (innermost) and the invocation's — titled through the
         // spec's defaulted stack_frame_title hook at snapshot time.
         let st = state_with(&[("frac", vec![brace_arg(), brace_arg()])]);
+        let spec = StdCallableSpec::<ArgLang>::default();
+        let expected_titles = [
+            spec.stack_frame_title(FrameRole::Argument { index: 1 }, "\\frac"),
+            spec.stack_frame_title(FrameRole::Invocation, "\\frac"),
+        ];
         let parsed = parse_std(r"\frac{a}", &st, Recovery::Tolerant);
 
         let diagnostic = parsed
@@ -2586,7 +2594,7 @@ mod tests {
             .next()
             .unwrap();
         let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
-        assert_eq!(titles, ["argument #2 of ‘\\frac’", "callable ‘\\frac’"]);
+        assert_eq!(titles, expected_titles);
         // The argument frame is anchored where the argument's region starts; the
         // invocation frame at the trigger.
         assert_eq!(diagnostic.frames()[0].span().range(), 8..8);
@@ -2597,7 +2605,7 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
         let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
-        assert_eq!(titles, ["argument #2 of ‘\\frac’", "callable ‘\\frac’"]);
+        assert_eq!(titles, expected_titles);
     }
 
     // --- expression-position rules -------------------------------------------------------
@@ -2621,8 +2629,16 @@ mod tests {
         // `{x}` was not swallowed by `\b`.
         assert!(root_child(&parsed, 1).is_group());
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        let message = parsed.result.diagnostics.iter().next().unwrap().message().to_string();
-        assert!(message.contains("single expression"), "unexpected message: {message}");
+        let condition = parsed
+            .result
+            .diagnostics
+            .iter()
+            .next()
+            .unwrap()
+            .data()
+            .downcast_ref::<ExpressionCallableRequiresContent>()
+            .unwrap();
+        assert_eq!(condition.callable, "\\b");
     }
 
     #[test]
@@ -2656,8 +2672,16 @@ mod tests {
         let e = root_child(&parsed, 0);
         assert!(!e.arguments().unwrap().get(0).unwrap().is_provided());
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        let message = parsed.result.diagnostics.iter().next().unwrap().message().to_string();
-        assert!(message.contains("expected an expression"), "unexpected message: {message}");
+        let condition = parsed
+            .result
+            .diagnostics
+            .iter()
+            .next()
+            .unwrap()
+            .data()
+            .downcast_ref::<ExpectedExpressionArgument>()
+            .unwrap();
+        assert_eq!(condition.argument_name, None);
     }
 
     // --- state scoping -------------------------------------------------------------------

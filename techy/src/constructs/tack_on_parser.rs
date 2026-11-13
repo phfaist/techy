@@ -438,11 +438,16 @@ mod tests {
             .parse(r"\label{a}")
             .unwrap();
         assert_eq!(result.diagnostics.len(), 1);
-        assert!(
-            result.diagnostics.iter().next().unwrap().message().contains("cannot resolve"),
-            "{}",
-            result.diagnostics.iter().next().unwrap().message()
-        );
+        let condition = result
+            .diagnostics
+            .iter()
+            .next()
+            .unwrap()
+            .data()
+            .downcast_ref::<super::super::UnresolvableCommand>()
+            .unwrap();
+        assert_eq!(condition.name, "label");
+        assert_eq!(condition.escape_char, '\\');
     }
 
     #[test]
@@ -476,10 +481,11 @@ mod tests {
 
         let err =
             language(once(), Recovery::Strict).parse(r"\section{A}\label{x}\label{y}").unwrap_err();
-        assert!(
-            err.to_string().contains("cannot be specified more than once"),
-            "{err}"
-        );
+        let condition = err
+            .data()
+            .downcast_ref::<RepeatedTackOnField>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.name, "label");
 
         let result =
             language(once(), Recovery::Tolerant).parse(r"\section{A}\label{x}\label{y}").unwrap();

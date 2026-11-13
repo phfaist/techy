@@ -2149,14 +2149,9 @@ pub(crate) mod tests {
             // The reversed pair delimits nothing: an implementation error, not a
             // panic and not a source condition.
             let error = cx.source_span_within(&end, &begin).unwrap_err();
-            let condition = error
-                .data()
-                .downcast_ref::<ImplementationError>()
-                .expect("an ImplementationError condition");
             assert!(
-                condition.detail.contains("do not delimit one range of one source"),
-                "unexpected detail: {}",
-                condition.detail
+                error.data().downcast_ref::<ImplementationError>().is_some(),
+                "an ImplementationError condition: {error}"
             );
         });
     }
@@ -2446,25 +2441,20 @@ pub(crate) mod tests {
         let error =
             stage_invocation_span(" abcd", 0, EndUnderTest::BeforeTheTrigger, |_cx| Vec::new())
                 .unwrap_err();
-        assert_invalid_node_span(&error);
+        assert_implementation_error(&error);
 
         // (b) the standard rule with a last child that ends before the trigger
         // starts (the trigger is the third character here, the child the first).
         let error =
             stage_invocation_span("abcd", 2, EndUnderTest::Standard, chars_child(0..1))
                 .unwrap_err();
-        assert_invalid_node_span(&error);
+        assert_implementation_error(&error);
     }
 
-    fn assert_invalid_node_span(error: &ParseError) {
-        let condition = error
-            .data()
-            .downcast_ref::<ImplementationError>()
-            .expect("an ImplementationError condition");
+    fn assert_implementation_error(error: &ParseError) {
         assert!(
-            condition.detail.contains("invalid node span"),
-            "unexpected detail: {}",
-            condition.detail
+            error.data().downcast_ref::<ImplementationError>().is_some(),
+            "an ImplementationError condition: {error}"
         );
     }
 

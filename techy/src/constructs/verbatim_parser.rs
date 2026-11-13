@@ -1446,7 +1446,11 @@ mod tests {
         )]);
 
         let err = try_parse(r"\verb|x|", &st, Recovery::Strict).unwrap_err();
-        assert!(err.to_string().contains("expected opening delimiter ‘{’"), "{err}");
+        let condition = err
+            .data()
+            .downcast_ref::<ExpectedVerbatimDelimiter>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.expected, Some('{'));
 
         let result = parse(r"\verb|x|", &st, Recovery::Tolerant);
         assert_eq!(result.diagnostics.len(), 1);
@@ -1461,7 +1465,11 @@ mod tests {
         let st = state_with(&[("verb", vec![verb_arg()])]);
 
         let err = try_parse(r"\verb", &st, Recovery::Strict).unwrap_err();
-        assert!(err.to_string().contains("expected a verbatim opening delimiter"), "{err}");
+        let condition = err
+            .data()
+            .downcast_ref::<ExpectedVerbatimDelimiter>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.expected, None);
 
         let result = parse(r"\verb", &st, Recovery::Tolerant);
         assert_eq!(result.diagnostics.len(), 1);
@@ -1473,7 +1481,11 @@ mod tests {
         let st = state_with(&[("verb", vec![verb_arg()])]);
 
         let err = try_parse(r"\verb|abc", &st, Recovery::Strict).unwrap_err();
-        assert!(err.to_string().contains("missing closing delimiter ‘|’"), "{err}");
+        let condition = err
+            .data()
+            .downcast_ref::<UnterminatedVerbatim>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.close, "|");
 
         let result = parse(r"\verb|abc", &st, Recovery::Tolerant);
         assert_eq!(result.diagnostics.len(), 1);
@@ -1658,7 +1670,12 @@ mod tests {
     fn environment_contents_missing_terminator() {
         let text = "\nno end in sight";
         let err = run_body(text, Recovery::Strict, true).err().expect("strict abort");
-        assert!(err.to_string().contains("missing terminator of environment ‘verbatim’"), "{err}");
+        let condition = err
+            .data()
+            .downcast_ref::<MissingEnvironmentTerminator>()
+            .unwrap_or_else(|| panic!("{err}"));
+        assert_eq!(condition.environment, "verbatim");
+        assert_eq!(condition.found, MissingTerminatorFound::EndOfInput);
 
         let run = run_body(text, Recovery::Tolerant, true).unwrap();
         assert_eq!(run.result.diagnostics.len(), 1);
@@ -1796,11 +1813,7 @@ mod tests {
             .downcast_ref::<MissingEnvironmentTerminator>()
             .expect("the missing-terminator condition");
         assert_eq!(condition.found, MissingTerminatorFound::UnreadableToken);
-        assert_eq!(
-            diagnostic.message(),
-            "missing terminator of environment ‘verbatim’ before a token that could \
-             not be read"
-        );
+        assert_eq!(condition.environment, "verbatim");
 
         // The content is what was read up to the unreadable character, and the body
         // ends there — not at the input's end, which lies well beyond.

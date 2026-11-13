@@ -548,16 +548,11 @@ mod tests {
     }
 
     #[test]
-    fn an_invalid_reference_argument_renders_its_reason_and_projects_it() {
+    fn an_invalid_reference_argument_projects_its_reason() {
         use crate::error::DiagnosticValue;
-        use alloc::string::ToString;
 
         let condition =
             InvalidSourceReferenceArgument::new(InvalidReferenceReason::NotPlainCharacters);
-        assert_eq!(
-            condition.to_string(),
-            "invalid source reference argument: its content is not plain characters"
-        );
         // The wire value is the reason's own name, not the rendered English.
         let projected = crate::error::DiagnosticInfo::serializable_data(&condition);
         assert_eq!(
@@ -630,7 +625,6 @@ mod tests {
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
         // The condition carries the door's traceback frame, anchored at the
         // inclusion site in the *outer* source.
-        assert_eq!(diagnostic.frames().last().unwrap().title(), "attached source");
         assert_eq!(diagnostic.frames().last().unwrap().span().range(), 0..5);
 
         // Strict: the funnel aborts, as everywhere.
@@ -693,11 +687,6 @@ mod tests {
         let condition =
             diagnostic.data().downcast_ref::<NoSourceResolver>().unwrap();
         assert_eq!(condition.reference, "chapter.tex");
-        assert_eq!(
-            diagnostic.message(),
-            "cannot resolve source reference ‘chapter.tex’: no source resolver \
-             is configured on this language’s driver"
-        );
 
         // Strict: the funnel aborts with the condition.
         let strict = driver(Recovery::Strict);
@@ -740,12 +729,8 @@ mod tests {
             .unwrap();
         assert_eq!(condition.reference, "missing.tex");
         assert_eq!(condition.error.reference(), "missing.tex");
-        // The message names the reference as written, with the resolver's own
-        // message as the detail.
-        assert_eq!(
-            diagnostic.message(),
-            "cannot resolve source reference ‘missing.tex’: no entry for this reference"
-        );
+        // The message carries the resolver's own message as the detail.
+        assert!(diagnostic.message().contains(condition.error.message()));
     }
 
     /// A resolver may spell the reference differently in its own error (e.g. a
@@ -783,10 +768,12 @@ mod tests {
         });
         assert!(result.unwrap().is_none());
         let diagnostic = session.diagnostics.iter().next().unwrap();
-        assert_eq!(
-            diagnostic.message(),
-            "cannot resolve source reference ‘missing.tex’: no file at this path"
-        );
+        // The texts below are the test's own: the reference as written and the
+        // resolver's message appear in the message, the resolver's spelling does not.
+        let message = diagnostic.message();
+        assert!(message.contains("missing.tex"), "{message}");
+        assert!(message.contains("no file at this path"), "{message}");
+        assert!(!message.contains("/texmf/"), "{message}");
         let condition = diagnostic
             .data()
             .downcast_ref::<UnresolvableSourceReference>()
