@@ -1749,13 +1749,17 @@ mod tests {
             .collect()
     }
 
-    fn diagnostics_mentioning(parsed: &Parsed, needle: &str) -> usize {
-        parsed
-            .result
-            .diagnostics
-            .iter()
-            .filter(|d| d.message().contains(needle))
-            .count()
+    /// The conditions of type `T` among the parse's diagnostics, in report order.
+    fn conditions_of<T: DiagnosticInfo + Clone>(parsed: &Parsed) -> Vec<T> {
+        parsed.result.diagnostics.conditions::<T>().cloned().collect()
+    }
+
+    /// The names of the unresolvable commands that the parse reported, in report order.
+    fn unresolved_command_names(parsed: &Parsed) -> Vec<String> {
+        conditions_of::<crate::constructs::UnresolvableCommand>(parsed)
+            .into_iter()
+            .map(|condition| condition.name)
+            .collect()
     }
 
     // --- the environment shape ----------------------------------------------------------
@@ -1931,7 +1935,10 @@ mod tests {
         assert_eq!(b.span().range(), 10..20);
         assert_eq!(body_shapes(b), ["chars 19..20 \"y\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "‘B’"), 1);
+        assert_eq!(
+            conditions_of::<EnvironmentTerminatorMismatch>(&parsed),
+            [EnvironmentTerminatorMismatch { expected: "B".into(), found: "A".into() }],
+        );
     }
 
     #[test]
@@ -1953,16 +1960,10 @@ mod tests {
             diagnostic.data().downcast_ref::<EnvironmentTerminatorMismatch>().unwrap();
         assert_eq!(condition.expected, "B");
         assert_eq!(condition.found, "A");
-        let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
-        assert_eq!(
-            titles,
-            [
-                "environment ‘B’",
-                "callable ‘\\begin’",
-                "environment ‘A’",
-                "callable ‘\\begin’",
-            ]
-        );
+        // Innermost first: B's body frame and B's invocation frame (both over B's
+        // `\begin` trigger), then A's body frame and A's invocation frame (over A's).
+        let spans: Vec<_> = diagnostic.frames().iter().map(|f| f.span().range()).collect();
+        assert_eq!(spans, [10..16, 10..16, 0..6, 0..6]);
     }
 
     #[test]
@@ -1983,7 +1984,7 @@ mod tests {
             ],
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "cannot resolve command"), 1);
+        assert_eq!(unresolved_command_names(&parsed), ["end"]);
     }
 
     #[test]
@@ -2002,7 +2003,7 @@ mod tests {
         assert_eq!(env.span().range(), 0..25);
         assert_eq!(body_shapes(env), ["group 9..18"]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "cannot resolve command"), 1);
+        assert_eq!(unresolved_command_names(&parsed), ["end"]);
     }
 
     #[test]
@@ -2040,7 +2041,13 @@ mod tests {
         assert_eq!(env.span().range(), 1..13);
         assert_eq!(body_shapes(env), ["chars 10..13 \" x \""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "missing terminator"), 1);
+        assert_eq!(
+            conditions_of::<MissingEnvironmentTerminator>(&parsed),
+            [MissingEnvironmentTerminator {
+                environment: "A".into(),
+                found: MissingTerminatorFound::StrayGroupClose,
+            }],
+        );
     }
 
     // --- terminator recovery -------------------------------------------------------------
@@ -2055,7 +2062,13 @@ mod tests {
         assert_eq!(env.span().range(), 0..17);
         assert_eq!(body_shapes(env), ["chars 15..17 \" x\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "before end of input"), 1);
+        assert_eq!(
+            conditions_of::<MissingEnvironmentTerminator>(&parsed),
+            [MissingEnvironmentTerminator {
+                environment: "itemize".into(),
+                found: MissingTerminatorFound::EndOfInput,
+            }],
+        );
         assert_eq!(parsed.pos, content.len());
     }
 
@@ -2071,7 +2084,15 @@ mod tests {
         let b = a.body().unwrap().iter().next().unwrap();
         assert_eq!(b.span().range(), 9..19);
         assert_eq!(parsed.result.diagnostics.len(), 2);
-        assert_eq!(diagnostics_mentioning(&parsed, "before end of input"), 2);
+        // Innermost first: B's body ends at end of input before A's does.
+        let at_end_of_input = |environment: &str| MissingEnvironmentTerminator {
+            environment: environment.into(),
+            found: MissingTerminatorFound::EndOfInput,
+        };
+        assert_eq!(
+            conditions_of::<MissingEnvironmentTerminator>(&parsed),
+            [at_end_of_input("B"), at_end_of_input("A")],
+        );
     }
 
     #[test]
@@ -2092,7 +2113,10 @@ mod tests {
         let env = root_child(&parsed, 0);
         assert_eq!(body_shapes(env), ["chars 9..10 \"x\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "malformed terminator"), 1);
+        assert_eq!(
+            conditions_of::<MalformedEnvironmentTerminator>(&parsed),
+            [MalformedEnvironmentTerminator { environment: "A".into() }],
+        );
     }
 
     #[test]
@@ -2104,7 +2128,10 @@ mod tests {
         let env = root_child(&parsed, 0);
         assert_eq!(env.span().range(), 0..14);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "malformed terminator"), 1);
+        assert_eq!(
+            conditions_of::<MalformedEnvironmentTerminator>(&parsed),
+            [MalformedEnvironmentTerminator { environment: "A".into() }],
+        );
     }
 
     #[test]
@@ -2122,7 +2149,10 @@ mod tests {
             ["callable 0..14 \"A\"", "group 14..19"],
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "malformed terminator"), 1);
+        assert_eq!(
+            conditions_of::<MalformedEnvironmentTerminator>(&parsed),
+            [MalformedEnvironmentTerminator { environment: "A".into() }],
+        );
     }
 
     #[test]
@@ -2151,7 +2181,7 @@ mod tests {
             ["chars 0..7 \"\\\\begin \"", "chars 7..8 \"x\""],
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "malformed ‘\\begin’"), 1);
+        assert_eq!(conditions_of::<MalformedBegin>(&parsed).len(), 1);
     }
 
     #[test]
@@ -2178,7 +2208,9 @@ mod tests {
         assert_eq!(env.span().range(), 0..25);
         assert_eq!(body_shapes(env), ["chars 12..15 \" x \""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "unknown environment"), 1);
+        let unknown = conditions_of::<UnknownEnvironment>(&parsed);
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0].name, "nope");
     }
 
     // --- slot state deltas ----------------------------------------------------------------
@@ -2589,7 +2621,7 @@ mod tests {
         assert_eq!(raw.span().range(), 0..8);
         assert_eq!(body_shapes(raw), ["chars 4..8 \" abc\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_eq!(diagnostics_mentioning(&parsed, "\\endraw"), 1);
+        assert_eq!(conditions_of::<MissingRawTerminator>(&parsed).len(), 1);
     }
 
     // --- the requires_content() override (slots session): `\begin` bare in expression

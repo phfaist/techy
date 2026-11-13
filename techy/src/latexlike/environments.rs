@@ -1215,8 +1215,11 @@ mod tests {
     use super::super::{CallableType, GroupType, LatexlikeDriver, MacroSpec, Mode};
     use super::*;
     use crate::constructs::{
-        ChildStateSpec, ExpressionParser, GroupAfterEffectsFn, GroupArgumentParser, GroupParser,
-        OptionalGroupArgumentParser,
+        ChildStateSpec, EnvironmentTerminatorMismatch, ExpressionCallableRequiresContent,
+        ExpressionParser, GroupAfterEffectsFn, GroupArgumentParser, GroupParser,
+        ImplementationError, MalformedEnvironmentTerminator, MissingEnvironmentTerminator,
+        MissingTerminatorFound, OptionalGroupArgumentParser, StrayGroupClose,
+        UnresolvableCommand,
     };
     use crate::engine::{CommandResolution, Language, ParseDriver, ParseResult};
     use crate::error::{HookFailed, Recovery};
@@ -1358,8 +1361,39 @@ mod tests {
         env.body().expect("an environment node").iter().map(|node| node.summary()).collect()
     }
 
-    fn messages(result: &ParseResult<Latexlike>) -> Vec<String> {
-        result.diagnostics.iter().map(|d| d.message().to_string()).collect()
+    /// The identifiers of the reported conditions, in report order.
+    fn identifiers(result: &ParseResult<Latexlike>) -> Vec<String> {
+        result.diagnostics.iter().map(|d| d.identifier().to_string()).collect()
+    }
+
+    /// The conditions of type `T` among the reported diagnostics, in report order.
+    fn conditions_of<T: DiagnosticInfo + Clone>(result: &ParseResult<Latexlike>) -> Vec<T> {
+        result.diagnostics.conditions::<T>().cloned().collect()
+    }
+
+    /// The names of the unresolvable commands reported, in report order.
+    fn unresolved_command_names(result: &ParseResult<Latexlike>) -> Vec<String> {
+        conditions_of::<UnresolvableCommand>(result).into_iter().map(|c| c.name).collect()
+    }
+
+    /// The condition of type `T` that a strict parse aborted on.
+    fn aborting_condition<T: DiagnosticInfo + Clone>(error: &ParseError) -> T {
+        error.data().downcast_ref::<T>().expect("the expected condition").clone()
+    }
+
+    fn unknown(name: &str) -> UnknownEnvironment {
+        UnknownEnvironment { name: name.into() }
+    }
+
+    fn orphan(name: Option<&str>, terminator: &str) -> OrphanEnd {
+        OrphanEnd { name: name.map(String::from), terminator: terminator.into() }
+    }
+
+    fn missing_at_end_of_input(environment: &str) -> MissingEnvironmentTerminator {
+        MissingEnvironmentTerminator {
+            environment: environment.into(),
+            found: MissingTerminatorFound::EndOfInput,
+        }
     }
 
     // --- the environment shape ---------------------------------------------------------
@@ -1534,7 +1568,8 @@ mod tests {
         let text = with_math_envs(Recovery::Tolerant)
             .parse("\\begin{aligned}x\\end{aligned}")
             .unwrap();
-        assert_eq!(messages(&text), ["unknown environment ‘aligned’"]);
+        assert_eq!(identifiers(&text).len(), 1);
+        assert_eq!(conditions_of::<UnknownEnvironment>(&text), [unknown("aligned")]);
     }
 
     // --- the `"_builtin"` seed: begin/end out of the box --------------------------------
@@ -1550,7 +1585,8 @@ mod tests {
         );
         let result = language.parse("\\begin{itemize}x\\end{itemize}").unwrap();
         check_latexlike_tree_invariants(&result.tree);
-        assert_eq!(messages(&result), ["unknown environment ‘itemize’"]);
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(conditions_of::<UnknownEnvironment>(&result), [unknown("itemize")]);
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("itemize"));
         assert_eq!(body_shapes(env), ["chars(x)"]);
@@ -1565,9 +1601,8 @@ mod tests {
             .unwrap();
         let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant), seed);
         let result = language.parse("\\begin{itemize}").unwrap();
-        let all = messages(&result);
-        assert_eq!(all.len(), 1);
-        assert!(all[0].contains("cannot resolve command ‘\\begin’"), "{}", all[0]);
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(unresolved_command_names(&result), ["begin"]);
         // `\begin` recovered as chars, `{itemize}` an ordinary group.
         assert_eq!(root_shapes(&result), ["chars(\\begin)", "group(Content { })"]);
     }
@@ -1630,8 +1665,7 @@ mod tests {
         // The pair is this package's alone: `\begin` resolves to nothing here.
         let tolerant = renamed_pair_language(Recovery::Tolerant);
         let result = tolerant.parse("\\begin{itemize}\\end{itemize}").unwrap();
-        let all = messages(&result);
-        assert!(all[0].contains("cannot resolve command ‘\\begin’"), "{all:?}");
+        assert_eq!(unresolved_command_names(&result).first().map(String::as_str), Some("begin"));
     }
 
     #[test]
@@ -1658,17 +1692,18 @@ mod tests {
 
         let result = language.parse("\\open x").unwrap();
         check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(identifiers(&result).len(), 1);
         assert_eq!(
-            messages(&result),
-            ["malformed ‘\\open’: expected the environment's name group immediately \
-              after the command"]
+            conditions_of::<MalformedBegin>(&result),
+            [MalformedBegin { command: "\\open".into() }]
         );
 
         let result = language.parse("\\shut{itemize}").unwrap();
         check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(identifiers(&result).len(), 1);
         assert_eq!(
-            messages(&result),
-            ["orphan ‘\\shut{itemize}’: no environment ‘itemize’ is open here"]
+            conditions_of::<OrphanEnd>(&result),
+            [orphan(Some("itemize"), "\\shut{itemize}")]
         );
     }
 
@@ -1678,13 +1713,11 @@ mod tests {
     fn terminator_name_mismatch_unwinds() {
         let content = "\\begin{A}x\\begin{B}y\\end{A}";
         let result = parse_tolerant(content);
-        let all = messages(&result);
-        assert_eq!(all.len(), 1);
-        assert!(
-            all[0].contains("missing terminator of environment ‘B’")
-                && all[0].contains("‘A’"),
-            "{}",
-            all[0]
+        let mismatch = EnvironmentTerminatorMismatch { expected: "B".into(), found: "A".into() };
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(
+            conditions_of::<EnvironmentTerminatorMismatch>(&result),
+            core::slice::from_ref(&mismatch)
         );
         // B closed without consuming `\end{A}`; A found and consumed its own
         // terminator.
@@ -1694,18 +1727,16 @@ mod tests {
         assert_eq!(body_shapes(outer), ["chars(x)", "Environment(B)"]);
 
         let err = strict().parse(content).unwrap_err();
-        assert!(err.to_string().contains("missing terminator of environment ‘B’"), "{err}");
+        assert_eq!(aborting_condition::<EnvironmentTerminatorMismatch>(&err), mismatch);
     }
 
     #[test]
     fn missing_terminator_at_end_of_input() {
         let result = parse_tolerant("\\begin{itemize}x");
-        let all = messages(&result);
-        assert_eq!(all.len(), 1);
-        assert!(
-            all[0].contains("missing terminator of environment ‘itemize’ before end of input"),
-            "{}",
-            all[0]
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(
+            conditions_of::<MissingEnvironmentTerminator>(&result),
+            [missing_at_end_of_input("itemize")]
         );
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.span().range(), 0..16);
@@ -1717,12 +1748,10 @@ mod tests {
     #[test]
     fn malformed_terminator_consumes_the_command_alone() {
         let result = parse_tolerant("\\begin{itemize}x\\end y");
-        let all = messages(&result);
-        assert_eq!(all.len(), 1);
-        assert!(
-            all[0].contains("malformed terminator of environment ‘itemize’"),
-            "{}",
-            all[0]
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(
+            conditions_of::<MalformedEnvironmentTerminator>(&result),
+            [MalformedEnvironmentTerminator { environment: "itemize".into() }]
         );
         // The command (with its post-space) is consumed; `y` is sibling content
         // after the environment.
@@ -1739,10 +1768,22 @@ mod tests {
         // invariant holds across the unwind.
         let result = tolerant().parse("\\begin{itemize}a}b").unwrap();
         check_latexlike_tree_invariants(&result.tree);
-        let all = messages(&result);
-        assert_eq!(all.len(), 2, "{all:?}");
-        assert!(all[0].contains("missing terminator of environment ‘itemize’"), "{}", all[0]);
-        assert!(all[1].contains("‘}’"), "{}", all[1]);
+        // The environment's missing terminator first, then the root's stray close.
+        assert_eq!(
+            identifiers(&result),
+            [MissingEnvironmentTerminator::IDENTIFIER, StrayGroupClose::IDENTIFIER]
+        );
+        assert_eq!(
+            conditions_of::<MissingEnvironmentTerminator>(&result),
+            [MissingEnvironmentTerminator {
+                environment: "itemize".into(),
+                found: MissingTerminatorFound::StrayGroupClose,
+            }]
+        );
+        assert_eq!(
+            conditions_of::<StrayGroupClose>(&result),
+            [StrayGroupClose { delim: "}".into() }]
+        );
         assert_eq!(
             root_shapes(&result),
             ["Environment(itemize)", "chars(})", "chars(b)"]
@@ -1753,21 +1794,24 @@ mod tests {
     fn unknown_environments_still_parse_their_body() {
         let content = "\\begin{foo}x\\end{foo} y";
         let result = parse_tolerant(content);
-        assert_eq!(messages(&result), ["unknown environment ‘foo’"]);
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(conditions_of::<UnknownEnvironment>(&result), [unknown("foo")]);
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("foo"));
         assert_eq!(body_shapes(env), ["chars(x)"]);
 
         let err = strict().parse(content).unwrap_err();
-        assert!(err.to_string().contains("unknown environment ‘foo’"), "{err}");
+        assert_eq!(aborting_condition::<UnknownEnvironment>(&err), unknown("foo"));
     }
 
     #[test]
     fn malformed_begin_recovers_as_chars() {
         let result = parse_tolerant("\\begin x");
-        let all = messages(&result);
-        assert_eq!(all.len(), 1);
-        assert!(all[0].contains("malformed ‘\\begin’"), "{}", all[0]);
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(
+            conditions_of::<MalformedBegin>(&result),
+            [MalformedBegin { command: "\\begin".into() }]
+        );
         // The chars fallback covers the consumed extent — the trigger *with* its
         // syntactic post-space, keeping the sibling partition exact.
         assert_eq!(root_shapes(&result), ["chars(\\begin )", "chars(x)"]);
@@ -1778,9 +1822,10 @@ mod tests {
     #[test]
     fn orphan_end_at_the_root() {
         let result = parse_tolerant("a\\end{itemize}b");
+        assert_eq!(identifiers(&result).len(), 1);
         assert_eq!(
-            messages(&result),
-            ["orphan ‘\\end{itemize}’: no environment ‘itemize’ is open here"]
+            conditions_of::<OrphanEnd>(&result),
+            [orphan(Some("itemize"), "\\end{itemize}")]
         );
         assert_eq!(
             root_shapes(&result),
@@ -1788,7 +1833,10 @@ mod tests {
         );
 
         let err = strict().parse("a\\end{itemize}b").unwrap_err();
-        assert!(err.to_string().contains("orphan ‘\\end{itemize}’"), "{err}");
+        assert_eq!(
+            aborting_condition::<OrphanEnd>(&err),
+            orphan(Some("itemize"), "\\end{itemize}")
+        );
     }
 
     #[test]
@@ -1796,16 +1844,18 @@ mod tests {
         let result = parse_tolerant("\\end x");
         // The quoted spelling stops at the command word: the trigger's post-space is
         // consumed with it (and staged), but reads as a stray blank inside quotes.
-        assert_eq!(messages(&result), ["orphan ‘\\end’: no environment is open here"]);
+        assert_eq!(identifiers(&result).len(), 1);
+        assert_eq!(conditions_of::<OrphanEnd>(&result), [orphan(None, "\\end")]);
         assert_eq!(root_shapes(&result), ["chars(\\end )", "chars(x)"]);
     }
 
     #[test]
     fn orphan_end_inside_a_group() {
         let result = parse_tolerant("{\\end{itemize}}");
+        assert_eq!(identifiers(&result).len(), 1);
         assert_eq!(
-            messages(&result),
-            ["orphan ‘\\end{itemize}’: no environment ‘itemize’ is open here"]
+            conditions_of::<OrphanEnd>(&result),
+            [orphan(Some("itemize"), "\\end{itemize}")]
         );
         let group = result.tree.root().child(0).unwrap();
         assert!(group.is_group());
@@ -1817,10 +1867,11 @@ mod tests {
         // The documented divergence from pylatexenc (slots session): `\begin` as a
         // bare expression argument is diagnosed, not dispatched as the argument.
         let result = parse_tolerant("\\frac\\begin{itemize} x");
-        let all = messages(&result);
-        assert!(
-            all.iter().any(|m| m.contains("requires content")),
-            "{all:?}"
+        assert_eq!(
+            conditions_of::<ExpressionCallableRequiresContent>(&result),
+            [ExpressionCallableRequiresContent { callable: "\\begin".into() }],
+            "{:?}",
+            identifiers(&result)
         );
     }
 
@@ -1829,26 +1880,35 @@ mod tests {
     #[test]
     fn argument_frames_quote_the_environment() {
         // An unresolvable command inside `tabular`'s mandatory argument: the
-        // diagnostic's traceback quotes the environment's name, not `\begin`.
+        // diagnostic's traceback quotes the environment's name, not `\begin`. The
+        // argument frame is titled by the environment's spec for its first argument,
+        // the dispatch frame by `\begin`'s spec.
         let result = parse_tolerant("\\begin{tabular}{a\\foo}x\\end{tabular}");
         let diagnostic = result.diagnostics.iter().next().unwrap();
         let titles: Vec<&str> =
             diagnostic.frames().iter().map(|frame| frame.title()).collect();
-        assert!(
-            titles.contains(&"argument #1 of environment ‘tabular’"),
-            "{titles:?}"
-        );
-        assert!(titles.contains(&"macro ‘\\begin’"), "{titles:?}");
+        let argument_title =
+            env(vec![]).stack_frame_title(FrameRole::Argument { index: 0 }, "tabular");
+        let dispatch_title =
+            BeginSpec::<Latexlike>::new("end").stack_frame_title(FrameRole::Invocation, "\\begin");
+        assert!(titles.contains(&argument_title.as_str()), "{titles:?}");
+        assert!(titles.contains(&dispatch_title.as_str()), "{titles:?}");
     }
 
     #[test]
     fn body_frames_quote_the_environment() {
-        // A condition inside the body: the body's frame quotes the environment.
+        // A condition inside the body: the body's frame, innermost, quotes the
+        // environment's name; the `\begin` dispatch frame encloses it. Both sit over
+        // the `\begin` trigger.
         let result = parse_tolerant("\\begin{itemize}\\foo\\end{itemize}");
         let diagnostic = result.diagnostics.iter().next().unwrap();
-        let titles: Vec<&str> =
-            diagnostic.frames().iter().map(|frame| frame.title()).collect();
-        assert!(titles.contains(&"environment ‘itemize’"), "{titles:?}");
+        let frames = diagnostic.frames();
+        let spans: Vec<_> = frames.iter().map(|frame| frame.span().range()).collect();
+        assert_eq!(spans, [0..6, 0..6]);
+        assert!(frames[0].title().contains("itemize"), "{:?}", frames[0].title());
+        let dispatch_title =
+            BeginSpec::<Latexlike>::new("end").stack_frame_title(FrameRole::Invocation, "\\begin");
+        assert_eq!(frames[1].title(), dispatch_title);
     }
 
     // --- the spec surface --------------------------------------------------------------
@@ -1930,13 +1990,13 @@ mod tests {
         let error = language.parse("\\begin{bad}x\\end{bad}").unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: body-delta table unavailable"
+            error.data().downcast_ref::<HookFailed>().map(|c| c.detail.as_str()),
+            Some("body-delta table unavailable")
         );
-        // The `\begin` dispatch frame is live at the consultation site — the only
-        // frame, as `bad` declares no arguments.
+        // The `\begin` dispatch frame (over the trigger) is live at the consultation
+        // site — the only frame, as `bad` declares no arguments.
         assert_eq!(error.frames().len(), 1);
-        assert_eq!(error.frames()[0].title(), "macro ‘\\begin’");
+        assert_eq!(error.frames()[0].span().range(), 0..6);
     }
 
     #[test]
@@ -1978,12 +2038,14 @@ mod tests {
             );
             let error = language.parse("\\begin{lit}x\\end{lit}").unwrap_err();
             assert_eq!(error.identifier(), "core.constructs.implementation-error");
-            assert!(
-                error.message().contains("environment ‘lit’"),
-                "the message should name the environment: {}",
-                error.message()
+            // The detail is the record's refusal, naming the environment.
+            let refusal = super::super::EnvironmentSyntaxError::LiteralTerminator {
+                environment: "lit".into(),
+            };
+            assert_eq!(
+                error.data().downcast_ref::<ImplementationError>().map(|c| c.detail.clone()),
+                Some(refusal.to_string())
             );
-            assert!(error.message().contains("literal terminator"), "{}", error.message());
         }
     }
 
@@ -1992,13 +2054,14 @@ mod tests {
         let spec = EnvironmentSpec::new(vec![brace_arg()]);
         let dyn_spec: &dyn CallableSpec<Latexlike> = &spec;
         assert_eq!(dyn_spec.arguments().len(), 1);
+        // The trait object answers with the environment's own frame titles.
         assert_eq!(
             dyn_spec.stack_frame_title(FrameRole::Invocation, "align"),
-            "environment ‘align’"
+            spec.stack_frame_title(FrameRole::Invocation, "align")
         );
         assert_eq!(
             dyn_spec.stack_frame_title(FrameRole::Argument { index: 0 }, "align"),
-            "argument #1 of environment ‘align’"
+            spec.stack_frame_title(FrameRole::Argument { index: 0 }, "align")
         );
     }
 
@@ -2089,9 +2152,10 @@ mod tests {
         // matches the literal string, pylatexenc's string-search parity — so the body
         // runs to end of input and recovers.
         let result = parse_tolerant("\\begin{verbatim}a\\end {verbatim}");
+        assert_eq!(identifiers(&result).len(), 1);
         assert_eq!(
-            messages(&result),
-            ["missing terminator of environment ‘verbatim’ before end of input"]
+            conditions_of::<MissingEnvironmentTerminator>(&result),
+            [missing_at_end_of_input("verbatim")]
         );
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(body_shapes(env), ["chars(a\\end {verbatim})"]);
@@ -2135,15 +2199,16 @@ mod tests {
     #[test]
     fn unterminated_verbatim_environment_recovers() {
         let err = strict().parse("\\begin{verbatim}\nabc").unwrap_err();
-        assert!(
-            err.to_string().contains("missing terminator of environment ‘verbatim’"),
-            "{err}"
+        assert_eq!(
+            aborting_condition::<MissingEnvironmentTerminator>(&err),
+            missing_at_end_of_input("verbatim")
         );
 
         let result = parse_tolerant("\\begin{verbatim}\nabc");
+        assert_eq!(identifiers(&result).len(), 1);
         assert_eq!(
-            messages(&result),
-            ["missing terminator of environment ‘verbatim’ before end of input"]
+            conditions_of::<MissingEnvironmentTerminator>(&result),
+            [missing_at_end_of_input("verbatim")]
         );
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.span().range(), 0..20);
@@ -2237,12 +2302,12 @@ mod tests {
             crate::latexlike::check_latexlike_tree_invariants(&result.tree);
             // The condition quotes the terminator as written — assembled the same way,
             // so the diagnostic names what was actually read.
-            let rendered: Vec<String> =
-                result.diagnostics.iter().map(|d| d.message().to_string()).collect();
-            assert_eq!(rendered.len(), 1, "{rendered:?}");
-            assert!(
-                rendered[0].contains(&alloc::format!("orphan ‘{quoted}’")),
-                "the diagnostic quotes the terminator as read: {rendered:?}"
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            let condition = result.diagnostics.conditions::<OrphanEnd>().next();
+            assert_eq!(
+                condition.map(|c| c.terminator.as_str()),
+                Some(quoted),
+                "the diagnostic quotes the terminator as read"
             );
             let node = result.tree.root().child(index).expect("the recovery node");
             assert_eq!(node.chars(), Some(recovered), "the recovered text differs from {input:?}");
@@ -2617,12 +2682,11 @@ mod tests {
     fn gdef_parse(
         language: &Language<GdefLatexlike>,
         input: &str,
-    ) -> (Vec<String>, Vec<String>) {
+    ) -> (Vec<String>, crate::error::Diagnostics<<GdefLatexlike as Lang>::SourceOrigin>) {
         let result = language.parse(input).expect("the parse runs");
         check_latexlike_tree_invariants(&result.tree);
         let shapes = result.tree.root().children().iter().map(|n| n.summary()).collect();
-        let messages = result.diagnostics.iter().map(|d| d.message().to_string()).collect();
-        (shapes, messages)
+        (shapes, result.diagnostics)
     }
 
     #[test]
@@ -2633,8 +2697,8 @@ mod tests {
         // the group's, one construct level up.
         for input in ["{\\gdef}\\g", "\\begin{center}\\gdef\\end{center}\\g"] {
             let language = gdef_language(GdefDriver::leaking());
-            let (shapes, messages) = gdef_parse(&language, input);
-            assert!(messages.is_empty(), "{input:?}: {messages:?}");
+            let (shapes, diagnostics) = gdef_parse(&language, input);
+            assert!(diagnostics.is_empty(), "{input:?}: {diagnostics:?}");
             // The construct, then `\g` as a resolved callable (an unresolved command
             // would be a `chars` recovery node plus a diagnostic).
             assert_eq!(shapes.len(), 2, "{input:?}: {shapes:?}");
@@ -2655,9 +2719,13 @@ mod tests {
         // definition dies — in a group and in an environment alike.
         for input in ["{\\def}\\d", "\\begin{center}\\def\\end{center}\\d"] {
             let language = gdef_language(GdefDriver::leaking());
-            let (shapes, messages) = gdef_parse(&language, input);
-            assert_eq!(messages.len(), 1, "{input:?}: {messages:?}");
-            assert!(messages[0].contains("cannot resolve command ‘\\d’"), "{messages:?}");
+            let (shapes, diagnostics) = gdef_parse(&language, input);
+            assert_eq!(diagnostics.len(), 1, "{input:?}: {diagnostics:?}");
+            let unresolved: Vec<&str> = diagnostics
+                .conditions::<UnresolvableCommand>()
+                .map(|c| c.name.as_str())
+                .collect();
+            assert_eq!(unresolved, ["d"], "{diagnostics:?}");
             assert_eq!(shapes[1], "chars(\\d)", "{input:?}: {shapes:?}");
         }
     }
@@ -2675,7 +2743,7 @@ mod tests {
         for input in ["\\begin{center}\\gdef\\end{center}\\g", "{\\gdef}\\g"] {
             let result = language.parse(input).expect("the parse runs");
             check_latexlike_tree_invariants(&result.tree);
-            assert_eq!(messages(&result).len(), 1, "{input:?}: {:?}", messages(&result));
+            assert_eq!(identifiers(&result).len(), 1, "{input:?}: {:?}", identifiers(&result));
             assert_eq!(root_shapes(&result)[1], "chars(\\g)", "{input:?}");
         }
     }
@@ -2687,28 +2755,28 @@ mod tests {
         // delta *and* merges it into its own record, which is what the enclosing
         // construct's hook then sees.
         let language = gdef_language(GdefDriver::leaking());
-        let (shapes, messages) = gdef_parse(
+        let (shapes, diagnostics) = gdef_parse(
             &language,
             "\\begin{outer}\\begin{center}\\gdef\\end{center}\\end{outer}\\g",
         );
-        assert!(messages.is_empty(), "{messages:?}");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(shapes[1], "Macro(g)", "{shapes:?}");
         assert_eq!(language.driver().environment_calls(), 2);
 
         // The two constructs interleave just as freely: a group inside an environment.
         let language = gdef_language(GdefDriver::leaking());
-        let (shapes, messages) =
+        let (shapes, diagnostics) =
             gdef_parse(&language, "\\begin{center}{\\gdef}\\end{center}\\g");
-        assert!(messages.is_empty(), "{messages:?}");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(shapes[1], "Macro(g)", "{shapes:?}");
         assert_eq!(language.driver().group_calls(), 1);
         assert_eq!(language.driver().environment_calls(), 1);
 
         // …and an environment inside a group.
         let language = gdef_language(GdefDriver::leaking());
-        let (shapes, messages) =
+        let (shapes, diagnostics) =
             gdef_parse(&language, "{\\begin{center}\\gdef\\end{center}}\\g");
-        assert!(messages.is_empty(), "{messages:?}");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(shapes[1], "Macro(g)", "{shapes:?}");
         assert_eq!(language.driver().group_calls(), 1);
         assert_eq!(language.driver().environment_calls(), 1);
@@ -2720,8 +2788,8 @@ mod tests {
         // keying on the invocation alone must still run. An empty-bodied environment
         // reaches the hook with `record = None`.
         let language = gdef_language(GdefDriver::leaking());
-        let (shapes, messages) = gdef_parse(&language, "\\begin{center}\\end{center}\\g");
-        assert_eq!(messages.len(), 1, "{messages:?}");
+        let (shapes, diagnostics) = gdef_parse(&language, "\\begin{center}\\end{center}\\g");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert_eq!(shapes[1], "chars(\\g)", "{shapes:?}");
         assert_eq!(language.driver().environment_calls(), 1);
         assert_eq!(language.driver().empty_records(), 1);
@@ -2729,8 +2797,8 @@ mod tests {
         // A body that parses nodes but generates no after-effect reaches it the same
         // way, still with an empty record.
         let language = gdef_language(GdefDriver::leaking());
-        let (_, messages) = gdef_parse(&language, "\\begin{center}x\\end{center}");
-        assert!(messages.is_empty(), "{messages:?}");
+        let (_, diagnostics) = gdef_parse(&language, "\\begin{center}x\\end{center}");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(language.driver().environment_calls(), 1);
         assert_eq!(language.driver().empty_records(), 1);
     }
@@ -2745,15 +2813,15 @@ mod tests {
         let error = language.parse("\\begin{center}x\\end{center}").unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
-            error.message(),
-            "extension hook reported a failure: the leak policy table is unavailable"
+            error.data().downcast_ref::<HookFailed>().map(|c| c.detail.as_str()),
+            Some("the leak policy table is unavailable")
         );
         // The error is anchored where the hook put it — the environment's name.
         assert_eq!(error.span().range(), 7..13);
         // The `\begin` dispatch frame is live at the routing site — the only frame, as
         // `center` declares no arguments and the body parser's own frame is long popped.
         assert_eq!(error.frames().len(), 1);
-        assert_eq!(error.frames()[0].title(), "macro ‘\\begin’");
+        assert_eq!(error.frames()[0].span().range(), 0..6);
         assert_eq!(language.driver().environment_calls(), 1);
     }
 }
