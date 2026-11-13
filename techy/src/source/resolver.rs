@@ -334,16 +334,17 @@ impl<O: SourceOrigin> ResolvedContent<O> {
 }
 
 /// The error that [`SourceResolver::resolve`] returns when it cannot provide the source
-/// that a reference names.
+/// that a reference refers to.
 ///
 /// A `ResolveError` contains the [`reference`](ResolveError::reference) and a
-/// [`message`](ResolveError::message) that describes the failure. When an `\input`-like
-/// construct fails to include a source, the parse reports the
+/// [`message`](ResolveError::message) that describes the failure. Write the message as
+/// a complete message that begins with a capital letter and has no final period.
+///
+/// When a source resolver returns a `ResolveError` during a parse, the parse reports an
 /// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
-/// error, whose message shows the reference as written in the document followed by
-/// this message, as in `Failed to include ‘chapter1.tex’: Source not found`. Write the
-/// message as a complete message that begins with a capital letter and has no final
-/// period.
+/// error. The message of that error contains the reference as written in the document,
+/// followed by the message of the `ResolveError`, as in
+/// `Failed to include ‘chapter1.tex’: Source not found`.
 ///
 /// An implementation can also attach the underlying error with
 /// [`with_cause`](ResolveError::with_cause). The cause is available through

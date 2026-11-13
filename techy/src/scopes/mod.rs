@@ -707,14 +707,13 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
 /// type begin with an escape character (id
 /// `core.specs.provider-commands-shadowed-by-escape`).
 ///
-/// A definition counts when its name is an escape character of the command rules
-/// followed by at least one more character, such as `"\\greet"`. A name that consists
-/// of the escape character alone, such as `"\\"` for the command `\\`, does not count.
+/// This warning concerns a definition whose name consists of an escape character of the
+/// command rules followed by at least one more character. A name that consists of the
+/// escape character alone, such as `"\\"` for the command `\\`, is not concerned.
 ///
-/// The name of a command token does not include the escape character. Command names
-/// must therefore be registered without it, as in
-/// `package.insert(CallableType::Macro, "greet", spec)` for the command `\greet`. A
-/// definition registered under `"\\greet"` is never resolved.
+/// The name of a command token does not include the escape character. The names of
+/// definitions must therefore be registered without the escape character, as in
+/// `package.insert(CallableType::Macro, "greet", spec)` for the command `\greet`.
 ///
 /// Reported by [`check_provider_commands_shadowed_by_escape`], once for each affected
 /// provider and callable type, at the start of the source passed to that function. A
@@ -727,15 +726,11 @@ pub struct ProviderCommandsShadowedByEscape {
     /// The name of the provider ([`SpecsProvider::name`]).
     pub provider: String,
     /// The callable type of the definitions, as its `Debug` rendering (e.g. `Macro`).
-    ///
-    /// The field stores a string because the data of a diagnostic cannot contain a
-    /// language's own callable type.
     pub callable_type: String,
     /// The number of definitions of the provider under this callable type. All of them
     /// begin with an escape character.
     pub count: usize,
-    /// The first of these definition names in sorted order, as registered (e.g.
-    /// `"\\greet"`).
+    /// The first of these definition names in sorted order, as registered.
     pub example: String,
     /// The escape characters that these definition names begin with, sorted and
     /// without duplicates.
@@ -778,7 +773,7 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
         if self.count > 1 {
             write!(f, " (e.g. ‘{}’)", self.example)?;
         }
-        f.write_str("; command names must be registered without their escape character")
+        f.write_str("; names must be registered without their escape character")
     }
 }
 
@@ -1728,8 +1723,9 @@ impl<L: Lang> fmt::Debug for FallbackProvider<L> {
 /// [`ErrorCallableSpec`] (id `core.specs.callable-defined-as-error`).
 ///
 /// An [`ErrorCallableSpec`] makes a name unavailable on purpose. For instance, a
-/// package stores it under the name of a command that a provider lower on the scope
-/// stack defines, so that documents cannot use that command.
+/// package stores an [`ErrorCallableSpec`] under the name of a command that an outer
+/// provider of the scope stack defines. Names are looked up innermost first, so
+/// documents cannot use that command.
 ///
 /// Reported by the invocation parser of [`ErrorCallableSpec`] when the name is invoked,
 /// at the span of the invoking token. The invocation is parsed into a `Chars` node over
@@ -1741,9 +1737,9 @@ pub struct CallableDefinedAsError {
     /// The invoked name, as resolved: for a command, the name without the escape
     /// character (`gone` for `\gone`).
     pub name: String,
-    /// The detail given to [`ErrorCallableSpec::with_detail`], which says why the name
-    /// may not be used (e.g. `removed by mypackage`), or `None` for a spec created with
-    /// [`ErrorCallableSpec::new`].
+    /// The detail given to [`ErrorCallableSpec::with_detail`] (e.g. `removed by
+    /// mypackage`), or `None` for a spec created with [`ErrorCallableSpec::new`]. The
+    /// detail explains why the name may not be used.
     pub detail: Option<String>,
 }
 

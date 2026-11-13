@@ -302,7 +302,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
 /// parse driver has no source resolver (id `core.sources.no-resolver`).
 ///
 /// A construct such as `\input{chapter1.tex}` includes the source that its reference
-/// argument names. The reference is looked up with the
+/// argument refers to. The reference is looked up with the
 /// [`SourceResolver`](crate::source::SourceResolver) that
 /// [`ParseDriver::source_resolver`](crate::core::ParseDriver::source_resolver) returns.
 /// A driver has no resolver by default. A program that supports inclusion configures
@@ -325,11 +325,12 @@ pub struct NoSourceResolver {
     pub reference: String,
 }
 
-/// The error that is reported when the source resolver fails to resolve a source
-/// reference (id `core.sources.unresolvable-reference`).
+/// The error that is reported when a document includes a source that the source
+/// resolver of the parse driver cannot provide (id
+/// `core.sources.unresolvable-reference`).
 ///
 /// A construct such as `\input{chapter1.tex}` includes the source that its reference
-/// argument names. The [`SourceResolver`](crate::source::SourceResolver) of the parse
+/// argument refers to. The [`SourceResolver`](crate::source::SourceResolver) of the parse
 /// driver returns a [`ResolveError`] when it cannot provide that source, for instance
 /// because no file of that name exists. The message contains the reference as written
 /// in the document, followed by the [`message`](ResolveError::message) of the
