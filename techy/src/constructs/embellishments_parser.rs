@@ -130,13 +130,15 @@ where
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         if self.markers.is_empty() {
             return Err(cx.implementation_error(
-                "EmbellishmentsArgumentParser::new needs at least one marker",
+                "Misconfigured argument parser ‘EmbellishmentsArgumentParser’: \
+                 ‘EmbellishmentsArgumentParser::new’ must be given at least one marker",
                 cx.here(),
             ));
         }
         if self.markers.iter().any(|marker| marker.is_empty()) {
             return Err(cx.implementation_error(
-                "EmbellishmentsArgumentParser::new needs non-empty markers",
+                "Misconfigured argument parser ‘EmbellishmentsArgumentParser’: \
+                 the markers must not be empty",
                 cx.here(),
             ));
         }

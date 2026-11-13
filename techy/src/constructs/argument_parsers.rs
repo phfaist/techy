@@ -111,22 +111,26 @@ use super::{
     comment_node_kind, ConstructParserResult, FromInvocation, Invocation, ParseContext,
 };
 
-/// Condition: a mandatory argument was not there where the callable's syntax required
-/// one.
+/// The error that is reported when a mandatory argument of a callable is missing (id
+/// `core.arguments.missing-mandatory-argument`).
 ///
-/// Raised by the mandatory argument parsers — [`GroupArgumentParser`] and
-/// [`CharsGroupArgumentParser`](super::CharsGroupArgumentParser) — when nothing that
-/// could be the argument follows: end of input, a paragraph break, or the close
-/// delimiter of an enclosing group. Under tolerant recovery the argument is then
-/// reported absent and nothing is consumed; under strict recovery the parse aborts.
+/// Reported by [`GroupArgumentParser`] and
+/// [`CharsGroupArgumentParser`](super::CharsGroupArgumentParser) when no group of the
+/// accepted form opens at the position of the argument, and the parser has no
+/// single-expression fallback or the fallback finds no expression either. Whitespace and
+/// comments before the argument are skipped. The span of the diagnostic is the token that
+/// follows them, or the end of the input.
 ///
-/// The payload names no callable: the diagnostic's frame stack already identifies the
-/// enclosing invocation.
+/// In a tolerant parse, the argument is absent and the parser consumes nothing; the
+/// invocation continues with its next argument. A strict parse stops at this error.
+///
+/// The condition contains no name of the callable: the traceback of the diagnostic shows
+/// the invocation that the argument belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.arguments.missing-mandatory-argument")]
 pub struct MissingMandatoryArgument {
-    /// The argument's declared name, when the spec has one.
+    /// The name of the argument ([`ArgumentSpec::name`]), if its spec declares one.
     pub argument_name: Option<String>,
 }
 
@@ -134,7 +138,7 @@ pub struct MissingMandatoryArgument {
 // conditional, which the message format string cannot express).
 impl fmt::Display for MissingMandatoryArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "missing mandatory argument")?;
+        write!(f, "Missing mandatory argument")?;
         if let Some(name) = &self.argument_name {
             write!(f, " ‘{}’", name)?;
         }
@@ -142,29 +146,35 @@ impl fmt::Display for MissingMandatoryArgument {
     }
 }
 
-/// Condition: an [`ExpressionParser`] argument found nothing that could begin an
-/// expression.
+/// The error that is reported when an [`ExpressionParser`] argument is missing (id
+/// `core.arguments.expected-expression-argument`).
 ///
-/// No group, callable invocation, or content character was there — the position holds
-/// end of input, a paragraph break, or the close delimiter of an enclosing group
-/// instead. Under tolerant recovery the argument is reported absent and nothing is
-/// consumed; under strict recovery the parse aborts.
+/// An [`ExpressionParser`] argument is a single expression: a character, a group or a
+/// callable invocation, as the `1` in `\frac12`, the `{a}` in `\frac{a}2` or the `\alpha`
+/// in `\frac\alpha2`. Whitespace and comments before the expression are skipped.
+///
+/// Reported by [`ExpressionParser`] when the input ends, or when a paragraph break or a
+/// closing delimiter follows, at the position of the argument. The span of the diagnostic
+/// is that token, or the end of the input.
+///
+/// In a tolerant parse, the argument is absent and the parser consumes nothing; the
+/// invocation continues with its next argument. A strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.arguments.expected-expression-argument")]
 pub struct ExpectedExpressionArgument {
-    /// The argument's declared name, when the spec has one.
+    /// The name of the argument ([`ArgumentSpec::name`]), if its spec declares one.
     pub argument_name: Option<String>,
 }
 
 // Hand-written wording: same conditional shape as [`MissingMandatoryArgument`].
 impl fmt::Display for ExpectedExpressionArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "expected an expression argument")?;
+        write!(f, "Missing argument")?;
         if let Some(name) = &self.argument_name {
             write!(f, " ‘{}’", name)?;
         }
-        Ok(())
+        write!(f, " (expected a single character, group or command)")
     }
 }
 
@@ -833,7 +843,8 @@ where
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         if matches!(&self.form, GroupArgumentForm::Rules(rules) if rules.is_empty()) {
             return Err(cx.implementation_error(
-                "GroupArgumentParser::any_of needs at least one delimiter rule",
+                "Misconfigured argument parser ‘GroupArgumentParser’: \
+                 ‘GroupArgumentParser::any_of’ must be given at least one group rule",
                 cx.here(),
             ));
         }
@@ -1148,7 +1159,8 @@ where
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         if self.rules.is_empty() {
             return Err(cx.implementation_error(
-                "OptionalGroupArgumentParser::any_of needs at least one delimiter rule",
+                "Misconfigured argument parser ‘OptionalGroupArgumentParser’: \
+                 ‘OptionalGroupArgumentParser::any_of’ must be given at least one group rule",
                 cx.here(),
             ));
         }
@@ -1280,7 +1292,8 @@ where
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         let Some(first_char) = self.marker.chars().next() else {
             return Err(cx.implementation_error(
-                "MarkerArgumentParser::new needs a non-empty marker",
+                "Misconfigured argument parser ‘MarkerArgumentParser’: the marker \
+                 must not be empty",
                 cx.here(),
             ));
         };
