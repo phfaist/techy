@@ -512,32 +512,30 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     }
 }
 
-/// A category mismatch reported by the by-name accessors: the node is not a callable,
-/// or the name matches nothing the callable declares.
+/// The error that the by-name accessors of [`NodeRef`] return when the node is not a
+/// callable, or when the callable has no argument or slot with the requested name.
 ///
-/// Returned by [`NodeRef::argument_nodes_named`],
-/// [`NodeRef::argument_content_nodes_named`], and
-/// [`NodeRef::slot_content_nodes_named`].
-///
-/// These accessors report an error rather than answering `None`, because a `None` on a
-/// misspelled name gives the call site nothing cheap to distinguish it by, and names
-/// are the access form the API recommends. `Ok(None)` stays reserved for the argument
-/// family's "declared but absent". None of these accessors ever panics.
+/// The by-name accessors are [`NodeRef::argument_nodes_named`],
+/// [`NodeRef::argument_content_nodes_named`] and [`NodeRef::slot_content_nodes_named`].
+/// The two argument accessors return `Ok(None)` for an argument that the spec of the
+/// callable declares and that the source does not provide. They return an error for a
+/// name that the spec does not declare, so that a misspelled name cannot be mistaken
+/// for an absent argument. None of these accessors panics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NamedAccessError {
-    /// The node is not a `Callable` — it has no arguments or slots to access.
+    /// The node is not a `Callable` node, so it has no arguments and no slots.
     NotACallable,
-    /// The name matches none of the callable's declared arguments (the names on
-    /// its spec's [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s).
+    /// The spec of the callable declares no argument with this name. The declared
+    /// names are those of its [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s.
     UnknownArgumentName {
-        /// The unmatched name, as queried.
+        /// The requested name.
         name: Box<str>,
     },
-    /// The name matches none of the callable's recorded slots
-    /// ([`ParsedSlot`](super::ParsedSlot) names).
+    /// The callable has no slot with this name. The slot names are those of its
+    /// [`ParsedSlot`](super::ParsedSlot) records.
     UnknownSlotName {
-        /// The unmatched name, as queried.
+        /// The requested name.
         name: Box<str>,
     },
 }
@@ -545,14 +543,12 @@ pub enum NamedAccessError {
 impl fmt::Display for NamedAccessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NamedAccessError::NotACallable => {
-                write!(f, "the node is not a callable (no arguments or slots)")
-            }
+            NamedAccessError::NotACallable => write!(f, "Node is not a callable"),
             NamedAccessError::UnknownArgumentName { name } => {
-                write!(f, "no argument named ‘{name}’ among the declared arguments")
+                write!(f, "Unknown argument name ‘{name}’ for this callable")
             }
             NamedAccessError::UnknownSlotName { name } => {
-                write!(f, "no slot named ‘{name}’ on the callable")
+                write!(f, "Unknown slot name ‘{name}’ for this callable")
             }
         }
     }

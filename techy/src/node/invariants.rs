@@ -299,19 +299,23 @@ fn validate_regions<L: Lang, A>(
     Ok(())
 }
 
-/// A violation of the all-trees law, reported by [`validate_tree`].
+/// The error that [`validate_tree`] returns when a tree violates one of the invariants
+/// that every finished tree must satisfy.
 ///
-/// It records the offending node, where one is identifiable, and what was violated. The
-/// [`Display`](core::fmt::Display) rendering is detailed enough to serve directly as a
-/// log or panic message.
+/// The field `node` identifies the node concerned, and the field `kind` describes the
+/// violation. The [`Display`](core::fmt::Display) text is a complete message that
+/// contains the values concerned, so you can write it directly to a log or use it as a
+/// panic message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TreeViolation {
-    /// The node the violation is about (e.g. the doubly-parented node itself for
-    /// [`MultipleParents`](TreeViolationKind::MultipleParents), the callable for
-    /// region violations); `None` when no single node is identifiable.
+    /// The node concerned by the violation, or `None` if the violation does not concern
+    /// a single node, as for [`Empty`](TreeViolationKind::Empty). For a violation that
+    /// concerns an argument or slot region, this is the callable node. For
+    /// [`MultipleParents`](TreeViolationKind::MultipleParents), this is the node that
+    /// has two parents.
     pub node: Option<NodeId>,
-    /// What was violated.
+    /// The kind of violation.
     pub kind: TreeViolationKind,
 }
 
@@ -326,114 +330,131 @@ impl TreeViolation {
     }
 }
 
-/// The specific all-trees-law violation inside a [`TreeViolation`].
+/// The kind of violation that a [`TreeViolation`] reports, with the values concerned.
+///
+/// Node indices and children ranges refer to the order in which the tree stores its
+/// nodes (see [`NodeId::index`]). The argument and slot regions of a callable are
+/// numbered from 0, arguments first; an argument that was not given in the source has
+/// no region and no number.
+///
+/// The [`Display`](core::fmt::Display) text is a lowercase phrase, which the `Display`
+/// text of [`TreeViolation`] inserts after the node concerned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TreeViolationKind {
-    /// The tree stores no nodes (a tree has at least its root node). Unreachable for
-    /// trees built by [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish);
-    /// kept so the checker is total.
+    /// The tree contains no nodes. A tree built by
+    /// [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish) always contains at
+    /// least its root node.
     Empty,
-    /// A children range is inverted or reaches past the node storage.
+    /// The children range of the node is inverted or extends past the last node of the
+    /// tree.
     ChildrenOutOfBounds {
-        /// The offending children range.
+        /// The children range of the node.
         children: Range<u32>,
-        /// The tree's node count.
+        /// The number of nodes in the tree.
         node_count: usize,
     },
-    /// A non-empty children range does not lie strictly after its node (the
-    /// breadth-first layout law).
+    /// The children range of the node is not empty and does not start after the node
+    /// itself. A tree stores its nodes in breadth-first order, so the children of a node
+    /// always follow the node.
     ChildrenNotAfterParent {
-        /// The offending children range.
+        /// The children range of the node.
         children: Range<u32>,
     },
-    /// The node lies inside two parents' children ranges.
+    /// The node is in the children ranges of two nodes.
     MultipleParents {
-        /// The first claiming parent (in storage order).
+        /// The first of the two parents, in storage order.
         first_parent: NodeId,
-        /// The second claiming parent.
+        /// The second of the two parents.
         second_parent: NodeId,
     },
-    /// The root (index 0) lies inside another node's children range.
+    /// The root node (index 0) is in the children range of another node.
     RootHasParent {
-        /// The claiming parent.
+        /// The node whose children range contains the root.
         parent: NodeId,
     },
-    /// The node is inside no parent's children range (unreachable from the root).
+    /// The node is not in the children range of any node, so it is not reachable from
+    /// the root.
     Unreachable,
-    /// A `Chars` or `Comment` node has children.
+    /// A `Chars` node or a `Comment` node has children.
     LeafWithChildren {
-        /// The childless kind (`"Chars"` or `"Comment"`).
+        /// The kind of the node: `"Chars"` or `"Comment"`.
         kind: &'static str,
     },
-    /// An argument/slot region of a finished tree is still staged (never resolved by
-    /// [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish)).
+    /// An argument or slot region of the callable is unresolved: its ranges are child
+    /// offsets, and not node indices of the tree.
+    /// [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish) resolves every region
+    /// of the tree that it builds (see
+    /// [`ChildRegion::is_resolved`](super::ChildRegion::is_resolved)).
     UnresolvedRegion {
-        /// The region's ordinal within the callable (arguments before slots).
+        /// The number of the region.
         region: usize,
     },
-    /// An argument/slot region does not start where the previous one ended, or
-    /// escapes the callable's children block: the regions must tile the block
-    /// exactly, in order.
+    /// An argument or slot region does not start where the previous region ends, or it
+    /// extends past the children of the callable. The regions must cover the children
+    /// of the callable in order and without gaps: first the arguments, then the slots.
     RegionNotTiling {
-        /// The region's ordinal within the callable.
+        /// The number of the region.
         region: usize,
-        /// The offending region's node-index range.
+        /// The node indices of the region.
         children: Range<u32>,
-        /// The callable's children block.
+        /// The children range of the callable.
         block: Range<u32>,
-        /// Where the region was expected to start.
+        /// The node index at which the region must start.
         expected_start: u32,
     },
-    /// Children after the last argument/slot region belong to no region (the regions
-    /// must tile the children block exactly).
+    /// Children of the callable that follow its last argument or slot region are not in
+    /// any region. The regions must cover all children of the callable.
     ChildrenNotInRegions {
-        /// The node indices no region accounts for.
+        /// The node indices of the children that are not in any region.
         unassigned: Range<u32>,
     },
-    /// A region-level content range escapes its own region's nodes.
+    /// The content range of a region whose content parent is the callable itself
+    /// extends past the nodes of the region.
     ContentOutsideRegion {
-        /// The region's ordinal within the callable.
+        /// The number of the region.
         region: usize,
-        /// The offending content range.
+        /// The content range.
         content: Range<u32>,
-        /// The region's node-index range.
+        /// The node indices of the region.
         region_children: Range<u32>,
     },
-    /// A content range escapes its content parent's children.
+    /// The content range of a region extends past the children of its content parent.
     ContentOutsideContentParent {
-        /// The region's ordinal within the callable.
+        /// The number of the region.
         region: usize,
-        /// The offending content range.
+        /// The content range.
         content: Range<u32>,
-        /// The content parent's children range.
+        /// The children range of the content parent.
         parent_children: Range<u32>,
     },
-    /// A content parent is not inside its callable's subtree (also reported when the
-    /// recorded content parent is not a node of this tree at all).
+    /// The content parent of a region is not inside the subtree of the callable. This
+    /// variant also reports a content parent that is not a node of the tree.
     ContentParentOutsideSubtree {
-        /// The region's ordinal within the callable.
+        /// The number of the region.
         region: usize,
-        /// The recorded content parent.
+        /// The content parent.
         content_parent: NodeId,
     },
-    /// A content parent lies outside its own argument/slot region's subtree.
+    /// The content parent of a region is inside the subtree of the callable, but not
+    /// inside the subtree of the region.
     ContentParentOutsideRegion {
-        /// The region's ordinal within the callable.
+        /// The number of the region.
         region: usize,
-        /// The recorded content parent.
+        /// The content parent.
         content_parent: NodeId,
-        /// The region's node-index range.
+        /// The node indices of the region.
         region_children: Range<u32>,
     },
-    /// A `Spanned` text payload is not a valid char-boundary range of the node's own
-    /// source.
+    /// A `Spanned` text of the node is not a range of the source of the node on
+    /// character boundaries.
     SpannedContentInvalid {
-        /// Which payload (e.g. `"chars content"`, `"group open delimiter"`).
+        /// The text concerned, for instance `"chars content"` or
+        /// `"group open delimiter"`.
         what: &'static str,
-        /// The offending span.
+        /// The span of the text.
         span: Span,
-        /// The node's source content length.
+        /// The length of the source content of the node, in bytes.
         content_len: usize,
     },
 }
@@ -475,8 +496,8 @@ impl TreeViolationKind {
 impl fmt::Display for TreeViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.node {
-            Some(id) => write!(f, "node {}: {}", id.index(), self.kind),
-            None => fmt::Display::fmt(&self.kind, f),
+            Some(id) => write!(f, "Invalid tree at node {}: {}", id.index(), self.kind),
+            None => write!(f, "Invalid tree: {}", self.kind),
         }
     }
 }
@@ -485,52 +506,56 @@ impl fmt::Display for TreeViolationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TreeViolationKind::Empty => {
-                write!(f, "the tree has no nodes (a tree has at least its root node)")
+                write!(f, "the tree has no nodes (a tree contains at least its root node)")
             }
             TreeViolationKind::ChildrenOutOfBounds { children, node_count } => {
-                write!(f, "children range {:?} out of bounds ({} nodes)", children, node_count)
+                write!(
+                    f,
+                    "invalid children range {:?} (the tree has {} nodes)",
+                    children, node_count
+                )
             }
-            TreeViolationKind::ChildrenNotAfterParent { children } => write!(
-                f,
-                "children range {:?} does not lie after the node (breadth-first layout)",
-                children
-            ),
+            TreeViolationKind::ChildrenNotAfterParent { children } => {
+                write!(f, "children range {:?} must start after the node", children)
+            }
             TreeViolationKind::MultipleParents { first_parent, second_parent } => write!(
                 f,
-                "the node is inside two children ranges (parents {:?} and {:?})",
-                first_parent, second_parent
+                "the node is a child of both node {} and node {}",
+                first_parent.index(),
+                second_parent.index()
             ),
             TreeViolationKind::RootHasParent { parent } => {
-                write!(f, "the root is another node's child (parent {:?})", parent)
+                write!(f, "the root is a child of node {}", parent.index())
             }
             TreeViolationKind::Unreachable => {
-                write!(f, "the node is unreachable from the root")
+                write!(f, "the node is not reachable from the root")
             }
             TreeViolationKind::LeafWithChildren { kind } => {
-                write!(f, "a {} node has children", kind)
+                write!(f, "‘{}’ nodes may not have children", kind)
             }
             TreeViolationKind::UnresolvedRegion { region } => {
-                write!(f, "region {} of a finished tree is still staged", region)
+                write!(f, "argument or slot region {} is unresolved", region)
             }
             TreeViolationKind::RegionNotTiling { region, children, block, expected_start } => {
                 write!(
                     f,
-                    "region {} children {:?} do not tile the children block {:?} \
-                     (expected to start at {})",
-                    region, children, block, expected_start
+                    "argument or slot region {} (nodes {:?}) must start at node {} and \
+                     lie within the children {:?} of the callable",
+                    region, children, expected_start, block
                 )
             }
             TreeViolationKind::ChildrenNotInRegions { unassigned } => write!(
                 f,
-                "children {:?} belong to no argument/slot region \
-                 (the regions must tile the children block)",
+                "children {:?} not in any argument or slot region (the regions must \
+                 cover all children of the callable)",
                 unassigned
             ),
             TreeViolationKind::ContentOutsideRegion { region, content, region_children } => {
                 write!(
                     f,
-                    "region {} content {:?} escapes its region children {:?}",
-                    region, content, region_children
+                    "content range {:?} of region {} must lie within the nodes {:?} of \
+                     the region",
+                    content, region, region_children
                 )
             }
             TreeViolationKind::ContentOutsideContentParent {
@@ -539,14 +564,17 @@ impl fmt::Display for TreeViolationKind {
                 parent_children,
             } => write!(
                 f,
-                "region {} content {:?} escapes its content parent's children {:?}",
-                region, content, parent_children
+                "content range {:?} of region {} must lie within the children {:?} of its \
+                 content parent",
+                content, region, parent_children
             ),
             TreeViolationKind::ContentParentOutsideSubtree { region, content_parent } => {
                 write!(
                     f,
-                    "region {} content parent {:?} is not inside the callable's subtree",
-                    region, content_parent
+                    "content parent {} of region {} is not inside the subtree of the \
+                     callable",
+                    content_parent.index(),
+                    region
                 )
             }
             TreeViolationKind::ContentParentOutsideRegion {
@@ -555,14 +583,17 @@ impl fmt::Display for TreeViolationKind {
                 region_children,
             } => write!(
                 f,
-                "region {} content parent {:?} lies outside its own region {:?}",
-                region, content_parent, region_children
+                "content parent {} of region {} is not inside the subtree of the region \
+                 (nodes {:?})",
+                content_parent.index(),
+                region,
+                region_children
             ),
             TreeViolationKind::SpannedContentInvalid { what, span, content_len } => write!(
                 f,
-                "{} span {:?} is not a valid char-boundary range of the node's source \
-                 (len {})",
-                what, span, content_len
+                "span {:?} of the {} must lie within the source of the node ({} bytes) on \
+                 character boundaries",
+                span, what, content_len
             ),
         }
     }
