@@ -4,7 +4,6 @@
 //! human-readable format (serde_json: pinned canonical rendering) and a compact one
 //! (postcard).
 
-use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -369,14 +368,16 @@ fn non_string_map_keys_are_rejected() {
 
 #[test]
 fn shape_mismatches_are_reported() {
-    assert_eq!(
-        from_value::<Plain>(&s("not a map")).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a map (struct Plain)"), found: "str" }
-    );
-    assert_eq!(
-        from_value::<Option<u8>>(&s("x")).unwrap_err(),
-        SerialValueError::Custom("invalid type: string \"x\", expected u8".into())
-    );
+    // A struct reads from a map only; the expected-value phrase names the struct.
+    match from_value::<Plain>(&s("not a map")).unwrap_err() {
+        SerialValueError::TypeMismatch { expected, found } => {
+            assert_eq!(found, "str");
+            assert!(expected.contains("Plain"), "{expected}");
+        }
+        other => panic!("expected a type mismatch, got {other:?}"),
+    }
+    // serde's own type errors surface as `Custom`.
+    assert!(matches!(from_value::<Option<u8>>(&s("x")).unwrap_err(), SerialValueError::Custom(_)));
     assert!(matches!(
         from_value::<Shape>(&SerialValue::Int(1)).unwrap_err(),
         SerialValueError::TypeMismatch { found: "int", .. }

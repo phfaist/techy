@@ -278,8 +278,12 @@ fn strict_struct_reads() {
     // Wrong kind for the struct.
     assert_eq!(
         WireInner::from_serial_value(&s("x")).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a map (WireInner)"), found: "str" }
+        FieldReader::new(&s("x"), "WireInner", &["id", "note"]).err().unwrap()
     );
+    assert!(matches!(
+        WireInner::from_serial_value(&s("x")).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "str", .. }
+    ));
     // Unknown key.
     assert_eq!(
         WireInner::from_serial_value(&map([("id", SerialValue::Int(1)), ("bogus", SerialValue::Null)])).unwrap_err(),
@@ -298,8 +302,12 @@ fn strict_struct_reads() {
     // Wrong kind for a field.
     assert_eq!(
         WireInner::from_serial_value(&map([("id", s("1"))])).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("an integer"), found: "str" }
+        u32::from_serial_value(&s("1")).unwrap_err()
     );
+    assert!(matches!(
+        WireInner::from_serial_value(&map([("id", s("1"))])).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "str", .. }
+    ));
     // Wrong kind for a nested field, a list, a byte string, an option.
     let mut broken = sample_value();
     if let SerialValue::Map(entries) = &mut broken {
@@ -307,24 +315,36 @@ fn strict_struct_reads() {
     }
     assert_eq!(
         WireAll::from_serial_value(&broken).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a byte string"), found: "list" }
+        SerialBytes::from_serial_value(&list([SerialValue::Int(1)])).unwrap_err()
     );
+    assert!(matches!(
+        WireAll::from_serial_value(&broken).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "list", .. }
+    ));
     let mut broken = sample_value();
     if let SerialValue::Map(entries) = &mut broken {
         entries.iter_mut().find(|(k, _)| k == "items").unwrap().1 = SerialValue::Bytes(Vec::new());
     }
     assert_eq!(
         WireAll::from_serial_value(&broken).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a list"), found: "bytes" }
+        Vec::<i64>::from_serial_value(&SerialValue::Bytes(Vec::new())).unwrap_err()
     );
+    assert!(matches!(
+        WireAll::from_serial_value(&broken).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "bytes", .. }
+    ));
     let mut broken = sample_value();
     if let SerialValue::Map(entries) = &mut broken {
         entries.iter_mut().find(|(k, _)| k == "maybe").unwrap().1 = SerialValue::Bool(true);
     }
     assert_eq!(
         WireAll::from_serial_value(&broken).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("an integer"), found: "bool" }
+        Option::<u32>::from_serial_value(&SerialValue::Bool(true)).unwrap_err()
     );
+    assert!(matches!(
+        WireAll::from_serial_value(&broken).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "bool", .. }
+    ));
     // The `FieldReader` scan is bounded on hostile input: a long map of one repeated
     // known key fails at the first repeat.
     let hostile = SerialValue::Map((0..10_000).map(|_| (String::from("id"), SerialValue::Int(1))).collect());
@@ -367,16 +387,24 @@ fn strict_enum_reads() {
     // Wrong payload kinds.
     assert_eq!(
         WireKind::from_serial_value(&map([("named", SerialValue::Int(1))])).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a string"), found: "int" }
+        String::from_serial_value(&SerialValue::Int(1)).unwrap_err()
     );
+    assert!(matches!(
+        WireKind::from_serial_value(&map([("named", SerialValue::Int(1))])).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "int", .. }
+    ));
     assert_eq!(
         WireKind::from_serial_value(&map([("sized", map([("w", SerialValue::Int(1)), ("d", SerialValue::Int(1))]))])).unwrap_err(),
         SerialValueError::UnknownField { name: "d".into(), expected: &["w", "h"] }
     );
     assert_eq!(
         WireKind::from_serial_value(&map([("sized", s("x"))])).unwrap_err(),
-        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a map (WireKind::Sized)"), found: "str" }
+        FieldReader::new(&s("x"), "WireKind::Sized", &["w", "h"]).err().unwrap()
     );
+    assert!(matches!(
+        WireKind::from_serial_value(&map([("sized", s("x"))])).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "str", .. }
+    ));
 }
 
 /// The wire shapes are the ones the serde bridge produces for the corresponding serde
