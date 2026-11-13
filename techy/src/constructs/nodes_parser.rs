@@ -57,7 +57,10 @@ use super::{
 /// looks up the definition of the command (for instance in the scope stack of the
 /// parsing state). This error is reported when `resolve_command` returns
 /// [`CommandResolution::Unresolved`](crate::core::specs::CommandResolution::Unresolved).
-/// When the resolver itself fails, `resolve_command` returns
+/// [`NodesParser`] also reports this error, without a detail and without calling
+/// `resolve_command`, for a placeholder command that a token reader returns after a
+/// tokenization error ([`TokenRecovery`](crate::core::token::TokenRecovery)). When the
+/// resolver itself fails, `resolve_command` returns
 /// [`CommandResolution::Failed`](crate::core::specs::CommandResolution::Failed) and the
 /// parser reports [`CommandResolutionFailed`] instead.
 ///
@@ -159,8 +162,8 @@ impl fmt::Display for CommandResolutionFailed {
 ///
 /// Reported by the argument parser that parses the argument. The span of the diagnostic
 /// is the callable. In a tolerant parse, the argument consists of the callable alone,
-/// with every declared argument of the callable absent; the tokens that follow the
-/// callable are left for the next argument. A strict parse stops with this error.
+/// with every declared argument of the callable absent, and the parse continues after the
+/// callable. A strict parse stops with this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -179,10 +182,13 @@ pub struct ExpressionCallableRequiresContent {
 ///
 /// When a token reader fails to read a token, it can return a
 /// [`TokenRecovery`](crate::core::token::TokenRecovery) with a placeholder token, and a
-/// tolerant parse continues with this placeholder. A placeholder has no source text, so
-/// [`NodesParser`] cannot parse a group or a specials invocation from it. The standard
-/// token reader only returns placeholder characters; a document cannot cause this error,
-/// but a custom token reader can.
+/// tolerant parse continues with this placeholder. A placeholder is not part of the token
+/// stream: the parse continues at the resume position of the recovery
+/// ([`TokenRecovery::resume`](crate::core::token::TokenRecovery::resume)). Therefore
+/// [`NodesParser`] cannot parse a group or a specials invocation from a placeholder.
+///
+/// The standard token reader returns only `Chars` placeholder tokens. Therefore a
+/// document cannot cause this error; only a custom token reader can.
 ///
 /// Reported by [`NodesParser`]. The span of the diagnostic is the span of the placeholder
 /// token. In a tolerant parse, the placeholder is parsed into a `Chars` node over this
@@ -216,14 +222,14 @@ impl fmt::Display for UnusableRecoveryToken {
         match self.kind {
             UnusableRecoveryTokenKind::Specials => write!(
                 f,
-                "Invalid recovery placeholder ‘{}’ of a tokenization error: a \
-                 placeholder token may not invoke specials",
+                "Misconfigured token reader: the recovery placeholder ‘{}’ of a \
+                 tokenization error may not be a specials token",
                 self.spelling
             ),
             UnusableRecoveryTokenKind::GroupOpen => write!(
                 f,
-                "Invalid recovery placeholder ‘{}’ of a tokenization error: a \
-                 placeholder token may not open a group",
+                "Misconfigured token reader: the recovery placeholder ‘{}’ of a \
+                 tokenization error may not be an opening delimiter",
                 self.spelling
             ),
         }
@@ -385,9 +391,11 @@ impl<L: Lang> Default for StopSpec<'_, L> {
 /// (id `core.groups.stray-group-close`).
 ///
 /// Each closing delimiter must close a group that is open, as in `{a b}`. Inside a group,
-/// a closing delimiter that does not close this group is reported by
-/// [`GroupParser`](super::GroupParser) as [`UnclosedGroup`](super::UnclosedGroup). This
-/// error concerns a closing delimiter outside of every group.
+/// a closing delimiter of another group rule is reported by
+/// [`GroupParser`](super::GroupParser) as [`UnclosedGroup`](super::UnclosedGroup), and it
+/// closes the groups up to an enclosing group of its own rule. A closing delimiter that
+/// reaches the outermost level, because no enclosing group is of its rule, is reported
+/// as this error.
 ///
 /// Reported by [`RootNodesParser`](super::RootNodesParser) for the source of the parse,
 /// and by [`ParseContext::parse_attached_source`] for an attached source, such as an

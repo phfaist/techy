@@ -2162,7 +2162,7 @@ pub struct SearchedProviders<'a, L: Lang> {
 impl<L: Lang> fmt::Display for SearchedProviders<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.stack.is_empty() {
-            return write!(f, "the scope stack has no definition providers");
+            return write!(f, "missing definition providers in the scope stack");
         }
         let noun = if self.stack.len() == 1 { "provider" } else { "providers" };
         write!(f, "no definition in {noun} ")?;

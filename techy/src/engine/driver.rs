@@ -320,19 +320,19 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// [`Unresolved`](CommandResolution::Unresolved).
     ///
     /// An implementation returns [`Resolved`](CommandResolution::Resolved) to dispatch
-    /// the invocation, or [`Unresolved`](CommandResolution::Unresolved) — the parse
-    /// loops then diagnose the command as unresolvable and recover (span-backed
-    /// chars-node fallback). The failure's optional `detail`
-    /// string is surfaced on that diagnostic: the place for a resolver to say *why*
-    /// ("searched libraries x, y, z"; "load the {amsmath} library for this command").
+    /// the invocation, or [`Unresolved`](CommandResolution::Unresolved) if the command
+    /// has no definition. For `Unresolved`, the parser reports an
+    /// [`UnresolvableCommand`](crate::core::constructs::UnresolvableCommand) error, and a
+    /// tolerant parse parses the command into a `Chars` node. The optional `detail` of
+    /// `Unresolved` appears in the message of this error, for instance
+    /// `searched libraries x, y, z`.
     ///
-    /// The default resolves nothing — it delegates to the no-op [`CommandResolver`]
-    /// `()`, whose detail reports that command resolution is not implemented. A
-    /// missing implementation has no compile-time signal — a language that enables
-    /// commands but never overrides this hook would otherwise see every command fail
-    /// with a bare "Unknown command", nothing pointing at the actual cause.
-    /// ([`StdParseDriver`] does not use this default: it routes the hook through its
-    /// pluggable [`CommandResolver`] strategy.)
+    /// The default implementation resolves no command: it calls the [`CommandResolver`]
+    /// implementation of `()`. Each command is then reported as unknown, with a detail
+    /// that states the missing command resolver. The compiler does not warn about a
+    /// language that enables commands and does not implement this method, so this detail
+    /// is the only pointer to the cause. ([`StdParseDriver`] does not use this default: it
+    /// calls its own [`CommandResolver`].)
     ///
     /// # Errors
     ///
@@ -822,9 +822,9 @@ pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>>;
 }
 
-/// The no-op resolver: resolves nothing, with a detail reporting that command
-/// resolution is not implemented (so a language that enables commands without
-/// configuring resolution sees the actual cause, not a bare "Unknown command").
+/// Resolves no command. Each command is reported as
+/// [`UnresolvableCommand`](crate::core::constructs::UnresolvableCommand), with a detail
+/// that states the missing command resolver and the ways to provide one.
 impl<L: Lang> CommandResolver<L> for () {
     fn resolve_command(
         &self,
@@ -1048,16 +1048,20 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
     }
 }
 
-/// The answer [`ParseDriver::resolve_command`] gives about one command token: it
-/// resolved, it did not resolve, or resolution broke.
+/// The result of [`ParseDriver::resolve_command`] for one command token.
 ///
-/// [`Resolved`](CommandResolution::Resolved) carries the invocation to dispatch. The
-/// other two are failures, and each carries an optional `detail` string saying *why*,
-/// which appears verbatim on the resulting diagnostic. Any resolution layer may fill
-/// that in: the trait's default hook reports that command resolution is not
-/// implemented at all, while a library-backed resolver might report where it searched
-/// ("searched libraries x, y, z") or hint at a fix ("load the {amsmath} library for
-/// this command").
+/// - [`Resolved`](CommandResolution::Resolved): The command has a definition, and the
+///   variant contains the invocation to dispatch.
+/// - [`Unresolved`](CommandResolution::Unresolved): The command has no definition. The
+///   parser reports an
+///   [`UnresolvableCommand`](crate::core::constructs::UnresolvableCommand) error.
+/// - [`Failed`](CommandResolution::Failed): The resolver could not look up the command,
+///   for instance because a definition provider reported an error. The parser reports a
+///   [`CommandResolutionFailed`](crate::core::constructs::CommandResolutionFailed) error.
+///
+/// `Unresolved` and `Failed` contain an optional `detail`, which the message of the
+/// error shows. A resolver can use it to list where it searched, as in
+/// `searched libraries x, y, z`, or to suggest a fix.
 #[non_exhaustive]
 pub enum CommandResolution<L: Lang> {
     /// The command resolved: dispatch this invocation.
@@ -1066,9 +1070,11 @@ pub enum CommandResolution<L: Lang> {
     /// query could see); the parse loops diagnose it as unresolvable and recover
     /// (span-backed chars fallback).
     Unresolved {
-        /// Optional human-facing detail on why resolution failed, appended to the
-        /// diagnostic's message and serialized with the condition. `None` when there
-        /// is nothing to say beyond "the name did not resolve".
+        /// Additional information for the
+        /// [`UnresolvableCommand`](crate::core::constructs::UnresolvableCommand) error,
+        /// or `None`. The message shows the detail after a colon, as in
+        /// `Unknown command ‘\foo’: <detail>`, so the detail begins with a lowercase
+        /// letter.
         detail: Option<String>,
     },
     /// Resolution failed *operationally* — a definition provider errored while
@@ -1078,8 +1084,10 @@ pub enum CommandResolution<L: Lang> {
     /// tooling can tell "command unknown" from "resolver broken"; recovery is the same
     /// span-backed chars fallback.
     Failed {
-        /// Optional human-facing detail on the operational failure (typically the
-        /// provider's rendered error), appended to the diagnostic's message.
+        /// The description of the failure for the
+        /// [`CommandResolutionFailed`](crate::core::constructs::CommandResolutionFailed)
+        /// error, or `None`. The message shows the detail after a colon, as in
+        /// `Failed to resolve command ‘\foo’: <detail>`.
         detail: Option<String>,
     },
 }
@@ -1188,8 +1196,8 @@ fn did_you_mean_hint<L: Lang>(
     let mut hint = String::new();
     if let Some(provider) = escape_trap {
         hint.push_str(&format!(
-            "provider ‘{provider}’ registers the name ‘{escape_spelling}’ (command \
-             names must be registered without the escape character)"
+            "invalid registration ‘{escape_spelling}’ in provider ‘{provider}’ \
+             (command names must be registered without the escape character)"
         ));
     }
     if !suggestions.is_empty() {

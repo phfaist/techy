@@ -124,10 +124,9 @@ where
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Groups::PRESENT {
                         return Err(cx.implementation_error(
-                            "Invalid stop cause ‘UnexpectedGroupClose’ \
-                             returned by the nodes parser of \
-                             ‘ParseDriver::make_nodes_parser’: the language \
-                             declares the groups feature absent",
+                            "Invalid ‘GroupClose’ token returned by the token \
+                             reader: the language declares the groups feature \
+                             absent",
                             span,
                         ));
                     }

@@ -487,9 +487,10 @@ limited by the engine's own guard, configured on the language value with
 defaulted — the core cannot know which of your callable types commands
 resolve under. The ready-made driver
 ([`StdParseDriver`](crate::core::StdParseDriver)) makes it a plug-in
-strategy ([`CommandResolver`](crate::core::CommandResolver)): `()` resolves
-nothing (right for test languages and languages without commands — and its
-failure detail says so, rather than leaving a bare "Unknown command"), and
+strategy ([`CommandResolver`](crate::core::CommandResolver)). `()`
+resolves no command. It suits test languages and languages without
+commands. Each command is then reported as unknown, with a detail that
+states the missing command resolver.
 [`ScopesCommandResolver`](crate::core::specs::ScopesCommandResolver)
 resolves every command through the state's scope stack under one fixed
 callable type — the standard shape, packaged from
