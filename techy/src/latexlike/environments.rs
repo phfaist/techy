@@ -1665,6 +1665,10 @@ mod tests {
         // The pair is this package's alone: `\begin` resolves to nothing here.
         let tolerant = renamed_pair_language(Recovery::Tolerant);
         let result = tolerant.parse("\\begin{itemize}\\end{itemize}").unwrap();
+        assert_eq!(
+            identifiers(&result).first().map(String::as_str),
+            Some(UnresolvableCommand::IDENTIFIER)
+        );
         assert_eq!(unresolved_command_names(&result).first().map(String::as_str), Some("begin"));
     }
 
@@ -1997,6 +2001,10 @@ mod tests {
         // site — the only frame, as `bad` declares no arguments.
         assert_eq!(error.frames().len(), 1);
         assert_eq!(error.frames()[0].span().range(), 0..6);
+        assert_eq!(
+            error.frames()[0].title(),
+            BeginSpec::<Latexlike>::new("end").stack_frame_title(FrameRole::Invocation, "\\begin")
+        );
     }
 
     #[test]
@@ -2054,15 +2062,17 @@ mod tests {
         let spec = EnvironmentSpec::new(vec![brace_arg()]);
         let dyn_spec: &dyn CallableSpec<Latexlike> = &spec;
         assert_eq!(dyn_spec.arguments().len(), 1);
-        // The trait object answers with the environment's own frame titles.
-        assert_eq!(
-            dyn_spec.stack_frame_title(FrameRole::Invocation, "align"),
-            spec.stack_frame_title(FrameRole::Invocation, "align")
-        );
-        assert_eq!(
-            dyn_spec.stack_frame_title(FrameRole::Argument { index: 0 }, "align"),
-            spec.stack_frame_title(FrameRole::Argument { index: 0 }, "align")
-        );
+        // The trait object answers with the environment's own frame titles, not the
+        // `CallableSpec` default that a spec without an override keeps.
+        #[derive(Debug)]
+        struct DefaultTitles;
+        impl crate::serialize::SerializableObject<Latexlike> for DefaultTitles {}
+        impl CallableSpec<Latexlike> for DefaultTitles {}
+        for role in [FrameRole::Invocation, FrameRole::Argument { index: 0 }] {
+            let title = dyn_spec.stack_frame_title(role, "align");
+            assert!(title.contains("align"), "{title:?}");
+            assert_ne!(title, DefaultTitles.stack_frame_title(role, "align"));
+        }
     }
 
     #[test]
@@ -2822,6 +2832,11 @@ mod tests {
         // `center` declares no arguments and the body parser's own frame is long popped.
         assert_eq!(error.frames().len(), 1);
         assert_eq!(error.frames()[0].span().range(), 0..6);
+        assert_eq!(
+            error.frames()[0].title(),
+            BeginSpec::<GdefLatexlike>::new("end")
+                .stack_frame_title(FrameRole::Invocation, "\\begin")
+        );
         assert_eq!(language.driver().environment_calls(), 1);
     }
 }

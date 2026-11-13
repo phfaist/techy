@@ -1964,6 +1964,17 @@ mod tests {
         // `\begin` trigger), then A's body frame and A's invocation frame (over A's).
         let spans: Vec<_> = diagnostic.frames().iter().map(|f| f.span().range()).collect();
         assert_eq!(spans, [10..16, 10..16, 0..6, 0..6]);
+        // The body frames quote their environment's source name; the invocation frames
+        // are the `\begin` dispatcher's own.
+        let frames = diagnostic.frames();
+        let begin_title =
+            BeginSpec.stack_frame_title(crate::spec::FrameRole::Invocation, "\\begin");
+        assert!(frames[0].title().contains('B'));
+        assert_ne!(frames[0].title(), begin_title);
+        assert_eq!(frames[1].title(), begin_title);
+        assert!(frames[2].title().contains('A'));
+        assert_ne!(frames[2].title(), begin_title);
+        assert_eq!(frames[3].title(), begin_title);
     }
 
     #[test]
