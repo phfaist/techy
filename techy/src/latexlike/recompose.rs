@@ -144,28 +144,37 @@ impl<LLL: LatexlikeLang> fmt::Debug for SourceRecomposer<LLL> {
     }
 }
 
-/// The failure of a [`SourceRecomposer`] run.
+/// The error that is returned when a [`SourceRecomposer`] cannot re-emit a callable
+/// node.
 ///
-/// A parse never produces a tree that causes one. The single variant reports a
-/// callable whose recorded invocation syntax does not match the role its callable type
-/// plays, which only a tree built by hand or restaged incoherently can hold: the parse
-/// deliberately does not check the pairing when it records it, and the source
-/// recomposer is where a mismatch surfaces.
+/// A [`TreeRecomposer`](crate::recompose::TreeRecomposer) that runs a
+/// [`SourceRecomposer`] returns this error wrapped in
+/// [`RecomposeError::Recomposer`](crate::recompose::RecomposeError::Recomposer). A
+/// tree produced by a parse never causes this error. It can occur for a tree built by
+/// hand with [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or for a tree
+/// produced by a restage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceRecomposeError {
-    /// The node's invocation-syntax payload records a different invocation
-    /// form than the role its `callable_type` plays — the recorded spelling
-    /// facts cannot be trusted to reemit this node (a hand-built or
-    /// incoherently restaged tree; parses never produce this).
+    /// The invocation syntax that a callable node records does not match the role of
+    /// its callable type.
+    ///
+    /// The source recomposer writes a callable node according to the role of its
+    /// callable type: macro, environment or specials. The
+    /// [`invocation_syntax`](crate::core::node::CallableData::invocation_syntax) of the
+    /// node must record the invocation syntax of the same role, for instance
+    /// [`InvocationSyntaxData::Macro`](super::InvocationSyntaxData::Macro) for a macro.
+    /// This variant is also returned for a callable type that has none of the three
+    /// roles.
     IncoherentInvocationSyntax {
-        /// The offending callable.
+        /// The callable node.
         node: NodeId,
-        /// The role the node's `callable_type` plays (`"macro"`,
-        /// `"environment"`, `"specials"` — or `"unknown"` for a form outside
-        /// the family's three roles).
+        /// The role of the node's callable type: `"macro"`, `"environment"`,
+        /// `"specials"`, or `"unknown"` for a callable type that has none of these
+        /// roles.
         callable_form: &'static str,
-        /// The arm the payload records (same labels).
+        /// The role of the invocation syntax that the node records, with the same
+        /// values as `callable_form`.
         payload_arm: &'static str,
     },
 }
@@ -177,13 +186,35 @@ impl fmt::Display for SourceRecomposeError {
                 node,
                 callable_form,
                 payload_arm,
-            } => write!(
-                f,
-                "callable {:?}: the invocation-syntax payload records the {} arm but \
-                 the node's callable type plays the {} role — the recorded spelling \
-                 facts cannot reemit this node",
-                node, payload_arm, callable_form
-            ),
+            } => {
+                let callable_type = match *callable_form {
+                    "macro" => "a macro type",
+                    "environment" => "an environment type",
+                    "specials" => "a specials type",
+                    _ => {
+                        return write!(
+                            f,
+                            "Unsupported callable type of callable node {}: the source \
+                             recomposer supports only macros, environments and specials",
+                            node.index()
+                        )
+                    }
+                };
+                let recorded = match *payload_arm {
+                    "macro" => "macro invocation syntax",
+                    "environment" => "environment invocation syntax",
+                    "specials" => "specials invocation syntax",
+                    _ => "invocation syntax of an unknown form",
+                };
+                write!(
+                    f,
+                    "Mismatched invocation syntax in callable node {}: the callable type is \
+                     {} and the node records {}",
+                    node.index(),
+                    callable_type,
+                    recorded
+                )
+            }
         }
     }
 }
