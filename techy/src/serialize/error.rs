@@ -201,11 +201,16 @@ pub enum SerializeError {
     /// Some spec types have no self-contained serialized form. A spec of such a type is
     /// serialized as a reference to its definition in the provider that defines it. This
     /// reference is taken from the provenance stamp of the spec
-    /// ([`SpecProvenance`](crate::core::specs::SpecProvenance)). Only a package created
-    /// with [`Package::new_shared`](crate::core::specs::Package::new_shared) issues
-    /// provenance stamps: stamp each spec with
-    /// [`Package::provenance_for`](crate::core::specs::Package::provenance_for) before
-    /// inserting it, or insert it with a method that stamps the spec, such as
+    /// ([`SpecProvenance`](crate::core::specs::SpecProvenance)).
+    ///
+    /// Among techy's providers, a package created with
+    /// [`Package::new_shared`](crate::core::specs::Package::new_shared) issues provenance
+    /// stamps. A custom provider can create them with
+    /// [`SpecProvenance::new`](crate::core::specs::SpecProvenance::new). In a shared
+    /// package, obtain the stamp of a spec with
+    /// [`Package::provenance_for`](crate::core::specs::Package::provenance_for) and attach
+    /// it with the `with_provenance` method of the spec before you insert the spec. You
+    /// can also insert the spec with a method that stamps it, such as
     /// [`Package::define_macro`](crate::core::specs::Package::define_macro).
     MissingProvenance {
         /// The name of the type of the spec.
@@ -321,8 +326,8 @@ impl fmt::Display for SerializeError {
             SerializeError::ArgumentSpecOutOfBand { index, count } => write!(
                 f,
                 "Unsupported out-of-band argument spec of argument #{} (the callable spec \
-                 declares {} argument specs): the callable spec must override \
-                 ‘serialize_argument_spec’ to serialize it",
+                 declares {} argument specs); override \
+                 ‘serialize_argument_spec’ in the callable spec",
                 index.saturating_add(1),
                 count
             ),
@@ -365,8 +370,7 @@ impl fmt::Display for SerializeError {
             ),
             SerializeError::MissingProvenance { spec } => write!(
                 f,
-                "Missing provenance stamp on a spec of type ‘{spec}’ (specs of \
-                 this type are serialized by identity only)"
+                "Missing provenance stamp on a spec of type ‘{spec}’"
             ),
             SerializeError::ProviderDropped { callable_type, key } => write!(
                 f,
@@ -713,8 +717,7 @@ pub enum DeserializeError {
         /// The writer-side table identifier.
         table: TableId,
     },
-    /// Absorbing the segment would give the table `table` more entries than the maximum
-    /// (`u32::MAX`).
+    /// Absorbing the segment would give the table `table` `u32::MAX` entries or more.
     TableFull {
         /// The name of the table.
         table: &'static str,
@@ -951,10 +954,17 @@ impl fmt::Display for DeserializeError {
                 "Missing table ‘{name}’: no table of this name with the expected \
                  driver type is registered in this session"
             ),
-            DeserializeError::SpanOutOfBounds { start, end, len } => write!(
-                f,
-                "Invalid serialized span {start}..{end}: the source has {len} bytes"
-            ),
+            DeserializeError::SpanOutOfBounds { start, end, len } => {
+                if start > end {
+                    write!(
+                        f,
+                        "Invalid serialized span {start}..{end}: the start may not exceed \
+                         the end"
+                    )
+                } else {
+                    write!(f, "Invalid serialized span {start}..{end}: the source has {len} bytes")
+                }
+            }
             DeserializeError::SpanNotOnCharBoundary { start, end } => write!(
                 f,
                 "Invalid serialized span {start}..{end}: the span must start and end on \
@@ -972,7 +982,8 @@ impl fmt::Display for DeserializeError {
             ),
             DeserializeError::SourceLengthMismatch { origin, expected, found } => write!(
                 f,
-                "Text supplied for {} has {found} bytes; the entry records {expected} bytes",
+                "Wrong length of the text supplied for {}: {found} bytes, expected \
+                 {expected} bytes",
                 OriginLabel(origin)
             ),
             DeserializeError::SourceDigestMismatch { origin, algorithm } => write!(
@@ -1004,7 +1015,7 @@ impl fmt::Display for DeserializeError {
             ),
             DeserializeError::TableFull { table } => write!(
                 f,
-                "Table ‘{table}’ is full: absorbing the segment would exceed \
+                "Table ‘{table}’ is full: absorbing the segment would reach \
                  u32::MAX entries"
             ),
             DeserializeError::Internal { detail } => {
@@ -1087,8 +1098,8 @@ impl core::error::Error for DeserializeError {
 /// related methods). Each variant reports a call that violates the documented
 /// requirements of the method.
 ///
-/// The setup takes place before any data is written or read. The errors of writing and
-/// reading are [`SerializeError`] and [`DeserializeError`].
+/// A program usually sets up a session before it writes or reads data. The errors of
+/// writing and reading are [`SerializeError`] and [`DeserializeError`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RegistrationError {
@@ -1135,11 +1146,12 @@ pub enum RegistrationError {
         /// The name of the table.
         table: &'static str,
     },
-    /// The tree annotation type is already registered in the trees table.
+    /// An annotation type of trees is registered twice in the trees table.
     ///
     /// Each annotation type is registered once, with
     /// [`TableHandle::register_annotation`](crate::serialize::TableHandle::register_annotation).
-    /// The unit annotation, which the parser output has, is registered from the start.
+    /// Every trees table has the unit annotation registered: the annotation of the parser
+    /// output (`NodeTree<L>`).
     DuplicateAnnotationType {
         /// The name of the trees table.
         table: &'static str,
@@ -1212,8 +1224,9 @@ impl core::error::Error for RegistrationError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SerialValueError {
-    /// The data contains a floating-point number. The value model has no floating-point
-    /// values.
+    /// A floating-point number is to be written, a format yields a floating-point number
+    /// when a value is read, or a value is to be read into a floating-point type (`f32`
+    /// or `f64`). The value model has no floating-point values.
     FloatRejected,
     /// The data contains a map key that is not a string. The maps of the value model have
     /// string keys.
@@ -1320,7 +1333,7 @@ impl fmt::Display for SerialValueError {
             SerialValueError::UnknownField { name, expected } => {
                 write!(f, "Unknown key ‘{name}’")?;
                 if expected.is_empty() {
-                    write!(f, " (this map has no keys)")
+                    write!(f, " (expected no keys)")
                 } else {
                     write!(f, " (expected ")?;
                     write_name_list(f, expected)?;
@@ -1331,7 +1344,7 @@ impl fmt::Display for SerialValueError {
             SerialValueError::UnknownVariant { name, expected } => {
                 write!(f, "Unknown variant ‘{name}’")?;
                 if expected.is_empty() {
-                    write!(f, " (this enum has no variants)")
+                    write!(f, " (expected no variants)")
                 } else {
                     write!(f, " (expected ")?;
                     write_name_list(f, expected)?;
