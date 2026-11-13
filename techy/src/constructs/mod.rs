@@ -348,7 +348,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             None => Err(self.implementation_error(
                 format!(
                     "Invalid positions {begin:?} and {end:?} passed to \
-                     ‘ParseContext::source_span_within’: the end must not \
+                     ‘ParseContext::source_span_within’: the end may not \
                      precede the beginning, and both positions must lie in one source"
                 ),
                 self.here(),
@@ -919,11 +919,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         trigger: &SourceSpan<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
         self.implementation_error(
-            "Invalid node span computed by \
-             ‘ParseContext::stage_invocation’: the end of the node must \
-             not precede the start of the invocation, and must lie in the source of \
-             the invocation; check the ‘end’ argument or the spans of the \
-             staged children",
+            "Invalid node span in ‘ParseContext::stage_invocation’: the end of \
+             the node may not precede the start of the invocation or lie in another \
+             source; check the ‘end’ argument or the spans of the staged children",
             trigger.clone(),
         )
     }
@@ -1656,12 +1654,18 @@ pub enum PlainCharsError {
         /// The id of the staged node that is not a `Chars` node.
         node: BuildId,
     },
-    /// A staged record that designates the content is malformed: for instance the
-    /// region of the argument, its child offsets, or a node that the record refers to.
+    /// A staged record that designates the content is invalid. For instance, the region
+    /// of the argument is not a valid range of the child list, or a node that the record
+    /// refers to is not staged.
     ///
-    /// The parsed document cannot cause this error. The cases are the
-    /// [`NodeBuildError`](crate::core::node::NodeBuildError) variants listed on
-    /// [`ParseContext::content_as_tree`].
+    /// The parsed document cannot cause this error. The contained
+    /// [`NodeBuildError`](crate::core::node::NodeBuildError) is
+    /// [`ContentOutOfBounds`](crate::core::node::NodeBuildError::ContentOutOfBounds),
+    /// [`ContentParentNotStaged`](crate::core::node::NodeBuildError::ContentParentNotStaged)
+    /// or [`ChildNotStaged`](crate::core::node::NodeBuildError::ChildNotStaged). For an
+    /// argument record, it can also be
+    /// [`RegionAlreadyResolved`](crate::core::node::NodeBuildError::RegionAlreadyResolved)
+    /// or [`RegionOutOfBounds`](crate::core::node::NodeBuildError::RegionOutOfBounds).
     MalformedRecord(NodeBuildError),
 }
 
@@ -1718,9 +1722,9 @@ impl core::error::Error for PlainCharsError {
 pub struct ImplementationError {
     /// The description of the violated requirement.
     ///
-    /// The message shows the detail after a colon, as in `Implementation error:
+    /// The message contains the detail after a colon, as in `Implementation error:
     /// <detail>`. Write the detail as a complete message that begins with a capital
-    /// letter and names the faulty code, for instance `Invalid state delta returned by
+    /// letter and identifies the faulty code, for instance `Invalid state delta returned by
     /// the nodes parser from ‘ParseDriver::make_nodes_parser’: a nodes parser must return
     /// no state delta`.
     pub detail: String,

@@ -896,7 +896,7 @@ impl fmt::Display for NodeBuildError {
             ),
             NodeBuildError::RegionOutOfBounds { region, n_children } => write!(
                 f,
-                "Argument or slot region {:?} out of bounds (the callable has {} \
+                "Invalid argument or slot region {:?} (the callable has {} \
                  children)",
                 region, n_children
             ),
@@ -914,7 +914,7 @@ impl fmt::Display for NodeBuildError {
             ),
             NodeBuildError::ContentOutOfBounds { content, available } => write!(
                 f,
-                "Content range {:?} out of bounds (the node list has {} nodes)",
+                "Invalid content range {:?} (the node list has {} nodes)",
                 content, available
             ),
             NodeBuildError::ContentParentNotStaged { parent } => write!(
