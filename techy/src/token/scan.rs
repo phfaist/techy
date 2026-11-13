@@ -559,8 +559,9 @@ pub fn scan_specials_trigger<L: Lang>(
     if !(m.end > pos && m.end <= content.len() && content.is_char_boundary(m.end)) {
         return Err(SpecialsScanError {
             kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(format!(
-                "Lang::scan_specials returned an invalid match end \
-                 {} for a match at {} (content length {})",
+                "Invalid match end {} returned by ‘Lang::scan_specials’ for \
+                 a scan at byte {}: the match end must lie after the scan position, \
+                 within the content (length {}), and on a character boundary",
                 m.end,
                 pos,
                 content.len()
@@ -591,8 +592,9 @@ fn checked_scan_error(
     if !valid {
         return SpecialsScanError {
             kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(format!(
-                "Lang::scan_specials reported an error at an invalid span {}..{} \
-                 for a scan at {} (content length {})",
+                "Invalid error span {}..{} returned by ‘Lang::scan_specials’ \
+                 for a scan at byte {}: the span must lie within the content (length {}) \
+                 and begin and end on character boundaries",
                 span.start(),
                 span.end(),
                 pos,

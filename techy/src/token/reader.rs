@@ -890,8 +890,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         if s.get(start..).is_none() {
             return Err(TokenError::new(
                 TokenErrorKind::Custom(Box::new(ImplementationError::new(format!(
-                    "token reader position {} is out of bounds or not a char \
-                     boundary (content length {})",
+                    "Invalid token reader position {}: a position must be a character \
+                     boundary within the content (length {})",
                     start,
                     s.len()
                 )))),
