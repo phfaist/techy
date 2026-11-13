@@ -14,82 +14,111 @@ use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{push_token_text, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
-/// Condition: an environment's body found the terminator of a *different* environment.
+/// The error that is reported when the terminator of an environment contains the name of
+/// a different environment (id `core.environments.terminator-mismatch`).
 ///
-/// Raised for `\begin{A}…\end{B}`: the terminator names `B`, but the body being parsed
-/// belongs to `A`. The body closes at that point **without** consuming the terminator,
-/// so an enclosing level can still claim it as its own.
+/// The *terminator* of an environment is the command that ends the body, followed by a
+/// group that contains the environment name, e.g. `\end{itemize}` in the LaTeX-like
+/// preset. The name in the terminator must be the name of the environment, as in
+/// `\begin{itemize} … \end{itemize}`.
+///
+/// Reported by [`EnvironmentBodyParser`] when it reads the terminator, unless name
+/// matching is turned off
+/// ([`with_match_invocation_name`](EnvironmentBodyParser::with_match_invocation_name)).
+/// The span of the diagnostic is the terminator.
+///
+/// In a tolerant parse, the body ends before the terminator, and the parser does not
+/// consume the terminator. The terminator is then parsed after the environment, by the
+/// enclosing level: for instance, it ends an enclosing environment of that name. A
+/// strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.environments.terminator-mismatch",
-    message = "missing terminator of environment ‘{expected}’: found the terminator of \
+    message = "Missing terminator of environment ‘{expected}’: found the terminator of \
                ‘{found}’ instead"
 )]
 pub struct EnvironmentTerminatorMismatch {
-    /// The environment being parsed, whose terminator was expected.
+    /// The name of the environment whose body is parsed.
     pub expected: String,
-    /// The environment named by the terminator that was found instead.
+    /// The environment name in the terminator that the parser found.
     pub found: String,
 }
 
-/// Condition: an environment's terminator command was not followed immediately by its
-/// name group.
+/// The error that is reported when the command that ends an environment body is not
+/// followed by a valid name group (id `core.environments.malformed-terminator`).
 ///
-/// The name group is rigid — no comment, no paragraph break, and no whitespace inside
-/// the name — so both `\end[y]` and `\end{ A }` raise this. The terminator command
-/// alone is consumed and the body closes; whatever follows it is parsed as content of
-/// the enclosing level.
+/// The command must be followed immediately by a group that contains only the
+/// environment name, as in `\end{itemize}`. Whitespace between the command and the group
+/// is allowed, as in `\end {itemize}`.
+///
+/// Reported by [`EnvironmentBodyParser`]. The span of the diagnostic is the command.
+///
+/// In a tolerant parse, the parser consumes the command alone, and the body ends there.
+/// The source that follows the command is parsed as content of the enclosing level. A
+/// strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.environments.malformed-terminator",
-    message = "malformed terminator of environment ‘{environment}’: expected its name \
-               group immediately after the command"
+    message = "Malformed terminator of environment ‘{environment}’: the command must be \
+               followed immediately by the environment name alone in a group"
 )]
 pub struct MalformedEnvironmentTerminator {
-    /// The environment being parsed.
+    /// The name of the environment whose body is parsed.
     pub environment: String,
 }
 
-/// Condition: an environment's body ended without its terminator ever appearing.
+/// The error that is reported when the terminator of an environment is missing (id
+/// `core.environments.missing-terminator`).
 ///
-/// The input ended inside the body, a group close delimiter appeared that nothing at
-/// the body's level had opened, or the reading stopped at a token the reader could not
-/// read; [`found`](MissingEnvironmentTerminator::found) says which.
+/// Reported by [`EnvironmentBodyParser`] and by
+/// [`VerbatimBodyParser`](super::VerbatimBodyParser) in three cases, which
+/// [`found`](MissingEnvironmentTerminator::found) tells apart:
+///
+/// - [`EndOfInput`](MissingTerminatorFound::EndOfInput): The input ends inside the body.
+///   The span of the diagnostic is the command that opens the environment (`\begin` in
+///   the LaTeX-like preset).
+/// - [`StrayGroupClose`](MissingTerminatorFound::StrayGroupClose): A closing delimiter
+///   appears that no group inside the body opened. The span of the diagnostic is this
+///   closing delimiter. Only [`EnvironmentBodyParser`] reports this case.
+/// - [`UnreadableToken`](MissingTerminatorFound::UnreadableToken): The token reader
+///   fails to read a token inside a verbatim body. The span of the diagnostic is the
+///   command that opens the environment. Only
+///   [`VerbatimBodyParser`](super::VerbatimBodyParser) reports this case.
+///
+/// In a tolerant parse, the body contains the content read up to the position of the
+/// error. A closing delimiter that ends the body does not belong to it: the closing
+/// delimiter is parsed after the environment, by the enclosing group or at the outermost
+/// level. A strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.environments.missing-terminator")]
 pub struct MissingEnvironmentTerminator {
-    /// The environment being parsed.
+    /// The name of the environment whose body is parsed.
     pub environment: String,
-    /// What ended the body instead.
+    /// What the parser found in place of the terminator.
     pub found: MissingTerminatorFound,
 }
 
-/// What ended an environment body or an argument whose terminator never appeared
-/// ([`MissingEnvironmentTerminator`],
-/// [`MissingArgumentTerminator`](super::MissingArgumentTerminator)).
+/// What a parser found in place of a missing terminator, in the conditions
+/// [`MissingEnvironmentTerminator`] and
+/// [`MissingArgumentTerminator`](super::MissingArgumentTerminator).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum MissingTerminatorFound {
-    /// The input ended before the terminator appeared.
+    /// The input ends before the terminator.
     EndOfInput,
-    /// A group close delimiter appeared that nothing inside the body or argument had
-    /// opened. The body or argument closes without consuming it, leaving it for an
-    /// enclosing level to claim.
+    /// A closing delimiter appears that no group inside the body or the argument opened.
+    /// The parser does not consume this closing delimiter.
     StrayGroupClose,
-    /// The reading stopped at a token the reader could not read and the driver
-    /// tolerated. The input has *not* ended: the body closes where the reading
-    /// stopped, and the enclosing content loop re-reads the failing token and applies
-    /// its own token recovery to it.
+    /// The token reader fails to read a token, and the parse driver tolerates the
+    /// failure. The input continues after this token: the body ends before the token,
+    /// and the enclosing content loop reads the token again and handles the failure.
     ///
-    /// Only a raw body ([`VerbatimBodyParser`](super::VerbatimBodyParser)) reports
-    /// this, and only when the embedder supplies its own token reader: the standard
-    /// reader has nothing left to reject under the raw-reading state.
-    /// [`TerminatedArgumentParser`](super::TerminatedArgumentParser) never reports
-    /// it, since its content is read by the standard content loop, which recovers
-    /// from such a token itself.
+    /// Only [`VerbatimBodyParser`](super::VerbatimBodyParser) reports this case, and
+    /// only with a custom token reader: the standard token reader does not fail under
+    /// the state of a verbatim body.
     UnreadableToken,
 }
 
@@ -100,16 +129,18 @@ impl fmt::Display for MissingEnvironmentTerminator {
         match self.found {
             MissingTerminatorFound::EndOfInput => write!(
                 f,
-                "missing terminator of environment ‘{}’ before end of input",
+                "Missing terminator of environment ‘{}’ at the end of the input",
                 self.environment
             ),
-            MissingTerminatorFound::StrayGroupClose => {
-                write!(f, "missing terminator of environment ‘{}’", self.environment)
-            }
+            MissingTerminatorFound::StrayGroupClose => write!(
+                f,
+                "Missing terminator of environment ‘{}’ before an unmatched closing \
+                 delimiter",
+                self.environment
+            ),
             MissingTerminatorFound::UnreadableToken => write!(
                 f,
-                "missing terminator of environment ‘{}’ before a token that could not \
-                 be read",
+                "Missing terminator of environment ‘{}’ before an unreadable token",
                 self.environment
             ),
         }
@@ -763,8 +794,11 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
         // ([§dd-dr:panic-policy]: outer-layer input never panics core code).
         let Some(end_token) = cx.probe_token(&Arc::clone(&cx.state))? else {
             return Err(cx.implementation_error(
-                "the matched environment stop token disappeared on re-peek \
-                 (the token reader re-read the same position differently)",
+                format_args!(
+                    "Inconsistent token reader: a second read of the terminator of \
+                     environment ‘{}’ returned no token",
+                    self.invocation_name
+                ),
                 cx.here(),
             ));
         };
@@ -776,8 +810,11 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             }
             _ => {
                 return Err(cx.implementation_error(
-                    "the matched environment stop token changed on re-peek \
-                     (the token reader re-read the same position differently)",
+                    format_args!(
+                        "Inconsistent token reader: a second read of the terminator of \
+                         environment ‘{}’ returned a different token",
+                        self.invocation_name
+                    ),
                     cx.tokens.source_span_of(&end_token),
                 ));
             }
@@ -835,8 +872,13 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 // the read-consume contract — an implementation error, not recoverable.
                 if cx.tokens.position_here() != after_command {
                     return Err(cx.implementation_error(
-                        "the token reader moved during a failed terminator name-group \
-                         read (a failed read must consume nothing)",
+                        format_args!(
+                            "Inconsistent token reader: the reader moved during a \
+                             failed read of the name group in the terminator of \
+                             environment ‘{}’; a failed read must \
+                             consume no input",
+                            self.invocation_name
+                        ),
                         cx.tokens.source_span_of(&end_token),
                     ));
                 }
@@ -907,8 +949,9 @@ where
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
             return Err(cx.implementation_error(
-                "the driver's content-loop parser returned a pass-through state delta \
-                 (a nodes parser has no after-effect to report)",
+                "Invalid state delta returned by the nodes parser of \
+                 ‘ParseDriver::make_nodes_parser’: a nodes parser must \
+                 return no state delta",
                 cx.here(),
             ));
         }
@@ -957,8 +1000,10 @@ where
             }
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
-                    "the driver's content-loop parser reported a node-condition stop, \
-                     but the environment body's stop spec sets no node condition",
+                    "Invalid stop cause ‘NodeCondition’ returned by the \
+                     nodes parser of ‘ParseDriver::make_nodes_parser’: \
+                     the stop specification of an environment body sets no node \
+                     condition",
                     cx.here(),
                 ));
             }
