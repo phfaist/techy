@@ -152,39 +152,36 @@ use crate::node::{
 
 // --- errors -----------------------------------------------------------------------------
 
-/// The reason an extraction helper failed.
+/// The error that an extraction helper of this module returns.
 ///
-/// The helpers run over an already-parsed tree, outside any parse, so there is no
-/// tolerant mode and nothing is reported as a diagnostic: input a helper cannot
-/// handle is always an `Err`.
+/// The helpers read a tree that is already parsed, outside of any parse. Therefore
+/// they have no tolerant mode and report no diagnostics: a helper returns an error for
+/// every input that it cannot handle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtractError {
-    /// A node that cannot flatten to characters was met — anything other than a
-    /// chars node, a comment (skipped), or a group or list container (whose
-    /// children are read instead). In practice this means a callable node,
-    /// reached either by [`content_as_chars`] itself or by [`parse_keyval`]
-    /// while flattening a key.
+    /// The content contains a node that cannot be read as characters. A helper reads
+    /// `Chars` nodes, skips comments, and reads the children of groups and lists; any
+    /// other node, in practice a callable, is reported. [`content_as_chars`] reports
+    /// this error, and so does [`parse_keyval`] for a key.
     NonCharsContent {
-        /// The offending node, in the tree the input nodes came from.
+        /// The node, in the tree of the input nodes.
         node: NodeId,
     },
-    /// The separator passed to [`split_at_chars`] was the empty string, which
-    /// has no occurrences to split at.
+    /// The separator passed to [`split_at_chars`] is the empty string.
     EmptySeparator,
-    /// [`split_embellishments`] or [`split_tack_on_fields`] met a node that is
-    /// neither ignorable filler (a whitespace-only chars node, a comment) nor an
-    /// entry of the shape it reads: the input was not the argument-content run
-    /// that helper is documented for.
+    /// [`split_embellishments`] or [`split_tack_on_fields`] found a node that is
+    /// neither whitespace, nor a comment, nor an entry of the form that the helper
+    /// reads. The input is then not the content of an argument of the kind that the
+    /// helper is meant for.
     UnexpectedContent {
-        /// The offending node, in the tree the input nodes came from.
+        /// The node, in the tree of the input nodes.
         node: NodeId,
     },
-    /// Building the result tree failed. Every variant of [`NodeBuildError`] but
-    /// one reports a violated builder contract, which is an implementation bug
-    /// rather than anything about the input; the exception is
-    /// [`ExtMintFailed`](NodeBuildError::ExtMintFailed), which reports that
-    /// [`Lang::make_node_ext`] — called for each newly created node — failed.
+    /// Building the result tree failed. If the variant of [`NodeBuildError`] is
+    /// [`ExtMintFailed`](NodeBuildError::ExtMintFailed), [`Lang::make_node_ext`]
+    /// failed for a node of the result tree. Any other variant is caused by a fault in
+    /// the helper, and not by the input.
     Build(NodeBuildError),
 }
 
@@ -197,14 +194,22 @@ impl From<NodeBuildError> for ExtractError {
 impl fmt::Display for ExtractError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExtractError::NonCharsContent { node } => {
-                write!(f, "content cannot flatten to characters: node {:?} is neither chars, comment, nor group/list", node)
+            ExtractError::NonCharsContent { node } => write!(
+                f,
+                "Invalid node {} in text content: the content may consist only of \
+                 characters, comments, groups and lists",
+                node.index()
+            ),
+            ExtractError::EmptySeparator => write!(f, "Split separator may not be empty"),
+            ExtractError::UnexpectedContent { node } => write!(
+                f,
+                "Unexpected node {}: the content may consist only of whitespace, comments \
+                 and entries of the expected form",
+                node.index()
+            ),
+            ExtractError::Build(error) => {
+                write!(f, "Failed to build the result tree: {}", error)
             }
-            ExtractError::EmptySeparator => write!(f, "split separator must not be empty"),
-            ExtractError::UnexpectedContent { node } => {
-                write!(f, "unexpected content in the input run: node {:?} is neither noise nor an entry of the expected shape", node)
-            }
-            ExtractError::Build(error) => write!(f, "building the result tree failed: {}", error),
         }
     }
 }
