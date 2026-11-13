@@ -129,8 +129,9 @@ pub struct CommandResolutionFailed {
     /// The message shows the detail after a colon, as in `Failed to resolve command
     /// ‘\foo’: <detail>`. For instance,
     /// [`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes) sets
-    /// it to the error of the definition provider that failed, followed by the name of
-    /// the provider in parentheses.
+    /// it to the message of the [`ScopeStackError`](crate::core::specs::ScopeStackError)
+    /// that the scope stack returned. This message names the definition provider that
+    /// failed, as in `Definition provider ‘user’ failed: <error>`.
     pub detail: Option<String>,
 }
 

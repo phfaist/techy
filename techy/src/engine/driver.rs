@@ -1148,7 +1148,7 @@ pub fn resolve_command_in_scopes<L: Lang>(
             CommandResolution::Unresolved { detail: Some(detail) }
         }
         Err(error) => CommandResolution::Failed {
-            detail: Some(format!("{} (provider ‘{}’)", error.error, error.provider)),
+            detail: Some(error.to_string()),
         },
     }
 }
