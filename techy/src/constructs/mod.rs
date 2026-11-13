@@ -1721,7 +1721,7 @@ pub struct ImplementationError {
     /// The message shows the detail after a colon, as in `Implementation error:
     /// <detail>`. Write the detail as a complete message that begins with a capital
     /// letter and names the faulty code, for instance `Invalid state delta returned by
-    /// the nodes parser of ‘ParseDriver::make_nodes_parser’: a nodes parser must return
+    /// the nodes parser from ‘ParseDriver::make_nodes_parser’: a nodes parser must return
     /// no state delta`.
     pub detail: String,
 }

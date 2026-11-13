@@ -89,9 +89,9 @@ use super::{node_text_content, push_pre_space_text, push_token_text, ConstructPa
 /// delimiter, and when the token reader fails to read a token of the content and the
 /// parse tolerates that error. The span of the diagnostic is the opening delimiter.
 ///
-/// In a tolerant parse, the argument contains the content read up to the position of the
-/// error, and its group node records an empty closing delimiter ([`GroupData::close`]). A
-/// strict parse stops at this error.
+/// In a tolerant parse, the argument contains the content up to the end of the input, or
+/// up to the token that could not be read. Its group node records an empty closing
+/// delimiter ([`GroupData::close`]). A strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(

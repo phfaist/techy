@@ -90,10 +90,12 @@ use super::{node_text_content, ConstructParser, ConstructParserResult, FromInvoc
 /// - [`StrayClose`](UnclosedGroupFound::StrayClose): A closing delimiter of another group
 ///   rule appears inside the group. The span of the diagnostic is this closing delimiter.
 ///
-/// In a tolerant parse, the group ends at the position of the error, and its node records
-/// an empty closing delimiter ([`GroupData::close`](crate::core::node::GroupData::close)).
-/// A mismatched closing delimiter does not belong to the group. It closes the enclosing
-/// group whose rule it belongs to; each group in between reports this error too. If no
+/// In a tolerant parse, the group ends at the end of the input, or before the mismatched
+/// closing delimiter. The node of the group records an empty closing delimiter
+/// ([`GroupData::close`](crate::core::node::GroupData::close)).
+///
+/// A mismatched closing delimiter does not belong to the group. It closes the nearest
+/// enclosing group of its own rule. Each group in between reports this error too. If no
 /// enclosing group matches it, it is reported as
 /// [`StrayGroupClose`](super::StrayGroupClose) at the outermost level. A strict parse
 /// stops at the first error.
@@ -330,7 +332,7 @@ where
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
             return Err(cx.implementation_error(
-                "Invalid state delta returned by the nodes parser of \
+                "Invalid state delta returned by the nodes parser from \
                  ‘ParseDriver::make_nodes_parser’: a nodes parser must return no \
                  state delta",
                 cx.here(),
@@ -361,8 +363,8 @@ where
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
                     "Invalid stop cause ‘NodeCondition’ returned by the nodes \
-                     parser of ‘ParseDriver::make_nodes_parser’: the stop \
-                     specification of a group sets no node condition",
+                     parser from ‘ParseDriver::make_nodes_parser’: a nodes parser may \
+                     stop at a node condition only if its stop specification sets one",
                     cx.here(),
                 ));
             }

@@ -75,11 +75,11 @@ pub struct ExpectedArgumentOpener {
 /// [`UnreadableToken`](MissingTerminatorFound::UnreadableToken): the content loop that
 /// reads the argument recovers from a token that it cannot read and continues.
 ///
-/// In a tolerant parse, the argument contains the content read up to the position of the
-/// error, and its group node records an empty closing delimiter ([`GroupData::close`]). A
-/// closing delimiter that ends the argument does not belong to it: the closing delimiter
-/// is parsed after the argument, by the enclosing group or at the outermost level. A
-/// strict parse stops at this error.
+/// In a tolerant parse, the argument contains the content up to the end of the input, or
+/// up to the unmatched closing delimiter. Its group node records an empty closing
+/// delimiter ([`GroupData::close`]). A closing delimiter that ends the argument does not
+/// belong to it: the closing delimiter is parsed after the argument, by the enclosing
+/// group or at the outermost level. A strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.arguments.missing-terminator")]
@@ -552,7 +552,7 @@ where
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
             return Err(cx.implementation_error(
-                "Invalid state delta returned by the nodes parser of \
+                "Invalid state delta returned by the nodes parser from \
                  ‘ParseDriver::make_nodes_parser’: a nodes parser must return no \
                  state delta",
                 cx.here(),
@@ -587,8 +587,8 @@ where
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
                     "Invalid stop cause ‘NodeCondition’ returned by the nodes \
-                     parser of ‘ParseDriver::make_nodes_parser’: the stop \
-                     specification of a terminated argument sets no node condition",
+                     parser from ‘ParseDriver::make_nodes_parser’: a nodes parser may \
+                     stop at a node condition only if its stop specification sets one",
                     cx.here(),
                 ));
             }

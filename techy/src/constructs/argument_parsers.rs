@@ -117,11 +117,20 @@ use super::{
 /// Reported by [`GroupArgumentParser`] and
 /// [`CharsGroupArgumentParser`](super::CharsGroupArgumentParser) when no group of the
 /// accepted form opens at the position of the argument, and the parser has no
-/// single-expression fallback or the fallback finds no expression either. Whitespace and
-/// comments before the argument are skipped. The span of the diagnostic is the token that
-/// follows them, or the end of the input.
+/// single-expression fallback or the fallback finds no expression either.
 ///
-/// In a tolerant parse, the argument is absent and the parser consumes nothing; the
+/// Whitespace and comments before the argument are skipped, except by a
+/// [`GroupArgumentParser`] configured with
+/// [`require_adjacent`](GroupArgumentParser::require_adjacent). For such a parser,
+/// whitespace or a comment before the argument means that the argument is missing.
+///
+/// The span of the diagnostic is the token that follows the skipped whitespace and
+/// comments, or the end of the input if nothing follows. The span is empty, at the
+/// position where the argument would begin, in two cases: the argument of a
+/// `require_adjacent` parser is not adjacent, or in a tolerant parse the token at this
+/// position cannot be read.
+///
+/// In a tolerant parse, the argument is absent, and the parser consumes nothing. The
 /// invocation continues with its next argument. A strict parse stops at this error.
 ///
 /// The condition contains no name of the callable: the traceback of the diagnostic shows
@@ -154,10 +163,13 @@ impl fmt::Display for MissingMandatoryArgument {
 /// in `\frac\alpha2`. Whitespace and comments before the expression are skipped.
 ///
 /// Reported by [`ExpressionParser`] when the input ends, or when a paragraph break or a
-/// closing delimiter follows, at the position of the argument. The span of the diagnostic
-/// is that token, or the end of the input.
+/// closing delimiter follows, at the position of the argument. In a tolerant parse, it is
+/// also reported when the token at this position cannot be read. The span of the
+/// diagnostic is the token that follows the skipped whitespace and comments, or the end
+/// of the input if the input ends. If the token cannot be read, the span is empty, at the
+/// position where the argument would begin.
 ///
-/// In a tolerant parse, the argument is absent and the parser consumes nothing; the
+/// In a tolerant parse, the argument is absent, and the parser consumes nothing. The
 /// invocation continues with its next argument. A strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
