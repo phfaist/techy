@@ -49,17 +49,22 @@ use super::{
     ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext,
 };
 
-/// Diagnostic condition: a [`Command`](crate::core::token::TokenKind::Command) token
-/// names no callable.
+/// The error that is reported when a document uses a command that has no definition (id
+/// `core.specs.unresolvable-command`).
 ///
-/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command) answered
-/// [`Unresolved`](crate::core::specs::CommandResolution::Unresolved). In tolerant
-/// parsing [`NodesParser`] recovers by staging a `Chars` node over the command token's
-/// span, so the source text survives in the tree; a strict parse stops with this
-/// condition.
+/// The parser resolves each command, such as `\emph`, with
+/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command), which
+/// looks up the definition of the command (for instance in the scope stack of the
+/// parsing state). This error is reported when `resolve_command` returns
+/// [`CommandResolution::Unresolved`](crate::core::specs::CommandResolution::Unresolved).
+/// When the resolver itself fails, `resolve_command` returns
+/// [`CommandResolution::Failed`](crate::core::specs::CommandResolution::Failed) and the
+/// parser reports [`CommandResolutionFailed`] instead.
 ///
-/// A resolver that failed while answering, rather than answering "no such callable",
-/// raises [`CommandResolutionFailed`] instead.
+/// Reported by [`NodesParser`] for a command in content, and by the argument parsers for
+/// a command that forms an argument on its own. The span of the diagnostic is the
+/// command. In a tolerant parse, the command is parsed into a `Chars` node that contains
+/// its source text, and the parse continues. A strict parse stops with this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.unresolvable-command")]
@@ -68,12 +73,15 @@ pub struct UnresolvableCommand {
     pub name: String,
     /// The escape character that introduced the command.
     pub escape_char: char,
-    /// Optional detail on why resolution failed, taken from
-    /// [`CommandResolution::Unresolved`](crate::core::specs::CommandResolution::Unresolved)
-    /// and appended to the message.
+    /// Additional information from the resolver, or `None`.
     ///
-    /// The default hook reports that command resolution is not implemented; a resolver
-    /// may report where it searched, or hint at a fix.
+    /// The message shows the detail after a colon, as in `Unknown command ‘\foo’:
+    /// <detail>`, so the detail continues the sentence and begins with a lowercase
+    /// letter. For instance,
+    /// [`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes)
+    /// lists the definition providers that it searched and suggests similar command
+    /// names, and the default resolver of [`ParseDriver`] states that the driver has no
+    /// command resolver.
     pub detail: Option<String>,
 }
 
@@ -81,25 +89,30 @@ pub struct UnresolvableCommand {
 // message format string cannot express).
 impl fmt::Display for UnresolvableCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cannot resolve command ‘{}{}’", self.escape_char, self.name)?;
+        write!(f, "Unknown command ‘{}{}’", self.escape_char, self.name)?;
         if let Some(detail) = &self.detail {
-            write!(f, " ({detail})")?;
+            write!(f, ": {detail}")?;
         }
         Ok(())
     }
 }
 
-/// Diagnostic condition: resolving a
-/// [`Command`](crate::core::token::TokenKind::Command) token failed operationally — a
-/// definition provider errored while answering the query.
+/// The error that is reported when the resolution of a command fails (id
+/// `core.specs.command-resolution-failed`).
 ///
-/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command) answered
-/// [`Failed`](crate::core::specs::CommandResolution::Failed). [`NodesParser`] recovers
-/// exactly as it does for a clean miss, by staging a `Chars` node over the command
-/// token's span, but the condition is a separate one so that tooling can tell "this
-/// command is unknown" from "the resolver is broken".
+/// The parser resolves each command, such as `\emph`, with
+/// [`ParseDriver::resolve_command`](crate::core::ParseDriver::resolve_command). This
+/// error is reported when `resolve_command` returns
+/// [`CommandResolution::Failed`](crate::core::specs::CommandResolution::Failed): the
+/// resolver could not look up the command, for instance because a definition provider
+/// reported an error. A command that has no definition is reported as
+/// [`UnresolvableCommand`]. The two errors let a program tell an unknown command from a
+/// faulty resolver.
 ///
-/// A resolver that answered "no such callable" raises [`UnresolvableCommand`] instead.
+/// Reported by [`NodesParser`] for a command in content, and by the argument parsers for
+/// a command that forms an argument on its own. The span of the diagnostic is the
+/// command. In a tolerant parse, the command is parsed into a `Chars` node that contains
+/// its source text, and the parse continues. A strict parse stops with this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.command-resolution-failed")]
@@ -108,70 +121,91 @@ pub struct CommandResolutionFailed {
     pub name: String,
     /// The escape character that introduced the command.
     pub escape_char: char,
-    /// Optional detail on the operational failure, taken from
-    /// [`CommandResolution::Failed`](crate::core::specs::CommandResolution::Failed) and
-    /// appended to the message. Typically the provider's rendered error.
+    /// The description of the failure from the resolver, or `None`.
+    ///
+    /// The message shows the detail after a colon, as in `Failed to resolve command
+    /// ‘\foo’: <detail>`. For instance,
+    /// [`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes) sets
+    /// it to the error of the definition provider that failed, followed by the name of
+    /// the provider in parentheses.
     pub detail: Option<String>,
 }
 
 // Hand-written wording: the detail suffix is conditional (as for UnresolvableCommand).
 impl fmt::Display for CommandResolutionFailed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "command resolution failed for ‘{}{}’", self.escape_char, self.name)?;
+        write!(
+            f,
+            "Failed to resolve command ‘{}{}’",
+            self.escape_char, self.name
+        )?;
         if let Some(detail) = &self.detail {
-            write!(f, " ({detail})")?;
+            write!(f, ": {detail}")?;
         }
         Ok(())
     }
 }
 
-/// Diagnostic condition: a callable that requires content was used bare where a single
-/// expression was expected.
+/// The error that is reported when a callable that requires arguments or a body forms an
+/// argument on its own (id `core.arguments.expression-callable-requires-content`).
 ///
-/// A callable requires content when it declares a mandatory argument or a body, which
+/// Some arguments consist of a single expression: a group, a single character, or a
+/// callable. For instance, an argument parsed by
+/// [`ExpressionParser`](super::ExpressionParser) is such an argument, as in `\frac12`. A
+/// callable can form this argument on its own only if it requires no content, that is, if
 /// [`CallableSpec::requires_content`](crate::core::specs::CallableSpec::requires_content)
-/// reports. In tolerant parsing the expression position recovers by staging the callable
-/// on its own, with every declared argument absent.
+/// returns `false`. A callable with a mandatory argument must be enclosed in a group
+/// together with its arguments, as in `\frac{\sqrt{2}}{3}`.
 ///
-/// This is the counterpart of pylatexenc's requires-arguments diagnostic.
+/// Reported by the argument parser that parses the argument. The span of the diagnostic
+/// is the callable. In a tolerant parse, the argument consists of the callable alone,
+/// with every declared argument of the callable absent; the tokens that follow the
+/// callable are left for the next argument. A strict parse stops with this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.arguments.expression-callable-requires-content",
-    message = "cannot use ‘{callable}’ as a single expression: it requires content \
-               (arguments or a body)"
+    message = "‘{callable}’ may not be used alone as an argument: it requires \
+               arguments or a body"
 )]
 pub struct ExpressionCallableRequiresContent {
-    /// The callable's invocation spelling, as written (`\frac`, `~`).
+    /// The callable as written in the source, for instance `\frac` or `~`.
     pub callable: String,
 }
 
-/// Diagnostic condition: a [`TokenRecovery`](crate::core::token::TokenRecovery)
-/// placeholder token arrived in a kind the content loop cannot process as content.
+/// The error that is reported when a token reader recovers from a tokenization error
+/// with a placeholder token that cannot be parsed (id
+/// `core.recovery.unusable-recovery-token`).
 ///
-/// A placeholder stands in for a read that failed, so it has no source bytes behind it.
-/// A `Specials` or `GroupOpen` placeholder therefore cannot be dispatched or parsed as a
-/// construct, and [`NodesParser`] recovers by staging a `Chars` node over the token
-/// error's span. Placeholders of the other kinds are processed as ordinary content.
+/// When a token reader fails to read a token, it can return a
+/// [`TokenRecovery`](crate::core::token::TokenRecovery) with a placeholder token, and a
+/// tolerant parse continues with this placeholder. A placeholder has no source text, so
+/// [`NodesParser`] cannot parse a group or a specials invocation from it. The standard
+/// token reader only returns placeholder characters; a document cannot cause this error,
+/// but a custom token reader can.
+///
+/// Reported by [`NodesParser`]. The span of the diagnostic is the span of the placeholder
+/// token. In a tolerant parse, the placeholder is parsed into a `Chars` node over this
+/// span, and the parse continues. A strict parse stops at the tokenization error and never
+/// reports this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.recovery.unusable-recovery-token")]
 pub struct UnusableRecoveryToken {
-    /// The placeholder's spelling (the specials trigger or open delimiter as written).
+    /// The spelling of the placeholder token: the specials or the opening delimiter of
+    /// the group.
     pub spelling: String,
-    /// Which token kind the placeholder had.
+    /// The kind of the placeholder token.
     pub kind: UnusableRecoveryTokenKind,
 }
 
-/// Which token kind an [`UnusableRecoveryToken`] placeholder had.
+/// The kind of the placeholder token of an [`UnusableRecoveryToken`] error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum UnusableRecoveryTokenKind {
-    /// A `Specials` placeholder: a recognized trigger cannot be invoked without real
-    /// bytes to consume.
+    /// A [`Specials`](crate::core::token::TokenKind::Specials) token.
     Specials,
-    /// A `GroupOpen` placeholder: a group cannot be parsed out of a delimiter with no
-    /// bytes behind it.
+    /// A [`GroupOpen`](crate::core::token::TokenKind::GroupOpen) token.
     GroupOpen,
 }
 
@@ -182,15 +216,14 @@ impl fmt::Display for UnusableRecoveryToken {
         match self.kind {
             UnusableRecoveryTokenKind::Specials => write!(
                 f,
-                "cannot invoke specials ‘{}’ here: the token is a recovery placeholder \
-                 standing in for a tokenization error, with no source bytes to parse",
+                "Invalid recovery placeholder ‘{}’ of a tokenization error: a \
+                 placeholder token may not invoke specials",
                 self.spelling
             ),
             UnusableRecoveryTokenKind::GroupOpen => write!(
                 f,
-                "cannot parse group opened by ‘{}’ here: the token is a recovery \
-                 placeholder standing in for a tokenization error, with no source bytes \
-                 to parse",
+                "Invalid recovery placeholder ‘{}’ of a tokenization error: a \
+                 placeholder token may not open a group",
                 self.spelling
             ),
         }
@@ -348,24 +381,28 @@ impl<L: Lang> Default for StopSpec<'_, L> {
     }
 }
 
-/// Diagnostic condition: a group close delimiter appeared where no group is open.
+/// The error that is reported when a closing delimiter appears where no group is open
+/// (id `core.groups.stray-group-close`).
 ///
-/// This is how the outermost level diagnoses [`StopCause::UnexpectedGroupClose`]. Inside
-/// a group the enclosing [`GroupParser`](super::GroupParser) claims such a token instead
-/// and diagnoses it as [`UnclosedGroup`](super::UnclosedGroup); at the outermost level
-/// nobody claims it. The standard root parser
-/// ([`RootNodesParser`](super::RootNodesParser)) reports this condition, consumes the
-/// token, stages it as a `Chars` node, and resumes; a strict parse stops here.
+/// Each closing delimiter must close a group that is open, as in `{a b}`. Inside a group,
+/// a closing delimiter that does not close this group is reported by
+/// [`GroupParser`](super::GroupParser) as [`UnclosedGroup`](super::UnclosedGroup). This
+/// error concerns a closing delimiter outside of every group.
 ///
-/// A custom root driver can raise the same condition for the same situation.
+/// Reported by [`RootNodesParser`](super::RootNodesParser) for the source of the parse,
+/// and by [`ParseContext::parse_attached_source`] for an attached source, such as an
+/// included file. A custom root parser can report it in the same situation. The span of
+/// the diagnostic is the closing delimiter. In a tolerant parse, the closing delimiter is
+/// parsed into a `Chars` node, and the parse continues after it. A strict parse stops
+/// with this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.groups.stray-group-close",
-    message = "unexpected closing ‘{delim}’ — no group is open"
+    message = "Unmatched closing delimiter ‘{delim}’: no group is open"
 )]
 pub struct StrayGroupClose {
-    /// The stray close delimiter as written (e.g. `}`).
+    /// The closing delimiter as written, for instance `}`.
     pub delim: String,
 }
 
@@ -807,13 +844,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             Some(run) => {
                 if run.end != start {
                     return Err(alloc::format!(
-                        "the token's StartBeforePreSpace edge {:?} is not the position \
-                         the stream stood at when the token was peeked ({:?}) — the \
-                         token reader violates the `TokenReader` contract (a peeked \
-                         token starts where the peek happened; moving to an edge sets \
-                         the position)",
-                        start,
-                        run.end
+                        "Inconsistent token reader: the token peeked at {:?} begins at \
+                         {:?}; a peeked token, including its pre-space, must begin at \
+                         the position of the peek",
+                        run.end,
+                        start
                     ));
                 }
                 run.end = end;
@@ -1168,10 +1203,9 @@ where
             if last_position.as_ref() == Some(&position) {
                 return Err(cx.implementation_error(
                     alloc::format!(
-                        "the token source made no progress: the token read at {position:?} \
-                         was consumed but the stream position is unchanged \
-                         (token-source contract violation: every token other than \
-                         EndOfStream must advance the stream position)"
+                        "Inconsistent token reader: the stream position did not advance \
+                         past the token read at {position:?}; every token other than \
+                         ‘EndOfStream’ must advance the stream position"
                     ),
                     cx.here(),
                 ));
@@ -1300,9 +1334,8 @@ where
                     // an implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Paragraphs::PRESENT {
                         return Err(cx.implementation_error(
-                            "a ParagraphBreak token reached content dispatch although \
-                             the language declares the paragraphs feature absent \
-                             (token-source contract violation)",
+                            "Invalid ‘ParagraphBreak’ token returned by the token reader: \
+                             the language declares the paragraphs feature absent",
                             cx.tokens.source_span_of(&token),
                         ));
                     }
@@ -1333,9 +1366,8 @@ where
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Comments::PRESENT {
                         return Err(cx.implementation_error(
-                            "a Comment token reached content dispatch although the \
-                             language declares the comments feature absent \
-                             (token-source contract violation)",
+                            "Invalid ‘Comment’ token returned by the token reader: \
+                             the language declares the comments feature absent",
                             cx.tokens.source_span_of(&token),
                         ));
                     }
@@ -1360,9 +1392,8 @@ where
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Commands::PRESENT {
                         return Err(cx.implementation_error(
-                            "a Command token reached content dispatch although the \
-                             language declares the commands feature absent \
-                             (token-source contract violation)",
+                            "Invalid ‘Command’ token returned by the token reader: \
+                             the language declares the commands feature absent",
                             cx.tokens.source_span_of(&token),
                         ));
                     }
@@ -1435,9 +1466,8 @@ where
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Specials::PRESENT {
                         return Err(cx.implementation_error(
-                            "a Specials token reached content dispatch although the \
-                             language declares the specials feature absent \
-                             (token-source contract violation)",
+                            "Invalid ‘Specials’ token returned by the token reader: \
+                             the language declares the specials feature absent",
                             cx.tokens.source_span_of(&token),
                         ));
                     }
@@ -1471,9 +1501,8 @@ where
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Groups::PRESENT {
                         return Err(cx.implementation_error(
-                            "a GroupOpen token reached content dispatch although the \
-                             language declares the groups feature absent \
-                             (token-source contract violation)",
+                            "Invalid ‘GroupOpen’ token returned by the token reader: \
+                             the language declares the groups feature absent",
                             cx.tokens.source_span_of(&token),
                         ));
                     }

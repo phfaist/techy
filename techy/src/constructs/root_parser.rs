@@ -124,9 +124,10 @@ where
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Groups::PRESENT {
                         return Err(cx.implementation_error(
-                            "a stray group close surfaced at the root although the \
-                             language declares the groups feature absent \
-                             (token-source contract violation)",
+                            "Invalid stop cause ‘UnexpectedGroupClose’ \
+                             returned by the nodes parser of \
+                             ‘ParseDriver::make_nodes_parser’: the language \
+                             declares the groups feature absent",
                             span,
                         ));
                     }
@@ -153,15 +154,17 @@ where
                 }
                 StopCause::TokenCondition { span, .. } => {
                     return Err(cx.implementation_error(
-                        "the root content loop stopped on a token condition none was \
-                         set (nodes-parser contract violation)",
+                        "Invalid stop cause ‘TokenCondition’ returned by the \
+                         nodes parser of ‘ParseDriver::make_nodes_parser’: \
+                         the stop specification of the root sets no token condition",
                         span,
                     ));
                 }
                 StopCause::NodeCondition => {
                     return Err(cx.implementation_error(
-                        "the root content loop stopped on a node condition none was \
-                         set (nodes-parser contract violation)",
+                        "Invalid stop cause ‘NodeCondition’ returned by the \
+                         nodes parser of ‘ParseDriver::make_nodes_parser’: \
+                         the stop specification of the root sets no node condition",
                         cx.here(),
                     ));
                 }
