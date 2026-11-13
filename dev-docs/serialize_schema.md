@@ -467,7 +467,7 @@ Example (entry 0 — the unclosed group; a top-level group carries no traceback 
 {
   "severity": "error",
   "identifier": "core.groups.unclosed-group",
-  "message": "unclosed group: expected ‘}’ before end of input",
+  "message": "Missing closing delimiter ‘}’ of the group at the end of the input",
   "data": {
     "expected_close": "}",
     "found": "end-of-input"

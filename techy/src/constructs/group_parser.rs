@@ -76,36 +76,45 @@ use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{node_text_content, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
-/// Condition: a delimited group was never closed with its expected delimiter.
+/// The error that is reported when a group is not closed by its closing delimiter (id
+/// `core.groups.unclosed-group`).
 ///
-/// Raised by [`GroupParser`]. Under tolerant recovery the group is closed anyway, and its
-/// node records an empty close delimiter
-/// ([`GroupData::close`](crate::core::node::GroupData::close)); a strict parse aborts.
-/// [`found`](UnclosedGroup::found) says what blocked the close, and that decides what
-/// happens to the token the parser stopped at:
+/// A group opens with the opening delimiter of a [`GroupRule`] and must be closed with the
+/// closing delimiter of the same rule, as in `{a b}` for the rule `{`…`}`.
 ///
-/// - at end of input there is no such token;
-/// - on a close delimiter of a different pairing, the group closes **without consuming**
-///   that token, which is left for an enclosing level to claim — or for the root, which
-///   diagnoses and skips it.
+/// Reported by [`GroupParser`] in two cases, which [`found`](UnclosedGroup::found) tells
+/// apart:
+///
+/// - [`EndOfInput`](UnclosedGroupFound::EndOfInput): The input ends inside the group. The
+///   span of the diagnostic is the opening delimiter of the group.
+/// - [`StrayClose`](UnclosedGroupFound::StrayClose): A closing delimiter of another group
+///   rule appears inside the group. The span of the diagnostic is this closing delimiter.
+///
+/// In a tolerant parse, the group ends at the position of the error, and its node records
+/// an empty closing delimiter ([`GroupData::close`](crate::core::node::GroupData::close)).
+/// A mismatched closing delimiter does not belong to the group. It closes the enclosing
+/// group whose rule it belongs to; each group in between reports this error too. If no
+/// enclosing group matches it, it is reported as
+/// [`StrayGroupClose`](super::StrayGroupClose) at the outermost level. A strict parse
+/// stops at the first error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.groups.unclosed-group")]
 pub struct UnclosedGroup {
-    /// The close delimiter the group expected (as written, e.g. `}`).
+    /// The closing delimiter that the rule of the group expects, as written (e.g. `}`).
     pub expected_close: String,
-    /// What blocked the close instead.
+    /// What the parser found in place of the closing delimiter.
     pub found: UnclosedGroupFound,
 }
 
-/// What an [`UnclosedGroup`] ran into instead of its close delimiter.
+/// What the [`GroupParser`] found in place of the closing delimiter of a group, in an
+/// [`UnclosedGroup`] error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum UnclosedGroupFound {
-    /// The input ended inside the group.
+    /// The input ends inside the group.
     EndOfInput,
-    /// A close delimiter belonging to a different pairing appeared (the group unwinds,
-    /// leaving the stray token for an enclosing level to claim).
+    /// A closing delimiter of another group rule appears inside the group.
     StrayClose,
 }
 
@@ -119,11 +128,16 @@ impl fmt::Display for UnclosedGroup {
         match self.found {
             UnclosedGroupFound::EndOfInput => write!(
                 f,
-                "unclosed group: expected ‘{}’ before end of input",
+                "Missing closing delimiter ‘{}’ of the group at the end of \
+                 the input",
                 self.expected_close
             ),
             UnclosedGroupFound::StrayClose => {
-                write!(f, "mismatched group close: expected ‘{}’", self.expected_close)
+                write!(
+                    f,
+                    "Mismatched closing delimiter: the group must be closed with ‘{}’",
+                    self.expected_close
+                )
             }
         }
     }
@@ -316,8 +330,9 @@ where
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
             return Err(cx.implementation_error(
-                "the driver's content-loop parser returned a pass-through state delta \
-                 (a nodes parser has no after-effect to report)",
+                "Invalid state delta returned by the nodes parser of \
+                 ‘ParseDriver::make_nodes_parser’: a nodes parser must return no \
+                 state delta",
                 cx.here(),
             ));
         }
@@ -345,8 +360,9 @@ where
             }
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
-                    "the driver's content-loop parser reported a node-condition stop, \
-                     but the group interior's stop spec sets no node condition",
+                    "Invalid stop cause ‘NodeCondition’ returned by the nodes \
+                     parser of ‘ParseDriver::make_nodes_parser’: the stop \
+                     specification of a group sets no node condition",
                     cx.here(),
                 ));
             }
