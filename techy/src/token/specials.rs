@@ -68,17 +68,23 @@ impl<L: Lang> fmt::Debug for SpecialsMatch<L> {
     }
 }
 
-/// An error that the `Lang::scan_specials` hook returns when it fails to scan a specials
-/// trigger.
+/// An error that [`Lang::scan_specials`](crate::core::Lang::scan_specials) returns when it
+/// fails to scan a specials trigger.
 ///
 /// A specials scan error contains the condition that describes the error
 /// ([`kind`](Self::kind)) and the byte range of the scanned content where the error
-/// occurred ([`span`](Self::span)). The token reader converts it into a
-/// [`TokenError`](super::TokenError) for the reader's own source. The hook does not know
-/// the tokens and the stream positions of the reader, so it cannot describe how to
-/// continue past the error. Therefore the token error has no
+/// occurred ([`span`](Self::span)). The standard token reader converts it into a
+/// [`TokenError`](super::TokenError) whose span lies in the source that the reader reads.
+/// The hook receives only the parsing state, the content and the scan position, so it
+/// cannot describe how to continue past the error. Therefore the token error has no
 /// [`TokenRecovery`](super::TokenRecovery), and it stops the parse, also in a tolerant
 /// parse.
+///
+/// [`scan_specials_trigger`](super::scan_specials_trigger) also returns a specials scan
+/// error when the hook returns a match end or an error span that lies outside the scanned
+/// content or not on a character boundary. Its condition is then an
+/// [`ImplementationError`](crate::core::constructs::ImplementationError), and its span is
+/// the empty range at the scan position.
 ///
 /// To report a problem in the document that the parse can continue past, the hook returns
 /// a [`SpecialsMatch`] whose spec has a parser that reports the problem.

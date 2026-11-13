@@ -82,8 +82,8 @@ impl fmt::Display for ForbiddenChar {
     }
 }
 
-/// The condition of a [`TokenError`]: the description of what went wrong while reading a
-/// token.
+/// A `TokenErrorKind` describes what went wrong while reading a token. It is the condition
+/// of a [`TokenError`].
 ///
 /// Each variant contains a condition that implements [`DiagnosticInfo`], so that a token
 /// error is reported as a [`Diagnostic`](crate::error::Diagnostic) like any other
@@ -103,10 +103,17 @@ pub enum TokenErrorKind {
     EndOfStreamAfterEscape(EndOfStreamAfterEscape),
     /// A character that the language forbids appears in the text.
     ForbiddenChar(ForbiddenChar),
-    /// A condition reported by the `Lang::scan_specials` hook of the language or by a
-    /// custom [`TokenReader`](super::TokenReader). The token layer also uses this variant
-    /// for an [`ImplementationError`](crate::core::constructs::ImplementationError) when
-    /// such a hook or reader violates its contract.
+    /// A condition reported by [`Lang::scan_specials`](crate::core::Lang::scan_specials) or
+    /// by a custom [`TokenReader`](super::TokenReader).
+    ///
+    /// The standard token reader also reports an
+    /// [`ImplementationError`](crate::core::constructs::ImplementationError) in this
+    /// variant in two cases: when `Lang::scan_specials` returns a match end or an error span
+    /// that lies outside the scanned content or not on a character boundary, and when the
+    /// reader is asked to read at a position that lies outside its content or not on a
+    /// character boundary. Such a position comes from outside the reader, e.g. from a
+    /// caller of [`move_to`](super::TokenReader::move_to) or
+    /// [`move_to_position`](super::TokenReader::move_to_position).
     Custom(Box<dyn DiagnosticData>),
 }
 
