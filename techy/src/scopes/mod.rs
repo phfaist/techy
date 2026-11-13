@@ -164,59 +164,78 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, L> {
 
 // --- provider failure shapes ---------------------------------------------------------
 
-/// A [`SpecsProvider`] operation failed — the provider-level error of
-/// [`retrieve_spec`](SpecsProvider::retrieve_spec) and
-/// [`with_definitions`](SpecsProvider::with_definitions). Structured for testability; custom providers report anything beyond the
-/// named cases through [`Failed`](ProviderError::Failed).
+/// The error that a [`SpecsProvider`] returns when an operation fails.
 ///
-/// A provider error is an *operational* failure (misconfiguration, extension bug, backing
-/// I/O), never a source condition: source-shaped failures of the specials scan travel as
-/// [`TokenError`](crate::core::token::TokenError)s instead, and "this name is an error" is
-/// expressed as an ordinary [`ErrorCallableSpec`] definition.
+/// [`retrieve_spec`](SpecsProvider::retrieve_spec) returns this error when the provider
+/// cannot look up a definition, and [`with_definitions`](SpecsProvider::with_definitions)
+/// returns it when the provider cannot apply a definition operation. A custom provider
+/// reports a failure that the other variants do not describe with
+/// [`Failed`](ProviderError::Failed).
+///
+/// A provider error reports a problem of the program, such as a misconfiguration, a
+/// faulty provider, or a failed read from a backing store. The document does not cause
+/// provider errors: a failure of the specials scan that the source causes is reported as
+/// a [`TokenError`](crate::core::token::TokenError), and a name that the document may
+/// not use is defined as an [`ErrorCallableSpec`].
+///
+/// The `Display` text is a complete message that begins with a capital letter, and it
+/// does not name the provider. [`ScopeStackError`] adds the name of the provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProviderError {
-    /// The provider does not accept definition ops (the default
-    /// [`with_definitions`](SpecsProvider::with_definitions) — e.g. a [`Package`]).
+    /// The provider does not accept definition operations. This is the error of the
+    /// default implementation of [`with_definitions`](SpecsProvider::with_definitions),
+    /// which a [`Package`] uses, for instance.
     NotMutable,
-    /// An op referenced a name the provider does not define
-    /// ([`DefinitionOp::Remove`] of an absent definition).
+    /// A definition operation refers to a name that the provider does not define, for
+    /// instance a [`DefinitionOp::Remove`] of a name that has no definition.
     UndefinedName {
-        /// The name the op referenced.
+        /// The name that the operation refers to.
         name: Box<str>,
     },
-    /// A provider-specific failure, rendered as a message.
+    /// Any other failure of the provider.
+    ///
+    /// The string is the message of the failure. Write it as a complete message that
+    /// begins with a capital letter, for instance `Failed to read the definition file
+    /// ‘defs.toml’`.
     Failed(Box<str>),
 }
 
 impl fmt::Display for ProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProviderError::NotMutable => {
-                write!(f, "the provider does not accept definition ops")
-            }
+            ProviderError::NotMutable => write!(
+                f,
+                "Read-only definition provider: definitions may not be added or removed"
+            ),
             ProviderError::UndefinedName { name } => {
-                write!(f, "no definition named ‘{name}’ in this provider")
+                write!(f, "Missing definition of ‘{name}’")
             }
             ProviderError::Failed(message) => write!(f, "{message}"),
         }
     }
 }
 
-/// A provider *within a stack* failed: the [`ProviderError`] plus which provider it was.
-/// The `Err` of [`ScopeStack::retrieve_spec`] — a failing provider stops the search —
-/// and the payload of [`ScopeOpError::Provider`].
+/// The error of a [`SpecsProvider`] on a [`ScopeStack`], together with the name of the
+/// provider.
+///
+/// [`ScopeStack::retrieve_spec`] returns this error when a provider fails; the search
+/// stops at the failing provider. [`ScopeOpError::Provider`] contains this error when a
+/// provider fails to apply a scope operation.
+///
+/// The `Display` text is the text of the [`ProviderError`], followed by the name of the
+/// provider in parentheses, as in `Missing definition of ‘foo’ (provider ‘user’)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeStackError {
     /// The name of the provider that failed.
     pub provider: Box<str>,
-    /// What went wrong.
+    /// The error that the provider returned.
     pub error: ProviderError,
 }
 
 impl fmt::Display for ScopeStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "provider ‘{}’: {}", self.provider, self.error)
+        write!(f, "{} (provider ‘{}’)", self.error, self.provider)
     }
 }
 
@@ -228,34 +247,34 @@ impl core::error::Error for ScopeStackError {
     }
 }
 
-/// One [`ScopeOp`] failed while a delta was applied.
+/// The error that is returned when a [`ScopeOp`] cannot be applied to a [`ScopeStack`].
 ///
-/// This is the per-op failure record collected by the fallible
-/// [`ParsingState::derived`](crate::core::ParsingState::derived) into a
-/// [`DeriveError`](crate::core::DeriveError).
+/// [`ScopeStack::apply_op`] returns this error. When
+/// [`ParsingState::derived`](crate::core::ParsingState::derived) applies a state delta,
+/// it collects one such error for each failing operation into a
+/// [`DeriveError`](crate::core::DeriveError). The caller decides how to handle the
+/// errors: during a parse, each error is reported as a
+/// [`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed) diagnostic, and a tolerant
+/// parse continues without the failing operations.
 ///
-/// The record is mechanical, not classified: the *caller* decides what a failure
-/// means — the in-parse derivation path treats it as a recoverable condition,
-/// reported through the recovery entry point
-/// ([`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed)); an embedder applying a
-/// delta out of parse treats it as its own input error.
+/// The `Display` text is a complete message that begins with a capital letter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ScopeOpError {
-    /// The op targeted a provider name not on the stack ([`ScopeOp::Unload`],
-    /// [`ScopeOp::Replace`], [`ScopeOp::Remove`]; [`ScopeOp::Define`] instead creates
-    /// the scope lazily).
+    /// The operation targets a provider that is not on the scope stack. The operations
+    /// [`ScopeOp::Unload`], [`ScopeOp::Replace`] and [`ScopeOp::Remove`] report this
+    /// error. [`ScopeOp::Define`] does not: it creates a scope with that name.
     UnknownProvider {
-        /// The name the op targeted.
+        /// The provider name that the operation targets.
         name: Box<str>,
     },
-    /// The targeted provider rejected or failed the op.
+    /// The targeted provider returned an error for the operation.
     Provider(ScopeStackError),
-    /// The stack belongs to a language that declares the scope stack absent
-    /// ([`Lang::Features`]): no scope operation can apply. Reachable only by calling
-    /// [`ScopeStack::apply_op`] directly on such a stack — a state delta can never
-    /// carry scope ops for one, because the delta's scope-op list is stored through
-    /// the same declaration and holds nothing for it.
+    /// The language has no scope stack ([`Lang::Features`]), so no scope operation can
+    /// be applied.
+    ///
+    /// Only a direct call of [`ScopeStack::apply_op`] can return this error. A state
+    /// delta of such a language cannot contain scope operations.
     ScopesAbsent,
 }
 
@@ -263,12 +282,12 @@ impl fmt::Display for ScopeOpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ScopeOpError::UnknownProvider { name } => {
-                write!(f, "no provider named ‘{name}’ on the scope stack")
+                write!(f, "Missing definition provider ‘{name}’ on the scope stack")
             }
             ScopeOpError::Provider(error) => fmt::Display::fmt(error, f),
             ScopeOpError::ScopesAbsent => write!(
                 f,
-                "the language declares the scope stack absent; no scope operation can apply"
+                "Invalid scope operation: the language has no scope stack"
             ),
         }
     }
