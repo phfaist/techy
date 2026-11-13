@@ -27,58 +27,68 @@ use super::environment_parser::MissingTerminatorFound;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{node_text_content, ConstructParserResult, FromInvocation, ParseContext};
 
-/// Condition: the beginning of a [`TerminatedArgumentParser`] argument was not
-/// there.
+/// The error that is reported when the prefix of a [`TerminatedArgumentParser`] argument
+/// is incomplete (id `core.arguments.expected-opener`).
 ///
-/// Raised when the configured opener does not follow the run of repeat characters
-/// (another character stands there, or the input ends), and when an argument whose
-/// terminator consists of the repeated characters alone starts with none of them.
-/// [`expected`](ExpectedArgumentOpener::expected) is the opener in the first case and
-/// the repeat character in the second.
+/// The prefix of such an argument is a run of the repeat character, if the parser has
+/// one, followed by the opener, e.g. `<<` in `\q<<…>>` or `###"` in `\raw###"…"###`.
+/// When the run of repeat characters is the whole terminator, the run must contain at
+/// least one repeat character, as in `\verbcode+…+`.
 ///
-/// Recovery reports the argument absent, consuming nothing: what the parser read
-/// while looking for the opener is parsed again as content of the enclosing
-/// construct.
+/// Reported by [`TerminatedArgumentParser`] in two cases:
+///
+/// - The opener does not follow the run of repeat characters.
+///   [`expected`](ExpectedArgumentOpener::expected) contains the opener. The span of the
+///   diagnostic is the first character that differs from the opener, or the end of the
+///   input.
+/// - The terminator consists of the run of repeat characters alone, and the argument
+///   begins with no repeat character. [`expected`](ExpectedArgumentOpener::expected)
+///   contains the repeat character. The span of the diagnostic is the position where the
+///   argument begins.
+///
+/// In a tolerant parse, the argument is absent and the parser consumes nothing. A strict
+/// parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "core.arguments.expected-opener",
-    message = "expected ‘{expected}’ to open the argument"
+    message = "Missing opening delimiter ‘{expected}’ of the argument"
 )]
 pub struct ExpectedArgumentOpener {
-    /// What was expected where the argument starts: the opener, or the repeat
-    /// character.
+    /// The opener, or the repeat character, that the argument must begin with.
     pub expected: String,
 }
 
-/// Condition: the terminator of a [`TerminatedArgumentParser`] argument never
-/// appeared.
+/// The error that is reported when the terminator of a [`TerminatedArgumentParser`]
+/// argument is missing (id `core.arguments.missing-terminator`).
 ///
-/// [`found`](MissingArgumentTerminator::found) says what ended the argument instead:
+/// Reported by [`TerminatedArgumentParser`] in two cases, which
+/// [`found`](MissingArgumentTerminator::found) tells apart:
 ///
-/// - [`EndOfInput`](MissingTerminatorFound::EndOfInput): the input ended inside the
-///   argument;
-/// - [`StrayGroupClose`](MissingTerminatorFound::StrayGroupClose): in parsed content,
-///   a group close delimiter appeared that nothing inside the argument had opened.
+/// - [`EndOfInput`](MissingTerminatorFound::EndOfInput): The input ends inside the
+///   argument. The span of the diagnostic is the prefix of the argument.
+/// - [`StrayGroupClose`](MissingTerminatorFound::StrayGroupClose): In parsed content, a
+///   closing delimiter appears that no group inside the argument opened. The span of the
+///   diagnostic is this closing delimiter.
 ///
 /// This parser never reports
-/// [`UnreadableToken`](MissingTerminatorFound::UnreadableToken): its content is read
-/// by the standard content loop, which applies its own recovery to a token it cannot
-/// read and carries on.
+/// [`UnreadableToken`](MissingTerminatorFound::UnreadableToken): the content loop that
+/// reads the argument recovers from a token that it cannot read and continues.
 ///
-/// Tolerant recovery keeps the content read so far, closes the argument's group node
-/// where the reading stopped, and records an **empty** close on it — the
-/// [`GroupData::close`] convention for a delimiter that was never found. A stray close
-/// delimiter is not consumed: it is left for the enclosing level to claim, or for the
-/// root, which diagnoses it separately.
+/// In a tolerant parse, the argument contains the content read up to the position of the
+/// error, and its group node records an empty closing delimiter ([`GroupData::close`]). A
+/// closing delimiter that ends the argument does not belong to it: the closing delimiter
+/// is parsed after the argument, by the enclosing group or at the outermost level. A
+/// strict parse stops at this error.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.arguments.missing-terminator")]
 pub struct MissingArgumentTerminator {
-    /// The terminator that never appeared, as composed for this argument (for
-    /// instance `\endphf`, or two backticks for a code span opened with two).
+    /// The terminator of the argument, composed from the configuration of the parser and
+    /// the prefix of the argument (e.g. `\endphf`, or two backticks for a code span opened
+    /// with two).
     pub terminator: String,
-    /// What ended the argument instead.
+    /// What the parser found in place of the terminator.
     pub found: MissingTerminatorFound,
 }
 
@@ -89,20 +99,20 @@ impl fmt::Display for MissingArgumentTerminator {
         match self.found {
             MissingTerminatorFound::EndOfInput => write!(
                 f,
-                "missing terminator ‘{}’ of the argument before end of input",
+                "Missing terminator ‘{}’ of the argument at the end of the input",
                 self.terminator
             ),
             MissingTerminatorFound::StrayGroupClose => {
                 write!(
                     f,
-                    "missing terminator ‘{}’ of the argument",
+                    "Missing terminator ‘{}’ of the argument before an unmatched \
+                     closing delimiter",
                     self.terminator
                 )
             }
             MissingTerminatorFound::UnreadableToken => write!(
                 f,
-                "missing terminator ‘{}’ of the argument before a token that could not \
-                 be read",
+                "Missing terminator ‘{}’ of the argument before an unreadable token",
                 self.terminator
             ),
         }
@@ -365,14 +375,14 @@ impl<L: LangHasGroups> TerminatedArgumentParser<L> {
         match self.repeat_char {
             None if self.terminator_head.is_empty() && self.terminator_tail.is_empty() => {
                 Some(String::from(
-                    "TerminatedArgumentParser can never form a terminator: no repeat \
-                     character is configured, and the terminator head and tail are \
-                     both empty",
+                    "Misconfigured argument parser ‘TerminatedArgumentParser’: a \
+                     repeat character, a terminator head or a terminator tail must be \
+                     configured",
                 ))
             }
             Some(repeat_char) if self.opener.starts_with(repeat_char) => Some(format!(
-                "TerminatedArgumentParser's opener ‘{}’ begins with its repeat \
-                 character ‘{}’, which the run of repeat characters always reads first",
+                "Misconfigured argument parser ‘TerminatedArgumentParser’: the \
+                 opener ‘{}’ may not begin with the repeat character ‘{}’",
                 self.opener, repeat_char
             )),
             _ => None,
@@ -542,8 +552,9 @@ where
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
             return Err(cx.implementation_error(
-                "the driver's content-loop parser returned a pass-through state delta \
-                 (a nodes parser has no after-effect to report)",
+                "Invalid state delta returned by the nodes parser of \
+                 ‘ParseDriver::make_nodes_parser’: a nodes parser must return no \
+                 state delta",
                 cx.here(),
             ));
         }
@@ -575,8 +586,9 @@ where
             }
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
-                    "the driver's content-loop parser reported a node-condition stop, \
-                     but the terminated argument's stop spec sets no node condition",
+                    "Invalid stop cause ‘NodeCondition’ returned by the nodes \
+                     parser of ‘ParseDriver::make_nodes_parser’: the stop \
+                     specification of a terminated argument sets no node condition",
                     cx.here(),
                 ));
             }
