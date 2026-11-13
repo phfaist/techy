@@ -481,14 +481,17 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 ///
 /// The error also contains what a caller needs to continue: the
 /// [`recovered`](DeriveError::recovered) state, which a tolerant caller can use in place
-/// of the state that failed, and the [`delta`](DeriveError::delta) that was applied. The
-/// error does not say how serious the failure is. Depending on the caller, a failing
-/// scope operation is a bug in an extension or a problem in the input of an embedding.
+/// of the derived state, and the [`delta`](DeriveError::delta) that was applied.
+///
+/// Depending on the caller, a failing scope operation is a bug in an extension or a
+/// problem in the input of an embedding. The caller decides how to report it: during a
+/// parse, each failure is reported as a
+/// [`ScopeOpFailed`](crate::core::constructs::ScopeOpFailed) diagnostic.
 ///
 /// `DeriveError` is not `Clone`, because a [`ParsingState`] is not: a state is
-/// identified by its address, and the recovered state is a state. The error is large,
-/// since it contains a whole state and a delta. The functions that return it allow
-/// `clippy::result_large_err` instead of boxing it.
+/// identified by its address, and the recovered state is a state. The error is large: it
+/// contains a whole state and a delta.
+// The functions that return it allow `clippy::result_large_err` instead of boxing it.
 pub struct DeriveError<L: Lang> {
     /// The errors of the scope operations that failed, in the order of the delta. Empty
     /// only when [`finalize_error`](DeriveError::finalize_error) is `Some`.
@@ -576,9 +579,10 @@ impl FinalizeError {
     /// Creates the error with the given description of the failure.
     ///
     /// Write the description as a complete message that begins with a capital letter.
-    /// Name the event, the rule or the input at fault, and say what the caller should
-    /// do, for instance `"Event ‘ExitMathContext’ needs the enclosing states: derive the
-    /// state through a parse context"`.
+    /// State what is wrong with the event, the rule or the input at fault. When the fix
+    /// is not obvious, give it after a semicolon, for instance `"Missing enclosing states
+    /// for event ‘ExitMathContext’; derive the state with
+    /// ‘ParseContext::derive_state’"`.
     pub fn new(message: impl Into<String>) -> FinalizeError {
         FinalizeError { message: message.into() }
     }

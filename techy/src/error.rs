@@ -1051,10 +1051,10 @@ impl<'a, O: SourceOrigin> IntoIterator for &'a Diagnostics<O> {
 /// inconsistent.
 ///
 /// The parts are inconsistent when no collection filled through [`Diagnostics::push`]
-/// could report them, for instance when more diagnostics are supplied than the
+/// could have these counts, for instance when more diagnostics are supplied than the
 /// retention limit allows. The rules that the parts must follow are listed on
-/// [`from_parts`](Diagnostics::from_parts). The fields contain the parts as they were
-/// given.
+/// [`from_parts`](Diagnostics::from_parts). The fields contain the counts of the parts
+/// as they were given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct InconsistentDiagnosticCounts {
@@ -1435,8 +1435,11 @@ pub fn format_position_with<O: SourceOrigin>(
 ///
 /// ```text
 /// Inside:
-///   @ (line 5, col 10): argument #1 of macro ‘\section’
+///   @ (line 5, col 9): group ‘{’
+///   @ (line 5, col 9): argument #1 of macro ‘\section’
+///   @ (line 5, col 1): macro ‘\section’
 ///   @ (line 2, col 1): environment ‘document’
+///   @ (line 2, col 1): macro ‘\begin’
 /// ```
 pub fn format_traceback<O: SourceOrigin>(frames: &[TraceFrame<O>]) -> String {
     format_traceback_with(frames, &mut LineIndexCache::new())

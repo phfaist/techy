@@ -156,7 +156,8 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
 
 /// The error that [`ParserSession::derived_state`] and
 /// [`ParserSession::group_interior_state`] return when the derivation of a parsing
-/// state fails.
+/// state fails, or when [`ParseDriver::observe_transition`] returns an error for the
+/// transition.
 ///
 /// The two variants call for different handling. A [`DeriveError`] lists the
 /// operations that failed and contains a recovered state, with which a tolerant caller
