@@ -372,8 +372,9 @@ impl<L: SerializableLang> DeserializableObject<L> for SpecProvenance<L> {
         };
         let Some(package) = (&*provider as &dyn Any).downcast_ref::<Package<L>>() else {
             return Err(DeserializeError::failed(format!(
-                "Invalid provider ‘{}’ of a spec identity: spec identities can only refer \
-                 to a ‘Package’",
+                "Unsupported type of provider ‘{}’ in a spec identity: spec identities must \
+                 refer to a ‘Package’; register a reader for the specs of a custom \
+                 provider type",
                 provider.name()
             )));
         };
@@ -520,7 +521,7 @@ impl<L: SerializableLang> DeserializableObject<L> for Scope<L> {
             let spec = cx.spec(definition.spec)?;
             if scope.insert(callable_type, definition.name.as_str(), spec).is_some() {
                 return Err(DeserializeError::failed(format!(
-                    "Duplicate definition of ‘{}’ (callable type {callable_type:?}) in \
+                    "Duplicate definition of ‘{}’ (callable type ‘{callable_type:?}’) in \
                      scope ‘{}’",
                     definition.name,
                     scope.name()
@@ -573,7 +574,7 @@ impl<L: SerializableLang> DeserializableObject<L> for FallbackProvider<L> {
             let spec = cx.spec(fallback.spec)?;
             if provider.set(callable_type, spec).is_some() {
                 return Err(DeserializeError::failed(format!(
-                    "Duplicate fallback for callable type {callable_type:?} in fallback \
+                    "Duplicate fallback for callable type ‘{callable_type:?}’ in fallback \
                      provider ‘{}’",
                     provider.name()
                 )));

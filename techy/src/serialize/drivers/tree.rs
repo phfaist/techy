@@ -276,8 +276,8 @@ fn codec_by_identifier<L: SerializableLang>(
 ) -> Result<TreeCodec<L>, DeserializeError> {
     let ordinal = cx.session_mut().table_ordinal_by_name(TREES_TABLE).ok_or_else(|| {
         DeserializeError::failed(alloc::format!(
-            "Misconfigured driver of table ‘{TREES_TABLE}’: The driver was called with the \
-             context of a session that has no table of this name"
+            "Misconfigured driver of table ‘{TREES_TABLE}’: The session of the context has \
+             no table ‘{TREES_TABLE}’"
         ))
     })?;
     let registry = cx
@@ -621,8 +621,8 @@ pub(crate) fn tree_of_object<L: SerializableLang, A: Clone + Send + Sync + 'stat
             // The stored tree's codec is registered (it was read through it); the
             // requested type may not be.
             let stored = registered_identifier(session, (*object).type_id()).map_or_else(
-                || String::from("an unregistered identifier"),
-                |identifier| alloc::format!("‘{identifier}’"),
+                || String::from("a tree of an unregistered annotation type"),
+                |identifier| alloc::format!("a tree with annotation identifier ‘{identifier}’"),
             );
             let requested = core::any::type_name::<A>();
             let requested_identifier = registered_identifier(session, TypeId::of::<NodeTree<L, A>>())
@@ -631,8 +631,7 @@ pub(crate) fn tree_of_object<L: SerializableLang, A: Clone + Send + Sync + 'stat
                     |identifier| alloc::format!("identifier ‘{identifier}’"),
                 );
             Err(DeserializeError::failed(alloc::format!(
-                "Annotation type mismatch: a tree serialized as {stored} is read with annotation type \
-                 ‘{requested}’ ({requested_identifier})"
+                "Invalid annotation type ‘{requested}’ ({requested_identifier}) for {stored}"
             )))
         }
     }
@@ -894,7 +893,7 @@ fn stage_node<L: SerializableLang, A>(
     for child in child_start..child_end {
         if let Some(other) = claimed_by[child as usize] {
             return Err(DeserializeError::failed(alloc::format!(
-                "Node #{child} has two parents (node #{other} and this node)"
+                "Node #{child} has two parents (node #{other} and node #{index})"
             )));
         }
         claimed_by[child as usize] = Some(index);

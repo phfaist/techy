@@ -1145,7 +1145,7 @@ impl<'de> VariantAccess<'de> for VariantReader<'de> {
         match self.payload {
             None => Ok(()),
             Some(payload) => Err(SerialValueError::TypeMismatch {
-                expected: Cow::Borrowed("a string naming a unit variant"),
+                expected: Cow::Borrowed("a variant name"),
                 found: payload.kind_name(),
             }),
         }
@@ -1155,7 +1155,7 @@ impl<'de> VariantAccess<'de> for VariantReader<'de> {
         match self.payload {
             Some(payload) => seed.deserialize(payload),
             None => Err(SerialValueError::TypeMismatch {
-                expected: Cow::Borrowed("a one-entry map from the variant name to its data"),
+                expected: Cow::Borrowed("a one-entry map from a variant name to its data"),
                 found: "str",
             }),
         }
@@ -1165,7 +1165,7 @@ impl<'de> VariantAccess<'de> for VariantReader<'de> {
         match self.payload {
             Some(payload) => payload.deserialize_seq(visitor),
             None => Err(SerialValueError::TypeMismatch {
-                expected: Cow::Borrowed("a one-entry map from the variant name to its data"),
+                expected: Cow::Borrowed("a one-entry map from a variant name to its data"),
                 found: "str",
             }),
         }
@@ -1179,7 +1179,7 @@ impl<'de> VariantAccess<'de> for VariantReader<'de> {
         match self.payload {
             Some(payload) => payload.deserialize_map(visitor),
             None => Err(SerialValueError::TypeMismatch {
-                expected: Cow::Borrowed("a one-entry map from the variant name to its data"),
+                expected: Cow::Borrowed("a one-entry map from a variant name to its data"),
                 found: "str",
             }),
         }

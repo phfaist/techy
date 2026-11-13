@@ -219,11 +219,13 @@ impl<L: SerializableLang> DeserializableObject<L> for Diagnostic<L::SourceOrigin
 /// serialized data therefore identifies a diagnostic by its identifier and reads its
 /// serializable data with [`data`](Self::data).
 ///
-/// `DeserializedCondition` overrides [`identifier()`](DiagnosticInfo::identifier) to
-/// return the stored identifier, as the documentation of that method allows for such
-/// adapter types. The [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) constant of the type,
-/// `core.serialization.deserialized-condition`, identifies the type itself, for
-/// instance for `Diagnostics::conditions::<DeserializedCondition>()`.
+/// `DeserializedCondition` is an *adapter type*: a type that stores the identifier of a
+/// condition defined elsewhere. It overrides
+/// [`identifier()`](DiagnosticInfo::identifier) to return the stored identifier, as the
+/// documentation of that method allows for adapter types. The
+/// [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) constant of the type,
+/// `core.serialization.deserialized-condition`, is the identifier of the type itself;
+/// no diagnostic read back from serialized data has this identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeserializedCondition {
     identifier: String,
