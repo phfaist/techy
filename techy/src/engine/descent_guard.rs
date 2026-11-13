@@ -102,8 +102,8 @@ pub trait DescentGuard: Sized {
     fn exit(&mut self);
 }
 
-/// The error that [`DescentGuard::try_enter`] returns when the run may not go one level
-/// deeper.
+/// The error that [`DescentGuard::try_enter`] returns when a guarded run (a parse, a
+/// tree traversal or a serialization) may not go one level deeper.
 ///
 /// The run then stops with an error that contains the [`detail`](DescentRefusal::detail)
 /// of the refusal: a parse with
@@ -115,12 +115,14 @@ pub struct DescentRefusal {
     /// begins with a capital letter: for instance `Depth limit reached (40 levels)`.
     ///
     /// Under the default configuration of [`StdDescentGuard`], the description also
-    /// names the `with_descent_guard_init` methods that configure the limit.
+    /// contains the fix: a call of a `with_descent_guard_init` method that configures
+    /// the limit.
     pub detail: String,
 }
 
-/// The warning that [`DescentGuard::try_enter`] returns when the run may go one level
-/// deeper but comes close to the limit.
+/// The warning that [`DescentGuard::try_enter`] returns when a guarded run (a parse, a
+/// tree traversal or a serialization) may go one level deeper but comes close to the
+/// limit.
 ///
 /// A parse reports the warning as a
 /// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching)
@@ -129,8 +131,8 @@ pub struct DescentRefusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentWarning {
     /// The description of the limit and of the stack use so far, as a complete message
-    /// that begins with a capital letter. The description also names the
-    /// `with_descent_guard_init` methods that configure the limit.
+    /// that begins with a capital letter. The description also contains the fix: a call
+    /// of a `with_descent_guard_init` method that configures the limit.
     pub detail: String,
 }
 

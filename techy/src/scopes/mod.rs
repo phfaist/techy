@@ -169,8 +169,7 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, L> {
 /// [`retrieve_spec`](SpecsProvider::retrieve_spec) returns this error when the provider
 /// cannot look up a definition, and [`with_definitions`](SpecsProvider::with_definitions)
 /// returns it when the provider cannot apply a definition operation. A custom provider
-/// reports a failure that the other variants do not describe with
-/// [`Failed`](ProviderError::Failed).
+/// reports any other failure with [`Failed`](ProviderError::Failed).
 ///
 /// A provider error reports a problem of the program, such as a misconfiguration, a
 /// faulty provider, or a failed read from a backing store. The document does not cause
@@ -178,8 +177,9 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, L> {
 /// a [`TokenError`](crate::core::token::TokenError), and a name that the document may
 /// not use is defined as an [`ErrorCallableSpec`].
 ///
-/// The `Display` text is a complete message that begins with a capital letter, and it
-/// does not name the provider. [`ScopeStackError`] adds the name of the provider.
+/// The `Display` text is a complete message that begins with a capital letter. It does
+/// not contain the name of the provider; the `Display` text of [`ScopeStackError`]
+/// contains it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProviderError {
@@ -223,8 +223,8 @@ impl fmt::Display for ProviderError {
 /// stops at the failing provider. [`ScopeOpError::Provider`] contains this error when a
 /// provider fails to apply a scope operation.
 ///
-/// The `Display` text is the text of the [`ProviderError`], followed by the name of the
-/// provider in parentheses, as in `Missing definition of ‘foo’ (provider ‘user’)`.
+/// The `Display` text states the failure together with the name of the provider, as in
+/// `Missing definition of ‘foo’ in definition provider ‘user’`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeStackError {
     /// The name of the provider that failed.
@@ -235,7 +235,21 @@ pub struct ScopeStackError {
 
 impl fmt::Display for ScopeStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (provider ‘{}’)", self.error, self.provider)
+        let provider = &self.provider;
+        match &self.error {
+            ProviderError::NotMutable => write!(
+                f,
+                "Read-only definition provider ‘{provider}’: definitions may not be \
+                 added or removed"
+            ),
+            ProviderError::UndefinedName { name } => write!(
+                f,
+                "Missing definition of ‘{name}’ in definition provider ‘{provider}’"
+            ),
+            ProviderError::Failed(message) => {
+                write!(f, "Definition provider ‘{provider}’ failed: {message}")
+            }
+        }
     }
 }
 
