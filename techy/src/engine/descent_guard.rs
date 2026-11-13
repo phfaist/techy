@@ -102,24 +102,35 @@ pub trait DescentGuard: Sized {
     fn exit(&mut self);
 }
 
-/// A guard's answer "do not descend": the run aborts — a parse with
-/// [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), a traversal
-/// with its own `DescentLimitExceeded`-style error value — carrying
-/// `detail` as its message body.
+/// The error that [`DescentGuard::try_enter`] returns when the run may not go one level
+/// deeper.
+///
+/// The run then stops with an error that contains the [`detail`](DescentRefusal::detail)
+/// of the refusal: a parse with
+/// [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), a tree
+/// traversal or a serialization with the corresponding variant of its own error type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentRefusal {
-    /// Human-readable explanation of which limit was hit and how to configure it.
+    /// The description of the limit that was reached, as a complete message that
+    /// begins with a capital letter: for instance `Depth limit reached (40 levels)`.
+    ///
+    /// Under the default configuration of [`StdDescentGuard`], the description also
+    /// names the `with_descent_guard_init` methods that configure the limit.
     pub detail: String,
 }
 
-/// A guard's early warning "descend, but the limit is getting close": a parse
-/// records it as a warning-severity
+/// The warning that [`DescentGuard::try_enter`] returns when the run may go one level
+/// deeper but comes close to the limit.
+///
+/// A parse reports the warning as a
 /// [`DescentLimitApproaching`](crate::core::constructs::DescentLimitApproaching)
-/// diagnostic, a traversal passes it to its visitor's `observe_descent_warning`
-/// hook; the run continues.
+/// diagnostic, and a tree traversal passes it to the `observe_descent_warning` method of
+/// its visitor. The run continues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentWarning {
-    /// Human-readable explanation of the approaching limit and how to configure it.
+    /// The description of the limit and of the stack use so far, as a complete message
+    /// that begins with a capital letter. The description also names the
+    /// `with_descent_guard_init` methods that configure the limit.
     pub detail: String,
 }
 
@@ -336,6 +347,12 @@ impl StdDescentGuard {
     pub const HEADROOM: usize = 64 * 1024;
 }
 
+/// The fix that the messages of the unconfigured default name: the configuration
+/// methods of the guarded runs.
+const CONFIGURE_HINT: &str = "choose a limit with ‘with_descent_guard_init’ \
+     (on ‘Language’, ‘TreeWalker’, ‘TreeRestager’, \
+     ‘TreeRecomposer’ or ‘SerdeSession’)";
+
 /// The address of a local variable in this function's own frame — the guard's
 /// stack-position measurement.
 #[inline(never)]
@@ -373,11 +390,7 @@ impl DescentGuard for StdDescentGuard {
             GuardMode::Depth { limit, current } => {
                 if *current >= *limit {
                     return Err(DescentRefusal {
-                        detail: format!(
-                            "the run is {} descent levels deep, the configured \
-                             depth limit (StdDescentGuardInit::depth_limit)",
-                            limit
-                        ),
+                        detail: format!("Depth limit reached ({} levels)", limit),
                     });
                 }
                 *current += 1;
@@ -388,19 +401,16 @@ impl DescentGuard for StdDescentGuard {
                 if consumed > *budget {
                     let detail = if self.unconfigured {
                         format!(
-                            "the run's estimated stack use ({} bytes) exceeds the \
-                             built-in default budget of {} bytes \
-                             (StdDescentGuard::DEFAULT_STACK_BUDGET); no descent-guard \
-                             configuration was given — choose a limit explicitly with \
-                             with_descent_guard_init (on Language, TreeWalker, \
-                             TreeRestager, TreeRecomposer, or SerdeSession)",
+                            "Default stack budget exceeded (estimated stack use {} \
+                             bytes; budget {} bytes); {}",
                             consumed,
-                            StdDescentGuard::DEFAULT_STACK_BUDGET
+                            StdDescentGuard::DEFAULT_STACK_BUDGET,
+                            CONFIGURE_HINT
                         )
                     } else {
                         format!(
-                            "the run's estimated stack use ({} bytes) exceeds the \
-                             configured budget of {} bytes",
+                            "Stack budget exceeded (estimated stack use {} bytes; \
+                             budget {} bytes)",
                             consumed, budget
                         )
                     };
@@ -413,15 +423,11 @@ impl DescentGuard for StdDescentGuard {
                     self.warned = true;
                     return Ok(Some(DescentWarning {
                         detail: format!(
-                            "the run's estimated stack use ({} bytes) has passed half \
-                             of the built-in default budget of {} bytes \
-                             (StdDescentGuard::DEFAULT_STACK_BUDGET); no descent-guard \
-                             configuration was given — deeper input will be refused; \
-                             choose a limit explicitly with with_descent_guard_init \
-                             (on Language, TreeWalker, TreeRestager, \
-                             TreeRecomposer, or SerdeSession)",
+                            "Half of the default stack budget used (estimated stack \
+                             use {} bytes; budget {} bytes); {}",
                             consumed,
-                            StdDescentGuard::DEFAULT_STACK_BUDGET
+                            StdDescentGuard::DEFAULT_STACK_BUDGET,
+                            CONFIGURE_HINT
                         ),
                     }));
                 }
