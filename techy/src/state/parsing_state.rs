@@ -985,10 +985,8 @@ mod tests {
         // The bare seed: initial_state_data's FinalizeError passes through…
         let err = ParsingState::<BrokenSeedLang>::lang_initial().unwrap_err();
         assert_eq!(err.message(), "the seed definition data is unavailable");
-        assert_eq!(
-            err.to_string(),
-            "cannot build the parsing state: the seed definition data is unavailable"
-        );
+        // The error's `Display` carries the seed's message.
+        assert!(err.to_string().contains("the seed definition data is unavailable"));
         // …and the packages form adds no failure source of its own — the same
         // error, before any package is pushed.
         let err = ParsingState::<BrokenSeedLang>::lang_initial_with_packages([

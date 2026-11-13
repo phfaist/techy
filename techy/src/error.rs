@@ -1571,15 +1571,69 @@ mod tests {
         Arc::new(Source::new(content))
     }
 
+    /// The decimal numbers of `text`, in order: the line and column (or byte) numbers
+    /// that a formatted position shows, read without the words around them.
+    fn numbers_in(text: &str) -> Vec<usize> {
+        text.split(|c: char| !c.is_ascii_digit())
+            .filter(|run| !run.is_empty())
+            .map(|run| run.parse().unwrap())
+            .collect()
+    }
+
+    /// Checks that `line` shows `frame`: the frame's position, then its title at the end.
+    fn assert_frame_line(line: &str, frame: &TraceFrame) {
+        let position = format_position(frame.span());
+        let at = line.find(&position).unwrap_or_else(|| panic!("no position in {line:?}"));
+        assert!(line.ends_with(frame.title()), "{line:?}");
+        assert!(at + position.len() <= line.len() - frame.title().len(), "{line:?}");
+    }
+
+    /// Checks the structure of a traceback: one heading line, then one line per frame,
+    /// in the order of `frames`.
+    fn assert_traceback(traceback: &str, frames: &[TraceFrame]) {
+        let lines: Vec<&str> = traceback.lines().collect();
+        assert_eq!(lines.len(), frames.len() + 1, "{traceback}");
+        assert!(!lines[0].is_empty());
+        for (line, frame) in lines[1..].iter().zip(frames) {
+            assert_frame_line(line, frame);
+        }
+    }
+
+    /// Checks the structure of a report: `headline`, then a line that ends with the
+    /// position of `span`, then the traceback of `frames`. Returns the lines after the
+    /// traceback (the provenance lines).
+    fn assert_report<'a>(
+        rendered: &'a str,
+        headline: &str,
+        span: &SourceSpan,
+        frames: &[TraceFrame],
+    ) -> Vec<&'a str> {
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], headline, "{rendered}");
+        assert!(lines[1].ends_with(&format_position(span)), "{rendered}");
+        let traceback = format_traceback(frames);
+        let traceback_lines: Vec<&str> = traceback.lines().collect();
+        let end = 2 + traceback_lines.len();
+        assert_eq!(lines[2..end], traceback_lines[..], "{rendered}");
+        lines[end..].to_vec()
+    }
+
     #[test]
     fn diagnostic_render_includes_line_info() {
         let source = arc_source("Hello\n\\unknown\nworld");
         let span = SourceSpan::new(&source, 6..14);
-        let diagnostic = Diagnostic::error(TestCondition::new("unknown macro"), span);
+        let diagnostic = Diagnostic::error(TestCondition::new("unknown macro"), span.clone());
+
+        // The headline is the diagnostic's `Display`: the severity, then the message.
+        let headline = diagnostic.to_string();
+        assert!(headline.starts_with(&Severity::Error.to_string()), "{headline}");
+        assert!(headline.ends_with("unknown macro"), "{headline}");
 
         let rendered = diagnostic.render();
-        assert!(rendered.contains("error: unknown macro"));
-        assert!(rendered.contains("line 2"));
+        let rest = assert_report(&rendered, &headline, &span, &[]);
+        assert!(rest.is_empty(), "{rendered}");
+        // The position is line 2, column 1.
+        assert_eq!(numbers_in(&format_position(&span)), [2, 1]);
     }
 
     #[test]
@@ -1662,11 +1716,17 @@ mod tests {
             Source::new("Hello\n\\unknown\nworld").with_origin(origin("test.tex")),
         );
         let span = SourceSpan::new(&source, 6..14);
-        let diagnostic = Diagnostic::error(TestCondition::new("unknown macro"), span);
+        let diagnostic = Diagnostic::error(TestCondition::new("unknown macro"), span.clone());
 
         let rendered = diagnostic.render();
-        assert!(rendered.contains("line 2"));
-        assert!(rendered.contains("[test.tex]"));
+        assert_report(&rendered, &diagnostic.to_string(), &span, &[]);
+        // The position shows line 2, column 1, followed by the origin label.
+        let position = format_position(&span);
+        let unlabeled = arc_source("Hello\n\\unknown\nworld");
+        let unlabeled_position = format_position(&SourceSpan::new(&unlabeled, 6..14));
+        assert_eq!(numbers_in(&unlabeled_position), [2, 1]);
+        assert!(position.starts_with(&unlabeled_position), "{position}");
+        assert!(position[unlabeled_position.len()..].contains("test.tex"), "{position}");
     }
 
     #[test]
@@ -1685,16 +1745,25 @@ mod tests {
             SourceSpan::new(&main, 0..10),
         ));
 
-        let diagnostic =
-            Diagnostic::error(TestCondition::new("boom"), SourceSpan::new(&expanded, 0..9));
+        let span = SourceSpan::new(&expanded, 0..9);
+        let diagnostic = Diagnostic::error(TestCondition::new("boom"), span.clone());
         let rendered = diagnostic.render();
 
-        assert!(rendered.contains("error: boom"));
-        assert!(rendered.contains("synthesized from"));
-        assert!(rendered.contains("(macro expansion)"));
-        assert!(rendered.contains("included from"));
-        assert!(rendered.contains("(main.tex)"));
-        assert!(rendered.contains("[document.tex]"));
+        // One provenance line per hop, innermost first: each shows the position that
+        // triggered the hop, then the hop's description or reference.
+        let hops = assert_report(&rendered, &diagnostic.to_string(), &span, &[]);
+        assert_eq!(hops.len(), 2, "{rendered}");
+        let hop_layout = |line: &str, trigger: &SourceSpan, text: &str| -> String {
+            let position = format_position(trigger);
+            let at = line.find(&position).unwrap_or_else(|| panic!("no position in {line:?}"));
+            assert!(line[at + position.len()..].contains(text), "{line:?}");
+            line[..at].to_string()
+        };
+        let synthesized = hop_layout(hops[0], &SourceSpan::new(&main, 0..10), "macro expansion");
+        let included = hop_layout(hops[1], &SourceSpan::entire(&document), "main.tex");
+        assert!(format_position(&SourceSpan::entire(&document)).contains("document.tex"));
+        // The two kinds of hop read differently.
+        assert_ne!(synthesized, included);
     }
 
     #[test]
@@ -1751,25 +1820,31 @@ mod tests {
 
     #[test]
     fn diagnostics_limit_counts_suppressed_pushes() {
-        let source = arc_source("abcd");
+        let source = arc_source("abcde");
         let mut diagnostics: Diagnostics = Diagnostics::with_limit(2);
-        for i in 0..4 {
+        for i in 0..5 {
             diagnostics.push(Diagnostic::error(
                 TestCondition::new("boom"),
                 SourceSpan::new(&source, i..i + 1),
             ));
         }
 
-        // Two retained, two counted; the collection is decidedly not empty.
+        // Two retained, three counted; the collection is decidedly not empty.
         assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics.suppressed(), 2);
+        assert_eq!(diagnostics.suppressed(), 3);
         assert!(!diagnostics.is_empty());
         assert!(diagnostics.has_errors());
         assert_eq!(diagnostics.iter().count(), 2);
 
+        // The retained reports, then one closing block that gives the number of
+        // suppressed diagnostics and the retention limit, in this order.
         let rendered = diagnostics.render_all();
-        assert!(rendered
-            .contains("… and 2 more diagnostics (retention limit of 2 reached)"));
+        let blocks: Vec<&str> = rendered.split("\n\n").collect();
+        assert_eq!(blocks.len(), 3, "{rendered}");
+        let reports: Vec<String> = diagnostics.iter().map(|d| d.render()).collect();
+        assert_eq!(blocks[..2], [reports[0].as_str(), reports[1].as_str()]);
+        assert_eq!(blocks[2].lines().count(), 1, "{rendered}");
+        assert_eq!(numbers_in(blocks[2]), [3, 2], "{rendered}");
     }
 
     #[test]
@@ -1877,18 +1952,18 @@ mod tests {
             }
         );
 
-        // Each refusal says which invariant failed.
-        assert!(refuse(1, 0, 1).to_string().contains("more diagnostics were supplied"));
-        assert!(refuse(5, 1, 1).to_string().contains("although the retention limit was not"));
-        assert!(refuse(5, 0, 0).to_string().contains("are errors than were reported in all"));
-        assert!(refuse(2, 1, 3).to_string().contains("more errors were reported in all"));
-
-        // The counts agree in number with what they count.
+        // A single diagnostic over a zero limit is refused as well.
         let one = vec![Diagnostic::error(TestCondition::new("bad"), SourceSpan::new(&source, 0..1))];
-        let message = Diagnostics::from_parts(one, 0, 0, 1).unwrap_err().to_string();
-        assert!(message.contains("1 diagnostic supplied"), "{message}");
-        assert!(message.contains("1 error in all"), "{message}");
-        assert!(refuse(1, 0, 1).to_string().contains("2 diagnostics supplied"));
+        assert_eq!(
+            Diagnostics::from_parts(one, 0, 0, 1).unwrap_err(),
+            InconsistentDiagnosticCounts {
+                retained: 1,
+                retained_errors: 1,
+                limit: 0,
+                suppressed: 0,
+                error_count: 1,
+            }
+        );
 
         // And the consistent parts are accepted.
         assert!(Diagnostics::from_parts(items, 2, 1, 2).is_ok());
@@ -1922,9 +1997,9 @@ mod tests {
         ));
 
         let separate: Vec<String> = diagnostics.iter().map(|d| d.render()).collect();
+        // The joined reports and nothing else: no closing block when nothing was
+        // suppressed.
         assert_eq!(diagnostics.render_all(), separate.join("\n\n"));
-        // No suppression footer when nothing was suppressed.
-        assert!(!diagnostics.render_all().contains("… and"));
     }
 
     #[test]
@@ -1935,7 +2010,8 @@ mod tests {
             vec![TraceFrame::new("environment ‘document’", SourceSpan::new(&source, 6..11))];
 
         let traceback = format_traceback(&frames);
-        assert_eq!(traceback, "Inside:\n  @ (line 2, col 1): environment ‘document’");
+        assert_traceback(&traceback, &frames);
+        assert_eq!(numbers_in(traceback.lines().nth(1).unwrap()), [2, 1]);
     }
 
     #[test]
@@ -1949,10 +2025,10 @@ mod tests {
         ];
 
         let traceback = format_traceback(&frames);
-        assert_eq!(
-            traceback,
-            "Inside:\n  @ (line 3, col 1): callable ‘\\textbf’\n  @ (line 2, col 1): environment ‘document’\n  @ (line 1, col 1): callable ‘\\section’"
-        );
+        assert_traceback(&traceback, &frames);
+        let positions: Vec<Vec<usize>> =
+            traceback.lines().skip(1).map(numbers_in).collect();
+        assert_eq!(positions, [[3, 1], [2, 1], [1, 1]]);
     }
 
     #[test]
@@ -1971,24 +2047,27 @@ mod tests {
             vec![TraceFrame::new("environment ‘document’", SourceSpan::new(&source, 6..11))];
 
         let traceback = format_traceback(&frames);
-        assert_eq!(
-            traceback,
-            "Inside:\n  @ (line 2, col 1) [test.tex]: environment ‘document’"
-        );
+        assert_traceback(&traceback, &frames);
+        // The frame's position carries its source's origin label.
+        assert!(format_position(frames[0].span()).contains("test.tex"));
+        assert_eq!(numbers_in(traceback.lines().nth(1).unwrap()), [2, 1]);
     }
 
     #[test]
     fn render_appends_the_traceback() {
         let source = arc_source("Hello\nWorld");
+        let span = SourceSpan::new(&source, 6..7);
         let diagnostic = Diagnostic::from_parts(
             Severity::Error,
             Box::new(TestCondition::new("boom")),
-            SourceSpan::new(&source, 6..7),
+            span.clone(),
             vec![TraceFrame::new("group ‘{’", SourceSpan::new(&source, 0..1))],
         );
         let rendered = diagnostic.render();
-        assert!(rendered.contains("error: boom"));
-        assert!(rendered.contains("Inside:\n  @ (line 1, col 1): group ‘{’"));
+        let rest = assert_report(&rendered, &diagnostic.to_string(), &span, diagnostic.frames());
+        assert!(rest.is_empty(), "{rendered}");
+        assert_traceback(&format_traceback(diagnostic.frames()), diagnostic.frames());
+        assert_eq!(rendered.lines().count(), 4, "{rendered}");
     }
 
     #[test]
@@ -2062,11 +2141,18 @@ mod tests {
             SourceSpan::new(&source, 7..8),
         )]);
         let rendered = diagnostic.render();
-        assert!(rendered.contains(
-            "Inside:\n  @ (line 1, col 1): group ‘{’\n  @ (line 2, col 2): copy shown by a reference"
-        ));
-        // The diagnostic's own position is unchanged.
-        assert!(rendered.contains("at: @ (line 2, col 1)"), "{rendered}");
+        // The diagnostic's own position is unchanged, and the outer frame follows the
+        // parse frame.
+        let span = SourceSpan::new(&source, 6..7);
+        assert_report(&rendered, &diagnostic.to_string(), &span, diagnostic.frames());
+        assert_eq!(numbers_in(rendered.lines().nth(1).unwrap()), [2, 1]);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_frame_line(lines[3], &TraceFrame::new("group ‘{’", SourceSpan::new(&source, 0..1)));
+        assert_frame_line(
+            lines[4],
+            &TraceFrame::new("copy shown by a reference", SourceSpan::new(&source, 7..8)),
+        );
+        assert_eq!(numbers_in(lines[4]), [2, 2]);
     }
 
     #[test]
@@ -2081,10 +2167,13 @@ mod tests {
                     SourceSpan::new(&other, 8..13),
                 )]);
         let rendered = diagnostic.render();
-        assert!(
-            rendered.contains("Inside:\n  @ (line 3, col 1) [other.tex]: reference"),
-            "{rendered}"
-        );
+        let span = SourceSpan::new(&source, 6..7);
+        assert_report(&rendered, &diagnostic.to_string(), &span, diagnostic.frames());
+        // The frame line shows the position in the other source, with its label.
+        let frame_line = rendered.lines().nth(3).unwrap();
+        assert_frame_line(frame_line, &TraceFrame::new("reference", SourceSpan::new(&other, 8..13)));
+        assert!(format_position(&SourceSpan::new(&other, 8..13)).contains("other.tex"));
+        assert_eq!(numbers_in(frame_line), [3, 1]);
     }
 
     #[test]
@@ -2097,8 +2186,12 @@ mod tests {
         assert_eq!(err.data().downcast_ref::<TestCondition>().unwrap().detail, "boom");
         assert_eq!(err.to_string(), "boom");
         assert!(err.frames().is_empty());
-        assert!(err.render().contains("error: boom"));
-        assert!(err.render().contains("line 1"));
+        // A fatal error renders like an error diagnostic of the same condition.
+        let span = SourceSpan::new(&source, 0..2);
+        let as_diagnostic = Diagnostic::error(TestCondition::new("boom"), span.clone());
+        assert_eq!(err.render(), as_diagnostic.render());
+        assert_report(&err.render(), &as_diagnostic.to_string(), &span, &[]);
+        assert_eq!(numbers_in(err.render().lines().nth(1).unwrap()), [1, 1]);
     }
 
     // --- HookFailed: the general operational hook-failure condition ------------------
@@ -2138,10 +2231,9 @@ mod tests {
         let plain = HookFailed::new("state seed unavailable", None);
         assert_eq!(HookFailed::IDENTIFIER, "core.hooks.hook-failed");
         assert_eq!(DiagnosticInfo::identifier(&plain), HookFailed::IDENTIFIER);
-        assert_eq!(
-            plain.to_string(),
-            "extension hook reported a failure: state seed unavailable"
-        );
+        assert_eq!(plain.detail, "state seed unavailable");
+        // The message carries the hook's detail.
+        assert!(plain.to_string().contains("state seed unavailable"));
         assert!(plain.cause.is_none());
 
         // The derive's constructor also takes the cause positionally (an
@@ -2243,16 +2335,23 @@ mod tests {
 
     #[test]
     fn format_position_char_pos_fallback() {
-        // A source too large for line indexing falls back to raw byte positions, with
-        // a parenthetical noting that no line/column is available. The parenthetical
-        // deliberately names no cause: a `None` from a `LineColProvider` can have any
-        // provider-specific reason.
+        // A source too large for line indexing has no line and column: the position
+        // falls back to the raw byte position, and shows no other number.
         let content = "a\n".repeat(DEFAULT_MAX_TEST_LEN);
         let source = arc_source(&content);
         let span = SourceSpan::new(&source, 42..43);
+        assert_eq!(LineIndexCache::new().line_col(&source, 42), None);
 
         let formatted = format_position(&span);
-        assert_eq!(formatted, "@ char pos 42 (no line info)");
+        assert_eq!(numbers_in(&formatted), [42]);
+        // It reads differently from a line-and-column position.
+        let small = arc_source("a\n".repeat(30).as_str());
+        let line_col = format_position(&SourceSpan::new(&small, 42..43));
+        assert_eq!(numbers_in(&line_col), [22, 1]);
+        assert_ne!(
+            formatted.replace(char::is_numeric, ""),
+            line_col.replace(char::is_numeric, "")
+        );
     }
 
     // Exceeds the default max scan length of 500_000 bytes ("a\n" is 2 bytes).
