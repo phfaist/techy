@@ -705,7 +705,7 @@ fn check_spanned_contents<L: Lang>(
         NodeKind::Comment(data) => {
             check(&data.content, "comment content")?;
             check(&data.start, "comment start delimiter")?;
-            check(&data.post_space, "comment post_space")
+            check(&data.post_space, "comment post-space")
         }
         // A Callable's invocation-syntax payload is Lang-opaque here: span-backed
         // fields inside it are the Lang's own recording discipline (checked by the
@@ -908,7 +908,7 @@ impl fmt::Display for NodeBuildError {
             ),
             NodeBuildError::ChildrenNotInRegions { unassigned } => write!(
                 f,
-                "Children {:?} not in any argument or slot region (the regions must \
+                "Children {:?} are not in any argument or slot region (the regions must \
                  cover all children of the callable)",
                 unassigned
             ),

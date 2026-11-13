@@ -848,7 +848,7 @@ fn rebuild_tree<L: SerializableLang, A>(
     // Defense in depth: the builder enforces the all-trees law, but the reader is a
     // total validator of untrusted input.
     validate_tree(&tree).map_err(|violation| {
-        DeserializeError::failed(alloc::format!("Invalid node tree: {violation}")).with_cause(violation)
+        DeserializeError::failed(violation.to_string()).with_cause(violation)
     })?;
     // Every node was claimed once, so the builder reached every node from the root; a
     // shorter tree would be a bug in this reader or in the builder.
