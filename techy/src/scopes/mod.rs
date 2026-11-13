@@ -689,55 +689,82 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
 
 // --- the escape-shadowing registration check --------------------------------------------
 
-/// Condition (warning): every definition a provider makes under one callable type
-/// begins with an escape character and is longer than that one character.
+/// The warning that is reported when all definitions of a provider under one callable
+/// type begin with an escape character (id
+/// `core.specs.provider-commands-shadowed-by-escape`).
 ///
-/// This is the registration mistake of inserting names *with* their escape character
-/// (`"\greet"` instead of `"greet"` — see [`Package::insert`]'s normalized-name
-/// contract). The name in a command token does not include the escape character, so
-/// none of these definitions can ever resolve.
+/// A definition counts when its name is an escape character of the command rules
+/// followed by at least one more character, such as `"\\greet"`. A name that consists
+/// of the escape character alone, such as `"\\"` for the command `\\`, does not count.
 ///
-/// A name that is *exactly* one escape character is not a mistake and does not count:
-/// the tokenizer reads `\\` as the command whose name is `\`, so `\\` is registered
-/// under the one-character name `"\\"`.
+/// The name of a command token does not include the escape character. Command names
+/// must therefore be registered without it, as in
+/// `package.insert(CallableType::Macro, "greet", spec)` for the command `\greet`. A
+/// definition registered under `"\\greet"` is never resolved.
 ///
-/// Recorded by [`check_provider_commands_shadowed_by_escape`], which no parse runs by
-/// default: a language author calls it once, on the providers they have built.
+/// Reported by [`check_provider_commands_shadowed_by_escape`], once for each affected
+/// provider and callable type, at the start of the source passed to that function. A
+/// parse does not run this check: a language developer calls the function on the
+/// providers of the language.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.provider-commands-shadowed-by-escape")]
 pub struct ProviderCommandsShadowedByEscape {
-    /// The provider whose definitions are all escape-shadowed.
+    /// The name of the provider ([`SpecsProvider::name`]).
     pub provider: String,
-    /// The affected callable type (its `Debug` rendering — the wire payload cannot
-    /// carry a language's type id directly).
+    /// The callable type of the definitions, as its `Debug` rendering (e.g. `Macro`).
+    ///
+    /// The field stores a string because the data of a diagnostic cannot contain a
+    /// language's own callable type.
     pub callable_type: String,
-    /// How many definitions the provider advertises under that type (all of them
-    /// escape-shadowed).
+    /// The number of definitions of the provider under this callable type. All of them
+    /// begin with an escape character.
     pub count: usize,
-    /// One offending name, exactly as registered (e.g. `"\\greet"`).
+    /// The first of these definition names in sorted order, as registered (e.g.
+    /// `"\\greet"`).
     pub example: String,
-    /// The escape character(s) the offending names begin with.
+    /// The escape characters that these definition names begin with, sorted and
+    /// without duplicates.
     pub escape_chars: String,
 }
 
-// Hand-written wording: the count needs number agreement, which the derive's message
-// format string cannot express.
+// Hand-written wording: the message depends on the number of definitions and of escape
+// characters, which the derive's message format string cannot express.
 impl fmt::Display for ProviderCommandsShadowedByEscape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "every ‘{}’ definition of provider ‘{}’ begins with an escape character \
-             followed by more characters (‘{}’ — {} definition{}, e.g. ‘{}’): command \
-             names are registered without the escape character, so none of these \
-             definitions can resolve",
-            self.callable_type,
-            self.provider,
-            self.escape_chars,
-            self.count,
-            if self.count == 1 { "" } else { "s" },
-            self.example,
-        )
+        write!(f, "Misconfigured provider ‘{}’: ", self.provider)?;
+        if self.count == 1 {
+            write!(
+                f,
+                "its only ‘{}’ definition ‘{}’ begins with ",
+                self.callable_type, self.example,
+            )?;
+        } else {
+            write!(
+                f,
+                "all {} ‘{}’ definitions begin with ",
+                self.count, self.callable_type,
+            )?;
+        }
+        let mut escape_chars = self.escape_chars.chars();
+        match (escape_chars.next(), escape_chars.next()) {
+            (Some(escape_char), None) => {
+                write!(f, "the escape character ‘{escape_char}’")?
+            }
+            _ => {
+                f.write_str("one of the escape characters ")?;
+                for (i, escape_char) in self.escape_chars.chars().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "‘{escape_char}’")?;
+                }
+            }
+        }
+        if self.count > 1 {
+            write!(f, " (e.g. ‘{}’)", self.example)?;
+        }
+        f.write_str("; command names must be registered without their escape character")
     }
 }
 
@@ -1304,19 +1331,20 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
         // span is clamped to the content so it stays liftable to a source
         // span.
         let Some(rest) = content.get(pos..) else {
-            let case = if pos > content.len() {
-                "out of the content's bounds"
+            let detail = if pos > content.len() {
+                alloc::format!(
+                    "Invalid position {pos} passed to ‘Package::scan_specials’: \
+                     the position exceeds the content length ({})",
+                    content.len()
+                )
             } else {
-                "not a character boundary"
+                alloc::format!(
+                    "Invalid position {pos} passed to ‘Package::scan_specials’: \
+                     the position is not a character boundary"
+                )
             };
             return Err(SpecialsScanError {
-                kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(
-                    alloc::format!(
-                        "Package::scan_specials called with an invalid position {pos} \
-                         ({case}; content length {})",
-                        content.len()
-                    ),
-                ))),
+                kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(detail))),
                 span: Span::empty(pos.min(content.len())),
             });
         };
@@ -1682,19 +1710,26 @@ impl<L: Lang> fmt::Debug for FallbackProvider<L> {
 
 // --- ErrorCallableSpec ---------------------------------------------------------------------
 
-/// Condition: a callable defined to be an error was invoked.
+/// The error that is reported when a document invokes a name that is defined by an
+/// [`ErrorCallableSpec`] (id `core.specs.callable-defined-as-error`).
 ///
-/// [`ErrorCallableSpec`] is that definition — a name made undefined on purpose. The
-/// invocation recovers by staging the trigger as a `Chars` node over its own source
-/// span.
+/// An [`ErrorCallableSpec`] makes a name unavailable on purpose. For instance, a
+/// package stores it under the name of a command that a provider lower on the scope
+/// stack defines, so that documents cannot use that command.
+///
+/// Reported by the invocation parser of [`ErrorCallableSpec`] when the name is invoked,
+/// at the span of the invoking token. The invocation is parsed into a `Chars` node over
+/// the same span, and no argument is read.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.specs.callable-defined-as-error")]
 pub struct CallableDefinedAsError {
-    /// The invocation spelling, as written.
+    /// The invoked name, as resolved: for a command, the name without the escape
+    /// character (`gone` for `\gone`).
     pub name: String,
-    /// Optional detail configured on the spec — *why* this name is an error ("removed
-    /// by {package}", "not available in this mode").
+    /// The detail given to [`ErrorCallableSpec::with_detail`], which says why the name
+    /// may not be used (e.g. `removed by mypackage`), or `None` for a spec created with
+    /// [`ErrorCallableSpec::new`].
     pub detail: Option<String>,
 }
 
@@ -1702,7 +1737,7 @@ pub struct CallableDefinedAsError {
 // format string cannot express).
 impl fmt::Display for CallableDefinedAsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "‘{}’ is defined to be an error", self.name)?;
+        write!(f, "‘{}’ may not be used", self.name)?;
         if let Some(detail) = &self.detail {
             write!(f, ": {detail}")?;
         }

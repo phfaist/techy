@@ -44,8 +44,8 @@ impl DefinitionKey {
 impl fmt::Display for DefinitionKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DefinitionKey::Name(name) => write!(f, "name `{name}`"),
-            DefinitionKey::Trigger(trigger) => write!(f, "trigger `{trigger}`"),
+            DefinitionKey::Name(name) => write!(f, "name ‘{name}’"),
+            DefinitionKey::Trigger(trigger) => write!(f, "trigger ‘{trigger}’"),
         }
     }
 }
