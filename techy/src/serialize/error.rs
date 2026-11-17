@@ -181,7 +181,8 @@ pub enum SerializeError {
         /// The description of the limit that was reached, as the descent guard reports
         /// it.
         detail: String,
-        /// The limit that was reached, as the descent guard reports it.
+        /// The limit that was reached (see
+        /// [`DescentRefusal::limit`](crate::core::DescentRefusal::limit)).
         limit: DescentLimit,
     },
     /// A driver produced an entry with an identifier other than the identifier of its
@@ -565,7 +566,8 @@ pub enum DeserializeError {
         /// The description of the limit that was reached, as the descent guard reports
         /// it.
         detail: String,
-        /// The limit that was reached, as the descent guard reports it.
+        /// The limit that was reached (see
+        /// [`DescentRefusal::limit`](crate::core::DescentRefusal::limit)).
         limit: DescentLimit,
     },
     /// The reading session has no reader for the identifier of an entry.

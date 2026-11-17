@@ -108,10 +108,12 @@ pub trait DescentGuard: Sized {
 /// The error that [`DescentGuard::try_enter`] returns when a guarded run (a parse, a
 /// tree traversal or a serialization) may not go one level deeper.
 ///
-/// The run then stops with an error that contains the [`detail`](DescentRefusal::detail)
-/// of the refusal: a parse with
-/// [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), a tree
+/// The run then stops with an error that contains both fields of the refusal: a parse
+/// with [`DescentLimitExceeded`](crate::core::constructs::DescentLimitExceeded), a tree
 /// traversal or a serialization with the corresponding variant of its own error type.
+/// The [`detail`](DescentRefusal::detail) describes the limit to a person. The
+/// [`limit`](DescentRefusal::limit) identifies the limit and its value, so that a
+/// program that handles the error can choose a remedy or word its own message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentRefusal {
     /// The description of the limit that was reached, as a complete message that
@@ -121,7 +123,7 @@ pub struct DescentRefusal {
     /// contains the fix: a call of a `with_descent_guard_init` method that configures
     /// the limit.
     pub detail: String,
-    /// The limit that refused the descent, with its value.
+    /// The limit that was reached, with its value.
     pub limit: DescentLimit,
 }
 
@@ -139,40 +141,61 @@ pub struct DescentWarning {
     /// that begins with a capital letter. The description also contains the fix: a call
     /// of a `with_descent_guard_init` method that configures the limit.
     pub detail: String,
-    /// The limit that the run comes close to, with its value.
+    /// The limit that the run comes close to, with its value. [`StdDescentGuard`] warns
+    /// only under its built-in default, so this limit is
+    /// [`DescentLimit::DefaultStackBudget`].
     pub limit: DescentLimit,
 }
 
-/// The limit of a [`StdDescentGuard`] that refused a descent or that a run comes close
-/// to, with its value: the field `limit` of [`DescentRefusal`] and [`DescentWarning`].
+/// A `DescentLimit` identifies the limit of a [`StdDescentGuard`] that a guarded run
+/// (a parse, a tree traversal or a serialization) has reached or comes close to, and
+/// gives its value.
 ///
-/// A program can act on it: configure a limit when the built-in default applies,
-/// report the depth in its own words, or run again with more stack.
+/// [`DescentRefusal`] and [`DescentWarning`] contain this value in their field `limit`,
+/// and the errors and diagnostics that report a refusal or a warning copy it. A program
+/// that handles such an error can use the limit to choose a remedy or to word its own
+/// message. For instance, under the
+/// [`DefaultStackBudget`](DescentLimit::DefaultStackBudget), the program can tell its
+/// developer to configure a limit. Under a [`Depth`](DescentLimit::Depth) limit, it can
+/// report the number of levels to the author of the document. Under a
+/// [`StackBudget`](DescentLimit::StackBudget), it can run again on a thread with a
+/// larger stack and a larger budget.
 ///
-/// As diagnostic data, the limit is a map with the key `kind`
-/// (`default-stack-budget`, `stack-budget` or `depth`) and the key `bytes` or `levels`.
+/// In the data of a diagnostic, the limit is a map with two keys: `kind`, which is
+/// `default-stack-budget`, `stack-budget` or `depth`, and `bytes` or `levels`, which
+/// contains the value. For instance, `DescentLimit::Depth { levels: 40 }` becomes the
+/// map `{kind: "depth", levels: 40}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DescentLimit {
-    /// The built-in default stack budget: the program configured no limit.
+    /// The built-in default stack budget, which applies when the program configured no
+    /// limit ([`StdDescentGuardInit::default`]).
     DefaultStackBudget {
-        /// The budget in bytes.
+        /// The budget in bytes: [`StdDescentGuard::DEFAULT_STACK_BUDGET`].
         bytes: usize,
     },
-    /// A stack budget that the program configured (fixed or computed).
+    /// A stack budget that the program configured with
+    /// [`fixed_stack_budget`](StdDescentGuardInit::fixed_stack_budget) or
+    /// [`computed_stack_budget`](StdDescentGuardInit::computed_stack_budget).
     StackBudget {
-        /// The budget in bytes.
+        /// The budget in bytes. For a computed stack budget, this is the budget that
+        /// the guard computed when the run started: the answer of the probe minus
+        /// [`StdDescentGuard::HEADROOM`], or
+        /// [`StdDescentGuard::DEFAULT_STACK_BUDGET`] if the probe returned `None`.
         bytes: usize,
     },
-    /// A depth limit that the program configured.
+    /// A depth limit that the program configured with
+    /// [`depth_limit`](StdDescentGuardInit::depth_limit).
     Depth {
-        /// The number of levels that may be open at the same time.
+        /// The maximum number of descents that may be open at the same time. In a
+        /// parse, one nesting level of the input takes about two descents (see
+        /// [`StdDescentGuardInit`]).
         levels: usize,
     },
 }
 
-/// Projects as a map of the `kind` of the limit (`default-stack-budget`,
-/// `stack-budget` or `depth`) and its value (`bytes` or `levels`).
+/// Converts the limit into the map that the documentation of [`DescentLimit`]
+/// describes.
 impl ToDiagnosticValue for DescentLimit {
     fn to_diagnostic_value(&self) -> DiagnosticValue {
         let (kind, key, value) = match *self {
