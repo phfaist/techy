@@ -541,6 +541,23 @@ pub enum DeserializeError {
         /// The table identifier that the position contains.
         found: TableId,
     },
+    /// A tree was read with an annotation type other than the one it was serialized
+    /// with.
+    ///
+    /// The trees table stores each tree with the annotation type that it was written
+    /// with. The reading program requested the tree as a tree of the annotation type
+    /// `requested`, or the data refers to the tree where a tree of another annotation
+    /// type is expected.
+    AnnotationTypeMismatch {
+        /// The annotation identifier of the stored tree, or `None` if no identifier is
+        /// registered for its annotation type.
+        stored: Option<String>,
+        /// The Rust type name of the requested annotation type.
+        requested: &'static str,
+        /// The annotation identifier of the requested annotation type, or `None` if no
+        /// identifier is registered for it.
+        requested_identifier: Option<String>,
+    },
     /// The references between the serialized entries form a cycle.
     ///
     /// While the session deserialized entry `referrer_index` of table `referrer_table`,
@@ -923,6 +940,19 @@ impl fmt::Display for DeserializeError {
                  ‘{expected}’",
                 found.ordinal()
             ),
+            DeserializeError::AnnotationTypeMismatch { stored, requested, requested_identifier } => {
+                write!(f, "Invalid annotation type ‘{requested}’ (")?;
+                match requested_identifier {
+                    Some(identifier) => write!(f, "identifier ‘{identifier}’")?,
+                    None => f.write_str("unregistered")?,
+                }
+                match stored {
+                    Some(identifier) => {
+                        write!(f, ") for a tree with annotation identifier ‘{identifier}’")
+                    }
+                    None => f.write_str(") for a tree of an unregistered annotation type"),
+                }
+            }
             DeserializeError::ReferenceCycle { table, index, referrer_table, referrer_index } => {
                 write!(
                     f,

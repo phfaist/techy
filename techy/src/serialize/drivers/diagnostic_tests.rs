@@ -815,9 +815,14 @@ fn a_parse_result_naming_a_tree_of_another_annotation_type_is_rejected() {
     *map_field_mut(entry, "tree") = SerialValue::Index { table: TableId::new(4), index: 0 };
     let mut reader = setup_annotated();
     let error = reader.push_segment(Segment::from_serial_value(&value).unwrap()).unwrap_err();
-    // The refusal is a `Failed` error of the tree driver; which annotation types it
-    // names is free text only.
-    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    match innermost(&error) {
+        DeserializeError::AnnotationTypeMismatch { stored, requested, requested_identifier } => {
+            assert_eq!(stored.as_deref(), Some("test.string"), "{error}");
+            assert_eq!(*requested, core::any::type_name::<()>(), "{error}");
+            assert_eq!(requested_identifier.as_deref(), Some(crate::serialize::drivers::CORE_TREE_IDENTIFIER), "{error}");
+        }
+        other => panic!("expected an annotation type mismatch, got {other}"),
+    }
     assert!(matches!(error, DeserializeError::InEntry { table: "parse-results", index: 0, .. }), "{error}");
 }
 

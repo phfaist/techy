@@ -568,8 +568,8 @@ pub trait TreeSerialization<L: SerializableLang> {
     /// The session has no trees table ([`DeserializeError::UnknownTableName`]); the
     /// errors of [`SerdeSession::object`](crate::serialize::SerdeSession::object); the
     /// tree at that position was serialized with a different annotation type than `A`
-    /// ([`DeserializeError::Failed`], naming the identifier the tree was serialized
-    /// under and the annotation type requested).
+    /// ([`DeserializeError::AnnotationTypeMismatch`], naming the identifier the tree was
+    /// serialized under and the annotation type requested).
     fn tree<A>(&mut self, position: TreeIndex) -> Result<NodeTree<L, A>, DeserializeError>
     where
         A: SerializableValue<L> + DeserializableValue<L> + Clone + Debug + Send + Sync + 'static;
@@ -620,19 +620,10 @@ pub(crate) fn tree_of_object<L: SerializableLang, A: Clone + Send + Sync + 'stat
         Err(object) => {
             // The stored tree's codec is registered (it was read through it); the
             // requested type may not be.
-            let stored = registered_identifier(session, (*object).type_id()).map_or_else(
-                || String::from("a tree of an unregistered annotation type"),
-                |identifier| alloc::format!("a tree with annotation identifier ‘{identifier}’"),
-            );
+            let stored = registered_identifier(session, (*object).type_id());
             let requested = core::any::type_name::<A>();
-            let requested_identifier = registered_identifier(session, TypeId::of::<NodeTree<L, A>>())
-                .map_or_else(
-                    || String::from("unregistered"),
-                    |identifier| alloc::format!("identifier ‘{identifier}’"),
-                );
-            Err(DeserializeError::failed(alloc::format!(
-                "Invalid annotation type ‘{requested}’ ({requested_identifier}) for {stored}"
-            )))
+            let requested_identifier = registered_identifier(session, TypeId::of::<NodeTree<L, A>>());
+            Err(DeserializeError::AnnotationTypeMismatch { stored, requested, requested_identifier })
         }
     }
 }

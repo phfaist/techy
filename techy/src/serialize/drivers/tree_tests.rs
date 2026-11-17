@@ -993,7 +993,14 @@ fn reading_a_tree_with_the_wrong_annotation_type_is_rejected() {
     let trees = reader.standard_tables().unwrap().trees;
     // The tree was written with the unit annotation; reading it as `SourceSpan` fails.
     let error = reader.tree::<SpanAnnotation>(trees.position(position.index())).unwrap_err();
-    assert!(matches!(error, DeserializeError::Failed { .. }), "{error}");
+    match &error {
+        DeserializeError::AnnotationTypeMismatch { stored, requested, requested_identifier } => {
+            assert_eq!(stored.as_deref(), Some(crate::serialize::drivers::CORE_TREE_IDENTIFIER), "{error}");
+            assert_eq!(*requested, core::any::type_name::<SpanAnnotation>(), "{error}");
+            assert_eq!(requested_identifier.as_deref(), Some("test.span"), "{error}");
+        }
+        _ => panic!("expected an annotation type mismatch, got {error}"),
+    }
     // The same position still reads as the annotation it was written with.
     assert!(reader.tree::<()>(trees.position(position.index())).is_ok());
 }
