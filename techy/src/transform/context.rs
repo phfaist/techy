@@ -189,6 +189,17 @@ enum Replaced {
     Count(usize),
 }
 
+/// The `replaced_by` of a
+/// [`ContentParentDropped`](RestageError::ContentParentDropped) for a content
+/// parent with this record: the staged count of an `Emit` that is not exactly
+/// one node, `None` for every other record and for no record.
+fn dropped_replaced_by(record: Option<&Replaced>) -> Option<usize> {
+    match record {
+        Some(Replaced::Count(count)) => Some(*count),
+        _ => None,
+    }
+}
+
 /// The staging side of a [`TreeRestager`] run, passed to every visitor call.
 ///
 /// Its surface is the region-aware restaging operations below — restage a whole
@@ -830,10 +841,7 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
                     return Err(RestageError::ContentParentDropped {
                         callable: callable.id(),
                         parent,
-                        replaced_by: match other {
-                            Some(Replaced::Count(count)) => Some(*count),
-                            _ => None,
-                        },
+                        replaced_by: dropped_replaced_by(other),
                     })
                 }
             }
@@ -883,11 +891,7 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
                     RestageError::ContentParentDropped {
                         callable: node.id(),
                         parent,
-                        replaced_by: match replaced.get(&parent) {
-                            Some(Replaced::Restaged { .. }) | Some(Replaced::One(_)) => Some(1),
-                            Some(Replaced::Count(count)) => Some(*count),
-                            None => None,
-                        },
+                        replaced_by: dropped_replaced_by(replaced.get(&parent)),
                     }
                 }
                 other => RestageError::Build(other),
