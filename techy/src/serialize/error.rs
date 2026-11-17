@@ -749,7 +749,7 @@ pub enum DeserializeError {
         /// The writer-side table identifier.
         table: TableId,
     },
-    /// Absorbing the segment would give the table `table` `u32::MAX` entries or more.
+    /// Absorbing the segment would give the table `table` more than `u32::MAX` entries.
     TableFull {
         /// The name of the table.
         table: &'static str,
@@ -1060,7 +1060,7 @@ impl fmt::Display for DeserializeError {
             ),
             DeserializeError::TableFull { table } => write!(
                 f,
-                "Table ‘{table}’ is full: absorbing the segment would reach \
+                "Table ‘{table}’ is full: absorbing the segment would exceed \
                  u32::MAX entries"
             ),
             DeserializeError::Internal { detail } => {

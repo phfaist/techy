@@ -262,6 +262,16 @@ fn address<T: ?Sized>(object: &Arc<T>) -> usize {
     Arc::as_ptr(object) as *const () as usize
 }
 
+/// The number of entries of a table of `len` entries once `appended` more are added,
+/// or `None` if that number exceeds the bound of a table, `u32::MAX` entries. Writing
+/// (interning) and reading (absorbing a segment) both check their appends here, so a
+/// table that a writer fills is one that a reader accepts.
+pub(super) fn table_len_after(len: usize, appended: usize) -> Option<u32> {
+    let len = u32::try_from(len).ok()?;
+    let appended = u32::try_from(appended).ok()?;
+    len.checked_add(appended)
+}
+
 impl<L: SerializableLang> SerdeSession<L> {
     /// A session with no tables; register them with
     /// [`register_table`](SerdeSession::register_table).
@@ -544,10 +554,9 @@ impl<L: SerializableLang> SerdeSession<L> {
         // is refused here, where the culprit is known, instead of being emitted into a
         // segment no reader accepts.
         check_entry_nesting(&wire).map_err(|error| SerializeError::from(error).in_table(name))?;
-        let position = u32::try_from(state.slots.len()).map_err(|_| SerializeError::TableFull { table: name })?;
-        if position == u32::MAX {
-            return Err(SerializeError::TableFull { table: name });
-        }
+        let end = table_len_after(state.slots.len(), 1).ok_or(SerializeError::TableFull { table: name })?;
+        // `end >= 1`: the new entry's position is the last one.
+        let position = end - 1;
         state.slots.push(Slot::Materialized(Box::new(object.clone())));
         state.by_pointer.insert(pointer, position);
         state.outbox.push(wire);
@@ -625,7 +634,7 @@ impl<L: SerializableLang> SerdeSession<L> {
                 let entries = core::mem::take(&mut table.outbox);
                 // Invariant: the outbox is the tail of the slots (every interned entry
                 // pushes both), so the entries start where the slots minus the outbox
-                // end; slot counts stay below `u32::MAX` (the table-full checks).
+                // end; slot counts stay at most `u32::MAX` (the table-full checks).
                 debug_assert!(entries.len() <= table.slots.len(), "the outbox is the tail of the slots");
                 let start = table.slots.len().saturating_sub(entries.len()) as u32;
                 SegmentTable::new(String::from(table.name), TableId::new(ordinal as u32), start, entries)
@@ -748,10 +757,8 @@ impl<L: SerializableLang> SerdeSession<L> {
             if start != len {
                 return Err(DeserializeError::SegmentOutOfOrder { table: table.name, expected: len, found: start });
             }
-            let fits = u32::try_from(entries.len()).ok().and_then(|n| len.checked_add(n));
-            match fits {
-                Some(end) if end < u32::MAX => {}
-                _ => return Err(DeserializeError::TableFull { table: table.name }),
+            if table_len_after(table.slots.len(), entries.len()).is_none() {
+                return Err(DeserializeError::TableFull { table: table.name });
             }
             // The nesting bound, checked without recursion before any entry is walked
             // (translated, parsed, or handed to a driver): every entry of this
@@ -786,7 +793,7 @@ impl<L: SerializableLang> SerdeSession<L> {
                     .get(&table.ordinal())
                     .ok_or(DeserializeError::UnknownWriterTable { table })?;
                 let appended = planned.iter().find(|(t, _)| *t == ordinal).map_or(0, |(_, entries)| entries.len());
-                // The table-full check above bounds `len + appended` below `u32::MAX`.
+                // The table-full check above bounds `len + appended` by `u32::MAX`.
                 let len = (self.tables[ordinal].slots.len() + appended) as u32;
                 if index >= len {
                     return Err(DeserializeError::IndexOutOfRange { table: self.tables[ordinal].name, index, len });

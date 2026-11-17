@@ -981,6 +981,23 @@ fn a_reader_registered_directly_from_a_routine_rebuilds_its_objects() {
 
 // --- the failure battery --------------------------------------------------------------
 
+/// The write side and the read side accept the same number of entries: both check
+/// their appends through one bound, `u32::MAX` entries per table, which a real table
+/// is too large to reach in a test.
+#[test]
+fn table_bound_is_shared_by_writing_and_reading() {
+    use super::session::table_len_after;
+    let max = u32::MAX as usize;
+    // Interning the last entry fills the table; one more is refused.
+    assert_eq!(table_len_after(max - 1, 1), Some(u32::MAX));
+    assert_eq!(table_len_after(max, 1), None);
+    // A segment that brings a table to exactly `u32::MAX` entries is accepted; one
+    // more entry is refused.
+    assert_eq!(table_len_after(max - 3, 3), Some(u32::MAX));
+    assert_eq!(table_len_after(max - 3, 4), None);
+    assert_eq!(table_len_after(0, max), Some(u32::MAX));
+}
+
 /// A toy object forming a write-side cycle through interior mutability; its driver
 /// holds its own table handle (shared so it can be set after registration).
 #[derive(Debug)]
