@@ -58,10 +58,7 @@ use super::{
 /// looks up the definition of the command (for instance in the scope stack of the
 /// parsing state). This error is reported when `resolve_command` returns
 /// [`CommandResolution::Unresolved`](crate::core::specs::CommandResolution::Unresolved).
-/// [`NodesParser`] also reports this error, without a detail and without calling
-/// `resolve_command`, for a placeholder command that a token reader returns after a
-/// tokenization error ([`TokenRecovery`](crate::core::token::TokenRecovery)). When the
-/// resolver itself fails, `resolve_command` returns
+/// When the resolver itself fails, `resolve_command` returns
 /// [`CommandResolution::Failed`](crate::core::specs::CommandResolution::Failed) and the
 /// parser reports [`CommandResolutionFailed`] instead.
 ///
@@ -190,7 +187,8 @@ pub struct ExpressionCallableRequiresContent {
 /// tolerant parse continues with this placeholder. A placeholder is not part of the token
 /// stream: the parse continues at the resume position of the recovery
 /// ([`TokenRecovery::resume`](crate::core::token::TokenRecovery::resume)). Therefore
-/// [`NodesParser`] cannot parse a group or a specials invocation from a placeholder.
+/// [`NodesParser`] cannot parse a command, a specials invocation or a group from a
+/// placeholder.
 ///
 /// The standard token reader returns only `Chars` placeholder tokens. Therefore a
 /// document cannot cause this error; only a custom token reader can.
@@ -203,8 +201,8 @@ pub struct ExpressionCallableRequiresContent {
 #[non_exhaustive]
 #[diagnostic(id = "core.recovery.unusable-recovery-token")]
 pub struct UnusableRecoveryToken {
-    /// The spelling of the placeholder token: the specials or the opening delimiter of
-    /// the group.
+    /// The spelling of the placeholder token: the command with its escape character, the
+    /// specials, or the opening delimiter of the group.
     pub spelling: String,
     /// The kind of the placeholder token.
     pub kind: UnusableRecoveryTokenKind,
@@ -214,6 +212,8 @@ pub struct UnusableRecoveryToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum UnusableRecoveryTokenKind {
+    /// A [`Command`](crate::core::token::TokenKind::Command) token.
+    Command,
     /// A [`Specials`](crate::core::token::TokenKind::Specials) token.
     Specials,
     /// A [`GroupOpen`](crate::core::token::TokenKind::GroupOpen) token.
@@ -225,6 +225,12 @@ pub enum UnusableRecoveryTokenKind {
 impl fmt::Display for UnusableRecoveryToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
+            UnusableRecoveryTokenKind::Command => write!(
+                f,
+                "Misconfigured token reader: the recovery placeholder ‘{}’ of a \
+                 tokenization error may not be a command",
+                self.spelling
+            ),
             UnusableRecoveryTokenKind::Specials => write!(
                 f,
                 "Misconfigured token reader: the recovery placeholder ‘{}’ of a \
@@ -683,7 +689,7 @@ impl<L: Lang> Clone for NodesOutcome<L> {
 /// command that does not resolve, or whose resolver failed, is diagnosed and recovered
 /// as a `Chars` node over the token's span. A recognized specials trigger never takes
 /// that path, because for specials recognition is resolution, so it always dispatches;
-/// a specials or group-open *placeholder* token does take it, diagnosed as
+/// a command, specials or group-open *placeholder* token does take it, diagnosed as
 /// [`UnusableRecoveryToken`], since there are no source bytes behind it to parse.
 ///
 /// Markup text left inside a `Chars` node is an accepted artifact of tolerant recovery
@@ -1426,20 +1432,28 @@ where
                             cx.tokens.source_span_of(&token),
                         ));
                     }
+                    // A recovery placeholder is never resolved or dispatched: a token
+                    // with no real bytes behind it cannot be consumed by the arm. It is
+                    // diagnosed as unusable and staged as chars, as for specials.
+                    if recovered {
+                        let condition = UnusableRecoveryToken::new(
+                            alloc::format!("{escape_char}{name}"),
+                            UnusableRecoveryTokenKind::Command,
+                        );
+                        if self.recover_as_chars(cx, &token, recovered, condition)? {
+                            return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
+                        }
+                        continue;
+                    }
                     // Resolution runs under the loop's own state — coherent with the
                     // state that tokenized the token (resolution precedes policy,
-                    // [§dd-dr:parsers-engine]). A recovery placeholder is never dispatched: its site
-                    // already diagnosed it, and a token with no real bytes behind it
-                    // cannot be consumed by the arm (no detail: the hook never ran).
-                    let resolved = if recovered {
-                        CommandResolution::Unresolved { detail: None }
-                    } else {
-                        // A hook Err aborts under any policy (resolve_command's
-                        // contract); the recoverable channels are the Ok values.
-                        cx.driver
-                            .resolve_command(&cx.state, &token, &*cx.tokens)
-                            .map_err(|error| cx.attach_hook_frames(error))?
-                    };
+                    // [§dd-dr:parsers-engine]). A hook Err aborts under any policy
+                    // (resolve_command's contract); the recoverable channels are the
+                    // Ok values.
+                    let resolved = cx
+                        .driver
+                        .resolve_command(&cx.state, &token, &*cx.tokens)
+                        .map_err(|error| cx.attach_hook_frames(error))?;
                     match resolved {
                         CommandResolution::Resolved(resolved) => {
                             if self.flush_through(cx, &token)? {
@@ -1503,7 +1517,7 @@ where
                     }
                     // Recognition = resolution: the token carries the full resolution
                     // (callable type + spec). Recovery placeholders are never
-                    // dispatched, as for commands.
+                    // dispatched.
                     if recovered {
                         let condition = UnusableRecoveryToken::new(
                             name,
@@ -2826,15 +2840,18 @@ mod tests {
     /// Which kind of recovery placeholder [`PlaceholderReader`] mints.
     #[derive(Debug, Clone, Copy)]
     enum PlaceholderKind {
+        /// A command placeholder over a backslash and the one character after it.
+        Command,
         Specials,
         GroupOpen,
     }
 
     /// A token source that offers a recovery placeholder of a chosen kind at one
     /// offset: peeking there reports a recoverable error whose placeholder token
-    /// stands over that single character, with the resume position just past it.
+    /// stands over that single character (two for a command), with the resume
+    /// position just past it.
     ///
-    /// No standard reader mints a `Specials` or `GroupOpen` placeholder — the standard
+    /// No standard reader mints a `Command`, `Specials` or `GroupOpen` placeholder — the standard
     /// forbidden-character recovery offers a `Char` — so this is the only way to reach
     /// the content loop's unusable-placeholder arms.
     struct PlaceholderReader<'s> {
@@ -2866,6 +2883,12 @@ mod tests {
             }
             let span = Span::new(self.at, self.at + 1);
             let token = match self.kind {
+                PlaceholderKind::Command => StdToken::command(
+                    '\\',
+                    Span::new(self.at, self.at + 2),
+                    Span::empty(self.at),
+                    Span::empty(self.at + 2),
+                ),
                 PlaceholderKind::Specials => {
                     let spec: Arc<dyn CallableSpec<TestLang>> =
                         Arc::new(StdCallableSpec::default());
@@ -3004,6 +3027,31 @@ mod tests {
         let condition = unusable_placeholder(&parsed.result);
         assert_eq!(condition.kind, UnusableRecoveryTokenKind::GroupOpen);
         assert_eq!(condition.spelling, "{");
+        assert_partition(&parsed.result, 0..5);
+    }
+
+    #[test]
+    fn a_command_placeholder_is_unusable_and_recovers_as_chars() {
+        // A command placeholder is never resolved: there are no source bytes behind it
+        // to parse arguments from, so the loop reports it as unusable, not as an
+        // unknown command, and stages its span as chars.
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab\\cd"));
+        let mut reader = PlaceholderReader {
+            inner: StdTokenReader::new(&source),
+            at: 2,
+            kind: PlaceholderKind::Command,
+        };
+        let parsed =
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"ab\"", "chars 2..4 \"\\\\c\"", "chars 4..5 \"d\""]
+        );
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        let condition = unusable_placeholder(&parsed.result);
+        assert_eq!(condition.kind, UnusableRecoveryTokenKind::Command);
+        assert_eq!(condition.spelling, "\\c");
         assert_partition(&parsed.result, 0..5);
     }
 
