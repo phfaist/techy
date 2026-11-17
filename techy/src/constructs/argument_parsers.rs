@@ -2624,6 +2624,17 @@ mod tests {
             .unwrap();
         let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
         assert_eq!(titles, expected_titles);
+        // The innermost frame numbers the missing second argument from 1. The number is
+        // read from the rendered title, since a recorded frame holds it nowhere else.
+        // Reading it from a library text is a single exception approved by the
+        // maintainer, not a pattern for other tests.
+        let number: usize = titles[0]
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .expect("the argument title carries a number");
+        assert_eq!(number, 2, "{}", titles[0]);
         // The argument frame is anchored where the argument's region starts; the
         // invocation frame at the trigger.
         assert_eq!(diagnostic.frames()[0].span().range(), 8..8);

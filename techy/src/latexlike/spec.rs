@@ -467,6 +467,19 @@ mod tests {
                 assert!(second.contains(invocation.as_str()), "{second}");
                 assert_ne!(&first, invocation);
                 assert_ne!(first, second);
+                // An argument title numbers the argument from 1. The number is read
+                // from the rendered title, since a recorded frame holds it nowhere
+                // else. Reading it from a library text is a single exception approved
+                // by the maintainer, not a pattern for other tests.
+                for (title, index) in [(&first, 0_usize), (&second, 1)] {
+                    let number: usize = title
+                        .chars()
+                        .filter(char::is_ascii_digit)
+                        .collect::<String>()
+                        .parse()
+                        .expect("the argument title carries a number");
+                    assert_eq!(number, index + 1, "{title}");
+                }
             }
         }
     }
