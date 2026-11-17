@@ -103,7 +103,10 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
-use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity};
+use crate::error::{
+    Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity,
+    ToDiagnosticValue,
+};
 use crate::source::{SourceSpan, TextContent};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
@@ -345,7 +348,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         }
         match self.tokens.source_span_within(begin, end) {
             Some(span) => Ok(span),
-            None => Err(self.implementation_error(
+            None => Err(self.implementation_error_with_kind(
+                ImplementationErrorKind::IncoherentPositions,
                 format!(
                     "Invalid positions {begin:?} and {end:?} passed to \
                      ‘ParseContext::source_span_within’: the end may not \
@@ -918,7 +922,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         &self,
         trigger: &SourceSpan<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
-        self.implementation_error(
+        self.implementation_error_with_kind(
+            ImplementationErrorKind::InvalidPosition,
             "Invalid node span in ‘ParseContext::stage_invocation’: the end of \
              the node may not precede the start of the invocation or lie in another \
              source; check the ‘end’ argument or the spans of the staged children",
@@ -1601,7 +1606,18 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         detail: impl fmt::Display,
         span: SourceSpan<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
-        ParseError::new(ImplementationError::new(detail.to_string()), span)
+        self.implementation_error_with_kind(ImplementationErrorKind::Other, detail, span)
+    }
+
+    /// Builds the abort error of [`implementation_error`](ParseContext::implementation_error)
+    /// with the given [`ImplementationErrorKind`].
+    pub fn implementation_error_with_kind(
+        &self,
+        kind: ImplementationErrorKind,
+        detail: impl fmt::Display,
+        span: SourceSpan<L::SourceOrigin>,
+    ) -> ParseError<L::SourceOrigin> {
+        ParseError::new(ImplementationError::new(detail.to_string()).with_kind(kind), span)
             .with_frames(self.session.snapshot_frames())
     }
 
@@ -1625,7 +1641,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                 ParseError::new(HookFailed::new(detail, None), span)
                     .with_frames(self.session.snapshot_frames())
             }
-            other => self.implementation_error(other, span),
+            other => self.implementation_error_with_kind(
+                ImplementationErrorKind::NodeBuildFailed,
+                other,
+                span,
+            ),
         }
     }
 }
@@ -1717,7 +1737,8 @@ impl core::error::Error for PlainCharsError {
 #[non_exhaustive]
 #[diagnostic(
     id = "core.constructs.implementation-error",
-    message = "Implementation error: {detail}"
+    message = "Implementation error: {detail}",
+    no_constructor
 )]
 pub struct ImplementationError {
     /// The description of the violated requirement.
@@ -1728,6 +1749,53 @@ pub struct ImplementationError {
     /// the nodes parser from ‘ParseDriver::make_nodes_parser’: a nodes parser must return
     /// no state delta`.
     pub detail: String,
+    /// The requirement that the faulty code violated.
+    pub kind: ImplementationErrorKind,
+}
+
+impl ImplementationError {
+    /// Creates the error with the given detail and the kind
+    /// [`Other`](ImplementationErrorKind::Other).
+    pub fn new(detail: impl Into<String>) -> ImplementationError {
+        ImplementationError { detail: detail.into(), kind: ImplementationErrorKind::Other }
+    }
+
+    /// Returns the error with its kind set to `kind`.
+    pub fn with_kind(self, kind: ImplementationErrorKind) -> ImplementationError {
+        ImplementationError { kind, ..self }
+    }
+}
+
+/// The requirement that code extending the parser violated, in an
+/// [`ImplementationError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
+#[non_exhaustive]
+pub enum ImplementationErrorKind {
+    /// A requirement that no other variant names.
+    Other,
+    /// A parser or a spec is configured with values that its documentation excludes.
+    MisconfiguredParser,
+    /// A parser that a hook created returns a state delta to a caller that accepts none.
+    UnexpectedStateDelta,
+    /// A nodes parser returns a stop cause that its stop specification excludes.
+    InvalidStopCause,
+    /// The token reader returns a token that the features of the language or the parsing
+    /// state exclude.
+    UnexpectedToken,
+    /// The stream position does not advance past a token.
+    StalledTokenReader,
+    /// A second read of one position gives another answer, or a failed read moves the
+    /// token reader.
+    InconsistentTokenReader,
+    /// A token does not begin at the position of its peek.
+    TokenPositionMismatch,
+    /// Two stream positions do not delimit one range of one source.
+    IncoherentPositions,
+    /// A position or a span lies outside the content, off a character boundary, or ends
+    /// before it starts.
+    InvalidPosition,
+    /// The node builder rejects staged nodes.
+    NodeBuildFailed,
 }
 
 /// The error that is reported when a scope operation of a state delta fails (id
@@ -2184,8 +2252,9 @@ pub(crate) mod tests {
             // The reversed pair delimits nothing: an implementation error, not a
             // panic and not a source condition.
             let error = cx.source_span_within(&end, &begin).unwrap_err();
-            assert!(
-                error.data().downcast_ref::<ImplementationError>().is_some(),
+            assert_eq!(
+                error.data().downcast_ref::<ImplementationError>().map(|e| e.kind),
+                Some(ImplementationErrorKind::IncoherentPositions),
                 "an ImplementationError condition: {error}"
             );
         });
@@ -2487,8 +2556,9 @@ pub(crate) mod tests {
     }
 
     fn assert_implementation_error(error: &ParseError) {
-        assert!(
-            error.data().downcast_ref::<ImplementationError>().is_some(),
+        assert_eq!(
+            error.data().downcast_ref::<ImplementationError>().map(|e| e.kind),
+            Some(ImplementationErrorKind::InvalidPosition),
             "an ImplementationError condition: {error}"
         );
     }

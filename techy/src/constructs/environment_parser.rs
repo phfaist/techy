@@ -13,6 +13,7 @@ use crate::token::{GroupRule, StreamPosition, TokenEdge, TokenKind};
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{push_token_text, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
+use super::ImplementationErrorKind;
 
 /// The error that is reported when the terminator of an environment contains the name of
 /// a different environment (id `core.environments.terminator-mismatch`).
@@ -799,7 +800,8 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
         // an extension contract violation, reported as an implementation error
         // ([§dd-dr:panic-policy]: outer-layer input never panics core code).
         let Some(end_token) = cx.probe_token(&Arc::clone(&cx.state))? else {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::InconsistentTokenReader,
                 format_args!(
                     "Inconsistent token reader: a second read of the terminator of \
                      environment ‘{}’ returned no token",
@@ -815,7 +817,8 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 escape_char
             }
             _ => {
-                return Err(cx.implementation_error(
+                return Err(cx.implementation_error_with_kind(
+                    ImplementationErrorKind::InconsistentTokenReader,
                     format_args!(
                         "Inconsistent token reader: a second read of the terminator of \
                          environment ‘{}’ returned a different token",
@@ -877,7 +880,8 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 // command) and close. A reader that drifted from that position broke
                 // the read-consume contract — an implementation error, not recoverable.
                 if cx.tokens.position_here() != after_command {
-                    return Err(cx.implementation_error(
+                    return Err(cx.implementation_error_with_kind(
+                        ImplementationErrorKind::InconsistentTokenReader,
                         format_args!(
                             "Inconsistent token reader: the reader moved during a \
                              failed read of the name group in the terminator of \
@@ -954,7 +958,8 @@ where
         // for a custom driver), so its contract is validated, not debug-asserted
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::UnexpectedStateDelta,
                 "Invalid state delta returned by the nodes parser from \
                  ‘ParseDriver::make_nodes_parser’: a nodes parser must \
                  return no state delta",
@@ -1005,7 +1010,8 @@ where
                 (body_end.clone(), None)
             }
             StopCause::NodeCondition => {
-                return Err(cx.implementation_error(
+                return Err(cx.implementation_error_with_kind(
+                    ImplementationErrorKind::InvalidStopCause,
                     "Invalid stop cause ‘NodeCondition’ returned by the \
                      nodes parser from ‘ParseDriver::make_nodes_parser’: \
                      the stop specification of an environment body sets no node \

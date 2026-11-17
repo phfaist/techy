@@ -81,6 +81,7 @@ use super::environment_parser::{
     MissingTerminatorFound, NameGroup,
 };
 use super::{node_text_content, push_pre_space_text, push_token_text, ConstructParser, ConstructParserResult, ParseContext};
+use super::ImplementationErrorKind;
 
 /// The error that is reported when the verbatim content of a [`VerbatimArgumentParser`]
 /// argument has no closing delimiter (id `core.verbatim.unterminated-verbatim`).
@@ -325,7 +326,8 @@ fn read_raw_content<L: Lang>(
             other => {
                 // The verbatim state disables every other recognizer; only a
                 // misbehaving custom reader can produce these kinds here.
-                return Err(cx.implementation_error(
+                return Err(cx.implementation_error_with_kind(
+                    ImplementationErrorKind::UnexpectedToken,
                     format_args!(
                         "Unexpected {} returned by the token reader under a verbatim \
                          parsing state (under this state, a token reader must return only \

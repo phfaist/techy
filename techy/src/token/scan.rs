@@ -22,7 +22,7 @@ use alloc::format;
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::constructs::ImplementationError;
+use crate::constructs::{ImplementationError, ImplementationErrorKind};
 use crate::source::Span;
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 
@@ -565,7 +565,7 @@ pub fn scan_specials_trigger<L: Lang>(
                 m.end,
                 pos,
                 content.len()
-            )))),
+            )).with_kind(ImplementationErrorKind::InvalidPosition))),
             span: Span::empty(pos),
         });
     }
@@ -599,7 +599,7 @@ fn checked_scan_error(
                 span.end(),
                 pos,
                 content.len()
-            )))),
+            )).with_kind(ImplementationErrorKind::InvalidPosition))),
             span: Span::empty(pos),
         };
     }

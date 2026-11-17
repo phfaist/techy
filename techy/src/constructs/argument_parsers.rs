@@ -108,6 +108,7 @@ use super::nodes_parser::{
     CommandResolutionFailed, ExpressionCallableRequiresContent, UnresolvableCommand,
 };
 use super::{
+    ImplementationErrorKind,
     comment_node_kind, ConstructParserResult, FromInvocation, Invocation, ParseContext,
 };
 
@@ -854,7 +855,8 @@ where
         // Spec-author contract, validated where the parser runs
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         if matches!(&self.form, GroupArgumentForm::Rules(rules) if rules.is_empty()) {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 "Misconfigured argument parser ‘GroupArgumentParser’: \
                  ‘GroupArgumentParser::any_of’ must be given at least one group rule",
                 cx.here(),
@@ -1170,7 +1172,8 @@ where
         // Spec-author contract, validated where the parser runs
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         if self.rules.is_empty() {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 "Misconfigured argument parser ‘OptionalGroupArgumentParser’: \
                  ‘OptionalGroupArgumentParser::any_of’ must be given at least one group rule",
                 cx.here(),
@@ -1303,7 +1306,8 @@ where
         // Spec-author contract, validated where the parser runs
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         let Some(first_char) = self.marker.chars().next() else {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 "Misconfigured argument parser ‘MarkerArgumentParser’: the marker \
                  may not be empty",
                 cx.here(),

@@ -14,7 +14,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 
 use crate::constructs::{
-    ConstructParser, FromInvocation, ImplementationError, ParseContext,
+    ConstructParser, FromInvocation, ImplementationError, ImplementationErrorKind, ParseContext,
 };
 use crate::error::{Diagnostics, ParseError};
 use crate::node::BuildId;
@@ -466,7 +466,8 @@ impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
         };
         session.finish(root).map_err(|error| {
             ParseError::new(
-                ImplementationError::new(error.to_string()),
+                ImplementationError::new(error.to_string())
+                    .with_kind(ImplementationErrorKind::NodeBuildFailed),
                 SourceSpan::entire(&source),
             )
         })

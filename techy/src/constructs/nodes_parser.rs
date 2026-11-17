@@ -45,6 +45,7 @@ use crate::token::{StreamPosition, Token, TokenEdge, TokenKind, TokenReader};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{
+    ImplementationErrorKind,
     comment_node_kind, push_pre_space_text, push_token_text, ConstructParser,
     ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext,
 };
@@ -902,7 +903,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
                 TokenEdge::StartBeforePreSpace,
                 TokenEdge::Start,
             );
-            cx.implementation_error(detail, span)
+            cx.implementation_error_with_kind(
+                ImplementationErrorKind::TokenPositionMismatch,
+                detail,
+                span,
+            )
         })?;
         self.flush(cx)
     }
@@ -928,7 +933,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
                 TokenEdge::StartBeforePreSpace,
                 TokenEdge::Start,
             );
-            cx.implementation_error(detail, span)
+            cx.implementation_error_with_kind(
+                ImplementationErrorKind::TokenPositionMismatch,
+                detail,
+                span,
+            )
         })?;
         if let Some(run) = self.run.take() {
             let (kind, span) = chars_run_node(cx, run)?;
@@ -1213,7 +1222,8 @@ where
             // are distinct positions.
             let position = cx.tokens.position_here();
             if last_position.as_ref() == Some(&position) {
-                return Err(cx.implementation_error(
+                return Err(cx.implementation_error_with_kind(
+                    ImplementationErrorKind::StalledTokenReader,
                     alloc::format!(
                         "Inconsistent token reader: the stream position did not advance \
                          past the token read at {position:?}; every token other than \
@@ -1301,7 +1311,11 @@ where
                 TokenKind::Char(c) => {
                     self.extend_run(cx, &token, c).map_err(|detail| {
                         let span = cx.tokens.source_span_of(&token);
-                        cx.implementation_error(detail, span)
+                        cx.implementation_error_with_kind(
+                            ImplementationErrorKind::TokenPositionMismatch,
+                            detail,
+                            span,
+                        )
                     })?;
                     if !recovered {
                         cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
@@ -1345,7 +1359,8 @@ where
                     // the token source violated its contract (`TokenReader` docs) —
                     // an implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Paragraphs::PRESENT {
-                        return Err(cx.implementation_error(
+                        return Err(cx.implementation_error_with_kind(
+                            ImplementationErrorKind::UnexpectedToken,
                             "Invalid ‘ParagraphBreak’ token returned by the token reader: \
                              the language declares the paragraphs feature absent",
                             cx.tokens.source_span_of(&token),
@@ -1377,7 +1392,8 @@ where
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Comments::PRESENT {
-                        return Err(cx.implementation_error(
+                        return Err(cx.implementation_error_with_kind(
+                            ImplementationErrorKind::UnexpectedToken,
                             "Invalid ‘Comment’ token returned by the token reader: \
                              the language declares the comments feature absent",
                             cx.tokens.source_span_of(&token),
@@ -1403,7 +1419,8 @@ where
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Commands::PRESENT {
-                        return Err(cx.implementation_error(
+                        return Err(cx.implementation_error_with_kind(
+                            ImplementationErrorKind::UnexpectedToken,
                             "Invalid ‘Command’ token returned by the token reader: \
                              the language declares the commands feature absent",
                             cx.tokens.source_span_of(&token),
@@ -1477,7 +1494,8 @@ where
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Specials::PRESENT {
-                        return Err(cx.implementation_error(
+                        return Err(cx.implementation_error_with_kind(
+                            ImplementationErrorKind::UnexpectedToken,
                             "Invalid ‘Specials’ token returned by the token reader: \
                              the language declares the specials feature absent",
                             cx.tokens.source_span_of(&token),
@@ -1512,7 +1530,8 @@ where
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Groups::PRESENT {
-                        return Err(cx.implementation_error(
+                        return Err(cx.implementation_error_with_kind(
+                            ImplementationErrorKind::UnexpectedToken,
                             "Invalid ‘GroupOpen’ token returned by the token reader: \
                              the language declares the groups feature absent",
                             cx.tokens.source_span_of(&token),
@@ -3205,10 +3224,11 @@ mod tests {
         let mut reader = NonAdvancingTokenReader { inner: StdTokenReader::new(&source) };
         let error = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect_err("a token that does not advance the stream must abort the parse");
-        assert!(
-            error.data().is::<crate::constructs::ImplementationError>(),
-            "an ImplementationError condition: {error:?}"
-        );
+        let condition = error
+            .data()
+            .downcast_ref::<crate::constructs::ImplementationError>()
+            .expect("an ImplementationError condition");
+        assert_eq!(condition.kind, ImplementationErrorKind::StalledTokenReader);
         assert_eq!(error.span().range(), 0..0);
     }
 
@@ -6235,6 +6255,14 @@ mod tests {
             StopSpec::none(),
         )
         .expect_err("the reader breaks clause 7");
+        assert_eq!(
+            error
+                .data()
+                .downcast_ref::<crate::constructs::ImplementationError>()
+                .expect("an ImplementationError condition")
+                .kind,
+            ImplementationErrorKind::TokenPositionMismatch,
+        );
         let detail = detail_of(&error);
         let span = error.span().range();
 

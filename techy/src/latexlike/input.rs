@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constructs::{
+    ImplementationErrorKind,
     parse_declared_arguments, CharsGroupArgumentParser, ChildStateSpec, ConstructParser,
     ConstructParserResult, InvalidReferenceReason, InvalidSourceReferenceArgument, Invocation,
     ParseContext, PlainCharsError, StopSpec,
@@ -535,7 +536,8 @@ where
             .iter()
             .find(|argument| argument.name() == Some(InputMacroSpec::<LLL>::REFERENCE_ARGUMENT_NAME))
             .ok_or_else(|| {
-                cx.implementation_error(
+                cx.implementation_error_with_kind(
+                    ImplementationErrorKind::MisconfiguredParser,
                     "Missing argument ‘reference’ in the argument list of \
                      ‘InputMacroSpec’",
                     at.clone(),

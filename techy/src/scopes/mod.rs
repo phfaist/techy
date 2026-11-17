@@ -71,7 +71,8 @@ use core::fmt;
 use hashbrown::HashMap;
 
 use crate::constructs::{
-    ConstructParser, ConstructParserResult, ImplementationError, Invocation, ParseContext,
+    ConstructParser, ConstructParserResult, ImplementationError, ImplementationErrorKind,
+    Invocation, ParseContext,
 };
 use crate::error::{Diagnostic, DiagnosticInfo, Diagnostics};
 use crate::node::{BuildId, NodeKind};
@@ -1353,7 +1354,10 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
                 )
             };
             return Err(SpecialsScanError {
-                kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(detail))),
+                kind: TokenErrorKind::Custom(Box::new(
+                    ImplementationError::new(detail)
+                        .with_kind(ImplementationErrorKind::InvalidPosition),
+                )),
                 span: Span::empty(pos.min(content.len())),
             });
         };
@@ -2842,7 +2846,8 @@ mod tests {
 
         let is_implementation_error = |kind: &TokenErrorKind| match kind {
             TokenErrorKind::Custom(data) => {
-                data.downcast_ref::<crate::constructs::ImplementationError>().is_some()
+                data.downcast_ref::<crate::constructs::ImplementationError>().map(|e| e.kind)
+                    == Some(ImplementationErrorKind::InvalidPosition)
             }
             _ => false,
         };

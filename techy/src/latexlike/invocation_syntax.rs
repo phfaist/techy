@@ -1112,8 +1112,12 @@ mod tests {
     #[test]
     fn stage_invocation_reports_a_bad_computed_span_as_an_error_not_a_panic() {
         let assert_implementation_error = |error: crate::error::ParseError| {
-            assert!(
-                error.data().downcast_ref::<crate::constructs::ImplementationError>().is_some(),
+            assert_eq!(
+                error
+                    .data()
+                    .downcast_ref::<crate::constructs::ImplementationError>()
+                    .map(|e| e.kind),
+                Some(crate::constructs::ImplementationErrorKind::InvalidPosition),
                 "an ImplementationError condition: {error:?}"
             );
             // Anchored at the trigger — the construct whose staging failed — not

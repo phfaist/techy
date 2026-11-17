@@ -12,6 +12,7 @@ use crate::source::SourceSpan;
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingStateDelta};
 
 use super::{
+    ImplementationErrorKind,
     ChildStateSpec, ConstructParser, ConstructParserResult, FromInvocation, ParseContext,
     StopCause, StopSpec, StrayGroupClose,
 };
@@ -123,7 +124,8 @@ where
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
                     if !<L::Features as LangFeatures>::Groups::PRESENT {
-                        return Err(cx.implementation_error(
+                        return Err(cx.implementation_error_with_kind(
+                            ImplementationErrorKind::UnexpectedToken,
                             "Invalid ‘GroupClose’ token returned by the token \
                              reader: the language declares the groups feature \
                              absent",
@@ -152,7 +154,8 @@ where
                     nodes.push(id);
                 }
                 StopCause::TokenCondition { span, .. } => {
-                    return Err(cx.implementation_error(
+                    return Err(cx.implementation_error_with_kind(
+                        ImplementationErrorKind::InvalidStopCause,
                         "Invalid stop cause ‘TokenCondition’ returned by the \
                          nodes parser from ‘ParseDriver::make_nodes_parser’: \
                          the stop specification of the root sets no token condition",
@@ -160,7 +163,8 @@ where
                     ));
                 }
                 StopCause::NodeCondition => {
-                    return Err(cx.implementation_error(
+                    return Err(cx.implementation_error_with_kind(
+                        ImplementationErrorKind::InvalidStopCause,
                         "Invalid stop cause ‘NodeCondition’ returned by the \
                          nodes parser from ‘ParseDriver::make_nodes_parser’: \
                          the stop specification of the root sets no node condition",

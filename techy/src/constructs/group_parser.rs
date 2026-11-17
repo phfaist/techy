@@ -75,6 +75,7 @@ use crate::token::{GroupRule, Token, TokenEdge};
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{node_text_content, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
+use super::ImplementationErrorKind;
 
 /// The error that is reported when a group is not closed by its closing delimiter (id
 /// `core.groups.unclosed-group`).
@@ -332,7 +333,8 @@ where
         // for a custom driver), so its contract is validated, not debug-asserted
         // ([§dd-dr:panic-policy]).
         if delta.is_some() {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::UnexpectedStateDelta,
                 "Invalid state delta returned by the nodes parser from \
                  ‘ParseDriver::make_nodes_parser’: a nodes parser must return no \
                  state delta",
@@ -362,7 +364,8 @@ where
                 (None, cx.tokens.position_here())
             }
             StopCause::NodeCondition => {
-                return Err(cx.implementation_error(
+                return Err(cx.implementation_error_with_kind(
+                    ImplementationErrorKind::InvalidStopCause,
                     "Invalid stop cause ‘NodeCondition’ returned by the nodes \
                      parser from ‘ParseDriver::make_nodes_parser’: a nodes parser may \
                      stop at a node condition only if its stop specification sets one",

@@ -31,7 +31,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 
-use crate::constructs::ImplementationError;
+use crate::constructs::{ImplementationError, ImplementationErrorKind};
 use crate::source::{Source, SourceOrigin, SourcePos, SourceSpan, Span};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 
@@ -894,7 +894,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                      boundary within the content (length {})",
                     start,
                     s.len()
-                )))),
+                )).with_kind(ImplementationErrorKind::InvalidPosition))),
                 // The offending position is by definition not a valid anchor, so the
                 // error is reported at the nearest valid one at or before it (a
                 // `SourceSpan` must be in bounds and on char boundaries).

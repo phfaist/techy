@@ -48,9 +48,9 @@ use crate::token::{
 };
 
 use super::{
-    ConstructParser, ImplementationError, NodesParser, OptionalGroupArgumentParser,
-    ParseContext, StopCause, StopSpec, TokenStopKind, UnclosedGroup, UnterminatedVerbatim,
-    VerbatimArgumentParser,
+    ConstructParser, ImplementationError, ImplementationErrorKind, NodesParser,
+    OptionalGroupArgumentParser, ParseContext, StopCause, StopSpec, TokenStopKind, UnclosedGroup,
+    UnterminatedVerbatim, VerbatimArgumentParser,
 };
 
 /// The tiled twin of [`RelaxedLang`]: the same tokenization (the scripted reader) and
@@ -266,6 +266,15 @@ fn implementation_detail(error: &ParseError) -> String {
         .clone()
 }
 
+/// The [`ImplementationErrorKind`] of an aborted parse.
+fn implementation_kind(error: &ParseError) -> ImplementationErrorKind {
+    error
+        .data()
+        .downcast_ref::<ImplementationError>()
+        .expect("an ImplementationError condition")
+        .kind
+}
+
 /// A chars node's content **as recorded** (not resolved): what tells `Owned` from
 /// `Spanned`.
 fn chars_content<'t, L: Lang>(node: &NodeRef<'t, L>) -> &'t TextContent {
@@ -364,7 +373,7 @@ fn a_tiled_language_rejects_a_chars_run_across_a_seam() {
         Recovery::Strict,
         StopSpec::none(),
     ));
-    assert!(error.data().is::<ImplementationError>(), "unexpected error: {error:?}");
+    assert_eq!(implementation_kind(&error), ImplementationErrorKind::IncoherentPositions);
 }
 
 #[test]
@@ -405,7 +414,7 @@ fn a_run_ending_at_a_seam_is_owned_and_a_tiled_language_rejects_it() {
         Recovery::Strict,
         StopSpec::none(),
     ));
-    assert!(error.data().is::<ImplementationError>(), "unexpected error: {error:?}");
+    assert_eq!(implementation_kind(&error), ImplementationErrorKind::IncoherentPositions);
 }
 
 // --- T2: a group spanning a seam -------------------------------------------------------
@@ -472,7 +481,7 @@ fn a_chars_run_across_a_hole_in_one_source_is_one_owned_node() {
         Recovery::Strict,
         StopSpec::none(),
     ));
-    assert!(error.data().is::<ImplementationError>(), "unexpected error: {error:?}");
+    assert_eq!(implementation_kind(&error), ImplementationErrorKind::IncoherentPositions);
 }
 
 // --- T5: an un-consumed stop token at a seam ------------------------------------------
@@ -720,6 +729,10 @@ fn a_token_not_starting_where_the_stream_stood_is_an_implementation_error() {
     assert_eq!(
         implementation_detail(&parse_with_broken_seams::<RelaxedLang>()),
         implementation_detail(&parse_with_broken_seams::<TiledScriptedLang>()),
+    );
+    assert_eq!(
+        implementation_kind(&parse_with_broken_seams::<TiledScriptedLang>()),
+        ImplementationErrorKind::TokenPositionMismatch,
     );
 }
 

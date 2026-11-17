@@ -66,6 +66,7 @@ use crate::token::{TokenEdge, TokenKind};
 
 use super::argument_parsers::{scan_argument_noise, stage_pre_space};
 use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
+use super::ImplementationErrorKind;
 
 /// The error that is reported when a tack-on field that may appear only once appears
 /// several times (id `core.arguments.repeated-tack-on-field`).
@@ -181,7 +182,8 @@ where
                 .any(|earlier| earlier.name == field.name)
                 .then_some(&*field.name)
         }) {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 format!(
                     "Misconfigured argument parser ‘TackOnFieldsArgumentParser’: \
                      duplicate field ‘{duplicate}’ (field names must be distinct)"

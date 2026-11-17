@@ -71,6 +71,7 @@ use super::argument_parsers::{
     marker_scan_state_delta, parse_expression_node, scan_argument_noise, stage_pre_space,
 };
 use super::{node_text_content, ConstructParserResult, FromInvocation, ParseContext};
+use super::ImplementationErrorKind;
 
 /// An argument position that absorbs a run of *marker + expression* pairs, such as
 /// the sub- and superscripts of `\op^{a}_{b}` (xparse's `e{<chars>}` argument type).
@@ -129,14 +130,16 @@ where
         // Spec-author contract, validated where the parser runs
         // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
         if self.markers.is_empty() {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 "Misconfigured argument parser ‘EmbellishmentsArgumentParser’: \
                  ‘EmbellishmentsArgumentParser::new’ must be given at least one marker",
                 cx.here(),
             ));
         }
         if self.markers.iter().any(|marker| marker.is_empty()) {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 "Misconfigured argument parser ‘EmbellishmentsArgumentParser’: \
                  the markers may not be empty",
                 cx.here(),

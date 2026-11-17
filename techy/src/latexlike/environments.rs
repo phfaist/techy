@@ -101,6 +101,7 @@ use core::any::Any;
 use core::fmt;
 
 use crate::constructs::{
+    ImplementationErrorKind,
     parse_declared_arguments, read_rigid_name_group, ConstructParser,
     ConstructParserResult, EnvironmentBeginSyntaxData, EnvironmentBody,
     EnvironmentBodyParser, Invocation, ParseContext, VerbatimBodyParser,
@@ -902,7 +903,8 @@ where
         let crate::token::TokenKind::Command { escape_char, .. } =
             cx.tokens.token_kind(trigger)
         else {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::MisconfiguredParser,
                 "Misconfigured spec ‘BeginSpec’: it must be invoked by a \
                  command token; register it as a ‘Macro’ entry",
                 cx.tokens.source_span_of(trigger),
@@ -943,7 +945,11 @@ where
                     Arc::clone(&cx.state),
                     vec![],
                 )
-                .map_err(|error| cx.implementation_error(error, trigger_span))?;
+                .map_err(|error| cx.implementation_error_with_kind(
+                    ImplementationErrorKind::NodeBuildFailed,
+                    error,
+                    trigger_span,
+                ))?;
             return Ok((id, None));
         };
         // The name as read, never the span's content: the span is only what the reader
@@ -1047,7 +1053,8 @@ where
         // contract (no pass-through delta) is enforced as an implementation
         // error, never a panic ([§dd-dr:panic-policy]).
         if passthrough.is_some() {
-            return Err(cx.implementation_error(
+            return Err(cx.implementation_error_with_kind(
+                ImplementationErrorKind::UnexpectedStateDelta,
                 "Invalid state delta returned by the body parser from \
                  ‘EnvironmentBehavior::make_body_parser’: a body parser \
                  must return no state delta",
