@@ -200,43 +200,47 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     Ok(Arc::new(source.with_line_column_number_offsets(line_number_offset, column_number_offset)))
 }
 
-/// The ready-made include-cycle and include-depth check, called with `?` inside a
-/// [`SourceResolver`] before it answers an `\input`-like reference.
+/// Checks that including a source would form no include cycle and would not exceed a
+/// maximum inclusion depth.
 ///
-/// Bounding include recursion is the embedder's policy — the parser never interprets
-/// references and performs no recursion checking, and some self-inclusion is legitimate,
-/// as in `.dtx` self-documenting files — but the common policy is this one, so this helper
-/// makes it a one-liner.
+/// A [`SourceResolver`] calls this function with `?` before it returns the content for a
+/// reference, for instance the argument of `\input{chapter1.tex}`. The parser itself
+/// performs no such check: limiting include recursion is a policy of the program that
+/// provides the resolver, and some self-inclusion is legitimate, as in the
+/// self-documenting `.dtx` files of LaTeX packages. This function implements the common
+/// policy.
 ///
-/// The check compares source *origins*, not the reference strings recorded in provenance:
-/// two spellings can name one file, and the primary source, which has no reference at all,
-/// still takes part through the origin its creator gave it. The arguments divide the work
-/// as follows:
+/// The check compares *keys* of sources, not reference strings, because two different
+/// references can denote the same file. A key is a canonical name of a source of type
+/// `K`, for instance an absolute path or a normalized URL. The key of each source on the
+/// include chain is computed from its [origin](Source::origin). This works only if the
+/// resolver gives each resolved source its key as its origin, and if the program gives the
+/// primary source an origin of the same form; the primary source then takes part in the
+/// check, although it has no reference.
 ///
-/// - `reference` is the reference as written, which the resolver received; the returned
-///   error carries it as its [`reference`](ResolveError::reference).
-/// - `target_key` is the canonical key of the source about to be included; a resolver
-///   computes that canonical name — an absolute path, a normalized URL — during resolution
-///   anyway.
-/// - `triggered_at` locates the triggering construct. The chain examined is its source's
-///   [`including_sources`](Source::including_sources): the would-be includer and every
-///   source above it, up to and including the primary one.
-/// - `origin_key` converts a chain source's origin into the same key space. This is cheap
-///   *provided the resolver gives resolved sources their canonical name as their origin*,
-///   and the embedder gives the primary source a suitable canonical origin too; the whole
-///   check rests on that. Returning `None` skips that chain entry, meaning nothing
-///   comparable was recorded for it.
-/// - `max_depth`, when `Some`, bounds the inclusion depth of the new source. The primary
-///   source is depth 0, a source it includes is depth 1, and so on.
+/// The arguments are the following:
+///
+/// - `reference` is the reference as written in the document, which the resolver
+///   received.
+/// - `target_key` is the key of the source that is about to be included. A resolver
+///   usually computes it while it resolves `reference`.
+/// - `triggered_at` is the location of the construct that requests the inclusion. The
+///   *include chain* consists of the source that contains this location, the source that
+///   includes it, and so on up to the primary source (see
+///   [`Source::including_sources`]).
+/// - `origin_key` returns the key of a source on the include chain, given its origin. It
+///   returns `None` for an origin that has no key; the source is then skipped.
+/// - `max_depth` is the maximum inclusion depth, or `None` for no limit. The primary
+///   source has depth 0, a source that it includes has depth 1, and so on.
 ///
 /// # Errors
 ///
-/// Returns a [`ResolveError`] of kind [`IncludeCycle`](ResolveErrorKind::IncludeCycle)
-/// if `target_key` matches the key of a source on the chain, and a `ResolveError` of kind
-/// [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded) if the depth of the
-/// new source would exceed `max_depth`.
+/// Returns a [`ResolveError`] whose [`reference`](ResolveError::reference) is `reference`:
 ///
-/// Both errors carry `reference` as their [`reference`](ResolveError::reference).
+/// - of kind [`IncludeCycle`](ResolveErrorKind::IncludeCycle) if `target_key` equals the
+///   key of a source on the include chain;
+/// - otherwise, of kind [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded)
+///   if the included source would have a depth greater than `max_depth`.
 pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
     reference: &str,
     target_key: &K,
