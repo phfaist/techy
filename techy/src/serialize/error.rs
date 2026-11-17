@@ -541,21 +541,29 @@ pub enum DeserializeError {
         /// The table identifier that the position contains.
         found: TableId,
     },
-    /// A tree was read with an annotation type other than the one it was serialized
+    /// A tree was read with an annotation type other than the one that it was serialized
     /// with.
     ///
-    /// The trees table stores each tree with the annotation type that it was written
-    /// with. The reading program requested the tree as a tree of the annotation type
-    /// `requested`, or the data refers to the tree where a tree of another annotation
-    /// type is expected.
+    /// The trees table stores each tree under the identifier that is registered for the
+    /// annotation type of the tree, for instance `core.tree` for the unit annotation. A
+    /// stored tree can be read back only with this annotation type.
+    /// [`TreeSerialization::tree`](crate::serialize::TreeSerialization::tree) returns
+    /// this error when its type argument differs from the annotation type of the stored
+    /// tree. Reading a serialized parse result returns this error, wrapped in
+    /// [`InEntry`](DeserializeError::InEntry), when the parse result refers to a tree
+    /// whose annotation type is not the unit annotation.
+    ///
+    /// A program that reads trees of several annotation types can use `stored` to choose
+    /// the annotation type, and read the tree again with this type.
     AnnotationTypeMismatch {
-        /// The annotation identifier of the stored tree, or `None` if no identifier is
-        /// registered for its annotation type.
+        /// The identifier under which the annotation type of the stored tree is
+        /// registered, or `None` if no identifier is registered for this type.
         stored: Option<String>,
-        /// The Rust type name of the requested annotation type.
+        /// The Rust type name of the requested annotation type, as returned by
+        /// [`core::any::type_name`].
         requested: &'static str,
-        /// The annotation identifier of the requested annotation type, or `None` if no
-        /// identifier is registered for it.
+        /// The identifier under which the requested annotation type is registered, or
+        /// `None` if the requested annotation type is not registered.
         requested_identifier: Option<String>,
     },
     /// The references between the serialized entries form a cycle.

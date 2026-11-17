@@ -561,15 +561,18 @@ pub trait TreeSerialization<L: SerializableLang> {
     where
         A: SerializableValue<L> + DeserializableValue<L> + Clone + Debug + Send + Sync + 'static;
 
-    /// The tree at `position` of the trees table, rebuilt with annotation type `A`.
+    /// Returns the tree at `position` of the trees table, rebuilt with annotation type
+    /// `A`.
+    ///
+    /// `A` must be the annotation type that the tree was serialized with. For instance,
+    /// a tree produced by the parser (`NodeTree<L>`) is read with `A = ()`.
     ///
     /// # Errors
     ///
-    /// The session has no trees table ([`DeserializeError::UnknownTableName`]); the
-    /// errors of [`SerdeSession::object`](crate::serialize::SerdeSession::object); the
-    /// tree at that position was serialized with a different annotation type than `A`
-    /// ([`DeserializeError::AnnotationTypeMismatch`], naming the identifier the tree was
-    /// serialized under and the annotation type requested).
+    /// - [`DeserializeError::UnknownTableName`] if the session has no trees table.
+    /// - [`DeserializeError::AnnotationTypeMismatch`] if the tree at `position` was
+    ///   serialized with an annotation type other than `A`.
+    /// - The errors of [`SerdeSession::object`](crate::serialize::SerdeSession::object).
     fn tree<A>(&mut self, position: TreeIndex) -> Result<NodeTree<L, A>, DeserializeError>
     where
         A: SerializableValue<L> + DeserializableValue<L> + Clone + Debug + Send + Sync + 'static;
