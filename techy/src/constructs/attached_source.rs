@@ -853,8 +853,9 @@ mod tests {
             error_fields[1],
             ("message".into(), DiagnosticValue::Str("cannot read file".into()))
         );
+        assert_eq!(error_fields[2], ("kind".into(), DiagnosticValue::Str("other".into())));
         assert_eq!(
-            error_fields[2],
+            error_fields[3],
             (
                 "cause_chain".into(),
                 DiagnosticValue::List(vec![DiagnosticValue::Str(

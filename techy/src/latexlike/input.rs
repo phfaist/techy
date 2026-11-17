@@ -722,7 +722,7 @@ mod tests {
     use crate::node::BodySlotExt;
     use crate::scopes::Package;
     use crate::source::{
-        check_include_chain, MapResolver, ResolveError, ResolvedContent,
+        check_include_chain, MapResolver, ResolveError, ResolveErrorKind, ResolvedContent,
         SourceProvenance, SourceResolver, SourceSpan,
     };
     use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
@@ -1156,6 +1156,7 @@ mod tests {
             None,
         )
         .unwrap_err();
+        assert_eq!(condition.error.kind(), ResolveErrorKind::IncludeCycle);
         assert_eq!(condition.error.reference(), cycle.reference());
         assert_eq!(condition.error.message(), cycle.message());
 

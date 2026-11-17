@@ -229,9 +229,10 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns a [`ResolveError`] when the target is already on its own include chain, and a
-/// different one when including it would exceed `max_depth`; the two messages are
-/// distinct.
+/// Returns a [`ResolveError`] of kind [`IncludeCycle`](ResolveErrorKind::IncludeCycle)
+/// when the target is already on its own include chain, and one of kind
+/// [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded) when including it
+/// would exceed `max_depth`.
 ///
 /// The error's [`reference`](ResolveError::reference) field carries an origin label where
 /// one exists, since the key type `K` is not required to be printable: for a cycle, the
@@ -251,7 +252,8 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
             return Err(ResolveError::new(
                 source.origin().label().unwrap_or_default(),
                 "Refusing recursive inclusion",
-            ));
+            )
+            .with_kind(ResolveErrorKind::IncludeCycle));
         }
     }
     // `depth` now counts the chain sources (includer … primary), which is exactly
@@ -264,7 +266,8 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
                     "Inclusion depth limit exceeded (maximum depth {})",
                     max_depth
                 ),
-            ));
+            )
+            .with_kind(ResolveErrorKind::IncludeDepthExceeded));
         }
     }
     Ok(())
@@ -358,14 +361,28 @@ impl<O: SourceOrigin> ResolvedContent<O> {
 pub struct ResolveError {
     reference: String,
     message: String,
+    kind: ResolveErrorKind,
     cause: Option<Arc<dyn core::error::Error + Send + Sync + 'static>>,
 }
 
 impl ResolveError {
     /// Creates a resolve error for `reference`, with `message` explaining the failure in
-    /// human-readable terms.
+    /// human-readable terms, and the kind [`Other`](ResolveErrorKind::Other).
+    ///
+    /// To set another kind, call [`with_kind`](ResolveError::with_kind) on the result.
     pub fn new(reference: impl Into<String>, message: impl Into<String>) -> Self {
-        ResolveError { reference: reference.into(), message: message.into(), cause: None }
+        ResolveError {
+            reference: reference.into(),
+            message: message.into(),
+            kind: ResolveErrorKind::Other,
+            cause: None,
+        }
+    }
+
+    /// Returns this error with its kind set to `kind`, as in
+    /// `ResolveError::new(reference, message).with_kind(ResolveErrorKind::NotFound)`.
+    pub fn with_kind(self, kind: ResolveErrorKind) -> Self {
+        ResolveError { kind, ..self }
     }
 
     /// Attaches the underlying error, which becomes available through
@@ -390,6 +407,31 @@ impl ResolveError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The kind of the failure.
+    pub fn kind(&self) -> ResolveErrorKind {
+        self.kind
+    }
+}
+
+/// A `ResolveErrorKind` identifies why a reference could not be resolved, in the
+/// [`kind`](ResolveError::kind) of a [`ResolveError`].
+///
+/// A resolver sets the kind with [`ResolveError::with_kind`]; an error created with
+/// [`ResolveError::new`] has the kind [`Other`](ResolveErrorKind::Other).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResolveErrorKind {
+    /// A failure that no other kind describes.
+    Other,
+    /// The resolver has no source for the reference.
+    NotFound,
+    /// The referenced source is already on the include chain of the reference, so
+    /// including it would form a cycle ([`check_include_chain`]).
+    IncludeCycle,
+    /// Including the referenced source would exceed the maximum inclusion depth
+    /// ([`check_include_chain`]).
+    IncludeDepthExceeded,
 }
 
 // The wording deliberately differs from the `UnresolvableSourceReference`
@@ -466,7 +508,8 @@ impl<O: SourceOrigin + From<String>> SourceResolver<O> for MapResolver {
                 }
                 Ok(resolved)
             }
-            None => Err(ResolveError::new(reference, "Source not found")),
+            None => Err(ResolveError::new(reference, "Source not found")
+                .with_kind(ResolveErrorKind::NotFound)),
         }
     }
 }
@@ -601,8 +644,9 @@ mod tests {
     fn map_resolver_fails_on_unknown_reference() {
         let resolver = MapResolver::new();
         let trigger = trigger_span();
-        assert!(SourceResolver::<Option<String>>::resolve(&resolver, "missing.tex", &trigger)
-            .is_err());
+        let err = SourceResolver::<Option<String>>::resolve(&resolver, "missing.tex", &trigger)
+            .unwrap_err();
+        assert_eq!(err.kind(), ResolveErrorKind::NotFound);
     }
 
     #[test]
@@ -653,6 +697,7 @@ mod tests {
         // source on the chain.
         let err =
             check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        assert_eq!(err.kind(), ResolveErrorKind::IncludeCycle);
         assert_eq!(err.reference(), "a.tex");
     }
 
@@ -663,10 +708,12 @@ mod tests {
         let trigger = chain_trigger();
         let err =
             check_include_chain(&String::from("doc.tex"), &trigger, key, None).unwrap_err();
+        assert_eq!(err.kind(), ResolveErrorKind::IncludeCycle);
         assert_eq!(err.reference(), "doc.tex");
         // The same refusal as a cycle through a source deeper on the chain.
         let deeper =
             check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        assert_eq!(deeper.kind(), ResolveErrorKind::IncludeCycle);
         assert_eq!(err.message(), deeper.message());
     }
 
@@ -677,10 +724,12 @@ mod tests {
         // names the immediate includer.
         let err = check_include_chain(&String::from("c.tex"), &trigger, key, Some(2))
             .unwrap_err();
+        assert_eq!(err.kind(), ResolveErrorKind::IncludeDepthExceeded);
         assert_eq!(err.reference(), "b.tex");
         // Its message differs from the cycle refusal's.
         let cycle =
             check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        assert_eq!(cycle.kind(), ResolveErrorKind::IncludeCycle);
         assert_ne!(err.message(), cycle.message());
     }
 

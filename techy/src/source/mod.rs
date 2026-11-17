@@ -77,7 +77,7 @@ pub use line_index::{LineColProvider, LineIndex, LineIndexCache};
 pub use origin::SourceOrigin;
 pub use resolver::{
     check_include_chain, resolve_source_reference, IntoSourceResolver, MapResolver,
-    ResolveError, ResolvedContent, SourceResolver,
+    ResolveError, ResolveErrorKind, ResolvedContent, SourceResolver,
 };
 pub use source::{
     IncludingSources, ProvenanceChain, Source, SourcePos, SourceProvenance, SourceSpan,

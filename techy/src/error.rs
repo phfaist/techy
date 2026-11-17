@@ -414,9 +414,9 @@ impl ToDiagnosticValue for DiagnosticValue {
     }
 }
 
-/// Projects as a map of the failed `reference`, the `message`, and a `cause_chain`
-/// list: the `Display` of each [`Error::source`](core::error::Error::source) hop,
-/// outermost first.
+/// Projects as a map of the failed `reference`, the `message`, the `kind` in kebab
+/// case, and a `cause_chain` list: the `Display` of each
+/// [`Error::source`](core::error::Error::source) hop, outermost first.
 ///
 /// This is the serialization face of the payload of the
 /// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
@@ -431,9 +431,16 @@ impl ToDiagnosticValue for crate::source::ResolveError {
             chain.push(DiagnosticValue::Str(error.to_string()));
             cause = error.source();
         }
+        let kind = match self.kind() {
+            crate::source::ResolveErrorKind::Other => "other",
+            crate::source::ResolveErrorKind::NotFound => "not-found",
+            crate::source::ResolveErrorKind::IncludeCycle => "include-cycle",
+            crate::source::ResolveErrorKind::IncludeDepthExceeded => "include-depth-exceeded",
+        };
         DiagnosticValue::Map(alloc::vec![
             ("reference".to_string(), DiagnosticValue::Str(self.reference().to_string())),
             ("message".to_string(), DiagnosticValue::Str(self.message().to_string())),
+            ("kind".to_string(), DiagnosticValue::Str(kind.to_string())),
             ("cause_chain".to_string(), DiagnosticValue::List(chain)),
         ])
     }
