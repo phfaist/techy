@@ -749,7 +749,13 @@ pub enum DeserializeError {
         /// The writer-side table identifier.
         table: TableId,
     },
-    /// Absorbing the segment would give the table `table` more than `u32::MAX` entries.
+    /// The entries of the segment do not fit into the table `table`: together with the
+    /// entries that the table already has, they exceed `u32::MAX` entries, the maximum
+    /// size of a table.
+    ///
+    /// Interning an object into a table has the same bound
+    /// ([`SerializeError::TableFull`]), so a reader accepts every table that a writer can
+    /// fill.
     TableFull {
         /// The name of the table.
         table: &'static str,
@@ -1060,8 +1066,8 @@ impl fmt::Display for DeserializeError {
             ),
             DeserializeError::TableFull { table } => write!(
                 f,
-                "Table ‘{table}’ is full: absorbing the segment would exceed \
-                 u32::MAX entries"
+                "Segment exceeds the capacity of table ‘{table}’ \
+                 (u32::MAX entries)"
             ),
             DeserializeError::Internal { detail } => {
                 write!(f, "Internal error in the serialization session (a bug in techy): {detail}")

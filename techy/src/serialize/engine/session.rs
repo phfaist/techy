@@ -262,10 +262,12 @@ fn address<T: ?Sized>(object: &Arc<T>) -> usize {
     Arc::as_ptr(object) as *const () as usize
 }
 
-/// The number of entries of a table of `len` entries once `appended` more are added,
-/// or `None` if that number exceeds the bound of a table, `u32::MAX` entries. Writing
-/// (interning) and reading (absorbing a segment) both check their appends here, so a
-/// table that a writer fills is one that a reader accepts.
+/// Returns the number of entries that a table of `len` entries has after `appended`
+/// entries are added to it, or `None` if this number exceeds `u32::MAX`, the maximum
+/// number of entries of a table.
+///
+/// Interning an object and absorbing a segment both check the size of the table with
+/// this function, so that a reader accepts every table that a writer can fill.
 pub(super) fn table_len_after(len: usize, appended: usize) -> Option<u32> {
     let len = u32::try_from(len).ok()?;
     let appended = u32::try_from(appended).ok()?;
