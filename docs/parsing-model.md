@@ -260,9 +260,17 @@ than the strict/tolerant pair (per-condition decisions, budgets).
 a library contract — a custom parser stages children the builder rejects, a
 hook breaks its purity obligation — that is not a source-input problem, and
 it deliberately bypasses `recover` and the recovery policy:
+[`ParseContext::implementation_error_with_kind`](crate::core::constructs::ParseContext::implementation_error_with_kind)
+returns an [`ImplementationError`](crate::core::constructs::ImplementationError)
+that stops the parse under every recovery policy. Its kind is the variant of
+[`ImplementationErrorKind`](crate::core::constructs::ImplementationErrorKind)
+that describes the violated requirement, for instance `NodeBuildFailed` for
+staged children that the builder rejects. When no variant describes the
+requirement,
 [`ParseContext::implementation_error`](crate::core::constructs::ParseContext::implementation_error)
-builds an [`ImplementationError`](crate::core::constructs::ImplementationError)
-abort that no recovery policy can absorb. A bug in extension code fails
+returns the same error with the kind `Other`
+([Custom construct parsers](crate::guide::construct_parsers#raising-conditions)
+has the details). A bug in extension code fails
 loudly even in tolerant parsing. The split is three-way:
 `ImplementationError` for contract violations,
 [`HookFailed`](crate::error::HookFailed) for operational failures in
