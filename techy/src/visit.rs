@@ -802,11 +802,9 @@ mod tests {
             .unwrap_err();
         // The refusal is the depth limit's own: the one a guard with that limit gives.
         let mut guard = StdDescentGuard::init(&StdDescentGuardInit::depth_limit(2));
-        let refusal = loop {
-            if let Err(refusal) = guard.try_enter() {
-                break refusal;
-            }
-        };
+        let refusal = (0..16)
+            .find_map(|_| guard.try_enter().err())
+            .expect("a depth limit of 2 refuses within 16 descents");
         let WalkError::DescentLimitExceeded { detail, limit } = error;
         assert_eq!(detail, refusal.detail);
         assert_eq!(limit, DescentLimit::Depth { levels: 2 });

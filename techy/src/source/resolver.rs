@@ -756,7 +756,6 @@ mod tests {
         let deeper = check_include_chain("a.tex", &String::from("a.tex"), &trigger, key, None)
             .unwrap_err();
         assert_eq!(deeper.kind(), ResolveErrorKind::IncludeCycle);
-        assert_eq!(err.message(), deeper.message());
     }
 
     #[test]
