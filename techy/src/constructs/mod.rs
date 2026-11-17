@@ -1591,16 +1591,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Builds the abort error for an extension-implementation contract violation
-    /// detected at `span`: an [`ImplementationError`] with the live traceback
-    /// attached.
+    /// Same as
+    /// [`implementation_error_with_kind`](ParseContext::implementation_error_with_kind),
+    /// with the kind [`Other`](ImplementationErrorKind::Other).
     ///
-    /// `detail` is typically a [`NodeBuildError`](crate::core::node::NodeBuildError) or a
-    /// literal description of the contract that was violated.
-    ///
-    /// Deliberately **not** the recovery entry point: an implementation bug is not a source
-    /// condition — it aborts even under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant), and no
-    /// [`ParseDriver::refine_diagnostic`] pass applies.
+    /// Use this method when no other variant of [`ImplementationErrorKind`] describes the
+    /// violated requirement, for instance when you report an error of another type as an
+    /// implementation error.
     pub fn implementation_error(
         &self,
         detail: impl fmt::Display,
@@ -1609,8 +1606,21 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.implementation_error_with_kind(ImplementationErrorKind::Other, detail, span)
     }
 
-    /// Builds the abort error of [`implementation_error`](ParseContext::implementation_error)
-    /// with the given [`ImplementationErrorKind`].
+    /// Returns the error that stops the parse when code that extends the parser violates
+    /// a requirement of the library. The error is an [`ImplementationError`] with the
+    /// given `kind` and `detail`, located at `span`, and it contains the current
+    /// traceback.
+    ///
+    /// A construct parser returns this error when it detects a fault in the language or
+    /// the program built on techy, for instance a misconfigured argument parser or a
+    /// token reader that breaks the [`TokenReader`](crate::core::token::TokenReader)
+    /// contract. Write `detail` as the documentation of
+    /// [`ImplementationError::detail`] describes.
+    ///
+    /// The parse stops with this error under every recovery policy, including
+    /// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant), and
+    /// [`ParseDriver::refine_diagnostic`] is not applied to it. Report a problem in the
+    /// parsed document with [`recover`](ParseContext::recover) instead.
     pub fn implementation_error_with_kind(
         &self,
         kind: ImplementationErrorKind,
@@ -1621,16 +1631,17 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             .with_frames(self.session.snapshot_frames())
     }
 
-    /// Build the abort error for a failed staging call — the in-crate lift of a
-    /// [`NodeBuildError`](crate::core::node::NodeBuildError) detected at `span`, applying
-    /// the condition split stated on [`stage_node`](ParseContext::stage_node): the
-    /// ext mint's own reported failure
-    /// ([`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed)) becomes a
-    /// [`HookFailed`] condition carrying the mint's `detail` — an operational
-    /// failure in consumer-supplied hook code, not a contract violation — and every
-    /// other variant goes through
-    /// [`implementation_error`](ParseContext::implementation_error). Both arms
-    /// attach the live traceback and abort under any recovery policy.
+    /// Returns the error that stops the parse after a staging call failed with `error`,
+    /// located at `span`, as [`stage_node`](ParseContext::stage_node) documents it.
+    ///
+    /// - [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed) becomes a
+    ///   [`HookFailed`] error with the detail that [`Lang::make_node_ext`] reported. This
+    ///   failure occurred in the hook code and does not violate a requirement.
+    /// - Every other variant becomes an [`ImplementationError`] of the kind
+    ///   [`NodeBuildFailed`](ImplementationErrorKind::NodeBuildFailed).
+    ///
+    /// Both errors contain the current traceback, and the parse stops with them under
+    /// every recovery policy.
     pub(crate) fn staging_error(
         &self,
         error: NodeBuildError,
@@ -1730,8 +1741,16 @@ impl core::error::Error for PlainCharsError {
 /// [`ParseDriver`], or a spec factory. A document cannot cause this error: it is caused
 /// by a fault in that code.
 ///
-/// Construct parsers report this error with [`ParseContext::implementation_error`]. The
-/// parse stops with this error under every recovery policy, including
+/// The error describes the violated requirement in two ways. Its field
+/// [`kind`](ImplementationError::kind) is one of the cases of
+/// [`ImplementationErrorKind`], and its field [`detail`](ImplementationError::detail)
+/// describes the requirement and the faulty code in words.
+///
+/// Construct parsers report this error with
+/// [`ParseContext::implementation_error_with_kind`], or with
+/// [`ParseContext::implementation_error`] when no kind other than
+/// [`Other`](ImplementationErrorKind::Other) applies. The parse stops with this error
+/// under every recovery policy, including
 /// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -1749,18 +1768,28 @@ pub struct ImplementationError {
     /// the nodes parser from ‘ParseDriver::make_nodes_parser’: a nodes parser must return
     /// no state delta`.
     pub detail: String,
-    /// The requirement that the faulty code violated.
+    /// The requirement that the faulty code violated, as one of the cases of
+    /// [`ImplementationErrorKind`].
+    ///
+    /// The message does not contain the kind. In the data of the diagnostic, the key
+    /// `kind` contains the name of the variant in kebab case, for instance
+    /// `misconfigured-parser`. A program or a tool can use the kind to group the reports
+    /// of one fault.
     pub kind: ImplementationErrorKind,
 }
 
 impl ImplementationError {
-    /// Creates the error with the given detail and the kind
+    /// Creates an implementation error with the given detail and the kind
     /// [`Other`](ImplementationErrorKind::Other).
+    ///
+    /// To set another kind, call [`with_kind`](ImplementationError::with_kind) on the
+    /// result.
     pub fn new(detail: impl Into<String>) -> ImplementationError {
         ImplementationError { detail: detail.into(), kind: ImplementationErrorKind::Other }
     }
 
-    /// Returns the error with its kind set to `kind`.
+    /// Returns this error with its kind set to `kind`, as in
+    /// `ImplementationError::new(detail).with_kind(ImplementationErrorKind::InvalidPosition)`.
     pub fn with_kind(self, kind: ImplementationErrorKind) -> ImplementationError {
         ImplementationError { kind, ..self }
     }
@@ -1768,33 +1797,89 @@ impl ImplementationError {
 
 /// The requirement that code extending the parser violated, in an
 /// [`ImplementationError`].
+///
+/// Each variant other than [`Other`](ImplementationErrorKind::Other) stands for one
+/// requirement that techy checks during a parse. When a check fails, techy reports an
+/// [`ImplementationError`] with the variant of that requirement. A construct parser
+/// can set a variant with [`ParseContext::implementation_error_with_kind`].
+///
+/// Every kind is a fault in the language or the program built on techy, and the parse
+/// stops with the error under every kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum ImplementationErrorKind {
-    /// A requirement that no other variant names.
+    /// A requirement that no other variant describes.
+    ///
+    /// [`ImplementationError::new`] and [`ParseContext::implementation_error`] set this
+    /// kind. The library also uses it when it reports an error of another type as an
+    /// implementation error, for instance a
+    /// [`PlainCharsError::MalformedRecord`] error.
     Other,
     /// A parser or a spec is configured with values that its documentation excludes.
+    ///
+    /// For instance, a
+    /// [`GroupArgumentParser`](crate::core::constructs::GroupArgumentParser) must be
+    /// given at least one group rule.
     MisconfiguredParser,
     /// A parser that a hook created returns a state delta to a caller that accepts none.
+    ///
+    /// For instance, the nodes parser that [`ParseDriver::make_nodes_parser`] creates for
+    /// the content of a group must return no state delta.
     UnexpectedStateDelta,
     /// A nodes parser returns a stop cause that its stop specification excludes.
+    ///
+    /// For instance, a nodes parser may return
+    /// [`StopCause::NodeCondition`](crate::core::constructs::StopCause::NodeCondition)
+    /// only if its stop specification sets a node condition.
     InvalidStopCause,
-    /// The token reader returns a token that the features of the language or the parsing
-    /// state exclude.
+    /// The token reader returns a token that the language or the parsing state excludes.
+    ///
+    /// A token reader returns tokens only of the features that the language declares
+    /// present in [`Lang::Features`] (clause 5 of the
+    /// [`TokenReader`](crate::core::token::TokenReader) contract). Under the parsing
+    /// state of a verbatim parser, it returns only characters, the closing delimiter and
+    /// the end of the input.
     UnexpectedToken,
     /// The stream position does not advance past a token.
+    ///
+    /// Every token other than `EndOfStream` must advance the stream position (clause 9
+    /// of the [`TokenReader`](crate::core::token::TokenReader) contract).
     StalledTokenReader,
-    /// A second read of one position gives another answer, or a failed read moves the
-    /// token reader.
+    /// The token reader returns different results for two reads of one position, or
+    /// moves the stream position during a failed read.
+    ///
+    /// A second peek at the same stream position under the same parsing state must
+    /// return the same token (clause 1 of the
+    /// [`TokenReader`](crate::core::token::TokenReader) contract), and a failed read
+    /// must consume no input.
     InconsistentTokenReader,
-    /// A token does not begin at the position of its peek.
+    /// A token does not begin at the stream position where it was peeked.
+    ///
+    /// A peeked token, including its pre-space, begins at the position of the peek.
+    /// Therefore the token that follows another token begins where the other token ends
+    /// (clauses 2 and 7 of the [`TokenReader`](crate::core::token::TokenReader)
+    /// contract). The nodes parser checks this for each token that it adds to a run of
+    /// characters.
     TokenPositionMismatch,
-    /// Two stream positions do not delimit one range of one source.
+    /// Two stream positions do not delimit a range of one source, in reading order.
+    ///
+    /// In a language that declares [`Lang::OBEYS_SPAN_TILING`] `= true`, the token reader
+    /// reads one source in reading order and without gaps (clause 8 of the
+    /// [`TokenReader`](crate::core::token::TokenReader) contract).
+    /// [`ParseContext::source_span_within`] reports this kind when the end it is given
+    /// precedes the beginning, or when the two positions lie in different sources.
     IncoherentPositions,
-    /// A position or a span lies outside the content, off a character boundary, or ends
-    /// before it starts.
+    /// A position or a span lies outside the content, is not on a character boundary, or
+    /// ends before it starts.
+    ///
+    /// For instance, the end of a match that [`Lang::scan_specials`] returns must lie
+    /// after the scan position, within the content, and on a character boundary.
     InvalidPosition,
-    /// The node builder rejects staged nodes.
+    /// The node builder rejects the nodes that a parser staged.
+    ///
+    /// The detail of the error contains the
+    /// [`NodeBuildError`](crate::core::node::NodeBuildError) that the node builder
+    /// returned.
     NodeBuildFailed,
 }
 
