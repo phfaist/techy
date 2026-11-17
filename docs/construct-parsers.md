@@ -384,6 +384,11 @@ builds an [`ImplementationError`](crate::core::constructs::ImplementationError)
 abort that ignores the recovery policy. Use it for "this cannot happen
 unless a contract was broken" paths — for example, a
 [`NodeBuildError`](crate::core::node::NodeBuildError) from a staging call.
+When one of the cases of
+[`ImplementationErrorKind`](crate::core::constructs::ImplementationErrorKind)
+describes the violated requirement, pass this case to
+[`cx.implementation_error_with_kind(kind, detail, span)`](crate::core::constructs::ParseContext::implementation_error_with_kind),
+as the example below does.
 The full split is three-way: `ImplementationError` for contract violations
 (loud even in tolerant parsing), [`HookFailed`](crate::error::HookFailed)
 for operational failures in consumer-supplied hook code (an input/output
@@ -411,8 +416,8 @@ the terminator as a single `GroupClose` token.
 use std::sync::Arc;
 
 use techy::core::constructs::{
-    verbatim_state_delta, ConstructParser, ConstructParserResult, Invocation,
-    ParseContext,
+    verbatim_state_delta, ConstructParser, ConstructParserResult,
+    ImplementationErrorKind, Invocation, ParseContext,
 };
 use techy::core::node::{
     BodySlotExt, BuildId, ChildRegion, ContentNodes, NodeKind, ParsedArguments,
@@ -524,8 +529,9 @@ impl ConstructParser<Latexlike> for UntilParser<'_> {
                 }
                 other => {
                     let at = cx.tokens.source_span_of(&token);
-                    return Err(cx.implementation_error(
-                        format!("unexpected {other} token under the raw state"),
+                    return Err(cx.implementation_error_with_kind(
+                        ImplementationErrorKind::UnexpectedToken,
+                        format!("Unexpected {other} token under the raw state"),
                         at,
                     ))
                 }
@@ -546,7 +552,13 @@ impl ConstructParser<Latexlike> for UntilParser<'_> {
                     Arc::clone(&raw),
                     Vec::new(),
                 )
-                .map_err(|error| cx.implementation_error(error, content))?;
+                .map_err(|error| {
+                    cx.implementation_error_with_kind(
+                        ImplementationErrorKind::NodeBuildFailed,
+                        error,
+                        content,
+                    )
+                })?;
             children.push(id);
         }
         // …recorded as the invocation's one content slot (a callable's
