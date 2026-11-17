@@ -74,8 +74,7 @@ prompts do not carry rulings: every agent reads this section.
 - **S2. Tests never pin wording.** No test compares a text that library code produces
   with a fixed expected text. A test checks the identifier or the type of a condition,
   its fields, span, severity and frames, the number and order of diagnostics, the node
-  tree. A comparison of two library outputs with each other pins no wording. A number
-  that a text renders may be extracted and compared (decision T1 rules on this).
+  tree. A comparison of two library outputs with each other pins no wording.
 - **S3. Every agent runs on Opus.** The workflow sets the model of every agent.
 - **S4. No design decision by an agent.** An agent that meets a design question (a change
   of behavior or of the public API beyond its decision, a name, a new field, variant,
@@ -118,7 +117,7 @@ Facts that hold for every decision of this group:
 
 #### F1. `ImplementationErrorKind` on `ImplementationError`
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "For F1, add the full variant list."
 
 - **Context.** `ImplementationError` (`techy/src/constructs/mod.rs:1722`) has one field,
   `detail: String`. About 45 places in library code construct it, through
@@ -180,7 +179,7 @@ and `span_tiling_tests.rs:715` (`TokenPositionMismatch`), `span_tiling_tests.rs:
 
 #### F2. `DescentLimit` on the refusals and warnings of the descent guard
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** `DescentRefusal` and `DescentWarning`
   (`techy/src/engine/descent_guard.rs:113`, `:132`) hold only `detail: String`. The guard
@@ -238,7 +237,7 @@ Tests that regain a distinction: all eight named above.
 
 #### F3. `ResolveErrorKind` on `ResolveError`
 
-Status: PROPOSED.
+Status: DECIDED, option (b). Philippe: "F3 with NotFound as well."
 
 - **Context.** `ResolveError` (`techy/src/source/resolver.rs:358`) has a reference, a
   message and an optional cause. `check_include_chain` (`:241`) returns it for two cases
@@ -258,23 +257,28 @@ Status: PROPOSED.
 - **Breaking.** No. The fields of `ResolveError` are private. The serialized map of a
   `ResolveError` gains the key `kind`.
 
-Shape of option (a):
+Shape of option (b), as ruled:
 
-- `pub enum ResolveErrorKind { Other, IncludeCycle, IncludeDepthExceeded }` in
+- `pub enum ResolveErrorKind { Other, NotFound, IncludeCycle, IncludeDepthExceeded }` in
   `techy/src/source/resolver.rs`, exported from `techy::source`; `Copy`,
   `#[non_exhaustive]`.
 - `ResolveError::kind(&self) -> ResolveErrorKind` and `with_kind(self, kind) -> Self`.
   `new` sets `Other`.
-- `check_include_chain` sets the two kinds.
+- `check_include_chain` sets `IncludeCycle` and `IncludeDepthExceeded`.
+- `NotFound` states that the resolver has no source for the reference.
+  `MapResolver::resolve` sets it (`resolver.rs:469`). No other place of library code sets
+  it; the resolver example of `docs/specs.md` keeps `new`.
 - The projection in `techy/src/error.rs:426` adds `kind` after `message`, in kebab case
-  (`other`, `include-cycle`, `include-depth-exceeded`). It is written there by hand,
-  because the source module may not depend on the error module.
+  (`other`, `not-found`, `include-cycle`, `include-depth-exceeded`). It is written there
+  by hand, because the source module may not depend on the error module.
 
-Tests that regain a distinction: the four named above check `kind()`.
+Tests that regain a distinction: the four named above check `kind()`. The existing test
+`map_resolver_fails_on_unknown_reference` (`resolver.rs:601`) gains one assertion on
+`NotFound`; no test is added for it.
 
 #### F4. Structured hint on `UnresolvableCommand`
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** `UnresolvableCommand.detail` (`techy/src/constructs/nodes_parser.rs:88`) is
   composed in `engine/driver.rs:1144-1150` from the searched providers and the
@@ -302,7 +306,7 @@ No unit of this build executes option (b): it needs its own plan.
 
 #### F5. A condition `InvalidSpecialsScanPosition`
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** `Package::scan_specials` (`techy/src/scopes/mod.rs:1330-1358`) reports a
   position outside the content, or off a character boundary, as an `ImplementationError`.
@@ -316,7 +320,7 @@ Status: PROPOSED.
 
 #### F6. `DeserializeError::AnnotationTypeMismatch`
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** `tree_of_object` (`techy/src/serialize/drivers/tree.rs:614-637`) returns
   `DeserializeError::Failed` with a free text when a tree is read as a tree of another
@@ -339,7 +343,7 @@ is the Rust type name. It replaces the `Failed` of `tree.rs:633`.
 
 #### F7. Other variants for deserialization and the tree driver
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** The read side of the tree driver reports about fifteen malformed-data cases
   as `DeserializeError::Failed` with a free text (`serialize/drivers/tree.rs:371-1132`),
@@ -366,7 +370,7 @@ Status: PROPOSED.
 
 #### F8. Rejection reasons of the derives
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** The tests of `techy-derive` check that both derives reject a faulty input
   and accept the corrected one. A compile error text is the only output of a proc macro.
@@ -376,7 +380,7 @@ Status: PROPOSED.
 
 #### F9. The event of a `FinalizeError`
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Context.** The preset has one event (`ExitMathContext`), so naming the event
   distinguishes nothing today.
@@ -388,7 +392,7 @@ Status: PROPOSED.
 
 #### B1. `TableFull`: the two bounds differ by one
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Evidence.** Confirmed by reading. The write side refuses position `u32::MAX`
   (`techy/src/serialize/engine/session.rs:544-547`), so a table holds at most `u32::MAX`
@@ -408,7 +412,7 @@ Status: PROPOSED.
 
 #### B2. `check_include_chain`: the depth error names the including source
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Evidence.** Confirmed by a test that was run and removed. For `c.tex` included from
   `b.tex` beyond the depth limit, the error displays as `Failed to resolve source reference
@@ -428,7 +432,7 @@ Status: PROPOSED.
 
 #### B3. `ContentParentDropped`: an arm maps to `Some(1)` and cannot be reached
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Evidence.** Confirmed by reading. `restage_over`
   (`techy/src/transform/context.rs:877-887`) maps a content parent recorded as `Restaged`
@@ -446,7 +450,7 @@ Status: PROPOSED.
 
 #### B4. A placeholder `Command` token is reported as an unknown command
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Evidence.** Confirmed by a test that was run and removed. A custom token reader that
   recovers with a placeholder `Command` token gets `core.specs.unresolvable-command`,
@@ -465,7 +469,7 @@ Status: PROPOSED.
 
 #### B5. `builder_failure`: the fallback to a builder id
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Evidence.** `techy/src/serialize/drivers/tree.rs:931-934`. Every id that the reader
   hands to the builder comes from its own staging map, so the fallback is not reached
@@ -476,7 +480,7 @@ Status: PROPOSED.
 
 #### B6. `MissingTerminatorFound::UnreadableToken` in `MissingArgumentTerminator`
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Evidence.** The terminated parser constructs only `EndOfInput` and `StrayGroupClose`
   (`techy/src/constructs/terminated_parser.rs:568`, `:581`); only the verbatim body parser
@@ -501,28 +505,41 @@ add": most reported gaps concern how a text presents data that a test already ch
 
 #### T1. The 1-based numbering of arguments in frame titles
 
-Status: PROPOSED.
+Status: DECIDED, option (a), as the single exception that the ruling below states.
 
 - **Gap.** Reported by the reviewers of two test units. Two places render the index of an
   argument as a number from 1 in a frame title: `techy/src/spec/callable.rs:210` (the
   default title) and `latexlike/spec.rs:44` (the preset titles). The message build removed
   the assertions on these texts. A change from `index + 1` to `index` now passes every
   test.
-- **Is the number data?** `FrameRole::Argument { index }` is data
+- **Where the number is.** `FrameRole::Argument { index }` is data
   (`spec/callable.rs:30-39`), and its documentation states "rendered 1-based". A recorded
   `TraceFrame` holds only the rendered title (`error.rs:482`): the number in the title is
   the only way a reader, or a tool that reads serialized frames, learns which argument
-  the frame concerns. A test can check it without comparing words: it extracts the
-  decimal numbers from the title and compares them with `index + 1`. The message build
-  did the same for the closing line of a report.
+  the frame concerns.
 - **Purpose of the check.** A frame title numbers an argument from 1, as `FrameRole`
   documents.
 - **Options.** (a) Two assertions in existing tests, no new test: in
   `latexlike/spec.rs:447`, the number in each argument title is `index + 1` (indices 0
   and 1); in `constructs/argument_parsers.rs:2603`, the innermost frame of the missing
-  second argument carries the number 2. (b) No check.
-- **Recommendation.** (a). With it, Philippe confirms that a number that a text renders
-  counts as data, not as wording.
+  second argument carries the number 2. Each assertion reads the decimal number out of
+  the title. (b) No check.
+- **Recommendation.** (a).
+- **Ruling.** Philippe: "T1: okay, read the number in the error message. This is a single,
+  rare, user-approved exception from which you are not allowed to derive any general
+  rule. Document this exception at the test location and do not mention it anywhere
+  else." What follows from it:
+  - The two assertions of option (a) are the whole exception. S2 holds unchanged
+    everywhere else. No agent reads a number, or any other part, out of a library text in
+    another test on the strength of this ruling.
+  - Each of the two assertions reads the number where it stands; no shared helper is
+    written. Each carries a short comment that states three things: the number is read
+    from the rendered title; a recorded frame holds the number nowhere else; this is a
+    single exception approved by the maintainer, not a pattern for other tests.
+  - Nothing else mentions the exception: no rustdoc, no guide, no entry and no sentence
+    in `dev-docs/` outside this plan (the records step leaves T1 out). A commit message
+    describes the assertion and states no rule. The handover lists T1 by its id and
+    status only.
 - **Not included.** Four serialization texts also number arguments from 1
   (`serialize/error.rs:331`, `:888`, `:895`, `serialize/drivers/tree.rs:1035`). No check:
   these errors carry the index as a field, which tests check; the number in the message
@@ -531,7 +548,7 @@ Status: PROPOSED.
 
 #### T2. The preset frame terms
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "Accept all your recommendations, including the breaking changes F2 and B2."
 
 - **Gap.** Reported by the reviewer of the preset tests. The words "macro", "environment"
   and "specials" in the preset frame titles are fixed by recorded decisions (S5), and no
@@ -548,7 +565,7 @@ Status: PROPOSED.
 
 #### T3. The other reported gaps
 
-Status: PROPOSED.
+Status: DECIDED, option (a). Philippe: "T3: keep no." (row 14 gets no test).
 
 Philippe may change a verdict in his ruling.
 
@@ -585,7 +602,19 @@ Two existing tests get a correction. Neither adds a test.
 
 ### Amendments
 
-None.
+- **2026-11-17.** Philippe, on the decisions of this section:
+
+  > * Accept all your recommendations, including the breaking changes F2 and B2. For F1, add the full variant list.
+  > * T1: okay, read the number in the error message. This is a single, rare, user-approved exception from which you are not allowed to derive any general rule. Document this exception at the test location and do not mention it anywhere else.
+  > * F3 with NotFound as well.
+  > * T3: keep no.
+
+  Every decision is `DECIDED` with the option that its `Status:` line names: the
+  recommended option everywhere, except F3, which takes option (b). The names that the
+  decisions propose are accepted as written, and so is the record label
+  `[§dd-dr:error-source-fields]`. F2 covers all seven carriers. "T3: keep no" confirms
+  row 14 of T3: no test for `replaced_by: None`. The ruling of T1 states what follows
+  from Philippe's words on T1.
 
 ## 3. Facts
 
@@ -684,8 +713,9 @@ no test.
 
 For the unit TS:
 
-- T1, option (a): a test helper that extracts the decimal numbers of a text, and the two
-  assertions that the decision names. The name used in a title contains no digit.
+- T1: the two assertions that the decision names, written as its ruling states (the
+  number read in place, the comment at each assertion, no mention elsewhere). The name
+  used in a title contains no digit.
 - T2: nothing under option (a).
 - T3, option (a): the two corrections. If an earlier unit already rewrote one of the two
   tests, the correction is adapted to the present code or reported as done.
@@ -702,7 +732,8 @@ One implementer, then one reviewer and one fixer if needed.
    the source of an error from structure and is useful beyond tests), each field and
    variant that was added with its purpose, and each proposal that Philippe declined with
    its reason. It quotes Philippe's rulings from section 2 exactly. It does not refer to
-   this plan or to the build.
+   this plan or to the build. It does not mention decision T1 or its exception (the
+   ruling of T1).
 2. A reference to the entry in `dev-docs/ARCHITECTURE.md`, in the line that lists the
    decisions behind the diagnostics section, and a mention of each new field where
    ARCHITECTURE describes its type.
@@ -736,7 +767,8 @@ one fixer; the set runs again once.
 ### 4.5 Handover
 
 `dev-docs/msgbuild-followup/handover.md`, at most about 150 lines, committed. Sections, in
-this order: State (branch, start commit, last commit); Decisions and their status; Commits
+this order: State (branch, start commit, last commit); Decisions and their status (T1 by
+its id and status only, by its ruling); Commits
 per unit; What was done (one line per unit); Changes of the public API, with the breaking
 ones marked; Changes of serialized data; Checks (results, what did not run, preexisting
 failures); Open points for Philippe (design questions of the agents, findings that no
