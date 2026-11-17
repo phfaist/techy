@@ -102,7 +102,9 @@ use alloc::vec::Vec;
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
+use crate::engine::{
+    DescentLimit, Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError,
+};
 use crate::error::{
     Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity,
     ToDiagnosticValue,
@@ -1048,14 +1050,14 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                 let frames = self.session.snapshot_frames();
                 self.session.diagnostics.push(Diagnostic::from_parts(
                     Severity::Warning,
-                    Box::new(DescentLimitApproaching::new(warning.detail)),
+                    Box::new(DescentLimitApproaching::new(warning.detail, warning.limit)),
                     span,
                     frames,
                 ));
             }
             Err(refusal) => {
                 let error = ParseError::new(
-                    DescentLimitExceeded::new(refusal.detail),
+                    DescentLimitExceeded::new(refusal.detail, refusal.limit),
                     self.here(),
                 )
                 .with_frames(self.session.snapshot_frames());
@@ -1935,6 +1937,9 @@ pub struct DescentLimitExceeded {
     /// The description of the limit that was reached, from
     /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail).
     pub detail: String,
+    /// The limit that was reached, from
+    /// [`DescentRefusal::limit`](crate::core::DescentRefusal::limit).
+    pub limit: DescentLimit,
 }
 
 /// The warning that is reported when the input nests close to the limit of the
@@ -1960,6 +1965,9 @@ pub struct DescentLimitApproaching {
     /// The description of the limit and of how far the parse has come, from
     /// [`DescentWarning::detail`](crate::core::DescentWarning::detail).
     pub detail: String,
+    /// The limit that the parse comes close to, from
+    /// [`DescentWarning::limit`](crate::core::DescentWarning::limit).
+    pub limit: DescentLimit,
 }
 
 impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {

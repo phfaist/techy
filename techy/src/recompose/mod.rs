@@ -189,7 +189,7 @@ use core::fmt;
 use alloc::boxed::Box;
 use alloc::string::String;
 
-use crate::engine::DescentWarning;
+use crate::engine::{DescentLimit, DescentWarning};
 use crate::node::{NodeId, NodeKind, NodeRef};
 use crate::state::Lang;
 
@@ -570,6 +570,9 @@ pub enum RecomposeError<E> {
         /// The description of the limit that was reached, as a complete message (see
         /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail)).
         detail: String,
+        /// The limit that was reached (see
+        /// [`DescentRefusal::limit`](crate::core::DescentRefusal::limit)).
+        limit: DescentLimit,
     },
 }
 
@@ -610,7 +613,7 @@ impl<E: fmt::Display> fmt::Display for RecomposeError<E> {
             RecomposeError::NoBodySlot { node } => {
                 write!(f, "Missing body slot in callable node {}", node.index())
             }
-            RecomposeError::DescentLimitExceeded { detail } => {
+            RecomposeError::DescentLimitExceeded { detail, .. } => {
                 write!(f, "Tree nested too deeply: {}", detail)
             }
         }

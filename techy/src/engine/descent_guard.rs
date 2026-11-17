@@ -45,7 +45,10 @@
 //! offered for now.
 
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec;
+
+use crate::error::{DiagnosticValue, ToDiagnosticValue};
 
 /// Caps recursion depth: asked before every descent whether the run may go one level
 /// deeper.
@@ -118,6 +121,8 @@ pub struct DescentRefusal {
     /// contains the fix: a call of a `with_descent_guard_init` method that configures
     /// the limit.
     pub detail: String,
+    /// The limit that refused the descent, with its value.
+    pub limit: DescentLimit,
 }
 
 /// The warning that [`DescentGuard::try_enter`] returns when a guarded run (a parse, a
@@ -134,6 +139,52 @@ pub struct DescentWarning {
     /// that begins with a capital letter. The description also contains the fix: a call
     /// of a `with_descent_guard_init` method that configures the limit.
     pub detail: String,
+    /// The limit that the run comes close to, with its value.
+    pub limit: DescentLimit,
+}
+
+/// The limit of a [`StdDescentGuard`] that refused a descent or that a run comes close
+/// to, with its value: the field `limit` of [`DescentRefusal`] and [`DescentWarning`].
+///
+/// A program can act on it: configure a limit when the built-in default applies,
+/// report the depth in its own words, or run again with more stack.
+///
+/// As diagnostic data, the limit is a map with the key `kind`
+/// (`default-stack-budget`, `stack-budget` or `depth`) and the key `bytes` or `levels`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DescentLimit {
+    /// The built-in default stack budget: the program configured no limit.
+    DefaultStackBudget {
+        /// The budget in bytes.
+        bytes: usize,
+    },
+    /// A stack budget that the program configured (fixed or computed).
+    StackBudget {
+        /// The budget in bytes.
+        bytes: usize,
+    },
+    /// A depth limit that the program configured.
+    Depth {
+        /// The number of levels that may be open at the same time.
+        levels: usize,
+    },
+}
+
+/// Projects as a map of the `kind` of the limit (`default-stack-budget`,
+/// `stack-budget` or `depth`) and its value (`bytes` or `levels`).
+impl ToDiagnosticValue for DescentLimit {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        let (kind, key, value) = match *self {
+            DescentLimit::DefaultStackBudget { bytes } => ("default-stack-budget", "bytes", bytes),
+            DescentLimit::StackBudget { bytes } => ("stack-budget", "bytes", bytes),
+            DescentLimit::Depth { levels } => ("depth", "levels", levels),
+        };
+        DiagnosticValue::Map(vec![
+            ("kind".to_string(), DiagnosticValue::Str(kind.to_string())),
+            (key.to_string(), value.to_diagnostic_value()),
+        ])
+    }
 }
 
 /// How deeply a run may nest: the configuration of [`StdDescentGuard`].
@@ -393,6 +444,7 @@ impl DescentGuard for StdDescentGuard {
                 if *current >= *limit {
                     return Err(DescentRefusal {
                         detail: format!("Depth limit reached ({} levels)", limit),
+                        limit: DescentLimit::Depth { levels: *limit },
                     });
                 }
                 *current += 1;
@@ -401,6 +453,13 @@ impl DescentGuard for StdDescentGuard {
             GuardMode::Measured { anchor, budget } => {
                 let consumed = anchor.abs_diff(stack_position());
                 if consumed > *budget {
+                    let limit = if self.unconfigured {
+                        DescentLimit::DefaultStackBudget {
+                            bytes: StdDescentGuard::DEFAULT_STACK_BUDGET,
+                        }
+                    } else {
+                        DescentLimit::StackBudget { bytes: *budget }
+                    };
                     let detail = if self.unconfigured {
                         format!(
                             "Default stack budget exceeded (estimated stack use {} \
@@ -416,7 +475,7 @@ impl DescentGuard for StdDescentGuard {
                             consumed, budget
                         )
                     };
-                    return Err(DescentRefusal { detail });
+                    return Err(DescentRefusal { detail, limit });
                 }
                 // The one-time early warning: only under the unconfigured
                 // built-in default, latched at the first descent past half the
@@ -431,6 +490,9 @@ impl DescentGuard for StdDescentGuard {
                             StdDescentGuard::DEFAULT_STACK_BUDGET,
                             CONFIGURE_HINT
                         ),
+                        limit: DescentLimit::DefaultStackBudget {
+                            bytes: StdDescentGuard::DEFAULT_STACK_BUDGET,
+                        },
                     }));
                 }
                 Ok(None)
@@ -501,6 +563,9 @@ mod tests {
         assert!(guard.warned);
         assert!(granted < 200);
         assert!(!refusal.detail.is_empty());
+        let default =
+            DescentLimit::DefaultStackBudget { bytes: StdDescentGuard::DEFAULT_STACK_BUDGET };
+        assert_eq!(refusal.limit, default);
     }
 
     #[test]
@@ -515,6 +580,9 @@ mod tests {
         assert_eq!(warnings, 0, "the warning fires only under the unconfigured default");
         assert!(granted < 200);
         assert!(!refusal.detail.is_empty());
+        let configured =
+            DescentLimit::StackBudget { bytes: StdDescentGuard::DEFAULT_STACK_BUDGET };
+        assert_eq!(refusal.limit, configured);
     }
 
     #[test]
@@ -528,7 +596,8 @@ mod tests {
         assert_eq!(measured_budget(&guard), Some(1000), "the headroom-subtracted budget");
         assert!(!guard.unconfigured);
         let (mut granted, mut warnings) = (0, 0);
-        assert!(descend(&mut guard, 10, &mut granted, &mut warnings).is_err());
+        let refusal = descend(&mut guard, 10, &mut granted, &mut warnings).unwrap_err();
+        assert_eq!(refusal.limit, DescentLimit::StackBudget { bytes: 1000 });
         assert!(granted < 10);
         assert_eq!(warnings, 0);
     }
@@ -556,8 +625,12 @@ mod tests {
         assert_eq!(measured_budget(&guard), Some(StdDescentGuard::DEFAULT_STACK_BUDGET));
         assert!(!guard.unconfigured);
         let (mut granted, mut warnings) = (0, 0);
-        assert!(descend(&mut guard, 200, &mut granted, &mut warnings).is_err());
+        let refusal = descend(&mut guard, 200, &mut granted, &mut warnings).unwrap_err();
         assert_eq!(warnings, 0);
+        // The program configured a limit: the refusal names a configured stack budget.
+        let configured =
+            DescentLimit::StackBudget { bytes: StdDescentGuard::DEFAULT_STACK_BUDGET };
+        assert_eq!(refusal.limit, configured);
     }
 
     #[test]
@@ -571,6 +644,7 @@ mod tests {
         let refusal = descend(&mut guard, 4, &mut granted, &mut warnings).unwrap_err();
         assert_eq!(granted, 3, "the fourth level is the refused one");
         assert!(!refusal.detail.is_empty());
+        assert_eq!(refusal.limit, DescentLimit::Depth { levels: 3 });
         assert!(matches!(guard.mode, GuardMode::Depth { limit: 3, current: 0 }));
         // The unwound exits rebalanced the count: three levels pass again.
         let (mut granted, mut warnings) = (0, 0);
@@ -584,5 +658,27 @@ mod tests {
         let (mut granted, mut warnings) = (0, 0);
         assert!(descend(&mut guard, 64, &mut granted, &mut warnings).is_ok());
         assert_eq!((granted, warnings), (64, 0));
+    }
+
+    #[test]
+    fn a_descent_limit_projects_as_a_map_of_its_kind_and_value() {
+        let projection = |kind: &str, key: &str, value: i64| {
+            DiagnosticValue::Map(vec![
+                ("kind".to_string(), DiagnosticValue::Str(kind.to_string())),
+                (key.to_string(), DiagnosticValue::Int(value)),
+            ])
+        };
+        assert_eq!(
+            DescentLimit::DefaultStackBudget { bytes: 1024 }.to_diagnostic_value(),
+            projection("default-stack-budget", "bytes", 1024)
+        );
+        assert_eq!(
+            DescentLimit::StackBudget { bytes: 2048 }.to_diagnostic_value(),
+            projection("stack-budget", "bytes", 2048)
+        );
+        assert_eq!(
+            DescentLimit::Depth { levels: 40 }.to_diagnostic_value(),
+            projection("depth", "levels", 40)
+        );
     }
 }

@@ -1147,7 +1147,7 @@ fn content_swap_annotations_flow_explicitly() {
 
 #[test]
 fn a_depth_limit_refuses_the_restage_of_a_deeper_tree() {
-    use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
+    use crate::engine::{DescentGuard, DescentLimit, StdDescentGuard, StdDescentGuardInit};
 
     // `a{b}c` drives three levels deep (root list → group → chars).
     let input = parse("a{b}c");
@@ -1170,7 +1170,8 @@ fn a_depth_limit_refuses_the_restage_of_a_deeper_tree() {
     };
     assert!(matches!(
         &error,
-        RestageError::DescentLimitExceeded { detail } if *detail == refusal.detail
+        RestageError::DescentLimitExceeded { detail, limit }
+            if *detail == refusal.detail && *limit == DescentLimit::Depth { levels: 2 }
     ));
 
     // A limit the tree fits under restages it whole.
@@ -1229,13 +1230,24 @@ fn the_unconfigured_default_warns_the_visitor_once_then_refuses() {
             Ok(Restage::Descend(()))
         }
 
-        fn observe_descent_warning(&mut self, _warning: crate::engine::DescentWarning) {
+        fn observe_descent_warning(&mut self, warning: crate::engine::DescentWarning) {
+            // The warning names the limit that applies: the built-in default budget.
+            let default = crate::engine::DescentLimit::DefaultStackBudget {
+                bytes: crate::engine::StdDescentGuard::DEFAULT_STACK_BUDGET,
+            };
+            assert_eq!(warning.limit, default);
             self.warnings += 1;
         }
     }
 
     let mut meter = Meter::default();
     let error = TreeRestager::new(&mut meter).restage::<Latexlike, (), ()>(&deep).unwrap_err();
-    assert!(matches!(&error, RestageError::DescentLimitExceeded { .. }));
+    let default = crate::engine::DescentLimit::DefaultStackBudget {
+        bytes: crate::engine::StdDescentGuard::DEFAULT_STACK_BUDGET,
+    };
+    assert!(matches!(
+        &error,
+        RestageError::DescentLimitExceeded { limit, .. } if *limit == default
+    ));
     assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
 }

@@ -96,7 +96,9 @@ use core::ops::ControlFlow;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::engine::{DescentGuard, DescentWarning, StdDescentGuard, StdDescentGuardInit};
+use crate::engine::{
+    DescentGuard, DescentLimit, DescentWarning, StdDescentGuard, StdDescentGuardInit,
+};
 use crate::node::{NodeKind, NodeRef, NodeTree, SlotRole};
 use crate::state::Lang;
 
@@ -355,13 +357,16 @@ pub enum WalkError {
         /// The description of the limit that was reached, as a complete message (see
         /// [`DescentRefusal::detail`](crate::core::DescentRefusal::detail)).
         detail: String,
+        /// The limit that was reached (see
+        /// [`DescentRefusal::limit`](crate::core::DescentRefusal::limit)).
+        limit: DescentLimit,
     },
 }
 
 impl fmt::Display for WalkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WalkError::DescentLimitExceeded { detail } => {
+            WalkError::DescentLimitExceeded { detail, .. } => {
                 write!(f, "Tree nested too deeply: {}", detail)
             }
         }
@@ -388,6 +393,7 @@ where
         Err(refusal) => {
             return ControlFlow::Break(Some(WalkError::DescentLimitExceeded {
                 detail: refusal.detail,
+                limit: refusal.limit,
             }))
         }
         Ok(Some(warning)) => visitor.observe_descent_warning(warning),
@@ -493,7 +499,9 @@ mod tests {
     use super::{
         scoped_children, NodeVisitor, TreeWalker, VisitContext, VisitFlow, WalkError,
     };
-    use crate::engine::{DescentGuard, DescentWarning, StdDescentGuard, StdDescentGuardInit};
+    use crate::engine::{
+        DescentGuard, DescentLimit, DescentWarning, StdDescentGuard, StdDescentGuardInit,
+    };
 
     /// Parse `input` with the plain latexlike preset (strict).
     fn parse(input: &str) -> NodeTree<Latexlike> {
@@ -799,8 +807,9 @@ mod tests {
                 break refusal;
             }
         };
-        let WalkError::DescentLimitExceeded { detail } = error;
+        let WalkError::DescentLimitExceeded { detail, limit } = error;
         assert_eq!(detail, refusal.detail);
+        assert_eq!(limit, DescentLimit::Depth { levels: 2 });
 
         // A limit the tree fits under walks it whole.
         let mut log = Log::default();
@@ -829,7 +838,12 @@ mod tests {
                 VisitFlow::Descend
             }
 
-            fn observe_descent_warning(&mut self, _warning: DescentWarning) {
+            fn observe_descent_warning(&mut self, warning: DescentWarning) {
+                // The warning names the limit that applies: the built-in default budget.
+                let default = DescentLimit::DefaultStackBudget {
+                    bytes: StdDescentGuard::DEFAULT_STACK_BUDGET,
+                };
+                assert_eq!(warning.limit, default);
                 self.warnings += 1;
             }
         }
@@ -839,7 +853,11 @@ mod tests {
         let mut meter = Meter::default();
         let error = TreeWalker::new(&mut meter).walk(tree.root()).unwrap_err();
         // `DescentLimitExceeded` is the walk's only error variant.
-        let WalkError::DescentLimitExceeded { .. } = error;
+        let WalkError::DescentLimitExceeded { limit, .. } = error;
+        assert_eq!(
+            limit,
+            DescentLimit::DefaultStackBudget { bytes: StdDescentGuard::DEFAULT_STACK_BUDGET }
+        );
         assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
         assert!(meter.entered > 0, "the walk made progress before refusing");
 

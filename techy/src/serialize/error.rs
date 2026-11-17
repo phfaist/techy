@@ -10,6 +10,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
 
+use crate::engine::DescentLimit;
 use crate::error::InconsistentDiagnosticCounts;
 use crate::scopes::DefinitionKey;
 
@@ -180,6 +181,8 @@ pub enum SerializeError {
         /// The description of the limit that was reached, as the descent guard reports
         /// it.
         detail: String,
+        /// The limit that was reached, as the descent guard reports it.
+        limit: DescentLimit,
     },
     /// A driver produced an entry with an identifier other than the identifier of its
     /// table.
@@ -360,7 +363,7 @@ impl fmt::Display for SerializeError {
                 "Reference cycle: an object of table ‘{table}’ refers back to \
                  itself (interned again by an object of table ‘{referrer}’)"
             ),
-            SerializeError::DescentLimitExceeded { detail } => {
+            SerializeError::DescentLimitExceeded { detail, .. } => {
                 write!(f, "Objects nested too deeply for serialization: {detail}")
             }
             SerializeError::UnexpectedIdentifier { table, expected, found } => write!(
@@ -562,6 +565,8 @@ pub enum DeserializeError {
         /// The description of the limit that was reached, as the descent guard reports
         /// it.
         detail: String,
+        /// The limit that was reached, as the descent guard reports it.
+        limit: DescentLimit,
     },
     /// The reading session has no reader for the identifier of an entry.
     ///
@@ -924,7 +929,7 @@ impl fmt::Display for DeserializeError {
                      ‘{referrer_table}’)"
                 )
             }
-            DeserializeError::DescentLimitExceeded { detail } => {
+            DeserializeError::DescentLimitExceeded { detail, .. } => {
                 write!(f, "Serialized entries nested too deeply: {detail}")
             }
             DeserializeError::UnknownIdentifier { table, identifier } => write!(

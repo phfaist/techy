@@ -116,7 +116,10 @@ where
 {
     match cx.descent_guard.try_enter() {
         Err(refusal) => {
-            return Err(RecomposeError::DescentLimitExceeded { detail: refusal.detail })
+            return Err(RecomposeError::DescentLimitExceeded {
+                detail: refusal.detail,
+                limit: refusal.limit,
+            })
         }
         Ok(Some(warning)) => recomposer.observe_descent_warning(warning),
         Ok(None) => {}

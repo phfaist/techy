@@ -508,7 +508,10 @@ impl<L: SerializableLang> SerdeSession<L> {
         // The descent: the driver call, with the guard's permission. Warnings have no
         // observer here.
         if let Err(refusal) = guard.try_enter() {
-            return Err(SerializeError::DescentLimitExceeded { detail: refusal.detail });
+            return Err(SerializeError::DescentLimitExceeded {
+                detail: refusal.detail,
+                limit: refusal.limit,
+            });
         }
         self.write_stack.push((ordinal, pointer));
         let result = match self.driver::<D>(ordinal) {
@@ -954,7 +957,10 @@ fn materialize<L: SerializableLang, D: ObjectSerdeDriver<L>>(
     // The descent: the driver call, with the guard's permission. Warnings have no
     // observer here.
     if let Err(refusal) = guard.try_enter() {
-        return Err(DeserializeError::DescentLimitExceeded { detail: refusal.detail });
+        return Err(DeserializeError::DescentLimitExceeded {
+            detail: refusal.detail,
+            limit: refusal.limit,
+        });
     }
     let result = materialize_entered::<L, D>(session, guard, ordinal, position);
     guard.exit();

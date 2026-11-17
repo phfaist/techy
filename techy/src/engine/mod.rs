@@ -46,7 +46,8 @@ use state_memo::{
 };
 
 pub use descent_guard::{
-    DescentGuard, DescentRefusal, DescentWarning, StdDescentGuard, StdDescentGuardInit,
+    DescentGuard, DescentLimit, DescentRefusal, DescentWarning, StdDescentGuard,
+    StdDescentGuardInit,
 };
 pub use driver::{
     resolve_command_in_scopes, CommandResolution, CommandResolver, ParseDriver,

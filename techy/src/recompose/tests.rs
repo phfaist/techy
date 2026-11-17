@@ -994,7 +994,7 @@ fn concat_pieces_constructors_chain() {
 
 #[test]
 fn a_depth_limit_refuses_the_recomposition_of_a_deeper_tree() {
-    use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
+    use crate::engine::{DescentGuard, DescentLimit, StdDescentGuard, StdDescentGuardInit};
     use crate::latexlike::source_recomposer;
 
     // `a{b}c` folds three levels deep (root list → group → chars).
@@ -1012,7 +1012,8 @@ fn a_depth_limit_refuses_the_recomposition_of_a_deeper_tree() {
     };
     assert!(matches!(
         &error,
-        RecomposeError::DescentLimitExceeded { detail } if *detail == refusal.detail
+        RecomposeError::DescentLimitExceeded { detail, limit }
+            if *detail == refusal.detail && *limit == DescentLimit::Depth { levels: 2 }
     ));
 
     // A limit the tree fits under reemits it whole.
@@ -1046,7 +1047,12 @@ fn the_guard_warning_reaches_the_recomposer() {
             self.inner.recompose_node(node, state, cx)
         }
 
-        fn observe_descent_warning(&mut self, _warning: crate::engine::DescentWarning) {
+        fn observe_descent_warning(&mut self, warning: crate::engine::DescentWarning) {
+            // The warning names the limit that applies: the built-in default budget.
+            let default = crate::engine::DescentLimit::DefaultStackBudget {
+                bytes: crate::engine::StdDescentGuard::DEFAULT_STACK_BUDGET,
+            };
+            assert_eq!(warning.limit, default);
             self.warnings += 1;
         }
     }
@@ -1079,6 +1085,12 @@ fn the_guard_warning_reaches_the_recomposer() {
 
     let mut meter = Meter { inner: source_recomposer(), warnings: 0 };
     let error = TreeRecomposer::new(&mut meter).recompose(&deep, ()).unwrap_err();
-    assert!(matches!(&error, RecomposeError::DescentLimitExceeded { .. }));
+    let default = crate::engine::DescentLimit::DefaultStackBudget {
+        bytes: crate::engine::StdDescentGuard::DEFAULT_STACK_BUDGET,
+    };
+    assert!(matches!(
+        &error,
+        RecomposeError::DescentLimitExceeded { limit, .. } if *limit == default
+    ));
     assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
 }

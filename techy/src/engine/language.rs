@@ -981,7 +981,12 @@ mod tests {
     // --- the descent guard end to end (Part 2) ------------------------------------------
 
     use crate::constructs::DescentLimitExceeded;
-    use crate::engine::{StdDescentGuard, StdDescentGuardInit};
+    use crate::engine::{DescentLimit, StdDescentGuard, StdDescentGuardInit};
+
+    /// The limit that a `DescentLimitExceeded` error names.
+    fn refused_limit<O: crate::source::SourceOrigin>(err: &ParseError<O>) -> DescentLimit {
+        err.data().downcast_ref::<DescentLimitExceeded>().unwrap().limit
+    }
 
     /// Balanced `{…{…}…}` nesting, `levels` deep, with one char inside.
     fn nested_braces(levels: usize) -> String {
@@ -1007,6 +1012,9 @@ mod tests {
             assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
             let condition = err.data().downcast_ref::<DescentLimitExceeded>().unwrap();
             assert!(!condition.detail.is_empty());
+            let default =
+                DescentLimit::DefaultStackBudget { bytes: StdDescentGuard::DEFAULT_STACK_BUDGET };
+            assert_eq!(condition.limit, default);
         }
     }
 
@@ -1018,6 +1026,7 @@ mod tests {
             .with_descent_guard_init(StdDescentGuardInit::fixed_stack_budget(4 * 1024));
         let err = language.parse(nested_braces(200)).unwrap_err();
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        assert_eq!(refused_limit(&err), DescentLimit::StackBudget { bytes: 4 * 1024 });
     }
 
     #[test]
@@ -1044,6 +1053,7 @@ mod tests {
         assert!(language.parse(nested_braces(3)).is_ok());
         let err = language.parse(nested_braces(20)).unwrap_err();
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        assert_eq!(refused_limit(&err), DescentLimit::Depth { levels: 10 });
         // Twelve sibling groups — more constructs than the limit, none deeper
         // than the limit — parse cleanly.
         let siblings = "{a}".repeat(12);
@@ -1081,6 +1091,8 @@ mod tests {
             .with_descent_guard_init(StdDescentGuardInit::computed_stack_budget(probe));
         let err = language.parse("x").unwrap_err();
         assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        // The resolved budget, from the probe's answer to the refusal.
+        assert_eq!(refused_limit(&err), DescentLimit::StackBudget { bytes: 100 });
         assert!(strict().parse("x").is_ok());
     }
 

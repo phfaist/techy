@@ -128,7 +128,10 @@ where
 {
     match cx.descent_guard.try_enter() {
         Err(refusal) => {
-            return Err(RestageError::DescentLimitExceeded { detail: refusal.detail })
+            return Err(RestageError::DescentLimitExceeded {
+                detail: refusal.detail,
+                limit: refusal.limit,
+            })
         }
         Ok(Some(warning)) => visitor.observe_descent_warning(warning),
         Ok(None) => {}
