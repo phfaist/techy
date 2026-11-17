@@ -381,22 +381,17 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// # Errors
     ///
-    /// Returns a [`NodeBuildError`](crate::core::node::NodeBuildError) in two cases, both
-    /// of which abort the parse under any recovery policy — neither is a condition in
-    /// the source being parsed:
+    /// Returns a [`NodeBuildError`](crate::core::node::NodeBuildError) in two cases:
     ///
-    /// - a violation of the staging contract, which is an implementation bug in an
-    ///   extension. Turn it into an abort error with
-    ///   [`implementation_error_with_kind`](ParseContext::implementation_error_with_kind)
-    ///   and the kind [`NodeBuildFailed`](ImplementationErrorKind::NodeBuildFailed).
-    /// - [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed), the failure
-    ///   [`Lang::make_node_ext`] itself reported. This is an operational failure in
-    ///   consumer-supplied code rather than a broken contract, so turn it into a
-    ///   [`HookFailed`](crate::error::HookFailed) condition holding the mint's
-    ///   `detail`, with the live traceback attached
-    ///   ([`attach_hook_frames`](ParseContext::attach_hook_frames)).
+    /// - [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed):
+    ///   [`Lang::make_node_ext`] failed to compute the extension of the node.
+    /// - Every other variant: the node violates a rule of the node builder. This is a
+    ///   fault in the code that stages the nodes.
     ///
-    /// The in-crate staging callers match on the variant and do exactly that.
+    /// Neither case is a problem in the parsed document. Pass the error to
+    /// [`staging_error`](ParseContext::staging_error), which returns the parse error for
+    /// it, and return that parse error. The parse then stops under every recovery
+    /// policy.
     pub fn stage_node(
         &mut self,
         kind: NodeKind<L>,
@@ -1634,17 +1629,23 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             .with_frames(self.session.snapshot_frames())
     }
 
-    /// Returns the error that stops the parse after a staging call failed with `error`,
-    /// located at `span`, as [`stage_node`](ParseContext::stage_node) documents it.
+    /// Returns the parse error for a [`NodeBuildError`] that
+    /// [`stage_node`](ParseContext::stage_node) returned. The parse error is located at
+    /// `span` and contains the current traceback.
     ///
-    /// - [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed) becomes a
-    ///   [`HookFailed`] error with the detail that [`Lang::make_node_ext`] reported. This
-    ///   failure occurred in the hook code and does not violate a requirement.
-    /// - Every other variant becomes an [`ImplementationError`] of the kind
-    ///   [`NodeBuildFailed`](ImplementationErrorKind::NodeBuildFailed).
+    /// Call this method in a construct parser when `stage_node` fails, and return the
+    /// result: `.map_err(|error| cx.staging_error(error, span))?`. The parse stops with
+    /// the returned error under every recovery policy.
     ///
-    /// Both errors contain the current traceback, and the parse stops with them under
-    /// every recovery policy.
+    /// The type of the returned error depends on the variant of `error`:
+    ///
+    /// - [`ExtMintFailed`](NodeBuildError::ExtMintFailed) reports that
+    ///   [`Lang::make_node_ext`] failed. It becomes a [`HookFailed`] error with the
+    ///   detail that `make_node_ext` reported.
+    /// - Every other variant reports a fault in the code that staged the nodes. It
+    ///   becomes an [`ImplementationError`] of the kind
+    ///   [`NodeBuildFailed`](ImplementationErrorKind::NodeBuildFailed), whose detail is
+    ///   the message of `error`.
     pub fn staging_error(
         &self,
         error: NodeBuildError,

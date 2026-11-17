@@ -110,24 +110,11 @@ language extension with
 staged first, bottom-up, and the staging call of their parent claims them.
 
 If staging fails, `stage_node` returns a
-[`NodeBuildError`](crate::core::node::NodeBuildError). Your parser then
-returns a [`ParseError`](crate::error::ParseError) that stops the parse under
-every recovery policy. The error to return depends on the variant:
-
-- [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed) reports
-  that `Lang::make_node_ext` failed. Return a
-  [`HookFailed`](crate::error::HookFailed) error, as the documentation of
-  `stage_node` describes.
-- Every other variant reports a fault in the code that staged the nodes.
-  Return the error of
-  [`cx.implementation_error_with_kind`](crate::core::constructs::ParseContext::implementation_error_with_kind)
-  with the kind
-  [`NodeBuildFailed`](crate::core::constructs::ImplementationErrorKind::NodeBuildFailed).
-
-The chapter's closing example returns only the second error. Its language
-is the preset [`Latexlike`](crate::latexlike::Latexlike), whose
-`make_node_ext` never fails, so `stage_node` never returns `ExtMintFailed`
-there.
+[`NodeBuildError`](crate::core::node::NodeBuildError). Pass this error to
+[`cx.staging_error(error, span)`](crate::core::constructs::ParseContext::staging_error)
+and return the result, as the chapter's closing example does:
+`.map_err(|error| cx.staging_error(error, span))?`. The returned error stops
+the parse under every recovery policy.
 
 [`cx.staged_nodes()`](crate::core::constructs::ParseContext::staged_nodes)
 returns a read-only view of the nodes staged so far.
@@ -398,12 +385,9 @@ is not a condition of the source. For such a violation,
 returns an [`ImplementationError`](crate::core::constructs::ImplementationError)
 that stops the parse under every recovery policy. The `kind` is the variant
 of [`ImplementationErrorKind`](crate::core::constructs::ImplementationErrorKind)
-that describes the violated requirement. For instance, the kind for a
-[`NodeBuildError`](crate::core::node::NodeBuildError) from a staging call is
-`NodeBuildFailed`, as in the example below. The paragraph "Node staging" of
-[What a parser receives](#what-a-parser-receives-the-parsecontext)
-describes the exception, `ExtMintFailed`. When no variant describes the
-violated requirement, use
+that describes the violated requirement. For instance, the example below
+reports a token that cannot occur under its raw-reading state with the kind
+`UnexpectedToken`. When no variant describes the violated requirement, use
 [`cx.implementation_error(detail, span)`](crate::core::constructs::ParseContext::implementation_error),
 which sets the kind `Other`.
 The full split is three-way: `ImplementationError` for contract violations

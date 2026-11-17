@@ -747,6 +747,9 @@ fn check_spanned_contents<L: Lang>(
 /// [`HookFailed`](crate::error::HookFailed) error, and the parse stops under every
 /// recovery policy.
 ///
+/// A construct parser obtains the parse error for a `NodeBuildError` from
+/// [`ParseContext::staging_error`](crate::core::constructs::ParseContext::staging_error).
+///
 /// The `Display` text is a complete message that begins with a capital letter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

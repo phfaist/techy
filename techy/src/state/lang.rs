@@ -608,14 +608,11 @@ pub trait Lang: Sized + 'static {
     ///
     /// Inside a parse,
     /// [`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node)
-    /// reports it like any other builder error, and its callers then split the two
-    /// cases: `ExtMintFailed`, this method's own reported failure, becomes a
-    /// [`HookFailed`](crate::error::HookFailed) condition, while every other builder
-    /// error becomes an
-    /// [`ImplementationError`](crate::core::constructs::ImplementationError) (through
-    /// [`implementation_error`](crate::core::constructs::ParseContext::implementation_error)).
-    /// Either way the parse aborts under any recovery policy, with the live traceback
-    /// attached. An implementation that cannot fail wraps its extension in `Ok(...)`.
+    /// returns this error to the construct parser, which passes it to
+    /// [`ParseContext::staging_error`](crate::core::constructs::ParseContext::staging_error).
+    /// That method turns `ExtMintFailed` into a [`HookFailed`](crate::error::HookFailed)
+    /// error, and the parse stops under every recovery policy. An implementation that
+    /// cannot fail wraps its extension in `Ok(...)`.
     fn make_node_ext(
         kind: &NodeKind<Self>,
         span: &SourceSpan<Self::SourceOrigin>,
