@@ -464,6 +464,9 @@ impl<'l, 'p, L: Lang> ParseSetup<'l, 'p, L> {
                 parser.parse(&mut cx)?
             }
         };
+        // `finish` mints no node extension (staging mints them), so no
+        // `ExtMintFailed` arrives here: every error of this call is a violated
+        // staging requirement.
         session.finish(root).map_err(|error| {
             ParseError::new(
                 ImplementationError::new(error.to_string())

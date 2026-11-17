@@ -945,11 +945,7 @@ where
                     Arc::clone(&cx.state),
                     vec![],
                 )
-                .map_err(|error| cx.implementation_error_with_kind(
-                    ImplementationErrorKind::NodeBuildFailed,
-                    error,
-                    trigger_span,
-                ))?;
+                .map_err(|error| cx.staging_error(error, trigger_span))?;
             return Ok((id, None));
         };
         // The name as read, never the span's content: the span is only what the reader
