@@ -184,14 +184,19 @@ pub struct ExpressionCallableRequiresContent {
 ///
 /// When a token reader fails to read a token, it can return a
 /// [`TokenRecovery`](crate::core::token::TokenRecovery) with a placeholder token, and a
-/// tolerant parse continues with this placeholder. A placeholder is not part of the token
-/// stream: the parse continues at the resume position of the recovery
-/// ([`TokenRecovery::resume`](crate::core::token::TokenRecovery::resume)). Therefore
-/// [`NodesParser`] cannot parse a command, a specials invocation or a group from a
-/// placeholder.
+/// tolerant parse continues with this placeholder. Reading then continues at the resume
+/// position of the recovery
+/// ([`TokenRecovery::resume`](crate::core::token::TokenRecovery::resume)), so the
+/// placeholder is not part of the token stream. Therefore [`NodesParser`] cannot parse a
+/// command invocation, a specials invocation or a group that begins with a placeholder.
+/// This error is reported when the placeholder is a
+/// [`Command`](crate::core::token::TokenKind::Command), a
+/// [`Specials`](crate::core::token::TokenKind::Specials) or a
+/// [`GroupOpen`](crate::core::token::TokenKind::GroupOpen) token.
 ///
-/// The standard token reader returns only `Chars` placeholder tokens. Therefore a
-/// document cannot cause this error; only a custom token reader can.
+/// The standard token reader returns only [`Char`](crate::core::token::TokenKind::Char)
+/// placeholder tokens. Therefore a document cannot cause this error; only a custom token
+/// reader can.
 ///
 /// Reported by [`NodesParser`]. The span of the diagnostic is the span of the placeholder
 /// token. In a tolerant parse, the placeholder is parsed into a `Chars` node over this
@@ -201,8 +206,9 @@ pub struct ExpressionCallableRequiresContent {
 #[non_exhaustive]
 #[diagnostic(id = "core.recovery.unusable-recovery-token")]
 pub struct UnusableRecoveryToken {
-    /// The spelling of the placeholder token: the command with its escape character, the
-    /// specials, or the opening delimiter of the group.
+    /// The text of the placeholder token: the escape character and the name of a command
+    /// (for instance `\c`), the characters of a specials token, or the opening delimiter
+    /// of a group.
     pub spelling: String,
     /// The kind of the placeholder token.
     pub kind: UnusableRecoveryTokenKind,
@@ -683,21 +689,25 @@ impl<L: Lang> Clone for NodesOutcome<L> {
 ///
 /// # Recovery
 ///
-/// Each problem is recovered where it is detected, under the session's recovery policy.
-/// A tokenizer error continues with the placeholder token the error offers, the reader
-/// repositioned to the error's resume position so the error is never read again. A
-/// command that does not resolve, or whose resolver failed, is diagnosed and recovered
-/// as a `Chars` node over the token's span. A recognized specials trigger never takes
-/// that path, because for specials recognition is resolution, so it always dispatches;
-/// a command, specials or group-open *placeholder* token does take it, diagnosed as
-/// [`UnusableRecoveryToken`], since there are no source bytes behind it to parse.
+/// The parser handles each problem where it detects it, according to the
+/// [`Recovery`](crate::error::Recovery) policy of the parse. A strict parse stops with
+/// an error. A tolerant parse reports a diagnostic and continues as follows:
 ///
-/// Markup text left inside a `Chars` node is an accepted artifact of tolerant recovery
-/// and always comes with a diagnostic. Such fallback nodes are deliberately not merged
-/// into neighboring character runs. Group recovery — an unclosed group at end of input,
-/// a mismatched close — belongs to [`GroupParser`](super::GroupParser).
+/// - After a tokenization error that offers a
+///   [`TokenRecovery`](crate::core::token::TokenRecovery), the parser continues with
+///   the placeholder token of the recovery, and the token reader continues reading at
+///   the resume position of the recovery.
+/// - A command that has no definition ([`UnresolvableCommand`]), or whose resolver
+///   failed ([`CommandResolutionFailed`]), is parsed into a `Chars` node that contains
+///   the source text of the command.
+/// - A placeholder command, specials or group-open token ([`UnusableRecoveryToken`]) is
+///   parsed into a `Chars` node over the span of the placeholder.
 ///
-/// An `Err` means the parse is over: nothing continues past one.
+/// Such a `Chars` node always comes with a diagnostic, and the parser does not merge it
+/// with the neighboring runs of characters. Unclosed and mismatched groups are handled
+/// by [`GroupParser`](super::GroupParser).
+///
+/// An `Err` ends the parse.
 pub struct NodesParser<'p, L: Lang> {
     stop: StopSpec<'p, L>,
     /// Descent-state policy for child constructs (groups and invocations); defaults to
