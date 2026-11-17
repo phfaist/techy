@@ -1645,7 +1645,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// Both errors contain the current traceback, and the parse stops with them under
     /// every recovery policy.
-    pub(crate) fn staging_error(
+    pub fn staging_error(
         &self,
         error: NodeBuildError,
         span: SourceSpan<L::SourceOrigin>,

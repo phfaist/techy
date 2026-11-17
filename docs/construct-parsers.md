@@ -569,13 +569,7 @@ impl ConstructParser<Latexlike> for UntilParser<'_> {
                     Arc::clone(&raw),
                     Vec::new(),
                 )
-                .map_err(|error| {
-                    cx.implementation_error_with_kind(
-                        ImplementationErrorKind::NodeBuildFailed,
-                        error,
-                        content,
-                    )
-                })?;
+                .map_err(|error| cx.staging_error(error, content))?;
             children.push(id);
         }
         // …recorded as the invocation's one content slot (a callable's
