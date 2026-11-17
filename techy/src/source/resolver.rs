@@ -213,6 +213,8 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
 /// still takes part through the origin its creator gave it. The arguments divide the work
 /// as follows:
 ///
+/// - `reference` is the reference as written, which the resolver received; the returned
+///   error carries it as its [`reference`](ResolveError::reference).
 /// - `target_key` is the canonical key of the source about to be included; a resolver
 ///   computes that canonical name — an absolute path, a normalized URL — during resolution
 ///   anyway.
@@ -234,12 +236,9 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
 /// [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded) if the depth of the
 /// new source would exceed `max_depth`.
 ///
-/// The error's [`reference`](ResolveError::reference) field carries an origin label where
-/// one exists, since the key type `K` is not required to be printable: for a cycle, the
-/// label of the offending source on the chain; for a depth overflow, that of the immediate
-/// includer, the target having no renderable origin yet. A resolver that prefers its own
-/// spelling of the reference maps the error before returning it.
+/// Both errors carry `reference` as their [`reference`](ResolveError::reference).
 pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
+    reference: &str,
     target_key: &K,
     triggered_at: &SourceSpan<O>,
     origin_key: impl Fn(&O) -> Option<K>,
@@ -250,7 +249,7 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
         depth += 1;
         if origin_key(source.origin()).is_some_and(|key| key == *target_key) {
             return Err(ResolveError::new(
-                source.origin().label().unwrap_or_default(),
+                reference,
                 "Refusing recursive inclusion",
             )
             .with_kind(ResolveErrorKind::IncludeCycle));
@@ -261,7 +260,7 @@ pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
     if let Some(max_depth) = max_depth {
         if depth > max_depth {
             return Err(ResolveError::new(
-                triggered_at.source().origin().label().unwrap_or_default(),
+                reference,
                 alloc::format!(
                     "Inclusion depth limit exceeded (maximum depth {})",
                     max_depth
@@ -722,20 +721,22 @@ mod tests {
     #[test]
     fn check_include_chain_passes_a_fresh_target() {
         let trigger = chain_trigger();
-        assert!(check_include_chain(&String::from("c.tex"), &trigger, key, None).is_ok());
+        assert!(check_include_chain("c", &String::from("c.tex"), &trigger, key, None).is_ok());
         // Depth: the new source would sit at depth 3 (primary = 0) — allowed at 3.
-        assert!(check_include_chain(&String::from("c.tex"), &trigger, key, Some(3)).is_ok());
+        assert!(
+            check_include_chain("c", &String::from("c.tex"), &trigger, key, Some(3)).is_ok()
+        );
     }
 
     #[test]
     fn check_include_chain_detects_a_cycle() {
         let trigger = chain_trigger();
-        // No depth bound: the refusal can only be the cycle, which names the offending
-        // source on the chain.
+        // No depth bound: the refusal can only be the cycle, which names the reference
+        // as written, not the canonical key.
         let err =
-            check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+            check_include_chain("a", &String::from("a.tex"), &trigger, key, None).unwrap_err();
         assert_eq!(err.kind(), ResolveErrorKind::IncludeCycle);
-        assert_eq!(err.reference(), "a.tex");
+        assert_eq!(err.reference(), "a");
     }
 
     #[test]
@@ -743,13 +744,13 @@ mod tests {
         // The primary participates through the origin its creator minted — the
         // user's point: `\input{doc.tex}` from anywhere inside the tree is a cycle.
         let trigger = chain_trigger();
-        let err =
-            check_include_chain(&String::from("doc.tex"), &trigger, key, None).unwrap_err();
+        let err = check_include_chain("doc.tex", &String::from("doc.tex"), &trigger, key, None)
+            .unwrap_err();
         assert_eq!(err.kind(), ResolveErrorKind::IncludeCycle);
         assert_eq!(err.reference(), "doc.tex");
         // The same refusal as a cycle through a source deeper on the chain.
-        let deeper =
-            check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        let deeper = check_include_chain("a.tex", &String::from("a.tex"), &trigger, key, None)
+            .unwrap_err();
         assert_eq!(deeper.kind(), ResolveErrorKind::IncludeCycle);
         assert_eq!(err.message(), deeper.message());
     }
@@ -758,14 +759,14 @@ mod tests {
     fn check_include_chain_detects_depth_overflow_with_a_distinct_message() {
         let trigger = chain_trigger();
         // `c.tex` is not on the chain: the refusal can only be the depth overflow, which
-        // names the immediate includer.
-        let err = check_include_chain(&String::from("c.tex"), &trigger, key, Some(2))
+        // names the reference as written.
+        let err = check_include_chain("c", &String::from("c.tex"), &trigger, key, Some(2))
             .unwrap_err();
         assert_eq!(err.kind(), ResolveErrorKind::IncludeDepthExceeded);
-        assert_eq!(err.reference(), "b.tex");
+        assert_eq!(err.reference(), "c");
         // Its message differs from the cycle refusal's.
         let cycle =
-            check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+            check_include_chain("a", &String::from("a.tex"), &trigger, key, None).unwrap_err();
         assert_eq!(cycle.kind(), ResolveErrorKind::IncludeCycle);
         assert_ne!(err.message(), cycle.message());
     }
@@ -778,11 +779,13 @@ mod tests {
         let a: Arc<Source> =
             Arc::new(Source::resolved("x", "a.tex", SourceSpan::entire(&primary)));
         let trigger = SourceSpan::entire(&a);
-        assert!(check_include_chain(&String::from("a.tex"), &trigger, key, None).is_ok());
-        // The label-less offender is still named in a depth error, by empty reference.
-        let err = check_include_chain(&String::from("a.tex"), &trigger, key, Some(1))
+        assert!(
+            check_include_chain("a.tex", &String::from("a.tex"), &trigger, key, None).is_ok()
+        );
+        // A depth error on a chain without labels still names the reference as written.
+        let err = check_include_chain("a.tex", &String::from("a.tex"), &trigger, key, Some(1))
             .unwrap_err();
-        assert_eq!(err.reference(), "");
+        assert_eq!(err.reference(), "a.tex");
     }
 
     #[test]

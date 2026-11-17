@@ -1105,6 +1105,7 @@ mod tests {
             triggered_at: &SourceSpan,
         ) -> Result<ResolvedContent, ResolveError> {
             check_include_chain(
+                reference,
                 &String::from(reference),
                 triggered_at,
                 |origin: &Option<String>| origin.clone(),
@@ -1150,6 +1151,7 @@ mod tests {
             .with_origin(Some("a.tex".into())),
         );
         let cycle = check_include_chain(
+            "a.tex",
             &String::from("a.tex"),
             &SourceSpan::entire(&included),
             |origin: &Option<String>| origin.clone(),

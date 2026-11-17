@@ -317,6 +317,7 @@ impl SourceResolver for DirectoryResolver {
             .map_err(|error| ResolveError::new(reference, error.to_string()))?;
         // Refuse include cycles and runaway nesting (recursion policy is ours).
         check_include_chain(
+            reference,
             &canonical,
             triggered_at,
             |origin: &Option<String>| origin.as_ref().map(PathBuf::from),
