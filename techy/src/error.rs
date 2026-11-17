@@ -414,11 +414,18 @@ impl ToDiagnosticValue for DiagnosticValue {
     }
 }
 
-/// Projects as a map of the failed `reference`, the `message`, the `kind` in kebab
-/// case, and a `cause_chain` list: the `Display` of each
-/// [`Error::source`](core::error::Error::source) hop, outermost first.
+/// Converts a [`ResolveError`](crate::source::ResolveError) into a map with these
+/// entries, in this order:
 ///
-/// This is the serialization face of the payload of the
+/// - `reference`: the reference that failed to resolve;
+/// - `message`: the message of the error;
+/// - `kind`: the [kind](crate::source::ResolveError::kind) of the error, in kebab case
+///   (`other`, `not-found`, `include-cycle` or `include-depth-exceeded`);
+/// - `cause_chain`: the `Display` texts of the underlying errors, as a list that begins
+///   with the cause of the `ResolveError` and follows
+///   [`Error::source`](core::error::Error::source) from there.
+///
+/// This map is the diagnostic value of the `error` field of the
 /// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
 /// condition.
 // The implementation is here rather than in the source module: the error module may

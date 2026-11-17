@@ -230,9 +230,9 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
 /// # Errors
 ///
 /// Returns a [`ResolveError`] of kind [`IncludeCycle`](ResolveErrorKind::IncludeCycle)
-/// when the target is already on its own include chain, and one of kind
-/// [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded) when including it
-/// would exceed `max_depth`.
+/// if `target_key` matches the key of a source on the chain, and a `ResolveError` of kind
+/// [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded) if the depth of the
+/// new source would exceed `max_depth`.
 ///
 /// The error's [`reference`](ResolveError::reference) field carries an origin label where
 /// one exists, since the key type `K` is not required to be printable: for a cycle, the
@@ -343,6 +343,13 @@ impl<O: SourceOrigin> ResolvedContent<O> {
 /// [`message`](ResolveError::message) that describes the failure. Write the message as
 /// a complete message that begins with a capital letter and has no final period.
 ///
+/// A `ResolveError` also has a [`kind`](ResolveError::kind), a [`ResolveErrorKind`] that
+/// tells a program why the reference could not be resolved without reading the message.
+/// For instance, the kind [`NotFound`](ResolveErrorKind::NotFound) means that the
+/// resolver has no source for the reference. [`new`](ResolveError::new) creates an error
+/// of kind [`Other`](ResolveErrorKind::Other), and [`with_kind`](ResolveError::with_kind)
+/// sets another kind.
+///
 /// When a source resolver returns a `ResolveError` during a parse, the parse reports an
 /// [`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference)
 /// error. The message of that error contains the reference as written in the document,
@@ -366,10 +373,11 @@ pub struct ResolveError {
 }
 
 impl ResolveError {
-    /// Creates a resolve error for `reference`, with `message` explaining the failure in
-    /// human-readable terms, and the kind [`Other`](ResolveErrorKind::Other).
+    /// Creates a `ResolveError` for `reference`, with `message` as the description of
+    /// the failure and the kind [`Other`](ResolveErrorKind::Other).
     ///
-    /// To set another kind, call [`with_kind`](ResolveError::with_kind) on the result.
+    /// Call [`with_kind`](ResolveError::with_kind) on the result to set another kind, and
+    /// [`with_cause`](ResolveError::with_cause) to attach the underlying error.
     pub fn new(reference: impl Into<String>, message: impl Into<String>) -> Self {
         ResolveError {
             reference: reference.into(),
@@ -379,8 +387,19 @@ impl ResolveError {
         }
     }
 
-    /// Returns this error with its kind set to `kind`, as in
-    /// `ResolveError::new(reference, message).with_kind(ResolveErrorKind::NotFound)`.
+    /// Sets the [`kind`](ResolveError::kind) of this error to `kind`, and returns the
+    /// error.
+    ///
+    /// For instance, a resolver that has no source for `reference` can return the
+    /// following error:
+    ///
+    /// ```
+    /// # use techy::source::{ResolveError, ResolveErrorKind};
+    /// # let reference = "chapter1.tex";
+    /// let error = ResolveError::new(reference, "Source not found")
+    ///     .with_kind(ResolveErrorKind::NotFound);
+    /// # assert_eq!(error.kind(), ResolveErrorKind::NotFound);
+    /// ```
     pub fn with_kind(self, kind: ResolveErrorKind) -> Self {
         ResolveError { kind, ..self }
     }
@@ -408,29 +427,47 @@ impl ResolveError {
         &self.message
     }
 
-    /// The kind of the failure.
+    /// Returns the kind of this error, which tells why the reference could not be
+    /// resolved.
+    ///
+    /// The kind is [`Other`](ResolveErrorKind::Other) unless it was set with
+    /// [`with_kind`](ResolveError::with_kind).
     pub fn kind(&self) -> ResolveErrorKind {
         self.kind
     }
 }
 
-/// A `ResolveErrorKind` identifies why a reference could not be resolved, in the
-/// [`kind`](ResolveError::kind) of a [`ResolveError`].
+/// The reason why a [`SourceResolver`] could not resolve a reference, as returned by
+/// [`ResolveError::kind`].
 ///
-/// A resolver sets the kind with [`ResolveError::with_kind`]; an error created with
-/// [`ResolveError::new`] has the kind [`Other`](ResolveErrorKind::Other).
+/// A program can use the kind to handle failures differently without reading the message
+/// of the error, for instance to report a missing file and an include cycle in different
+/// ways.
+///
+/// [`ResolveError::new`] creates an error of kind [`Other`](ResolveErrorKind::Other), and
+/// a resolver sets another kind with [`ResolveError::with_kind`]. Within techy,
+/// [`check_include_chain`] returns errors of kinds
+/// [`IncludeCycle`](ResolveErrorKind::IncludeCycle) and
+/// [`IncludeDepthExceeded`](ResolveErrorKind::IncludeDepthExceeded), and [`MapResolver`]
+/// returns errors of kind [`NotFound`](ResolveErrorKind::NotFound).
+///
+/// The enum is `#[non_exhaustive]`: later versions can add kinds, so a `match` on a kind
+/// needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ResolveErrorKind {
-    /// A failure that no other kind describes.
+    /// A failure that no other kind describes, for instance a file that exists but cannot
+    /// be read. This is the kind that [`ResolveError::new`] sets.
     Other,
-    /// The resolver has no source for the reference.
+    /// The resolver has no source for the reference, for instance because no file of that
+    /// name exists.
     NotFound,
-    /// The referenced source is already on the include chain of the reference, so
-    /// including it would form a cycle ([`check_include_chain`]).
+    /// The referenced source is the source that contains the reference, or a source that
+    /// includes it directly or indirectly. Including the referenced source would form an
+    /// include cycle.
     IncludeCycle,
-    /// Including the referenced source would exceed the maximum inclusion depth
-    /// ([`check_include_chain`]).
+    /// Including the referenced source would exceed the maximum inclusion depth that the
+    /// resolver passed to [`check_include_chain`].
     IncludeDepthExceeded,
 }
 
