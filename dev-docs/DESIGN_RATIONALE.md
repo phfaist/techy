@@ -378,7 +378,8 @@ Status: DECIDED (user; settled before any consumer existed).
   [§dd-dr:include-chain-helpers]. Documented on the trait.
 - **`ResolveError` = strings + optional structured cause**: human-readable
   `reference`/`message` stay the primary interface (a failed `\input` flattens into a
-  diagnostic anyway); an optional `Arc<dyn core::error::Error + Send + Sync>` cause
+  diagnostic anyway), with a `ResolveErrorKind` for the cases a program tells apart
+  ([§dd-dr:error-source-fields]); an optional `Arc<dyn core::error::Error + Send + Sync>` cause
   travels the standard `Error::source()` chain so embedders can downcast (e.g.
   `io::Error` kind). Principle recorded here: **techy error types stay uniformly
   `Clone`; out-of-crate information sits behind the `Arc`** (`with_cause` wraps with
@@ -408,17 +409,19 @@ policy a one-liner:
   `.filter(…).count()` for `.dtx`-style bounded self-inclusion). The existing
   `provenance_chain()` yields the provenance *records*; this yields the *sources*,
   whose origins carry the comparable names.
-- **`check_include_chain<O, K: PartialEq>(target_key: &K, triggered_at:
-  &SourceSpan<O>, origin_key: impl Fn(&O) -> Option<K>, max_depth: Option<usize>)
-  -> Result<(), ResolveError>`** (home: the source topic, public path `techy::source`) —
+- **`check_include_chain<O, K: PartialEq>(reference: &str, target_key: &K,
+  triggered_at: &SourceSpan<O>, origin_key: impl Fn(&O) -> Option<K>, max_depth:
+  Option<usize>) -> Result<(), ResolveError>`** (home: the source topic, public path
+  `techy::source`) —
   the canned
   cycle-plus-depth check a resolver calls with `?`. Keying design:
   compare **origins**, not provenance reference strings — the primary source
   participates (the embedder mints it with a suitable canonical name); the caller
   passes the already-canonicalized target key (the resolver computes it during
   resolution anyway); `origin_key` is a cheap conversion when the resolver mints
-  canonical origins (documented invariant); `None` keys are skipped. Distinct
-  messages for cycle vs depth-exceeded.
+  canonical origins (documented invariant); `None` keys are skipped. Both errors carry
+  the reference as written, and the kinds `IncludeCycle` and `IncludeDepthExceeded`
+  tell them apart ([§dd-dr:error-source-fields]).
 
 A `techy::helpers` recipes module was REJECTED (the `util` vague-name problem;
 placement stays by logical function — adding a module later is additive, while
@@ -5924,7 +5927,8 @@ for hand-built sessions that want a configured guard.
 - **A refusal is `DescentLimitExceeded` and aborts under any recovery policy** — a
   distinct condition, not `ImplementationError` (it is an input/configuration
   limit, not an extension bug), with the live traceback including the just-pushed
-  frame. No tolerant fallback in v1: past the limit there is no safe way to
+  frame; refusals and warnings carry the limit that applies as `DescentLimit` data
+  ([§dd-dr:error-source-fields]). No tolerant fallback in v1: past the limit there is no safe way to
   continue.
 - Naming: "descent" is established public vocabulary; "Stack"-only names were
   rejected (collision with the crate's data-stack vocabulary: scope stack, frame
@@ -6488,9 +6492,9 @@ Consequences applied with the decision:
   abandoned. The builder's internal post-validation read-backs remain `expect`s — rule 1:
   **validate at the boundary, assert inside**.
 - Construct parsers lift `NodeBuildError` into a `ParseError` carrying the
-  `ImplementationError` condition (`core.constructs.implementation-error`) via
-  `ParseContext::implementation_error`, deliberately bypassing the recover funnel: an
-  implementation bug **aborts even under tolerant recovery** (tolerance promises a
+  `ImplementationError` condition (`core.constructs.implementation-error`, kind
+  `NodeBuildFailed`) via `ParseContext::implementation_error_with_kind`, deliberately
+  bypassing the recover funnel: an implementation bug **aborts even under tolerant recovery** (tolerance promises a
   best-effort tree for bad *input*, not tolerance of buggy extensions), and no
   `Lang::refine_diagnostic` pass applies. (The former `StdInvocationParser` slots check is gone with the spec-side slot
   list — nothing declarable was left for it to catch, [§dd-dr:no-spec-side-slots].)
@@ -6724,13 +6728,95 @@ stays. The serialization goldens record severity, identifier, data, span and fra
 every serialized `message` replaced by a placeholder; one test checks that a serialized
 `message` equals the `Display` of its condition. Where only a message told two cases
 apart, the missing structured field is tracked as a follow-up rather than kept as a
-wording assertion.
+wording assertion ([§dd-dr:error-source-fields]).
 Rejected alternatives: lowercase messages in the style of rustc (the user: "Capital letter
 first."); wording assertions kept as regression guards (message wording is not part of the
 contract, [§dd-dr:wire-identifier-stability], so such assertions only block improvements).
 
 Revisit if: a consumer needs a case distinction that only a message shows — the answer is
 a field of the condition, not a stable message.
+
+#### Fields that identify the source of an error [§dd-dr:error-source-fields]
+
+Status: DECIDED (user-led).
+
+Where only a message told two error cases apart ([§dd-dr:message-wording]), a field or
+variant is added only if it identifies the source of the error from structure **and** is
+useful beyond tests — to a program that handles the error, to tools, to serialized
+diagnostics, to rendering. A distinction that only a test needs carries no field. The user
+accepted every recommendation of that review, "including the breaking changes". Added,
+each as additive data (keys only grow, [§dd-dr:wire-identifier-stability]):
+
+- **`ImplementationErrorKind`** as `kind` on `ImplementationError` (data key `kind`): the
+  requirement that library code found violated — `MisconfiguredParser`,
+  `UnexpectedStateDelta`, `InvalidStopCause`, `UnexpectedToken`, `StalledTokenReader`,
+  `InconsistentTokenReader`, `TokenPositionMismatch`, `IncoherentPositions`,
+  `InvalidPosition`, `NodeBuildFailed`, and `Other` (the default; lifted errors of other
+  types). It gives logs and serialized reports a stable value to group faults of
+  extensions, lists in one place the requirements the library checks, and tells apart the
+  position clauses of the `TokenReader` contract. `new(detail)` and
+  `ParseContext::implementation_error` keep their signatures and set `Other`; `with_kind`
+  and `implementation_error_with_kind` set a kind. The user: "add the full variant list".
+- **`DescentLimit`** (`DefaultStackBudget { bytes }`, `StackBudget { bytes }`,
+  `Depth { levels }`) as `limit` on `DescentRefusal`, `DescentWarning` and every carrier
+  of a refusal or warning: the conditions `DescentLimitExceeded`/`DescentLimitApproaching`
+  (data key `limit`: a map of `kind` plus `bytes` or `levels`) and the
+  `DescentLimitExceeded` variants of `WalkError`, `RestageError`, `RecomposeError`,
+  `SerializeError` and `DeserializeError`. A program can act on it: configure a limit
+  (default budget), report the depth in its own words (depth limit), or run again with
+  more stack (stack budget). A computed budget whose probe answers `None` reports
+  `StackBudget` — the program did configure a limit. `detail` stays. Breaking: public
+  fields of exhaustive structs, generated constructors, enum variants.
+- **`ResolveErrorKind`** (`Other`, `NotFound`, `IncludeCycle`, `IncludeDepthExceeded`)
+  on `ResolveError` (`kind()`/`with_kind`; `new` sets `Other`): a program can treat a
+  cycle, a depth overflow and a failed lookup differently. `check_include_chain` sets the
+  two include kinds, `MapResolver` sets `NotFound`. The serialized map gains `kind` after
+  `message`, projected by hand in the error module (the source module does not depend on
+  it). The user: "with NotFound as well".
+- **`DeserializeError::AnnotationTypeMismatch { stored, requested,
+  requested_identifier }`**: a typed access that failed, like `WrongTable`; a reader of
+  several annotation types reads `stored` and picks the type to read with.
+
+Rulings of the same review on suspected defects and on test coverage:
+
+- One table bound of `u32::MAX` entries for writing (interning) and reading
+  (`push_segment`), through one helper: a reader accepts every table a writer can fill.
+- `check_include_chain` takes the reference as written, and both of its errors carry it
+  (breaking); the kind tells the two cases apart.
+- `RestageError::ContentParentDropped::replaced_by` is `Some(n)` only for a recorded count
+  of `n` nodes; both sites map through one helper.
+- A placeholder `Command` recovery token is `UnusableRecoveryToken` (kind `Command`),
+  recovered as characters like the specials and group-open placeholders: no resolver ran,
+  so "unknown command" would misreport it.
+- Kept as they are: the text fallback of the tree reader's builder-failure detail (a text
+  fallback over a panic, [§dd-dr:panic-policy]); `MissingTerminatorFound::UnreadableToken`
+  in `MissingArgumentTerminator` (the condition is public and constructible with any
+  value).
+- The preset frame terms ("macro", "environment", "specials") are guarded by the decisions
+  that record them, not by tests: no structure carries them, so a test could only compare
+  words. The other reported coverage gaps get no test (presentation of data that a test
+  already checks, or one more pass through a guarded path), including the closest call,
+  `ContentParentDropped` with `replaced_by: None` (the user: "keep no").
+
+Rejected alternatives: a structured hint on `UnresolvableCommand` (searched providers,
+suggestions) — the most useful structure for tools, but it changes the resolver channel
+`CommandResolution::Unresolved` and meets open questions about that message; it needs a
+design session of its own. A condition for an invalid specials scan position — a caller
+fault whose two cases no program acts on (the kind `InvalidPosition` covers it). Variants
+per malformed-data case of the serialization readers (or one `MalformedTree` with a reason
+enum) — which check refuses the data is not usable by a program, while the location
+wrappers `InNode`/`InEntry` and the typed causes remain; the one useful split, malformed
+data against a misconfigured reading program inside `DeserializeError::Failed`, belongs
+to the serialization API review. A reason enum for the derives' rejections — it would
+serve tests only. The event of a `FinalizeError` — one event exists, so it distinguishes
+nothing. A smaller `ImplementationErrorKind` — it cannot tell the position clauses apart.
+A typed cause instead of `ResolveErrorKind` — it doubles the text in the cause chain.
+`DescentLimit` on the guard types and conditions only — the traversals and serialization
+would lose it.
+
+Revisit if: a consumer needs a distinction that only a message or a `detail` shows (the
+answer is a field); a second finalize event exists; tools ask for the suggestions of an
+unresolvable command; the serialization API review splits `DeserializeError::Failed`.
 
 #### `DiagnosticInfo` (implementor) / `DiagnosticData` (dyn facade) split [§dd-dr:diagnostic-info-data-split]
 
