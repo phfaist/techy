@@ -384,9 +384,9 @@ builds an [`ImplementationError`](crate::core::constructs::ImplementationError)
 abort that ignores the recovery policy. Use it for "this cannot happen
 unless a contract was broken" paths — for example, a
 [`NodeBuildError`](crate::core::node::NodeBuildError) from a staging call.
-When one of the cases of
+When a variant of
 [`ImplementationErrorKind`](crate::core::constructs::ImplementationErrorKind)
-describes the violated requirement, pass this case to
+describes the violated requirement, pass this variant to
 [`cx.implementation_error_with_kind(kind, detail, span)`](crate::core::constructs::ParseContext::implementation_error_with_kind),
 as the example below does.
 The full split is three-way: `ImplementationError` for contract violations

@@ -1593,7 +1593,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Same as
+    /// Returns the same error as
     /// [`implementation_error_with_kind`](ParseContext::implementation_error_with_kind),
     /// with the kind [`Other`](ImplementationErrorKind::Other).
     ///
@@ -1744,7 +1744,7 @@ impl core::error::Error for PlainCharsError {
 /// by a fault in that code.
 ///
 /// The error describes the violated requirement in two ways. Its field
-/// [`kind`](ImplementationError::kind) is one of the cases of
+/// [`kind`](ImplementationError::kind) is one of the variants of
 /// [`ImplementationErrorKind`], and its field [`detail`](ImplementationError::detail)
 /// describes the requirement and the faulty code in words.
 ///
@@ -1770,7 +1770,7 @@ pub struct ImplementationError {
     /// the nodes parser from ‘ParseDriver::make_nodes_parser’: a nodes parser must return
     /// no state delta`.
     pub detail: String,
-    /// The requirement that the faulty code violated, as one of the cases of
+    /// The requirement that the faulty code violated, as one of the variants of
     /// [`ImplementationErrorKind`].
     ///
     /// The message does not contain the kind. In the data of the diagnostic, the key
@@ -1797,7 +1797,8 @@ impl ImplementationError {
     }
 }
 
-/// The requirement that code extending the parser violated, in an
+/// An `ImplementationErrorKind` identifies the requirement that code extending the
+/// parser violated, in the field [`kind`](ImplementationError::kind) of an
 /// [`ImplementationError`].
 ///
 /// Each variant other than [`Other`](ImplementationErrorKind::Other) stands for one
@@ -1814,8 +1815,11 @@ pub enum ImplementationErrorKind {
     ///
     /// [`ImplementationError::new`] and [`ParseContext::implementation_error`] set this
     /// kind. The library also uses it when it reports an error of another type as an
-    /// implementation error, for instance a
-    /// [`PlainCharsError::MalformedRecord`] error.
+    /// implementation error, for instance the
+    /// [`ScopeStackError`](crate::core::specs::ScopeStackError) that
+    /// [`ScopeStack::retrieve_spec`](crate::core::specs::ScopeStack::retrieve_spec)
+    /// returns when a [`SpecsProvider`](crate::core::specs::SpecsProvider) fails to look
+    /// up the spec of an environment.
     Other,
     /// A parser or a spec is configured with values that its documentation excludes.
     ///
