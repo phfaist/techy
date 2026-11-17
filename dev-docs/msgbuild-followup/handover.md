@@ -84,7 +84,7 @@ All passed once, no fixer needed: `cargo test --workspace` (1507 passed), with `
 
 ## Open points for Philippe
 
-1. **ExtMintFailed outside the staging helper: resolved, one question left.** The chars fallback after `MalformedBegin` in `latexlike/environments.rs` goes through `cx.staging_error` (`8282226`). The `session.finish` site in `engine/language.rs` needs no split: `finish` mints no node extension, so it never returns `ExtMintFailed`. Left for Philippe: `staging_error` is `pub(crate)`, so a custom parser writes the split by hand (for `ExtMintFailed`: `cx.attach_hook_frames(ParseError::new(HookFailed::new(detail, None), span))`). Options: (a) keep it private; (b) make the split public under a clear name. Recommendation of the documenter: (b).
+1. **ExtMintFailed outside the staging helper: resolved.** The chars fallback after `MalformedBegin` in `latexlike/environments.rs` goes through `cx.staging_error` (`8282226`). The `session.finish` site in `engine/language.rs` needs no split: `finish` mints no node extension, so it never returns `ExtMintFailed`. By Philippe's decision, `ParseContext::staging_error` is public (`a9f50c8`), so a custom parser lifts a staging failure in one call; the guides and the rustdoc describe it (`436f8a8`).
 2. **Stale guide example: resolved.** `docs/construct-parsers.md`, `docs/parsing-model.md`, the rustdoc of `stage_node` and two rows of `docs/ai-guide-custom-lang.md` name `implementation_error_with_kind` with the kind `NodeBuildFailed` for a staging failure (`8734ea5`, `635bc8b`, `bec0791`).
 3. **Descent messages from `limit`.** The descent conditions still embed the guard's prewritten `detail`. Options: (a) leave; (b) a follow-up decision to compose the messages from `limit` and the stack use. Recommendation: (a) for now.
 4. **Wire strings of `ResolveErrorKind`.** Only `other` is checked in the serialized form; the other three kebab-case strings are hand-written and unguarded. Options: (a) leave; (b) one assertion on the projected `kind` of a non-`Other` error in an existing test. Recommendation: (a), unless the wire strings should be guarded.
@@ -107,5 +107,5 @@ None reported by the agents; a grep of `techy/src` and `docs` finds none.
 
 1. Review the branch and push it (the build did not push).
 2. Run `sh scripts/check_semver.sh` locally; expect exactly the breaking changes listed above.
-3. Rule on the question left in open point 1 and on open points 3 to 5.
+3. Rule on open points 3 to 5.
 4. Decide what to do with the older stash `msgbuild leftover`.

@@ -6491,8 +6491,9 @@ Consequences applied with the decision:
   errors, not debug panics). A builder whose `add` errored is *poisoned*; the build must be
   abandoned. The builder's internal post-validation read-backs remain `expect`s — rule 1:
   **validate at the boundary, assert inside**.
-- Construct parsers lift a `NodeBuildError` from a staging call through the context's
-  staging helper: `ExtMintFailed` becomes `HookFailed` (a hook failure,
+- Construct parsers lift a `NodeBuildError` from a staging call through
+  `ParseContext::staging_error`, a public method, so that a parser written outside the
+  crate lifts exactly as the library's own parsers do: `ExtMintFailed` becomes `HookFailed` (a hook failure,
   [§dd-dr:hook-fallibility]), and every other variant becomes a `ParseError` carrying the
   `ImplementationError` condition (`core.constructs.implementation-error`, kind
   `NodeBuildFailed`), deliberately bypassing the recover funnel: an implementation bug **aborts even under tolerant recovery** (tolerance promises a
@@ -6537,7 +6538,9 @@ misuse the `get` companions already cover; keeping the six value functions
 debug-asserted with release fallbacks (superseded in a recorded reversal — the
 functions are deliberately infallible, so rule 2's "return an `Err` instead" has no
 channel to prefer, and the real release-mode alternative was unspecified misbehavior
-or a later cryptic panic).
+or a later cryptic panic); a crate-private staging lift — every parser written outside
+the crate then repeats the match on `NodeBuildError` by hand, and a match that omits the
+`ExtMintFailed` case reports a hook failure as an implementation error.
 Revisit if: profiling shows the always-on builder validation measurably costs on the hot
 staging path (all checks are O(1) per region/payload today).
 
