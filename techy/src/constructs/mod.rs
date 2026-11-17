@@ -387,7 +387,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// - a violation of the staging contract, which is an implementation bug in an
     ///   extension. Turn it into an abort error with
-    ///   [`implementation_error`](ParseContext::implementation_error).
+    ///   [`implementation_error_with_kind`](ParseContext::implementation_error_with_kind)
+    ///   and the kind [`NodeBuildFailed`](ImplementationErrorKind::NodeBuildFailed).
     /// - [`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed), the failure
     ///   [`Lang::make_node_ext`] itself reported. This is an operational failure in
     ///   consumer-supplied code rather than a broken contract, so turn it into a
