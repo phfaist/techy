@@ -6491,10 +6491,11 @@ Consequences applied with the decision:
   errors, not debug panics). A builder whose `add` errored is *poisoned*; the build must be
   abandoned. The builder's internal post-validation read-backs remain `expect`s — rule 1:
   **validate at the boundary, assert inside**.
-- Construct parsers lift `NodeBuildError` into a `ParseError` carrying the
+- Construct parsers lift a `NodeBuildError` from a staging call through the context's
+  staging helper: `ExtMintFailed` becomes `HookFailed` (a hook failure,
+  [§dd-dr:hook-fallibility]), and every other variant becomes a `ParseError` carrying the
   `ImplementationError` condition (`core.constructs.implementation-error`, kind
-  `NodeBuildFailed`) via `ParseContext::implementation_error_with_kind`, deliberately
-  bypassing the recover funnel: an implementation bug **aborts even under tolerant recovery** (tolerance promises a
+  `NodeBuildFailed`), deliberately bypassing the recover funnel: an implementation bug **aborts even under tolerant recovery** (tolerance promises a
   best-effort tree for bad *input*, not tolerance of buggy extensions), and no
   `Lang::refine_diagnostic` pass applies. (The former `StdInvocationParser` slots check is gone with the spec-side slot
   list — nothing declarable was left for it to catch, [§dd-dr:no-spec-side-slots].)
@@ -6744,7 +6745,7 @@ Where only a message told two error cases apart ([§dd-dr:message-wording]), a f
 variant is added only if it identifies the source of the error from structure **and** is
 useful beyond tests — to a program that handles the error, to tools, to serialized
 diagnostics, to rendering. A distinction that only a test needs carries no field. The user
-accepted every recommendation of that review, "including the breaking changes". Added,
+accepted the breaking changes this requires ("including the breaking changes"). Added,
 each as additive data (keys only grow, [§dd-dr:wire-identifier-stability]):
 
 - **`ImplementationErrorKind`** as `kind` on `ImplementationError` (data key `kind`): the
@@ -6777,7 +6778,7 @@ each as additive data (keys only grow, [§dd-dr:wire-identifier-stability]):
   requested_identifier }`**: a typed access that failed, like `WrongTable`; a reader of
   several annotation types reads `stored` and picks the type to read with.
 
-Rulings of the same review on suspected defects and on test coverage:
+Rulings taken with this decision on suspected defects and on test coverage:
 
 - One table bound of `u32::MAX` entries for writing (interning) and reading
   (`push_segment`), through one helper: a reader accepts every table a writer can fill.
