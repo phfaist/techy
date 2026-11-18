@@ -52,7 +52,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-techy = "0.1"
+techy = "0.2"
 ```
 
 Parse LaTeX-like input with the built-in `latexlike` preset:
