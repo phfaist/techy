@@ -3,13 +3,20 @@
 # tests run on Linux, and on macOS and Windows when selected; the other parts run on
 # Linux, each in its own job. The everyday subset is the workflow `CI` (ci.yml).
 #
-# By default each job first updates the dependencies to their newest compatible
-# versions (`cargo update`), so that the run catches a dependency release that breaks
-# the build or the tests, which the everyday run cannot see, since it keeps to the
-# committed Cargo.lock. With the option `update` turned off, the run uses the committed
-# Cargo.lock as it is. Either way, the cargo commands run with `--locked`: after the
-# update the lock file is current, and without it the commands use exactly the
-# committed versions.
+# By default the jobs whose outcome depends on the dependency versions first update the
+# dependencies (`cargo update`), so that the run catches a dependency release that
+# breaks techy, which the everyday run cannot see, since it keeps to the committed
+# Cargo.lock. A project that depends on techy ignores techy's Cargo.lock and gets the
+# newest versions that its Rust version allows; the updates reproduce that:
+#   * the tests and the no_std build: the newest versions (what a project on the
+#     current stable Rust gets);
+#   * the MSRV check: the newest versions that support Rust 1.86 (what a project on
+#     Rust 1.86 gets).
+# Clippy, the API documentation and the API-stability comparison judge techy's own
+# code and keep to the committed Cargo.lock. With the option `update` turned off, every
+# job uses the committed Cargo.lock as it is. Either way, the cargo commands run with
+# `--locked`: after the update the lock file is current, and without it the commands
+# use exactly the committed versions.
 
 name: CI (full)
 
@@ -17,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       update:
-        description: "First update the dependencies to their newest compatible versions (cargo update); turned off, the run uses the committed Cargo.lock"
+        description: "For the tests, the MSRV check and the no_std build, first update the dependencies (cargo update); turned off, every job uses the committed Cargo.lock"
         type: boolean
         default: true
       test:
@@ -63,8 +70,12 @@ defaults:
   run:
     shell: bash
 
-# In each job, the update runs before the cache is restored: the cache key is computed
-# from Cargo.lock, so the key follows the versions actually built.
+# In each job that updates, the update runs before the cache is restored: the cache key
+# is computed from Cargo.lock, so the key follows the versions actually built. Each
+# update sets its version choice through CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS,
+# which overrides the workspace's `incompatible-rust-versions = "fallback"`
+# (.cargo/config.toml): `allow` ignores the minimum Rust versions that the
+# dependencies declare, `fallback` respects them.
 
 jobs:
   tests:
@@ -84,8 +95,10 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Update the dependencies
+      - name: Update the dependencies (newest versions)
         if: ${{ inputs.update }}
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
         run: cargo update
       - uses: Swatinem/rust-cache@v2
       # `cargo test` runs the unit tests, the integration tests under
@@ -107,9 +120,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Update the dependencies
-        if: ${{ inputs.update }}
-        run: cargo update
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (default features)
         if: ${{ !cancelled() && inputs.clippy }}
@@ -138,7 +148,8 @@ jobs:
       # The update picks, for each dependency, the newest version whose own declared
       # minimum Rust version is at most the workspace's `rust-version`, falling back to
       # the newest version only where no such version exists (cargo's MSRV-aware
-      # resolution, `fallback` mode). What this checks: that a project on Rust 1.86
+      # resolution, `fallback` mode; the workspace default, stated here so that the
+      # job does not depend on it). What this checks: that a project on Rust 1.86
       # that resolves its dependencies this way can build techy.
       - name: Update the dependencies (versions that support Rust 1.86)
         if: ${{ inputs.update }}
@@ -164,8 +175,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Update the dependencies
+      # A dependency release that stops supporting no_std breaks every no_std project
+      # that depends on techy: the update tries the newest versions.
+      - name: Update the dependencies (newest versions)
         if: ${{ inputs.update }}
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
         run: cargo update
       - uses: Swatinem/rust-cache@v2
       # techy is `#![no_std]` outside of `cfg(test)` and documents support for
@@ -191,9 +206,6 @@ jobs:
         with:
           fetch-depth: 0 # the baseline branch must be in the clone
       - uses: dtolnay/rust-toolchain@stable
-      - name: Update the dependencies
-        if: ${{ inputs.update }}
-        run: cargo update
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:

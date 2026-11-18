@@ -7,6 +7,17 @@
 # relative path resolves from there no matter where cargo is invoked.
 rustdocflags = ["--html-in-header", "docs/rustdoc-header.html"]
 
+[resolver]
+# Whenever cargo picks a dependency version (`cargo update`, a dependency added to
+# a Cargo.toml, a Cargo.lock written anew), it takes the newest version that meets
+# the Cargo.toml requirement and declares a minimum Rust version no higher than the
+# workspace's `rust-version` (Cargo.toml); where no such version exists, the newest
+# version that meets the requirement. A package that declares no minimum Rust
+# version counts as compatible. Versions already in Cargo.lock are not changed. The
+# setting applies to this workspace only: a project that depends on techy picks its
+# versions under its own settings.
+incompatible-rust-versions = "fallback"
+
 [alias]
 # Build the workspace documentation. `--no-deps` keeps dependencies (syn,
 # hashbrown, ...) out of the doc bundle and its search index; if `cargo doc`
