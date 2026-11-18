@@ -3,10 +3,6 @@
 **/*.rs.bk
 *.pdb
 
-# Cargo lock file (uncomment if this is an application)
-# For libraries, typically uncommitted to allow flexible dependency resolution
-Cargo.lock
-
 # IDE/Editor files
 .vscode/
 .idea/

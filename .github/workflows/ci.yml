@@ -4,6 +4,10 @@
 # wasm32, the API-stability comparison) are in the workflow `CI (full)` (ci-full.yml),
 # which is run by hand.
 #
+# Every cargo command runs with `--locked`: the checks use the dependency versions of the
+# committed Cargo.lock and fail if it is out of date with the manifests. The newest
+# compatible versions are tried by `CI (full)`, which updates the lock file first.
+#
 # Deliberately absent:
 #   * `cargo fmt --check`: the sources are hand-formatted and do not round-trip
 #     through rustfmt, so a formatting gate would fail on the current tree.
@@ -49,10 +53,10 @@ jobs:
       # techy/tests/, and the doctests of both crates. Both feature settings run:
       # `serde` gates the rendering layer of techy::serialize and whole test files.
       - name: Test (default features)
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Test (all features)
         if: ${{ !cancelled() }}
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --locked
 
   lints:
     name: clippy, docs
@@ -67,10 +71,10 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' }}
       - name: Clippy (default features)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy (all features)
         if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # `cargo docs` is the workspace alias (.cargo/config.toml): `doc --workspace
       # --no-deps` with docs/rustdoc-header.html injected. RUSTDOCFLAGS is left
       # unset on purpose — an env value replaces the config's rustdocflags and
@@ -79,7 +83,7 @@ jobs:
       # Cargo.toml (`rustdoc::broken_intra_doc_links` and `missing_docs` are deny).
       - name: API documentation
         if: ${{ !cancelled() }}
-        run: cargo docs --all-features
+        run: cargo docs --all-features --locked
 
   msrv:
     name: MSRV (1.86)
@@ -97,4 +101,4 @@ jobs:
       # rather than `test` — the gate is that everything *builds* there; the behavior
       # of the tests is the stable job's business.
       - name: Check on the declared minimum toolchain
-        run: cargo check --workspace --all-features --all-targets
+        run: cargo check --workspace --all-features --all-targets --locked

@@ -2,12 +2,24 @@
 # workflow"), with a choice of the parts to run and of the platforms for the tests. The
 # tests run on Linux, and on macOS and Windows when selected; the other parts run on
 # Linux, each in its own job. The everyday subset is the workflow `CI` (ci.yml).
+#
+# By default each job first updates the dependencies to their newest compatible
+# versions (`cargo update`), so that the run catches a dependency release that breaks
+# the build or the tests, which the everyday run cannot see, since it keeps to the
+# committed Cargo.lock. With the option `update` turned off, the run uses the committed
+# Cargo.lock as it is. Either way, the cargo commands run with `--locked`: after the
+# update the lock file is current, and without it the commands use exactly the
+# committed versions.
 
 name: CI (full)
 
 on:
   workflow_dispatch:
     inputs:
+      update:
+        description: "First update the dependencies to their newest compatible versions (cargo update); turned off, the run uses the committed Cargo.lock"
+        type: boolean
+        default: true
       test:
         description: "Tests (default and all features)"
         type: boolean
@@ -51,6 +63,9 @@ defaults:
   run:
     shell: bash
 
+# In each job, the update runs before the cache is restored: the cache key is computed
+# from Cargo.lock, so the key follows the versions actually built.
+
 jobs:
   tests:
     name: tests (${{ matrix.os }})
@@ -69,15 +84,18 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Update the dependencies
+        if: ${{ inputs.update }}
+        run: cargo update
       - uses: Swatinem/rust-cache@v2
       # `cargo test` runs the unit tests, the integration tests under
       # techy/tests/, and the doctests of both crates. Both feature settings run:
       # `serde` gates the rendering layer of techy::serialize and whole test files.
       - name: Test (default features)
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Test (all features)
         if: ${{ !cancelled() }}
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --locked
 
   lints:
     name: clippy, docs
@@ -89,13 +107,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Update the dependencies
+        if: ${{ inputs.update }}
+        run: cargo update
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (default features)
         if: ${{ !cancelled() && inputs.clippy }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy (all features)
         if: ${{ !cancelled() && inputs.clippy }}
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # `cargo docs` is the workspace alias (.cargo/config.toml): `doc --workspace
       # --no-deps` with docs/rustdoc-header.html injected. RUSTDOCFLAGS is left
       # unset on purpose — an env value replaces the config's rustdocflags and
@@ -104,7 +125,7 @@ jobs:
       # Cargo.toml (`rustdoc::broken_intra_doc_links` and `missing_docs` are deny).
       - name: API documentation
         if: ${{ !cancelled() && inputs.docs }}
-        run: cargo docs --all-features
+        run: cargo docs --all-features --locked
 
   msrv:
     name: MSRV (1.86)
@@ -114,6 +135,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.86.0
+      # The update picks, for each dependency, the newest version whose own declared
+      # minimum Rust version is at most the workspace's `rust-version`, falling back to
+      # the newest version only where no such version exists (cargo's MSRV-aware
+      # resolution, `fallback` mode). What this checks: that a project on Rust 1.86
+      # that resolves its dependencies this way can build techy.
+      - name: Update the dependencies (versions that support Rust 1.86)
+        if: ${{ inputs.update }}
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: cargo update
       - uses: Swatinem/rust-cache@v2
       # `--all-targets`, so the test harness and the dev-dependencies are held to the
       # declared minimum too, not just the library a consumer compiles: a contributor
@@ -121,7 +152,7 @@ jobs:
       # rather than `test` — the gate is that everything *builds* there; the behavior
       # of the tests is the stable job's business, on every OS.
       - name: Check on the declared minimum toolchain
-        run: cargo check --workspace --all-features --all-targets
+        run: cargo check --workspace --all-features --all-targets --locked
 
   no-std:
     name: no_std (wasm32-unknown-unknown)
@@ -133,15 +164,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - name: Update the dependencies
+        if: ${{ inputs.update }}
+        run: cargo update
       - uses: Swatinem/rust-cache@v2
       # techy is `#![no_std]` outside of `cfg(test)` and documents support for
       # wasm32-unknown-unknown, where the host supplies all input; building for
       # that target keeps both claims honest.
       - name: Check for wasm32 (default features)
-        run: cargo check -p techy --target wasm32-unknown-unknown
+        run: cargo check -p techy --target wasm32-unknown-unknown --locked
       - name: Check for wasm32 (all features)
         if: ${{ !cancelled() }}
-        run: cargo check -p techy --target wasm32-unknown-unknown --all-features
+        run: cargo check -p techy --target wasm32-unknown-unknown --all-features --locked
 
   semver:
     name: API stability (advisory)
@@ -157,6 +191,9 @@ jobs:
         with:
           fetch-depth: 0 # the baseline branch must be in the clone
       - uses: dtolnay/rust-toolchain@stable
+      - name: Update the dependencies
+        if: ${{ inputs.update }}
+        run: cargo update
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
