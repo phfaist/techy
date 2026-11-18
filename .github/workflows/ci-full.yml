@@ -1,0 +1,172 @@
+# Every check, run by hand (the tab Actions, the workflow `CI (full)`, the button "Run
+# workflow"), with a choice of the parts to run and of the platforms for the tests. The
+# tests run on Linux, and on macOS and Windows when selected; the other parts run on
+# Linux, each in its own job. The everyday subset is the workflow `CI` (ci.yml).
+
+name: CI (full)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Tests (default and all features)"
+        type: boolean
+        default: true
+      macos:
+        description: "... the tests also on macOS (runner minutes cost 10 times those of Linux)"
+        type: boolean
+        default: true
+      windows:
+        description: "... the tests also on Windows (runner minutes cost 2 times those of Linux)"
+        type: boolean
+        default: true
+      clippy:
+        description: "Clippy"
+        type: boolean
+        default: true
+      docs:
+        description: "API documentation"
+        type: boolean
+        default: true
+      msrv:
+        description: "Minimum supported Rust version (1.86)"
+        type: boolean
+        default: true
+      no_std:
+        description: "no_std build for wasm32-unknown-unknown"
+        type: boolean
+        default: true
+      semver:
+        description: "API stability against the branch api-baseline (advisory)"
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # No debug information: smaller build folders and caches, faster links.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }})
+    if: ${{ inputs.test }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(format('["ubuntu-latest"{0}{1}]', inputs.macos && ', "macos-latest"' || '', inputs.windows && ', "windows-latest"' || '')) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      # The golden files under techy/tests/golden/ are compared against freshly
+      # rendered strings, so git must not rewrite their newlines on checkout.
+      - name: Keep newlines verbatim
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `cargo test` runs the unit tests, the integration tests under
+      # techy/tests/, and the doctests of both crates. Both feature settings run:
+      # `serde` gates the rendering layer of techy::serialize and whole test files.
+      - name: Test (default features)
+        run: cargo test --workspace
+      - name: Test (all features)
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --all-features
+
+  lints:
+    name: clippy, docs
+    if: ${{ inputs.clippy || inputs.docs }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (default features)
+        if: ${{ !cancelled() && inputs.clippy }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (all features)
+        if: ${{ !cancelled() && inputs.clippy }}
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # `cargo docs` is the workspace alias (.cargo/config.toml): `doc --workspace
+      # --no-deps` with docs/rustdoc-header.html injected. RUSTDOCFLAGS is left
+      # unset on purpose — an env value replaces the config's rustdocflags and
+      # would drop that injection. Broken intra-doc links and undocumented public
+      # items already fail the build through the workspace lint policy in
+      # Cargo.toml (`rustdoc::broken_intra_doc_links` and `missing_docs` are deny).
+      - name: API documentation
+        if: ${{ !cancelled() && inputs.docs }}
+        run: cargo docs --all-features
+
+  msrv:
+    name: MSRV (1.86)
+    if: ${{ inputs.msrv }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - uses: Swatinem/rust-cache@v2
+      # `--all-targets`, so the test harness and the dev-dependencies are held to the
+      # declared minimum too, not just the library a consumer compiles: a contributor
+      # on the MSRV must be able to run the suite, and nothing else pins that. `check`
+      # rather than `test` — the gate is that everything *builds* there; the behavior
+      # of the tests is the stable job's business, on every OS.
+      - name: Check on the declared minimum toolchain
+        run: cargo check --workspace --all-features --all-targets
+
+  no-std:
+    name: no_std (wasm32-unknown-unknown)
+    if: ${{ inputs.no_std }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # techy is `#![no_std]` outside of `cfg(test)` and documents support for
+      # wasm32-unknown-unknown, where the host supplies all input; building for
+      # that target keeps both claims honest.
+      - name: Check for wasm32 (default features)
+        run: cargo check -p techy --target wasm32-unknown-unknown
+      - name: Check for wasm32 (all features)
+        if: ${{ !cancelled() }}
+        run: cargo check -p techy --target wasm32-unknown-unknown --all-features
+
+  semver:
+    name: API stability (advisory)
+    if: ${{ inputs.semver }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Advisory: under the 0.x soft freeze a breaking change is a deliberate act
+    # that moves the `api-baseline` branch at the next version bump, so the report
+    # feeds the release notes instead of failing the run.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the baseline branch must be in the clone
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      # scripts/check_semver.sh holds the canonical invocation; only the revision
+      # differs here, the remote-tracking branch instead of a local one.
+      - name: Compare the public API against api-baseline
+        run: |
+          if ! git rev-parse --verify --quiet origin/api-baseline >/dev/null; then
+            echo "::notice::no 'api-baseline' branch on the remote — skipping the API comparison"
+            exit 0
+          fi
+          BASELINE_REV=origin/api-baseline sh scripts/check_semver.sh
