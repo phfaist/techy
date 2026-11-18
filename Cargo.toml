@@ -1,8 +1,17 @@
 [workspace]
 # A virtual workspace root has no `edition` to infer the resolver from, so pin it
 # explicitly: v1 would unify features across the no_std-leaning core and std-linking
-# members.
-resolver = "2"
+# members. v3 handles features as v2 does; it differs in one point: whenever cargo
+# picks a dependency version (`cargo update`, a dependency added to a Cargo.toml, a
+# Cargo.lock written anew), it takes the newest version that meets the Cargo.toml
+# requirement and declares a minimum Rust version no higher than `rust-version` below;
+# where no such version exists, the newest version that meets the requirement. A
+# package that declares no minimum Rust version counts as compatible. Versions already
+# in Cargo.lock are not changed. The committed Cargo.lock thus stays buildable on the
+# minimum Rust version without pins in the manifests. The setting applies to this
+# workspace only: a project that depends on techy picks its versions under its own
+# settings.
+resolver = "3"
 members = ["techy", "techy-derive"]
 
 # Shared metadata inherited by member crates (`<field>.workspace = true`).

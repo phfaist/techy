@@ -45,9 +45,8 @@ serde = { version = "1", optional = true, default-features = false, features = [
 serde = ["dep:serde"]
 
 [dev-dependencies]
-# proptest 1.12 requires Rust 1.88: the workspace's version choice (.cargo/config.toml,
-# `incompatible-rust-versions`) keeps Cargo.lock on the 1.11 series, which builds with
-# the minimum Rust version 1.86.
+# proptest 1.12 requires Rust 1.88: the workspace's `resolver = "3"` (Cargo.toml) keeps
+# Cargo.lock on the 1.11 series, which builds with the minimum Rust version 1.86.
 proptest = "1"
 # Format crates for the tests of the `serde` rendering layer only (runtime deps stay
 # serde-only): serde_json pins the canonical JSON rendering; postcard exercises the

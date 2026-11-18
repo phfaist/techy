@@ -73,9 +73,9 @@ defaults:
 # In each job that updates, the update runs before the cache is restored: the cache key
 # is computed from Cargo.lock, so the key follows the versions actually built. Each
 # update sets its version choice through CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS,
-# which overrides the workspace's `incompatible-rust-versions = "fallback"`
-# (.cargo/config.toml): `allow` ignores the minimum Rust versions that the
-# dependencies declare, `fallback` respects them.
+# which overrides the default of the workspace's `resolver = "3"` (Cargo.toml):
+# `allow` ignores the minimum Rust versions that the dependencies declare, `fallback`
+# (the resolver-3 default) respects them.
 
 jobs:
   tests:
